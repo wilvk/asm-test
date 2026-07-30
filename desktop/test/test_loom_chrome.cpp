@@ -1,4 +1,4 @@
-// test_loom_chrome.cpp — the Loom's honesty chrome (05-loom-day-one.md T2, D7).
+// test_loom_chrome.cpp — the Loom's fidelity chrome (05-loom-day-one.md T2, D7).
 //
 // Every assertion here is about a SENTENCE the user reads. The words are the
 // interface: "alive at trace end" and "thread died" are the same rectangle and

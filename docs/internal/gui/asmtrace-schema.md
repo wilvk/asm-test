@@ -25,7 +25,7 @@ to renderer discipline:
 
 - **Provenance is mandatory.** Every stream states which backend produced it and
   whether it is exact. A reader can always answer "how do you know?".
-- **Dishonesty is a field, not an omission.** Truncation, drops, throttling,
+- **A fidelity loss is a field, not an omission.** Truncation, drops, throttling,
   redaction and a torn (unterminated) file are all *representable* and therefore
   *testable* — see
   [`tests/golden-asmtrace/`](../../../tests/golden-asmtrace/README.md), whose
@@ -110,7 +110,7 @@ An **optional** header object naming the recorded routine by the **SHA-256 of
 its bytes**, so a consumer can prove two recordings are — or refuse them as not —
 the same routine (28 R1 T1). `dt_diff_build` ([04-replay-views.md](04-replay-views.md)
 T6) refuses a pair whose `code.sha256` differ; when either side omits `code` it
-keeps its honest "identity not checked" caveat.
+keeps its faithful "identity not checked" caveat.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -165,7 +165,7 @@ degrades to bare offsets and says so.
 
 `blocks` is the de-duplicated block-start set actually recorded;
 `blocks_total`/`insns_total` are the totals *seen* — they count past the
-buffer caps, which is what makes `blocks_total > len(blocks)` an honest
+buffer caps, which is what makes `blocks_total > len(blocks)` a faithful
 truncation signal rather than a lost fact.
 
 ### `syscall` — one decoded syscall
@@ -198,7 +198,7 @@ re-derive.
 
 The `--stream` engine hands the front-end a formatted line only
 ([`asmspy_stream_sink`](../../../cli/libasmspy.h#L371)), so v1 records the text
-honestly rather than inventing fields it did not measure. Structuring the line
+faithfully rather than inventing fields it did not measure. Structuring the line
 is engine work, out of scope here.
 
 ### `call` — one call-tree entry
@@ -239,7 +239,7 @@ Task fields mirror [`asmspy_task_t`](../../../cli/libasmspy.h#L505); `mode` is w
 ```
 
 Edge fields mirror [`asmspy_sample_edge_t`](../../../cli/libasmspy.h#L544); the
-four trailing counters are the sink's honesty channel. **Always `exact:false`.**
+four trailing counters are the sink's fidelity channel. **Always `exact:false`.**
 `lost`/`throttled` are the drop record: a survey that dropped samples says so.
 
 ### `watch` — one hardware data-watchpoint hit
@@ -352,7 +352,7 @@ a later quiet window (the pinned region not entered for one entry wait) is
 capturing until Stop, and the quiet window is surfaced as a marker with
 `steps:0` (an empty pass — `vt` genuinely holds nothing, so it is a marker, not
 fabricated data) so a reader shows *"armed, region quiet"* rather than inferring
-the lull from a gap. A hand-authored *skip* dishonesty fixture may likewise carry
+the lull from a gap. A hand-authored *skip* low-fidelity fixture may likewise carry
 a `steps:0` marker to exercise the per-pass placard.
 
 ### `mem` — one memory access (address stream)
@@ -408,11 +408,11 @@ cone entry is a `{step, off, kind}` triple mirroring the `srcmap` row shape;
 operand shape (omitted when the sink writes no register). Field order: `step`,
 `off`, `loc`, `cone`, `born_untraced`.
 
-`born_untraced` is the honesty verdict (33 R6 T1): `true` when the value has **no
+`born_untraced` is the fidelity verdict (33 R6 T1): `true` when the value has **no
 traced producer** inside the window — the backward slice reached only the sink,
 because it was read from an argument, a constant, or pre-existing state. The cone
 is then the **sink alone** — never empty. This is *provenance starts at
-instrumentation*, the same worldline-honesty the Loom's lineage carries
+instrumentation*, the same worldline-fidelity the Loom's lineage carries
 ([05-loom-day-one.md](05-loom-day-one.md)); a reader distinguishes it from
 "nothing happened" and never invents ancestry. `blame` is a **pure derived pass**
 over the `df_edge` graph a recording already carries (`asmtest_slice_backward` —
@@ -436,7 +436,7 @@ producer so a **two-recording merged view** has an exact per-step basis. `step` 
 absolute (past any evicted prefix) so two recordings align truncation-robustly.
 Field order: `step`, `changed`, `computed`.
 
-`computed` is the honesty flag (33 R6 T2): `false` when there is **no known
+`computed` is the fidelity flag (33 R6 T2): `false` when there is **no known
 predecessor** — the first held step (whose true predecessor is either genuine step
 0 or an evicted step the ring cannot distinguish) — with an empty `changed`. A
 full delta there would be a D7 lie ("everything changed"); `computed:false` says
@@ -612,7 +612,7 @@ has to make explicitly rather than inherit.
   above) now carries the SHA-256 of the recorded bytes: the corpus recorder
   hashes its fixed 64-byte window and the live `--dataflow` producer hashes the
   region it read, so `dt_diff_build` refuses a pair whose hashes differ and keeps
-  the honest caveat only when a side omits `code`. Raised 2026-07-24 by 04.
+  the accurate caveat only when a side omits `code`. Raised 2026-07-24 by 04.
 - **No block starts from the L0 producer.** `coverage` is defined and the
   region tiers write it, but the emulator L0 value producer measures executed
   *steps* and has no block information, so the generated corpus carries `trace`
@@ -787,7 +787,7 @@ and never re-entered is the top residency winner and an entry breakpoint there
 can never fire again — the rule's known failure shape. So a client showing a
 `residency` pick **must label it as weaker evidence**, and successive `pick`
 events with rising `attempt` are the server walking the ranked candidates after
-a `REGION_NEVER_RAN`, which is an honest refusal about *that candidate* and not
+a `REGION_NEVER_RAN`, which is a genuine refusal about *that candidate* and not
 a fact about the target.
 
 `"idle"` (39 T3) is the third value, and it is **not a pick** — it is an empty
@@ -857,7 +857,7 @@ produces `err` instead, never both.
    lines' depths stay true. Nothing else may migrate server-side: a server that
    sorted would be deciding what the operator is allowed to see.
 
-### Honesty rules specific to serve
+### Fidelity rules specific to serve
 
 - **A pause is a recorded gap.** Events produced while `pause` is on are not
   emitted, so the session's `end` is marked `truncated` and the terminal
@@ -869,7 +869,7 @@ produces `err` instead, never both.
   has none.
 - **Payloads are separated, not withheld.** Serve emits the same
   payload-separated `syscall` events record mode does, with
-  `"redacted":false` stated honestly in the header. Redaction is a **renderer**
+  `"redacted":false` stated faithfully in the header. Redaction is a **renderer**
   duty ([08-observer-views.md](08-observer-views.md)); the wire never pretends
   content was withheld when it was not.
 
@@ -971,7 +971,7 @@ rax rbx rcx rdx rsi rdi rbp rsp r8 r9 r10 r11 r12 r13 r14 r15 rip rflags
 **oldest first**. The full register file is snapshotted BEFORE each instruction;
 when more steps run than the ring holds, the **earliest** entries are evicted, so
 the held events are steps `[dropped, dropped + count)`. The `end` footer then
-carries the truncation honestly: `"truncated":true` and the evicted count in
+carries the truncation faithfully: `"truncated":true` and the evicted count in
 `drops.lost`, so a reader offsets the first held step by `drops.lost` and renders
 the missing prefix as a torn edge — never as step 0. A recording with no
 `regstate` events simply had the ring disarmed (`--steps` defaults to 0), the
@@ -997,7 +997,7 @@ so the desktop **Scrubber** time-travels a LIVE capture — and, because serve a
 gains the ring too.
 
 **Descriptor id.** `user_regs@x86_64/sysv` — named for the ptrace source (the
-kernel's `struct user_regs_struct`), so the id is honest that these are the **real
+kernel's `struct user_regs_struct`), so the id is truthful that these are the **real
 architectural** registers captured perturbingly (single-step), not emulated. The
 `values` **field names are identical** to `emu_x86_regs_t@x86_64/sysv`'s (the 16
 GPRs + `rip` + `rflags`, `struct user_regs_struct.eflags` folded to `rflags`), so
@@ -1060,7 +1060,7 @@ opt-in**: `asmtrace_record --fpregs` (the emulator ring) and `asmspy --dataflow
 - **Off by default (D6).** A recording written without the opt-in carries **none**
   of these fields and is byte-identical to a pre-R4 `regstate` — the golden corpus
   is unchanged unless a fixture or `--fpregs` arms it. The `has_vec`/`--fpregs`
-  gate means a deck's *absence* is honest "not measured", never a rendered zero.
+  gate means a deck's *absence* is a truthful "not measured", never a rendered zero.
 - **Both producers, one field-order owner.** The emulator's `emit_regstate` reads
   the XMM file from its per-step ring (already captured) and MXCSR from a parallel
   ring; the live ring reads all 16 XMM + MXCSR in one `PTRACE_GETFPREGS` per step.
@@ -1179,21 +1179,21 @@ denormals-are-zero bits:
   decoded so a viewer needs no MXCSR bit knowledge; `mxcsr` rides alongside so the
   decode is auditable. x87 control/status is **not** carried (the corpus is SSE;
   an x87 fixture would extend this row, not replace it).
-- **Honest degradation (D7).** `fpenv` is emitted only where the wide deck is armed
+- **Graceful degradation (D7).** `fpenv` is emitted only where the wide deck is armed
   and MXCSR was actually read; a step whose MXCSR is unrecorded emits **no** `fpenv`
   (never a fabricated default), exactly as a disarmed ring emits no `regstate`.
 
-## `severity` — the derivable honesty-chrome tier (optional)
+## `severity` — the derivable fidelity-chrome tier (optional)
 
 > **Owned by [01-asmtrace-format.md](01-asmtrace-format.md)**, appended under this
 > file's D5 append-only rule at the request of
 > [23-graded-truth-layer.md](23-graded-truth-layer.md) (T1, F5). It adds ONE
 > **optional** provenance field, **derivable** from fields this schema already
 > carries, and **no new envelope major** and **no field to any existing kind**.
-> The field GRADES how loud a reader renders honesty chrome; it gates **no truth
-> off** — every honesty field still renders regardless of the tier (D7). Because
+> The field GRADES how loud a reader renders fidelity chrome; it gates **no truth
+> off** — every fidelity field still renders regardless of the tier (D7). Because
 > it is derivable and optional, an old recording with no `severity` still grades:
-> a reader computes the tier from the honesty facts. **01 owner sign-off: recorded
+> a reader computes the tier from the fidelity facts. **01 owner sign-off: recorded
 > 2026-07-27 (the Phase-3-freeze checkpoint, D5).**
 
 ```json
@@ -1201,15 +1201,15 @@ denormals-are-zero bits:
 ```
 
 An optional `provenance` string, one of `"neutral" | "caution" | "integrity"`,
-naming the tier a reader renders this recording's honesty chrome at. It is the
-**dominant** (loudest) tier over the recording's active honesty signals.
+naming the tier a reader renders this recording's fidelity chrome at. It is the
+**dominant** (loudest) tier over the recording's active fidelity signals.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `severity` | str | no | `"neutral"` \| `"caution"` \| `"integrity"` — the honesty-chrome tier. Absent → the reader **derives** it (below). |
+| `severity` | str | no | `"neutral"` \| `"caution"` \| `"integrity"` — the fidelity-chrome tier. Absent → the reader **derives** it (below). |
 
 **The tier is derivable.** A reader that does not find `severity` computes it from
-the existing honesty fields, so grading is a property of the data, not of the
+the existing fidelity fields, so grading is a property of the data, not of the
 producer:
 
 - **integrity** — the recording is **torn** (no `end` footer), a **mixed-basis
@@ -1228,11 +1228,11 @@ producer:
 
 When the field IS present it is honoured verbatim (a producer that graded at
 capture time overrides the derivation). Two readings must never disagree, so a
-producer that emits `severity` MUST emit the tier its own honesty fields derive
+producer that emits `severity` MUST emit the tier its own fidelity fields derive
 to. The rule is the same one `codeimage` states: a reader that gets it wrong is
 silently wrong. The reference mapper is
 [`fidelity_severity`](../../../desktop/src/ui/fidelity.h) — pure, derivable, and
-pinned against the committed dishonesty fixtures
+pinned against the committed low-fidelity fixtures
 ([tests/golden-asmtrace/low-fidelity/](../../../tests/golden-asmtrace/low-fidelity/)).
 
 ## `df_step` region tag — the `rbase` extension (37)

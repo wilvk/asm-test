@@ -1,9 +1,9 @@
-// examples/dotnet/tier-ladder — this host's honest trace-tier degradation ladder,
+// examples/dotnet/tier-ladder — this host's faithful trace-tier degradation ladder,
 // read straight from the PUBLIC cascade API instead of a per-example private self-skip.
 //
 //     HwTrace.ResolveTiers(TracePolicy.Best)  // the full cross-tier cascade, most-faithful first
 //     HwTrace.AutoTier(TracePolicy.Best)       // the single top pick a scope would arm
-//     HwTrace.DegradationNote()                // one honest sentence naming why each rung fell
+//     HwTrace.DegradationNote()                // one candid sentence naming why each rung fell
 //
 // Every OTHER managed example here ARMS a scope and then self-skips PRIVATELY when its tier is
 // unavailable (single-method checks Available(SingleStep); amdlbr checks Available(AmdLbr)).
@@ -18,7 +18,7 @@
 // On a Zen 5 host with no CAP_PERFMON the ladder reads: Intel PT unavailable (wrong arch),
 // AMD LBR unavailable (needs CAP_PERFMON), single-step available — so the cascade falls to the
 // portable single-step floor. Grant CAP_PERFMON and the AMD LBR rung reappears above it; the
-// output is rendered from the API, so it stays honest either way.
+// output is rendered from the API, so it stays accurate either way.
 
 using System;
 using Asmtest;
@@ -38,7 +38,7 @@ internal static class Program
         string lib = HwTrace.LibraryPath();
         if (string.IsNullOrEmpty(lib))
         {
-            // The one honest skip: with no lib loaded there is no host to probe — not a
+            // The one legitimate skip: with no lib loaded there is no host to probe — not a
             // hardware gate, the cascade API simply has nothing to resolve.
             Console.WriteLine($"# self-skip: libasmtest_hwtrace not loaded ({HwTrace.DegradationNote()})");
             return 0;

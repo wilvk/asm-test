@@ -108,7 +108,7 @@ std::string loom_torn_text(const loom_provenance_t &p) {
                std::to_string(p.steps_total) + " steps recorded";
     // No total on the wire (an `end` footer predating steps_total, 28 R1 T2, and
     // no trace insns_total either). Saying "N of N" would claim the run ended
-    // where the buffer did; naming the gap is the honest form.
+    // where the buffer did; naming the gap is the faithful form.
     return "trace truncated: " + std::to_string(p.steps_recorded) +
            " steps recorded; this feed did not record the total";
 }

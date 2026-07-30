@@ -4,7 +4,7 @@
 // Scrubber tabs that drew only a "producer absent" placard. This lifts
 // observer_draw.cpp's own empties-gating up a level: the view set becomes a PURE
 // function of the recording's data × the active mode, and the views a recording
-// cannot fill are collapsed into ONE honest "unavailable views (N)" affordance
+// cannot fill are collapsed into ONE faithful "unavailable views (N)" affordance
 // that still NAMES each absent view and its verbatim machine reason (D7 —
 // restructured, never removed).
 //

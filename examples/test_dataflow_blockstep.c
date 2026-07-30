@@ -708,7 +708,7 @@ static const uint8_t sc_loop[] = {
  * region then LOADS it. This pins the exact SCOPE of F2's memory story, which is inherited from
  * F1 rather than introduced here: the Unicorn guest maps only the code pages and a window
  * around rsp, so a kernel write to the heap is memory the replay never had. The load therefore
- * hits unmapped guest memory and the capture TRUNCATES — the honest outcome — while the
+ * hits unmapped guest memory and the capture TRUNCATES — the truthful outcome — while the
  * single-step fallback still reports the region correctly. Returns SC_PREAD_MAGIC when
  * single-stepped. */
 static const uint8_t sc_pread_heap[] = {
@@ -737,7 +737,7 @@ static const uint8_t sc_execve[] = {
 /* sc_then_sysenter(): scan-only. The ALL-quantifier case: an injectable impurity FOLLOWED by a
  * non-injectable one. If `injectable` were settled at the FIRST impurity — the exact shape of
  * the HIGH-3 early-break bug F1's review found — this region would be called injectable and its
- * sysenter would reach the replay. The honest reason is "sysenter", not "syscall". (cpuid no
+ * sysenter would reach the replay. The accurate reason is "sysenter", not "syscall". (cpuid no
  * longer serves this case as of T6: it is injectable too, so `syscall; cpuid` is now fully
  * injectable — sysenter is the one impurity with no BTF boundary and no DR-breakpoint plan.) */
 static const uint8_t sc_then_sysenter[] = {
@@ -1376,7 +1376,7 @@ static void run_stack_window_case(void) {
  *   (b) NEGATIVE CONTROL: no_vec_seed + no_vec_canary -> rc=OK, NOT truncated, trace DIFFERS
  *                         (oracle 0x3fc9999999999999 RZ vs replay 0x3fc999999999999a RN).
  * Seeding MXCSR is only legitimate because Unicorn HONOURS it — verified against silicon under
- * both RN and RZ. Had it merely stored the value, the honest move would have been to gate FP
+ * both RN and RZ. Had it merely stored the value, the truthful move would have been to gate FP
  * regions off the replay rather than lie about them. */
 static void run_mxcsr_case(void) {
     /* 1.0 and 5.0 as raw doubles; 1.0/5.0 is inexact, so the rounding mode is observable. */
@@ -1972,7 +1972,7 @@ static void run_hwrec_scan_case(void) {
               off[2] == 5 && off[3] == 7,
           "scan_hwrec: hwrec_5site (5 DISTINCT sites) caps at n=%d (want 4) "
           "with overflow=%d (want 1) — the architectural DR0-3 slot count, "
-          "honestly reported rather than silently dropping the 5th",
+          "faithfully reported rather than silently dropping the 5th",
           n5, overflow);
 }
 
@@ -2530,7 +2530,7 @@ static void run_hwrec_cpuid_replay_case(void) {
  * run at different times), so this reuses run_syscall_mem_case's independent-sources technique
  * instead of vec_compare: the replay's recorded rax WRITE value (read out of the value trace)
  * must equal the SAME capture's real returned rax (hwrec_rdtsc is exactly `rdtsc; ret`, so
- * nothing between the site and the return could make them differ if injection is honest). Plus
+ * nothing between the site and the return could make them differ if injection is faithful). Plus
  * monotonicity across hwrec_rdtsc2's two DISTINCT sites in one region: the second site's
  * recorded tsc must be > the first's. */
 static void run_hwrec_rdtsc_value_case(void) {
@@ -2694,7 +2694,7 @@ static void run_hwrec_overflow_fallback_case(void) {
  *
  * F2 rests on a measured premise: BTF traps the syscall, so the forward pass always has a real
  * boundary immediately AFTER it retired, holding the kernel's result. The replay does not trust
- * that premise, it REQUIRES it (`pc + len == pc_next`). `execve` is the honest way to falsify
+ * that premise, it REQUIRES it (`pc + len == pc_next`). `execve` is the genuine way to falsify
  * it: on success the address space is REPLACED and control resurfaces at the new program's
  * entry point, so the boundary after the syscall is nowhere near syscall+2. There is no
  * "result" to carry across — the process that would have received it no longer exists.
@@ -2939,7 +2939,7 @@ int main(void) {
          * the forward pass a real boundary at the site, and step_block injects the recorded
          * post-state from it (see the DFB_IMP_HWREC branch). This is the gate LIFTING, not a
          * regression of the T5-era assertion above it (T5 landed the boundary; T6 landed the
-         * injection that makes admitting the region honest). */
+         * injection that makes admitting the region legitimate). */
         CHECK(asmtest_dataflow_blockstep_is_injectable(
                   imp_rdtsc, sizeof imp_rdtsc, &why) == 1,
               "injectable: `rdtsc` IS injectable (T6) — the DR exec "

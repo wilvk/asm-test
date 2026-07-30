@@ -1,7 +1,7 @@
 // scrubber_draw.cpp — the ImGui half of the register time-travel scrubber.
 // Draws only: every decision is in scrubber.cpp, asserted headlessly. The one
 // engine call (regsynth, behind ASMTEST_DESKTOP_CAN_AUTHOR) is the app-tree's
-// only; the viewer compiles it out and shows the honest "full app only" note (D4).
+// only; the viewer compiles it out and shows the faithful "full app only" note (D4).
 #include "imgui.h"
 
 #include <utility> // std::move (the synth swaps the index in place)

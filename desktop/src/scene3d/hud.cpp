@@ -160,7 +160,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     if (tmax < 0)
         tmax = 0;
     // The ONE time-position widget, CONTINUOUS variant (24 T4): a real total (the
-    // step count) exists here, so a scrub is honest — unlike the Invocations
+    // step count) exists here, so a scrub is faithful — unlike the Invocations
     // pager, which has no continuous total and uses the discrete variant.
     if (dt_timepos_scrub("playhead (step)", &t, tmax)) {
         s.t = static_cast<uint64_t>(t);

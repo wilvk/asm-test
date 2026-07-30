@@ -236,6 +236,6 @@ TEST(neg, records_a_recording) {
     ASSERT_EQ(1, 2);
 }
 
-/* A test that notes NOTHING must emit no `recording:` key at all — the honest
+/* A test that notes NOTHING must emit no `recording:` key at all — the faithful
  * degrade for every suite with no producer glue. */
 TEST(neg, records_nothing) { ASSERT_EQ(3, 4); }

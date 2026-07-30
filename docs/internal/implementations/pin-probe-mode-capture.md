@@ -24,9 +24,9 @@ hot-patch/probe API is unmaintained). The capture lands in the project's
 existing value-trace record shape so it is diffable against the other value
 producers; we prove it by diffing against the out-of-process ptrace stepper on
 the same fixture, and we surface every probe-mode refusal (a function too short
-or non-relocatable to probe) as an honest per-target skip with a reason.
+or non-relocatable to probe) as a genuine per-target skip with a reason.
 
-Scope honesty: probe-style boundary trampolining is *approximable* without Pin,
+Scope fidelity: probe-style boundary trampolining is *approximable* without Pin,
 so this is a robustness/ergonomics win, ranked below the SDE and XED-trace
 tracks. And note DynamoRIO's external-attach path **is** wired in this repo for
 the taint/dataflow tier (landed 2026-07-14,
@@ -48,7 +48,7 @@ commit is the docs commit `ca5ba2f`).
   (Capstone reg id), `addr`, `size`, `is_write`, `value_valid`, `wide` /
   `wide_off`, an inline `value` for widths ≤ 8, and a `step`. `asmtest_valtrace_t`
   (:93-116) holds three caller-owned arrays (`insn_off`, `recs`, `wide`) with the
-  honest append/`truncated` discipline. This is the record we fill.
+  faithful append/`truncated` discipline. This is the record we fill.
 - [src/ptrace_backend.c](../../../src/ptrace_backend.c) — the out-of-process
   single-step stepper. `read_pc_ret()` (:431) reads the tracee's PC, the integer
   **return register** (RAX on x86-64), and SP via `PTRACE_GETREGS`. This is the
@@ -342,7 +342,7 @@ user-facing note.
 
 **Goal.** A function Pin cannot probe (too short to hold a 14-byte probe, or
 non-relocatable) is reported as an explicit per-target **skip with a reason**,
-never a silent miss — the repo's honesty rule.
+never a silent miss — the repo's fidelity rule.
 
 **Steps.**
 1. **Pre-check** before every probe request (Pin's insertion APIs return `VOID`

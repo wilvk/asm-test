@@ -204,7 +204,7 @@ static long ibs_precover_elapsed_ms(const struct timespec *t0) {
  * at a managed-runtime target), then normalizes the sampled edges into covered-block
  * leaders and builds the memoization table from them.
  *
- * HONESTY: like the MSR rung beside it, the warm-up child re-executes code(args…) an
+ * FIDELITY: like the MSR rung beside it, the warm-up child re-executes code(args…) an
  * unspecified number of times in a fork-isolated copy — non-idempotent side effects
  * repeat THERE, never in the parent, which runs the routine again itself via the normal
  * block-step call right after this returns.
@@ -353,7 +353,7 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
      * the `msr` module) that also returns 0 off x86-64 Linux, so this rung self-skips
      * cleanly to block-step wherever it is absent. It shares AMD_LBR's 16-deep window
      * ceiling, so CEILING_FREE excludes it in lock-step with the fast AMD_LBR tier.
-     * HONESTY: like the fast begin/end tier it sits beside (and UNLIKE the fork-isolated
+     * FIDELITY: like the fast begin/end tier it sits beside (and UNLIKE the fork-isolated
      * steppers below), asmtest_amd_msr_trace runs the routine IN-PROCESS — a second real
      * execution, so non-idempotent side effects happen again and a faulting routine takes
      * down the tracer. call_auto_reset() first so the truncated fast-tier trace cannot

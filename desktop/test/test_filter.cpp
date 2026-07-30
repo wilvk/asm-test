@@ -4,7 +4,7 @@
 //      empty query shows N == M;
 //  (b) the sortable table reorders VIEW indices under a given sort spec while the
 //      underlying model order is unchanged;
-//  (c) the discrete time variant carries a non-empty intentional-honesty reason
+//  (c) the discrete time variant carries a non-empty intentional-fidelity reason
 //      for each discrete surface (Invocations, Disassembly logical time), so the
 //      discreteness is marked as deliberate, not a missing scrubber.
 #include <cstdio>

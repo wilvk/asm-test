@@ -12,7 +12,7 @@ reports the runs it could not hold, and when a *statistical* survey is the
 better tool than a longer exact window.
 
 Every lever here is **fidelity-neutral by construction**: a mis-tuned knob
-degrades to an honest `truncated` trace (or simply forgoes the stretch), never
+degrades to a faithful `truncated` trace (or simply forgoes the stretch), never
 to silently wrong offsets.
 
 ---
@@ -36,7 +36,7 @@ consequences bound what one capture can hold:
   throttling (`kernel.perf_event_max_sample_rate`).
 - **Too-fast single-shot routines.** The stack arrives only at a PMI, so a tiny
   routine that returns before any sample fires in-region is never captured at
-  all. The backend reports that honestly as `truncated`; the deterministic
+  all. The backend reports that faithfully as `truncated`; the deterministic
   boundary snapshot below exists for exactly this case.
 
 ## How truncation is reported
@@ -69,7 +69,7 @@ completeness ceiling — and re-run on the backend that comes back (typically
 
 The Tier-B stitched capture is bounded by the data ring: a long
 `sample_period=1` run emits more windows than the ring holds, the kernel drops
-the *newest* samples, and the trace honestly truncates. Raise `data_size`
+the *newest* samples, and the trace faithfully truncates. Raise `data_size`
 (bytes, rounded up to power-of-two pages; `0` selects the AMD default of
 256 KB) to extend reach. On a dedicated runner, also raise
 `kernel.perf_event_max_sample_rate` and set
@@ -84,7 +84,7 @@ taken branches instead of every one, so consecutive 16-deep windows overlap by
 `16 − N` entries and still stitch — at ~N× fewer interrupts, cutting the
 throttling and ring pressure that end a long capture. `N` must stay below the
 LBR depth (the backend clamps it) so an overlap always remains; an over-large
-value just produces a stitch gap and an honest `truncated`.
+value just produces a stitch gap and a faithful `truncated`.
 
 **The caveat that keeps the default at `0`:** a loop's taken edges repeat
 identically every iteration, which gives the stitcher no way to tell 1 skipped
@@ -164,7 +164,7 @@ Reaching for it is the wrong move when:
 - **the question is "where is it hot?", not "exactly what ran?"** — a hot-edge
   histogram over a longer window answers it without any ceiling to tune.
 
-The lane is honest about being statistical: it fills its own survey shape,
+The lane is candid about being statistical: it fills its own survey shape,
 never `asmtest_trace_t`, and a sampled edge proves presence but absence proves
 nothing. See
 [the IBS-Op lane](hardware-tracing.md#statistical-edges-out-of-band-the-amd-ibs-op-lane)

@@ -81,7 +81,7 @@ int main(void) {
     /* --- forced collisions: three distinct keys, one slot --------------- */
     /* Brute-force two MORE keys landing in entry 0's slot of the 128-slot
      * table. Alignment-shaped keys (function-address-like, low bits zero) so
-     * the search is honest about the mixer's real input distribution. */
+     * the search is faithful to the mixer's real input distribution. */
     size_t slot0 = (size_t)(asmspy_gh_mix(0x400000) & (h.cap - 1));
     uint64_t coll[2];
     size_t ncoll = 0;

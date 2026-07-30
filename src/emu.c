@@ -818,7 +818,7 @@ bool emu_step_capture(emu_t *e, size_t cap) {
         return false;
     /* R4: the parallel MXCSR ring. If it cannot be allocated the register ring is
      * still armed — the deck simply carries no MXCSR (emu_step_mxcsr_at returns
-     * false), honest degradation rather than a failed capture. */
+     * false), graceful degradation rather than a failed capture. */
     uint32_t *mxr = (uint32_t *)calloc(cap, sizeof *mxr);
     free(e->step_ring.buf); /* drop any previously armed ring */
     free(e->step_ring.mxcsr);
@@ -871,7 +871,7 @@ bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
 bool emu_step_mxcsr_at(const emu_t *e, size_t i, uint32_t *out) {
     /* R4: entry i's MXCSR pre-state, from the parallel ring (same head/index math
      * as emu_step_at). False when i is out of range or the MXCSR ring could not be
-     * allocated — the caller then omits MXCSR from the deck, honestly. */
+     * allocated — the caller then omits MXCSR from the deck, faithfully. */
     if (e == NULL || i >= e->step_ring.count || e->step_ring.mxcsr == NULL)
         return false;
     if (out != NULL)

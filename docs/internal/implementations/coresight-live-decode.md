@@ -459,7 +459,7 @@ scaffold" is replaced by the shipped reality, and the change is logged.
 2. [docs/guides/tracing/hardware-tracing.md](../../../docs/guides/tracing/hardware-tracing.md):
    the backend table row (line 39 "specific **AArch64** boards (scaffold)"),
    the callout at line 54, and the limitation bullet at line 545 — same
-   correction. Keep the honest CI caveat: live capture still cannot run on
+   correction. Keep the candid CI caveat: live capture still cannot run on
    standard CI (board runner is
    [self-hosted-ci-runners.md](self-hosted-ci-runners.md)'s scope).
 3. Update the status paragraph in

@@ -32,7 +32,7 @@ int main() {
                 hot++;
             if (r.covered)
                 covered++;
-            // The rule that keeps the gutter honest: coverage is what a
+            // The rule that keeps the gutter faithful: coverage is what a
             // `coverage` event recorded (block starts), never "this executed".
             vt::eq("loop covered==block_start at " + std::to_string(r.off),
                    r.covered, r.block_start);

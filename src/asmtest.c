@@ -83,7 +83,7 @@ void asmtest_note_recording(const char *path, long step) {
 }
 
 /* Called at the top of every test: name this test's recording (when armed) and
- * CLEAR any previous note. The clear is what keeps --no-fork honest — in-process
+ * CLEAR any previous note. The clear is what keeps --no-fork accurate — in-process
  * runs share these globals, and a stale note would attribute one test's
  * recording to the next test's failure. */
 static void asmtest_record_begin(const char *suite, const char *name) {
@@ -1819,7 +1819,7 @@ static void print_tap_result(int num, const test_result_t *r,
         printf("  at:  %s:%d\n", r->file, r->line);
         /* Record mode (--record-dir): additive YAML keys, so every existing
          * substring pin in tests/expect.sh stays green. A suite with no
-         * producer glue noted nothing and emits neither key — the honest
+         * producer glue noted nothing and emits neither key — the graceful
          * degrade, not a `recording: (none)` line nobody can open. */
         if (r->rec_path[0]) {
             printf("  recording: %s\n", r->rec_path);

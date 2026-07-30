@@ -45,7 +45,7 @@ internal static class Program
     static int Main(string[] args)
     {
         // The re-exec'd child: run ONLY the fatal leg, then let the process die (or, if
-        // single-step self-skipped here, exit 0 so the parent can say so honestly).
+        // single-step self-skipped here, exit 0 so the parent can say so truthfully).
         if (System.Array.IndexOf(args, "--fatal-child") >= 0)
             return RunFatalChild();
 
@@ -126,7 +126,7 @@ internal static class Program
 
     // The child. Arm the in-process whole-window single-step scope and run the hostile block.
     // This is the leg EXPECTED to die (exit 133). If single-step self-skips here, the block runs
-    // uninstrumented and the child exits 0 — the parent interprets that honestly.
+    // uninstrumented and the child exits 0 — the parent interprets that faithfully.
     static int RunFatalChild()
     {
         Console.WriteLine("   [child] arming in-process whole-window (new AsmTrace()) on this thread…");
@@ -146,7 +146,7 @@ internal static class Program
         }
 
         // Reaching here means we were NOT force-killed — the predicted fatal boundary did not
-        // fire on this host. The parent reads exit 0 and reports that honestly.
+        // fire on this host. The parent reads exit 0 and reports that faithfully.
         Console.WriteLine("   [child] survived (no force-kill) — closing the window normally.");
         Console.Out.Flush();
         return 0;

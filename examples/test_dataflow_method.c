@@ -166,7 +166,7 @@ static void test_attribute(void) {
     CHECK(few[0].version == 3 && few[2].version == 5,
           "attribute: the capped prefix still attributes correctly");
 
-    /* empty method-map: every step unattributed, count still honest */
+    /* empty method-map: every step unattributed, count still accurate */
     asmtest_method_attr_t none[NSTEPS];
     int e = asmtest_method_attribute(NULL, 0, v, none, NSTEPS);
     CHECK(e == NSTEPS && none[0].record == -1 && none[0].method == -1,

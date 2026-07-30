@@ -226,7 +226,7 @@ static VOID OnEntry(ADDRINT rdi, ADDRINT rsi, ADDRINT rdx, ADDRINT rcx,
 /* Exit: RAX (+ RDX for a 128-bit return) and RFLAGS — the integer return set,
  * is_write = true. The FP return register is not captured: probe-mode IARG_CONTEXT
  * has no SSE state (see the entry note) and IARG_FUNCARG addresses ARGUMENTS only,
- * not returns — an honest Pin-probe-mode limitation. Publishes done with a release
+ * not returns — a genuine Pin-probe-mode limitation. Publishes done with a release
  * store (the taint-shm handshake). */
 static VOID OnExit(ADDRINT rax, ADDRINT rdx, const CONTEXT *ctxt) {
     if (g_chan == 0)

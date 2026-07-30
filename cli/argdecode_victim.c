@@ -113,7 +113,7 @@ int main(void) {
         syscall(SYS_getppid); /* T9: a second arity-ZERO shape */
 
         /* The DELIBERATELY-UNDESCRIBED control: asmspy carries no arg-shape for
-         * sysinfo, so it must render the honest unknown-arity form
+         * sysinfo, so it must render the truthful unknown-arity form
          * (sysinfo(<3 raw words>, ...) = 0) instead of inventing a fixed arity of
          * three. This is a DETERMINATE source of that "..." every iteration — the
          * smoke used to rely on the incidental restart_syscall, which the kernel

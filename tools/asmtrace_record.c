@@ -14,7 +14,7 @@
  * each instruction, by descriptor reference (`emu_x86_regs_t@x86_64/sysv`), the
  * per-step producer the teaching scrubber and ABI x-ray replay from. When more
  * steps run than the ring holds, the earliest are evicted and the footer says
- * so (`truncated` + `drops.lost`): an over-cap deck is honest data, never a
+ * so (`truncated` + `drops.lost`): an over-cap deck is faithful data, never a
  * silent short one.
  *
  * Deterministic by construction, which is what makes the output a GOLDEN
@@ -140,7 +140,7 @@ static int g_statediff = 0;
 /* Emit one `blame` backward-attribution event (33 R6 T1) for `seed` step: the
  * backward def-use slice (asmtest_slice_backward_seed — the SAME pure pass the
  * TUI and desktop slicers are parity-pinned against) is the cone of producing
- * steps, and the sink-alone case is the honest born-of-untraced-state verdict
+ * steps, and the sink-alone case is the truthful born-of-untraced-state verdict
  * ("provenance starts at instrumentation"), never an empty cone. `loc` is the
  * seed step's write record (the blamed value), or NULL. The def-use graph `g` is
  * already built (record_bytes calls asmtest_defuse_build); this is a projection
@@ -296,7 +296,7 @@ static const uint8_t FP_SCALE_ADD[] = {
 /* cell is hot — so the listing lives beside the bytes.                  */
 /* ------------------------------------------------------------------ */
 
-/* scene_hot_loop(n)  [rdi=n] — the smallest honest source of HEAT. The
+/* scene_hot_loop(n)  [rdi=n] — the smallest genuine source of HEAT. The
  * three-instruction loop body runs n times while the prologue and epilogue run
  * once each, so the terrain has a hot cell over cold ones rather than a uniform
  * plane. With n = 3 the executed stream is 13 steps and offset 0x06 is hit 3
@@ -444,7 +444,7 @@ static uint64_t emit_regstates_arm64(asmtrace_writer_t *w, const uint8_t *code,
  * event per held pre-state of the arm64 per-step ring
  * (emu_arm64_regs_t@aarch64/aapcs64), so an arm64 Author-mode capture ALSO
  * drives the Scrubber's register time-travel, mirroring how the x86-64 ring
- * already does. The header's `arch` is honestly "aarch64" (the guest, via the
+ * already does. The header's `arch` is accurately "aarch64" (the guest, via the
  * writer override) even though the recording is produced on an x86-64 lane. No
  * mem/blame: those ride their own opt-ins and are not armed here. The reader
  * needs NO change either way: the value fabric is already arch-parameterized
@@ -650,7 +650,7 @@ static void regs_to_regfile(asmtest_regfile_t *rf, const emu_x86_regs_t *r) {
  * emit one `regstate` event per held pre-state (oldest first). Returns the
  * number of earliest steps the ring EVICTED (emu_step_dropped): the caller
  * folds a non-zero count into the footer as truncation, so an over-cap run is
- * honest data — the held deck is steps [dropped, dropped+count) and the footer
+ * faithful data — the held deck is steps [dropped, dropped+count) and the footer
  * says how many fell off the front. The ring is x86-64-guest only, exactly the
  * corpus's own arch gate; where emu_step_capture cannot arm (non-x86-64 or an
  * allocation failure) nothing is written and 0 is returned.
@@ -694,7 +694,7 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
             if (!emu_step_at(e, i, NULL, &regs))
                 continue;
             /* R4: the per-step MXCSR from the parallel ring — 0 if the ring could
-             * not be allocated, which the vec serializer emits honestly. */
+             * not be allocated, which the vec serializer emits faithfully. */
             if (want_vec)
                 emu_step_mxcsr_at(e, i, &mxcsr);
             emit_regstate(w, &regs, want_vec, mxcsr);
@@ -747,7 +747,7 @@ static int record_bytes(const char *dir, const char *out, const char *label,
  * `label` is what the recording's `note` calls the routine; `recs_cap` bounds
  * the operand buffer (a SMALL cap is how the truncated loom fixture is made —
  * the producer then flips `truncated` and the footer says so, which is a D7
- * dishonesty fixture rather than a hand-edited file). `steps_cap` arms the
+ * low-fidelity fixture rather than a hand-edited file). `steps_cap` arms the
  * per-step register ring (0 = no regstate); a small cap over a longer routine
  * is how the register-ring truncation fixture is made, the same way.
  *
@@ -889,7 +889,7 @@ static int record_bytes_fp(const char *dir, const char *out, const char *label,
      * for a routine with a callee-save restore between the value and the `ret`
      * (`... mov rax, rbx; pop rbx; ret`) it seeds the restore instead. Either way
      * the emitted cone is the EXACT backward slice of the seeded step — the seed is
-     * a which-value POLICY, never a source of dishonesty. Whatever the seed, a sink
+     * a which-value POLICY, never a source of fidelity loss. Whatever the seed, a sink
      * with no producer is the born-untraced verdict. Off by default so the golden
      * corpus is unchanged unless a fixture or --blame arms it; needs g (a routine
      * that produced no def-use graph carries none, e.g. the scene/ABI paths). */
@@ -966,7 +966,7 @@ static int record_one(const char *dir, const rec_routine_t *r) {
  * df_edge / regstate: a scene golden that carried them would be pinning the
  * value producer's field order twice, which the corpus loop already does.
  *
- * The basis is honestly "abs". The producer maps the routine window at
+ * The basis is accurately "abs". The producer maps the routine window at
  * REC_CODE_BASE (src/dataflow_emu.c), so REC_CODE_BASE + insn_off IS the
  * address the guest executed — not a rebasing invented at write time. The
  * corpus loop writes the same measurement region-relative because the trace
@@ -1661,7 +1661,7 @@ int main(int argc, char **argv) {
                          sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0, 0, 0,
                          0) != 0)
             failed++;
-        /* The D7 dishonesty fixture: a four-record operand buffer fills mid-run,
+        /* The D7 low-fidelity fixture: a four-record operand buffer fills mid-run,
          * the producer flips `truncated`, and the footer declares it. Generated,
          * never hand-edited — a fixture nobody can produce is a fixture nobody
          * can trust. */
@@ -1701,10 +1701,10 @@ int main(int argc, char **argv) {
                          LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 65536,
                          0, 0, 1 /* --blame */, 0) != 0)
             failed++;
-        /* The D7 honesty fixture for T1: `identity(a) = a` (mov rax, rdi; ret).
+        /* The D7 fidelity fixture for T1: `identity(a) = a` (mov rax, rdi; ret).
          * Its penultimate step reads rdi — an ARGUMENT, produced by no traced
          * instruction — so the backward slice is the sink ALONE and the blame is
-         * born_untraced: an honest "provenance starts at instrumentation" verdict,
+         * born_untraced: a truthful "provenance starts at instrumentation" verdict,
          * never an empty cone. */
         if (record_bytes(dir, "blame-untraced", "identity (--blame)",
                          BLAME_UNTRACED, sizeof BLAME_UNTRACED, df_args, 1,
@@ -1723,12 +1723,12 @@ int main(int argc, char **argv) {
             if (record_bytes(dir, "loom-sum-via-rbx", "sum_via_rbx", rbx,
                              sizeof rbx, rbx_args, 2, 65536, 0, 0, 0, 0) != 0)
                 failed++;
-            /* The T2 register-ring dishonesty fixture (09-teaching-producers.md):
+            /* The T2 register-ring low-fidelity fixture (09-teaching-producers.md):
              * the SAME sum_via_rbx bytes with a TWO-entry step ring, so it holds
              * only the last two pre-states and evicts the rest. The operand
              * buffer is UNcapped (65536), so this truncation is the register
              * ring's alone — the footer's `truncated` flips and `drops.lost`
-             * carries the evicted count, exactly the D7 honesty loom-truncated
+             * carries the evicted count, exactly the D7 fidelity loom-truncated
              * shows for operands. The name ends in `-truncated` because the
              * golden corpus test (desktop/test/test_golden.cpp) requires a flat
              * golden to be truncated IFF so named. Generated, never hand-edited. */
@@ -1807,7 +1807,7 @@ int main(int argc, char **argv) {
     /* The AArch64 value-fabric golden (R5 T2, doc 32): the first non-x86-64
      * guest. Generated on the SAME x86-64 lane (Unicorn emulates the arm64
      * guest), so it rides the existing ASMTRACE_GOLDEN_OK gate; deterministic and
-     * byte-stable like every other golden. The header's arch is honestly
+     * byte-stable like every other golden. The header's arch is accurately
      * "aarch64" (the guest), and the Loom / Slice / Timeline render its fabric
      * with no desktop change. Baked steps_cap = 8 comfortably holds all four
      * executed steps (add/add/mov/ret), so this is also the arm64 regstate
@@ -1820,12 +1820,12 @@ int main(int argc, char **argv) {
                          ARM64_DF_CHAIN, sizeof ARM64_DF_CHAIN, arm64_args, 2,
                          8) != 0)
             failed++;
-        /* The D7 dishonesty fixture for the arm64 ring (mirrors
+        /* The D7 low-fidelity fixture for the arm64 ring (mirrors
          * regstate-truncated.asmtrace): the SAME chain with a two-entry step
          * ring over four executed steps, so the earliest two pre-states are
          * evicted. The value fabric itself is uncapped, so this truncation is
          * the register ring's alone — the footer's `truncated` flips and
-         * `drops.lost` counts the evicted prefix, exactly the D7 honesty
+         * `drops.lost` counts the evicted prefix, exactly the D7 fidelity
          * `regstate-truncated.asmtrace` shows for x86-64. `-truncated` in the
          * name so the golden test (desktop/test/test_golden.cpp) requires it
          * to actually be truncated. Generated, never hand-edited. */

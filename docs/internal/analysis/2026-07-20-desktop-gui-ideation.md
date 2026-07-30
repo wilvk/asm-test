@@ -125,7 +125,7 @@ during review.
 | View | Verdict | Notes |
 |---|---|---|
 | **Def-use slice explorer** | **Build — the crown jewel** | The only view no existing tool offers: node-link graph over `defuse[]`, click a step → backward/forward slice cones lit (`asmtest_slice_backward/forward`). The **emulator producer is cross-platform, deterministic, no ptrace, no root** — ships early, everywhere, seeded by the conformance corpus. |
-| Operand-value timeline | Build now | What each step read/wrote — the honest widget the dataflow capture supports today; `asmspy_dataview.h` already computes the annotations. |
+| Operand-value timeline | Build now | What each step read/wrote — the genuine widget the dataflow capture supports today; `asmspy_dataview.h` already computes the annotations. |
 | Register time-travel scrubber | Build **after funding the producer** | Small emulator-only addition: per-step register capture ring via `UC_HOOK_CODE`. Until then it has no data and must not be scheduled as UI work. |
 | Trace canvas (heat + block boundaries + coverage gutter) | Build (Author mode) | Per-offset execution counts, block partition, lcov overlay on the original `.s`; coverage union across inputs as accumulating heat. Observer-mode variant is "latest invocation #N" with the truncation flag, not a stream. |
 | Hot-edge graph (IBS) | Build — renamed | Edge-weighted graph / ranked table with mispredict % as a channel. **Not a flame graph** (no stacks). Carry `branch/total`, `THROTTLED`, `lost`, window ms in the chrome. |
@@ -211,7 +211,7 @@ C-direct (or the Python binding — the only one that both reads the ABI
 manifest and ships the full slicer) and treat the frontend as a renderer of
 `.asmtrace`/speedscope files, never a live driver.
 
-## UX principles (the repo's honesty culture, carried into the GUI)
+## UX principles (the repo's fidelity culture, carried into the GUI)
 
 - **Truncation is loud** — `truncated=true` is a persistent banner, never a
   silent cutoff.

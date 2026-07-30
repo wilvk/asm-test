@@ -278,7 +278,7 @@ best-effort on a live runtime — see [Call descent levels](../guides/tracing/na
 canonical *import + scope* shape. It auto-names the region from the call site
 (`[CallerMemberName]` / `[CallerLineNumber]`), and `Dispose` renders the executed
 assembly into `Path` (and to stdout unless `emit: false`); `Truncated` is the
-thread-scope honesty bit.
+thread-scope fidelity bit.
 
 ```csharp
 HwTrace.Init(HwBackend.SingleStep);
@@ -303,7 +303,7 @@ using (ww = new AsmTrace(emit: false))     // zero config: captures whatever run
     HotPath(data);
 // ww.Addresses    — the raw absolute addresses, in execution order
 // ww.CountInRange(base, len)              — attribute a known native region
-// ww.Truncated / ww.Armed / ww.SkipReason — the honesty surface
+// ww.Truncated / ww.Armed / ww.SkipReason — the fidelity surface
 ```
 
 **Managed-method labelling (§D0.1/§D0.2)** — `byMethod: true` gives the scope an
@@ -344,7 +344,7 @@ a region, and self-skips (never throws) if resolution or arming fails. `Invoke` 
 ```csharp
 using var t = AsmTrace.Method((Func<long,long,long>)HotPath, emit: false);
 var r = (long)t.Invoke(20L, 22L);   // Invoke is the library's own NoInlining call site
-// t.Path is exactly HotPath's executed body; t.Armed / t.SkipReason are the honesty bits
+// t.Path is exactly HotPath's executed body; t.Armed / t.SkipReason are the fidelity bits
 ```
 
 `Invoke` marshals through a `(long…)->long` shim table (arities 0–6); a signature it cannot

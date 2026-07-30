@@ -5,7 +5,7 @@
 // value it computes is asserted headlessly (test_cvd). The palette (ui/theme.h)
 // is verified through THIS: simulate protanopia / deuteranopia / tritanopia over
 // the categorical hues, and check contrast at the smallest font. Where two hues
-// collapse under a simulation, the honest guarantee is the SECOND CHANNEL
+// collapse under a simulation, the real guarantee is the SECOND CHANNEL
 // (ui/legend.h's encoding table) — this file only measures; it never pretends a
 // hue alone suffices.
 #ifndef ASMDESK_UI_CVD_H

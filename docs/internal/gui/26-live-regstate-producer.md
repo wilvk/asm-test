@@ -13,7 +13,7 @@
 > (`desktop/src/analysis/stepindex.cpp`) read `regstate` by field name, and doc
 > 25 promotes a live capture into the workspace model — so a live `regstate`
 > stream makes `si.present()` true and the Scrubber lights up with **zero desktop
-> change** (beyond T4's honesty banner). This is a producer brief.
+> change** (beyond T4's fidelity banner). This is a producer brief.
 
 ## Why this work exists
 
@@ -55,7 +55,7 @@ completes the set by lighting the Scrubber (still perturbing + torn, labelled).
   threaded at `:3541` (SM_DATAFLOW) / `:3604` (SM_AUTO), echoed in
   `serve_params_json` (`:3422`).
 - **The bound** — the valtrace `steps_cap` (`cli/asmspy_engine.c:3656`, truncate-
-  when-full, honest via `vt->truncated`) and the serve `paused` gate
+  when-full, faithful via `vt->truncated`) and the serve `paused` gate
   (`cli/asmspy.c:144`). **Not** the emulator's drop-oldest ring.
 - **The arch gate is free** — `asmspy_engine_dataflow` already refuses i386 at
   `cli/asmspy_engine.c:3635` (`ASMSPY_ETRACEE_I386`); the engine is x86-64-fixed
@@ -75,7 +75,7 @@ armed by a new flag on the valtrace / engine call. Populate it from the `regs`
 already read at `src/dataflow_ptrace.c:1032`, at the `open_step` seam
 (`:745`/`:1043`) so it is the instruction's pre-state. Grow it in lockstep with
 the step buffer, bounded by the existing `steps_cap` (`cli/asmspy_engine.c:3656`)
-— overflow stays honest via `vt->truncated`. x86-64 only (the engine already
+— overflow stays faithful via `vt->truncated`. x86-64 only (the engine already
 refuses i386 at `:3635`); when disarmed, nothing is captured and the cost is one
 untaken branch per step.
 
@@ -90,7 +90,7 @@ one `regstate` event per step **in `df_step` order** from the captured file,
 reusing `emit_regstate`'s exact body (`tools/asmtrace_record.c:160-178`) with
 `eflags` → `rflags`. Emit under a new descriptor **`user_regs@x86_64/sysv`** with
 the **same field names** as the emulator's (so the Scrubber renders it unchanged)
-but an honest id naming the ptrace source; embed the descriptor in the header
+but an accurate id naming the ptrace source; embed the descriptor in the header
 (`descriptors`, asmtrace-schema.md). Because the sink is shared, this lands for
 both live serve sessions and `asmspy --dataflow --record` files at once.
 
@@ -113,7 +113,7 @@ adds the register ring over the window already bounded by `--max`.
 **Done when.** `--steps` (CLI) and `steps:true` (serve) turn the ring on, the
 `started` echo shows it, and its omission leaves output byte-identical to today.
 
-### T4 — honesty: descriptor, provenance, Scrubber banner  (S, depends on: T2)
+### T4 — fidelity: descriptor, provenance, Scrubber banner  (S, depends on: T2)
 
 The live `regstate` is the **real architectural** register file (ground truth,
 more authoritative than emulation) captured **perturbingly** (single-step). Embed
@@ -124,7 +124,7 @@ the Scrubber's absent-reason accurate for a live `dataflow` capture *without*
 the register ring") distinct from the emulator's. A statistical (`sample`)
 session never single-steps, so it never carries `regstate` — say so.
 
-**Done when.** the descriptor is embedded and named honestly; the live Scrubber
+**Done when.** the descriptor is embedded and named accurately; the live Scrubber
 carries the perturb+torn caveat; the absent-reasons distinguish live-no-`--steps`
 from emulator-no-`--steps` from statistical-can't.
 
@@ -153,7 +153,7 @@ emulator modulo base offsets.
 ## Task order & parallelism
 
 `T1` (capture) → `T2` (emit) are the spine and must be sequential. `T3` (opt-in)
-and `T4` (honesty) both build on `T2` and parallelise. `T5` verifies `T2`+`T3`.
+and `T4` (fidelity) both build on `T2` and parallelise. `T5` verifies `T2`+`T3`.
 
 Order: `T1` → `T2` → (`T3` ∥ `T4`) → `T5`.
 

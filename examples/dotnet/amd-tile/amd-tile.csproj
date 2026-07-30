@@ -26,7 +26,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <!-- The checkpoint is planted on the method's PREPARED entry. Tiered compilation would
          re-JIT a hot method to a NEW address mid-window, leaving the breakpoint on the
-         abandoned body — it would simply stop firing (honestly visible as fewer islands, never
+         abandoned body — it would simply stop firing (faithfully visible as fewer islands, never
          as wrong addresses). Pinning tiering off keeps this demo's checkpoint valid for the
          whole window; see AsmTrace.Checkpoints for the general guidance. -->
     <TieredCompilation>false</TieredCompilation>

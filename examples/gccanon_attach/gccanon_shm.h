@@ -36,7 +36,7 @@
 
 /* One GC's batch can be large (the attach probe measured ~500 ranges per compacting gen2 GC, and
  * 160,032 relocating ranges over 320 GCs). Sized to hold several whole batches; overflow is
- * reported honestly via moves_total rather than silently dropped, because a dropped range is
+ * reported faithfully via moves_total rather than silently dropped, because a dropped range is
  * precisely a missed relocation. ~2 MB of shm. */
 #define GCCANON_MAX_MOVES 65536
 

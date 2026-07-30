@@ -1,6 +1,6 @@
 # asm-test — macOS Clean-Room & Portability Test Plan
 
-Makes the macOS dlopen-binding install-tests **clean-room honest** (the bundled
+Makes the macOS dlopen-binding install-tests **clean-room faithful** (the bundled
 native lib is the *only* thing that can satisfy the load — never a leaked dev
 `build/`, a Homebrew dylib, or a `DYLD_*` override) and **portable across both
 Darwin arches** (arm64 + x86-64), without depending on the scarce/slow hosted
@@ -338,7 +338,7 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 > **Recommendation: Track D is now a genuine backstop rather than a gap-filler** — worth
 > keeping for on-demand local use with no CI dependency, but no longer the "try it first"
 > priority, because the coverage it was standing in for is now green on real hardware. The
-> honest remaining unique value is proving a clean-room x86 `dlopen` on a *vanilla* Intel-macOS
+> genuine remaining unique value is proving a clean-room x86 `dlopen` on a *vanilla* Intel-macOS
 > userland that Apple's CI image does not represent. Weigh that against ~30 GB, a brittle
 > shakedown, and the EULA note before spending the time.
 >
@@ -367,14 +367,14 @@ convention.
     assert over SSH, capture the result, tear the container down.
 - **`HAVE_KVM` guard** — the target hard-errors with a clear message if
   `/dev/kvm` is absent, so it's a no-op on laptops/hosted CI and only runs where it can.
-- **Honest tradeoffs (documented in `make help` + docs):** x86-only (OpenCore path —
+- **Candid tradeoffs (documented in `make help` + docs):** x86-only (OpenCore path —
   no arm64 guest); brittle "virtualized Hackintosh" that can break on macOS
   point-updates; EULA gray on non-Apple hosts; tens-of-GB image; software-rendered
   graphics (irrelevant for a headless CLI smoke). **Not a duplicate** of
   `test-macos-x86-rosetta` — that proves the x86 *ABI* under Rosetta on Apple Silicon;
   this proves a *clean-room x86 dlopen* on a vanilla Intel macOS userland.
 
-## Track E — CI wiring + docs — **done (2026-07-07), with two honest exceptions**
+## Track E — CI wiring + docs — **done (2026-07-07), with two disclosed exceptions**
 
 > **Status: implemented.** The hosted lanes are all wired: the release.yml
 > per-binding smokes now run under `source scripts/clean-env.sh` (see Track A's

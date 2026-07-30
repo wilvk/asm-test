@@ -52,9 +52,9 @@ arm64 run path are all landed and docker-verified**:
   `steps_cap = 8` ring into the **same** `arm64-df-chain.asmtrace` golden (the
   arm64 analogue of `add_signed`'s worked example — no separate `--steps`-style
   flag exists yet), so its `regstate` events now show x2=12 / x3=24 / x0=24 at
-  the SAME steps the value fabric already proved, plus a new D7 dishonesty
+  the SAME steps the value fabric already proved, plus a new D7 low-fidelity
   fixture `arm64-regstate-truncated.asmtrace` (`steps_cap = 2`, the ring evicts
-  2 of 4 steps, `truncated`/`drops.lost` honest). **No desktop/reader change**:
+  2 of 4 steps, `truncated`/`drops.lost` faithful). **No desktop/reader change**:
   `desktop/src/analysis/stepindex.cpp`'s `read_values` already renders any
   integer `values` key it does not specifically name via its generic
   "extra keys, sorted" fallback, so the Scrubber time-travels an arm64 capture
@@ -64,7 +64,7 @@ arm64 run path are all landed and docker-verified**:
   coverage in `examples/test_emu.c`
   (`emu_arm64.step_capture_records_prestates` /
   `_drops_oldest_and_counts` / `_arming_survives_across_calls_on_same_handle`).
-  Deferred, honestly out of scope for this root: arm64 snapshot/restore (an
+  Deferred, frankly out of scope for this root: arm64 snapshot/restore (an
   x86-64 `emu_t` / Reweave concern) and a vector/NEON regstate deck (a further
   descriptor row, like R4 was for x86-64).
 - **T3 Author-mode arm64 run — DONE.** The Author door's Run button dispatches
@@ -75,12 +75,12 @@ arm64 run path are all landed and docker-verified**:
   `emu_call_traced`/`emu_result_t` path — T3's OWN changes touch no `emu.c`
   code (that is the T2-regstate item above, landed separately so the two
   did not collide). The result is a genuinely different SHAPE,
-  `author_result_t::ran_value_fabric` (step + def-use-edge counts, an honest
+  `author_result_t::ran_value_fabric` (step + def-use-edge counts, a faithful
   `vf_note`), which deliberately never populates the x86-64 `ran`/register/
   fault fields: this producer captures no register file and no fault
   kind/address, and the door says so in every branch (a clean run, a run that
   did not reach the return sentinel, a truncated buffer, and a producer setup
-  failure all get distinct, honest notes — `author_vm.h`'s
+  failure all get distinct, faithful notes — `author_vm.h`'s
   `author_valuefabric_t` / `author_apply_run_vf`) rather than rendering
   zeros. Saving the run materialises the fabric as `trace` + `df_step` +
   `df_edge` events through the SAME writer the `codeimage` event already used
@@ -96,7 +96,7 @@ arm64 run path are all landed and docker-verified**:
   `author_arch_table()` — one source of truth, not a second hardcoded arch
   list that could drift from the door's own gate. Tested in
   `test_author_vm.cpp`: the arch-gating table flip, all four
-  `author_apply_run_vf` honesty branches, and an end-to-end
+  `author_apply_run_vf` fidelity branches, and an end-to-end
   `author_recording` → `recording_to_asmtrace` → `load_recording` round-trip
   carrying `trace`/`df_step`/`df_edge` for a synthetic arm64 fabric (the same
   `arm64_df_chain` listing as the T2 golden). `desktop-ui-test`'s Author
@@ -104,7 +104,7 @@ arm64 run path are all landed and docker-verified**:
   per-arch interaction test existed for x86-64 to mirror, so none was invented
   uniquely for arm64 either; noted here rather than silently left out.
 
-**Honest limits that remain (not scoped as tasks — see Non-goals below):**
+**Acknowledged limits that remain (not scoped as tasks — see Non-goals below):**
 arm64 snapshot/restore + Reweave, and a vector/NEON regstate deck, both noted
 in their landing bullets above as further, separate seams — not this root.
 
@@ -116,7 +116,7 @@ pattern, another `emu_<arch>_t` ring instance), exactly as designed.
 ## Why this work exists
 
 The plan states the limit plainly and the code enforces it: "value fabrics are
-x86-64-guest-only until a per-guest valtrace producer exists" (plan Honest
+x86-64-guest-only until a per-guest valtrace producer exists" (plan Acknowledged
 limits); Author mode showed non-x86-64 code as bytes + a labelled "run/trace is
 x86-64-only in v1" ([06](06-doors-and-learning.md) door;
 `desktop/src/author_vm.cpp`) — **since T3 above, this is no longer true for
@@ -192,7 +192,7 @@ and an arm64 GP-zero set + layout.
 Loom, Slice, Timeline, and Scrubber render it via the descriptor mechanism with
 **no desktop change**; a golden arm64 recording is committed and byte-stable.
 
-### T3 — Author-mode arm64 + honest gate flip  (M, depends on T2)
+### T3 — Author-mode arm64 + faithful gate flip  (M, depends on T2)
 
 **Goal.** Author mode runs/traces arm64 code, and the "x86-64-only in v1" label
 becomes conditional.
@@ -205,7 +205,7 @@ becomes conditional.
    positive capability where the guest is available.
 
 **Done when.** An arm64 routine authored in the box runs on the emulator and
-weaves a fabric; unsupported arches keep an honest, now-accurate label;
+weaves a fabric; unsupported arches keep a faithful, now-accurate label;
 `test_author` / `desktop-ui-test` cover the arm64 path.
 
 ## Unblocks / downstream
@@ -218,14 +218,14 @@ weaves a fabric; unsupported arches keep an honest, now-accurate label;
 - The seam generalizes: a third guest (RISC-V) is then another `df_guest`
   instance, not another rewrite.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **N-way lockstep braids stay out of scope** — this root lands the per-guest
   producer, not the cross-ISA semantic alignment the plan killed as unfunded.
 - Live (ptrace) arm64 capture is a separate host concern (the `--dataflow` engine
   is x86-64-fixed under its own guards); this root is the **emulator** value
   producer. A live arm64 path is a further brief.
-- Each guest ships its own descriptor + honesty fixtures (D6/D7) — no guest is
+- Each guest ships its own descriptor + fidelity fixtures (D6/D7) — no guest is
   "mostly x86-64 with tweaks"; the seam is explicit per arch.
 
 ## Cross-references
@@ -236,4 +236,4 @@ Producer [dataflow_emu.c](../../../src/dataflow_emu.c); operand enumerator
 [06](06-doors-and-learning.md), [09](09-teaching-producers.md). Relates to
 [R4](31-wide-register-deck.md) (each guest's vector deck is that guest's
 descriptor). Missing-enumerator-arm policy: repo `CLAUDE.md` (add it, do not
-self-skip). Golden/honesty D6/D7.
+self-skip). Golden/fidelity D6/D7.

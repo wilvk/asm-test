@@ -14,7 +14,7 @@
 //    touched, so "the survey disagrees" is not a conclusion available here.
 //  - An exact companion that recorded something the fabric did not is still
 //    "unconfirmed", not "conflicts": two exact producers with different
-//    windows, scopes or address bases will honestly disagree about coverage
+//    windows, scopes or address bases will legitimately disagree about coverage
 //    without either being wrong.
 //
 // So every entry reads either "corroborates" or "recorded by <producer> —

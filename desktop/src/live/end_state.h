@@ -125,7 +125,7 @@ inline std::string end_cause_fix(EndCause c) {
     return std::string();
 }
 
-// The graded honesty tier the placard renders through (T1's components): the
+// The graded fidelity tier the placard renders through (T1's components): the
 // torn causes and the protocol mismatch are INTEGRITY (loud, non-collapsible); a
 // clean stop is NEUTRAL.
 inline bool end_cause_is_integrity(EndCause c) {

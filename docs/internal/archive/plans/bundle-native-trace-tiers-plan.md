@@ -236,7 +236,7 @@ the existing GPL "written offer" is unaffected.
    the package**; a `--where`-style assert fails if it resolves from `build/`.
 2. **Track 3:** same for `NativeTrace.available()` on `linux-x86_64` with no
    `DYNAMORIO_HOME`; the bundled `libdynamorio.so` resolves via `$ORIGIN`.
-3. **Cross-platform honesty:** the macOS and `linux-arm64` (drtrace) packages install
+3. **Cross-platform fidelity:** the macOS and `linux-arm64` (drtrace) packages install
    and **self-skip** the absent tier with a clean message, no crash.
 4. **`package-libs-verify`:** passes for a correct merged tree; fails a tier lib with a
    leaked absolute rpath or a missing license note, and fails a darwin slot that wrongly

@@ -13,7 +13,7 @@
  *   asmtrace_export --lcov       [--name=SF]    [--out=FILE] REC.asmtrace
  *   asmtrace_export --dot-tree   [--out=FILE]   REC.asmtrace
  *
- *   exit 0 = wrote output; 1 = I/O or parse error; 2 = honest refusal.
+ *   exit 0 = wrote output; 1 = I/O or parse error; 2 = genuine refusal.
  *
  * Dependency-free by construction: one TU, C11, libc only — no engine objects,
  * no Capstone (the schema's optional per-event "disasm" string is why), no JSON
@@ -25,9 +25,9 @@
  * per-stream (trace events) event ordinal. speedscope is told so via
  * "unit":"none"; the Chrome/Perfetto output says so in otherData.ts_unit. A
  * viewer that reads those numbers as microseconds is reading a number we never
- * measured — hence the honest labels rather than a fabricated clock.
+ * measured — hence the accurate labels rather than a fabricated clock.
  *
- * HONESTY RULES, each with a test in scripts/test-asmtrace-export.sh:
+ * FIDELITY RULES, each with a test in scripts/test-asmtrace-export.sh:
  *   - `survey` events are STATISTICAL hot-edge histograms. They are never
  *     exported as stacks, in any mode: an edge is evidence an edge was seen,
  *     never that a call happened at a point in time. A survey-only recording is
@@ -427,7 +427,7 @@ typedef struct {
     char basis_other[16];
     int basis_mixed;
 
-    /* honesty */
+    /* fidelity */
     int has_end;
     int truncated;
     int64_t lost;
@@ -732,7 +732,7 @@ static int load(const char *path, recording *r, int *rc) {
 }
 
 /* ------------------------------------------------------------------ */
-/* shared refusal + honesty helpers                                     */
+/* shared refusal + fidelity helpers                                    */
 /* ------------------------------------------------------------------ */
 
 /* The recording is less than it looks: buffers filled, samples lost, or the
@@ -1137,7 +1137,7 @@ static int emit_lcov(const recording *r, FILE *o, const char *name) {
     free(v);
 
     if (rec_incomplete(r)) {
-        /* lcov has no comment syntax, so the honesty channel is stderr — the
+        /* lcov has no comment syntax, so the fidelity channel is stderr — the
          * format stays pristine for genhtml. */
         char why[128];
         incomplete_reason(r, why, sizeof why);
@@ -1279,7 +1279,7 @@ static void usage(FILE *o) {
             "  --out=FILE          write there instead of stdout\n"
             "  --heat-cap=N        --chrome: distinct heat offsets, 0 = no cap"
             " (default 256)\n"
-            "exit 0 = wrote output; 1 = I/O or parse error; 2 = honest "
+            "exit 0 = wrote output; 1 = I/O or parse error; 2 = a genuine "
             "refusal\n");
 }
 

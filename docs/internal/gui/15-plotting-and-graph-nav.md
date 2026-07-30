@@ -21,7 +21,7 @@ Two chassis, adopted around **existing pure view-models** — not new looks:
 - **ImPlot** gives the app axes/pan/zoom/cursors it hand-rolls today, and
   finally renders `data/perf_history` (parsed + tested but drawn nowhere) and
   the hotedges/timeline/scrubber/watch numeric surfaces — **without** turning
-  any of them into a dishonest chart (no stacks for survey data).
+  any of them into a misleading chart (no stacks for survey data).
 - **imgui-node-editor** (and, as a de-risk step, the standalone `imgui_canvas`)
   gives the graph views — topo, tree, hotedges snapshot, slice explorer — a
   real pan/zoom canvas with selection and "fit graph", while keeping the app's
@@ -97,13 +97,13 @@ through it and finally show `perf_history`.
    existing models (do **not** move logic into draw code — D4):
    - `views/hotedges.cpp`: ranked `PlotBars` + src-block × dst-block
      `PlotHeatmap` with `ColormapScale` — **stays "edges not stacks"**,
-     honesty-compliant (this is why it is bars+heatmap, not a stacked area).
+     fidelity-compliant (this is why it is bars+heatmap, not a stacked area).
    - `data/perf_history`: `PlotLines` — finally rendered, closing the
      parsed-but-never-shown gap.
    - `views/timeline.cpp` + scrubber: `DragLineX` as the playhead (hover/held
      out-params), `TagX` labels, `SetupAxisLinks` to sync the time axis across
      timeline/watch/diff panes. **Axis stays ordinal** — a custom tick formatter
-     labels it "step", never wall time (the recording has no honest wall clock).
+     labels it "step", never wall time (the recording has no real wall clock).
    - `views/watch.cpp`: value-over-step as `PlotStairs`; flag bits as
      `PlotDigital`.
 4. All named APIs are verified present at `v1.0` (doc 11). Keep the scrubber's
@@ -211,7 +211,7 @@ for the graph views — while keeping the app's **own deterministic layout**
 2. **Keep layout app-deterministic**: feed `ed::SetNodePosition` every frame from
    the app's own layout; set `config.SettingsFile = nullptr` so node-editor never
    persists or invents positions. The library imposes no layout — this is a
-   policy you enforce, and it is the honesty guardrail.
+   policy you enforce, and it is the fidelity guardrail.
 3. Wire the graph views:
    - `views/topo.cpp` and `views/tree.cpp` gain the canvas, selection, and
      `NavigateToContent` (fit-graph).
@@ -248,8 +248,8 @@ explorer) before the node-editor's 4-TU adoption.
 
 - **No force-directed layout, ever** (docs 04/08). Node-editor is fed the app's
   deterministic positions every frame; `SettingsFile=nullptr`. This is the
-  honesty guardrail, not a preference.
-- **No stacks for survey data** (honesty R4). Hotedges is bars + heatmap, not a
+  fidelity guardrail, not a preference.
+- **No stacks for survey data** (fidelity R4). Hotedges is bars + heatmap, not a
   stacked area; that is why ImPlot is adopted as a *chassis*, not a chart
   gallery.
 - **Ordinal time axis.** The timeline/scrubber axis is "step", never wall time —

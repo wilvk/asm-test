@@ -363,7 +363,7 @@ async function main() {
     }
 
     // --- window: region-free WHOLE-WINDOW capture (§Z1 — the empty-ctor
-    //     `using (new AsmTrace())`). HONEST-BUT-NOISY: captures the FFI dispatch too,
+    //     `using (new AsmTrace())`). FAITHFUL-BUT-NOISY: captures the FFI dispatch too,
     //     so the routine's absolute addresses are a SUBSET. Mirrors the C whole-window
     //     test (examples/test_hwtrace.c). ---
     {
@@ -379,7 +379,7 @@ async function main() {
         // insns[] hold ABSOLUTE addresses. When the capture did NOT overflow, the
         // routine's own addresses [base+0,+3,+6,+0xc,+0x11] must all be present (a
         // SUBSET amid the noise). If it truncated, the routine may be past the prefix —
-        // an honest best-effort outcome, so we only assert the subset on a clean capture.
+        // a faithful best-effort outcome, so we only assert the subset on a clean capture.
         if (!res.truncated) {
           const base = BigInt(koffi.address(code.base));
           const want = [0, 3, 6, 0xc, 0x11].map((o) => base + BigInt(o));
@@ -388,7 +388,7 @@ async function main() {
             "window: the routine's absolute addresses are all captured (subset)");
         } else {
           console.log('# note: window truncated (managed capture overflowed the buffer) '
-            + '— skipping the exact-subset assert (honest best-effort)');
+            + '— skipping the exact-subset assert (faithful best-effort)');
         }
       } else {
         console.log('# note: window self-skipped (begin_window unavailable)');
@@ -616,7 +616,7 @@ async function main() {
 
       ok(Number(r) === 42, 'auto-selected backend traces a live call (returns 42)');
       ok(tr.covered(0) || tr.truncated(),
-        'auto-selected backend covers block offset 0 (or honestly truncates)');
+        'auto-selected backend covers block offset 0 (or faithfully truncates)');
       if (pick === SINGLESTEP) { // the pick off PT/AMD hosts: byte-exact parity
         assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
         ok(true, 'auto pick (single-step) yields offsets [0, 3, 6, 12, 17]');
@@ -710,7 +710,7 @@ async function main() {
         ok(res.result === 42, 'stealthTrace: add2(20,22).result == 42 (out of band, from caller RAX)');
         // Stream: EXACT when the reverse-attach single-step ran to completion. Over a LIVE
         // runtime it may truncate (the runtime's async signals interrupt the per-insn step) —
-        // honest best-effort, mirroring dotnet's outOfProcess AsmTrace.Method and window(). Assert
+        // faithful best-effort, mirroring dotnet's outOfProcess AsmTrace.Method and window(). Assert
         // the exact [0,3,6,c,11] stream only when it did NOT truncate.
         if (!res.truncated) {
           assert.deepStrictEqual(res.offsets, [0x0, 0x3, 0x6, 0xC, 0x11]);
@@ -718,7 +718,7 @@ async function main() {
             'stealthTrace: exact offsets [0,3,6,12,17] over two blocks (complete out-of-band capture)');
         } else {
           ok(true,
-            'stealthTrace: stream truncated over the live runtime (honest best-effort; result still exact)');
+            'stealthTrace: stream truncated over the live runtime (faithful best-effort; result still exact)');
         }
       }
       code.free();
@@ -776,7 +776,7 @@ async function main() {
           ok(c.firstM1 >= 0 && c.firstM2 > c.firstM1,
             'stealthWindow: follows the calls in order (m1 before m2)');
         } else {
-          ok(true, 'stealthWindow: stream truncated over the live runtime (honest best-effort; result exact)');
+          ok(true, 'stealthWindow: stream truncated over the live runtime (faithful best-effort; result exact)');
         }
       }
       chan.free(); drv.free(); m1.free(); m2.free();

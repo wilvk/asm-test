@@ -84,7 +84,7 @@ one machine; absolute cross-architecture numbers are not directly comparable.
 
 ## Comparing systems & architectures
 
-The `BENCH` tier above measures **real cycles on the host** — the honest answer
+The `BENCH` tier above measures **real cycles on the host** — the truthful answer
 to "how fast on this machine," but not comparable across architectures (`cyc` ≠
 `ticks`) or across machines. For a **host-independent** cross-architecture
 metric — deterministic instructions/basic blocks per call for x86-64, AArch64,

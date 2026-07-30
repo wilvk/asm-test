@@ -73,12 +73,12 @@ per-ISA-set breakdown that nothing else in the tree can produce.
 
 ---
 
-## The honest boundary
+## The candid boundary
 
 SDE is an **emulator**, so what the lane asserts holds *up to emulation fidelity*.
 Timing and the exact silicon-level ABI are not what SDE guarantees — it guarantees
 architectural results (registers, flags, memory, control flow). Two anchors keep
-that fidelity honest:
+that fidelity trustworthy:
 
 - **Native TAP identity** (the transparency null test above) proves SDE reproduces
   the real machine byte-for-byte on ISA the host *does* support.

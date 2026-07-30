@@ -10,7 +10,7 @@
 // InputText, not an addon, so no ImSearch context is required).
 //
 // It does NOT replace Tree's engine-side filter (that bounds what the engine
-// EMITS — a different, honest thing) nor Backends' combo (a selector). It sits on
+// EMITS — a different, genuine thing) nor Backends' combo (a selector). It sits on
 // top of the CLIENT-side lists that had nothing (doc 16's framing).
 #ifndef ASMDESK_UI_FILTER_H
 #define ASMDESK_UI_FILTER_H

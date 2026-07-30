@@ -11,7 +11,7 @@ digest rows + one license row + (if it uses `imgui_internal.h`) one probe line*.
 
 1. **Check the admission rule** (D2, five points: MIT/zlib/BSD/OFL license; a
    pinned tarball/commit + digest; the `imgui_internal.h` compile-gate;
-   view-model purity; the honesty filter). If it fails any, it is not
+   view-model purity; the fidelity filter). If it fails any, it is not
    admissible — see doc 11's *Deliberate skips* before arguing.
 
 2. **Write `scripts/fetch-<name>.sh`** — a thin wrapper over

@@ -3,7 +3,7 @@
 There is no like-for-like competitor — no other maintained framework calls
 assembly through the real ABI and asserts on registers, flags, and memory with
 test discovery and CI reporting. What people actually use instead is one of
-four *workflows*. This page compares against those honestly: what each does
+four *workflows*. This page compares against those candidly: what each does
 well, what you give up, and when it is the better choice.
 
 > Kept current against the tools' documentation as of 2026-07. If a claim here

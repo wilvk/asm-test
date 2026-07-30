@@ -19,7 +19,7 @@ int main() {
     vt::eq("hits", v.hits.size(), size_t{3});
     vt::check("arm echoed", v.have_effective,
               "the started params echo is the "
-              "only honest source for the arm");
+              "only faithful source for the arm");
     vt::eq("armed len", v.effective.len, 4);
     vt::eq("armed rw", v.effective.rw, 1);
 

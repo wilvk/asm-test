@@ -1,5 +1,5 @@
 /* test_asmtrace.c — headless unit test for the `.asmtrace` NDJSON writer
- * (cli/asmtrace_ndjson.h) and the honesty facts the format is supposed to
+ * (cli/asmtrace_ndjson.h) and the fidelity facts the format is supposed to
  * carry.
  *
  * Two halves, both run by `make cli-smoke`:
@@ -11,7 +11,7 @@
  *   schema.*  — the example embedded in docs/internal/gui/asmtrace-schema.md is
  *               parsed by the same reader, so the written contract cannot drift
  *               away from the code without this failing.
- *   fixture.* — the committed dishonesty fixtures (truncated / dropped /
+ *   fixture.* — the committed low-fidelity fixtures (truncated / dropped /
  *               redacted / torn) surface their flags through that reader. The
  *               RENDERER half of that discipline lives in the desktop docs;
  *               this is the reader-level half.
@@ -415,14 +415,14 @@ static void test_df_step_wide_bytes(void) {
     check("df_step.wide keeps the wide flag",
           strstr(body, "\"wide\":true") != NULL, body);
 
-    /* No side buffer: degrades to bytes-less [wide] honestly. */
+    /* No side buffer: degrades to bytes-less [wide] gracefully. */
     asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, NULL, 0);
     check("df_step.wide with no buffer omits bytes",
           strstr(body, "\"bytes\"") == NULL, body);
     check("df_step.wide with no buffer keeps the wide flag",
           strstr(body, "\"wide\":true") != NULL, body);
 
-    /* Wide but the value was NOT captured (the dishonesty case): no bytes. */
+    /* Wide but the value was NOT captured (the low-fidelity case): no bytes. */
     r.value_valid = false;
     asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, wide,
                           sizeof wide);
@@ -551,7 +551,7 @@ static void test_blame_body(void) {
           strstr(body, "\"born_untraced\":false") != NULL, body);
 
     /* A value born of untraced state: the sink alone, born_untraced true, and a
-     * non-empty cone (honest, never {}). loc omitted (NULL). */
+     * non-empty cone (truthful, never {}). loc omitted (NULL). */
     asmtrace_blame_body(body, sizeof body, 0, 0, NULL, cone_steps, cone_offs, 1,
                         1);
     check("blame.body untraced omits loc", strstr(body, "\"loc\":") == NULL,
@@ -565,7 +565,7 @@ static void test_blame_body(void) {
 }
 
 /* The `statediff` step-to-step delta body (33 R6 T2): the changed register subset
- * with new values, and the first-held `computed:false` baseline honesty. */
+ * with new values, and the first-held `computed:false` baseline fidelity. */
 static void test_statediff_body(void) {
     char body[512];
     asmtest_regfile_t prev, cur;
@@ -591,7 +591,7 @@ static void test_statediff_body(void) {
     check_str("statediff.body baseline", body,
               "\"step\":0,\"changed\":{},\"computed\":false");
 
-    /* A step that changed nothing (prev == cur): an honest empty delta, but
+    /* A step that changed nothing (prev == cur): a genuine empty delta, but
      * computed TRUE (the predecessor IS known). */
     asmtrace_statediff_body(body, sizeof body, 3, &cur, &cur);
     check_str("statediff.body no-change", body,
@@ -838,7 +838,7 @@ static void test_schema_example(void) {
           "example lost a documented kind");
 }
 
-/* ---- fixture.* — the committed dishonesty corpus (D7) ---- */
+/* ---- fixture.* — the committed low-fidelity corpus (D7) ---- */
 
 /* Where the hand-authored fixtures live, relative to the repo root (the smoke's
  * working directory). Overridable so the test is runnable from anywhere. */
@@ -849,7 +849,7 @@ static void fixture_path(char *out, size_t cap, const char *name) {
 }
 
 /* Each fixture encodes ONE way a recording can be less than it looks, and each
- * check asserts the fact SURVIVES the reader — which is the half of the honesty
+ * check asserts the fact SURVIVES the reader — which is the half of the fidelity
  * discipline that lives here. (The banner / provenance-chrome / redaction-reveal
  * RENDERER assertions replay these same files from the desktop docs.) */
 static void test_fixtures(void) {
@@ -889,7 +889,7 @@ static void test_fixtures(void) {
               "the header did not declare the recording redacted");
         check("fixture.redacted_has_syscalls", has_kind(&r, "syscall"), NULL);
         /* The point of the fixture: the content is not in the file AT ALL, so
-         * no reader-side reveal can produce it. A grep is the honest check. */
+         * no reader-side reveal can produce it. A grep is the truthful check. */
         {
             FILE *f = fopen(path, "r");
             char line[MAX_LINE];

@@ -68,7 +68,7 @@ would fight physics or the design. They are marked so no one re-opens them.
   `ptslice` *replays* a recorded stitch path (replay needs no silicon, but *capturing*
   stitch needs Intel PT, and `stitch` has no v1 writer). Gated behind
   `ASMTEST_DESKTOP_HAVE_PT_REPLAY`.
-- **Observer Watch.** Needs HW debug registers + privilege; the canonical honest
+- **Observer Watch.** Needs HW debug registers + privilege; the canonical genuine
   refusal is arm64 advertising 4 slots yet returning `ENOSPC`. Widely available on
   x86-64; permanent where absent.
 - **Signed installers / notarization.** Credential gate.

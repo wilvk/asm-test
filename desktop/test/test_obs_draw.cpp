@@ -67,7 +67,7 @@ int main() {
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
 
-    // The honesty-chrome palette these banners draw with is the shared one
+    // The fidelity-chrome palette these banners draw with is the shared one
     // (ui/theme.h) after it had drifted to three ambers across five draw TUs
     // (11-imgui-addons.md quick win #6). The load-bearing invariant: the ImU32
     // form the Loom fabric paints with must pack, byte-for-byte, from the same
@@ -86,7 +86,7 @@ int main() {
         "obs-syscalls.asmtrace",  "obs-syscalls-redacted.asmtrace",
         "obs-watch.asmtrace",     "obs-watch-skip.asmtrace",
         "obs-topo.asmtrace",      "obs-survey-ibs.asmtrace",
-        "obs-survey-sw.asmtrace", "obs-survey-dishonest.asmtrace",
+        "obs-survey-sw.asmtrace", "obs-survey-low-fidelity.asmtrace",
         "obs-tree.asmtrace",      "obs-region.asmtrace",
         "obs-codeimage.asmtrace", "obs-codeimage-gate.asmtrace",
         "obs-ptslice.asmtrace",   "min-trace.asmtrace",

@@ -40,7 +40,7 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
     };
 
     // The lean default trio — always present with a recording open (F4). Summary
-    // is the provenance/honesty chrome; Canvas and the operand Timeline read from
+    // is the provenance/fidelity chrome; Canvas and the operand Timeline read from
     // the trace/dataflow the recording always carries at least in outline.
     add(ViewId::Summary, "Summary", true, "", std::nullopt);
     add(ViewId::Canvas, "Canvas", true, "", dt_view::canvas);

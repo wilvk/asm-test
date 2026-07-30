@@ -6,7 +6,7 @@
 > plan's "mid-run state editing (no resume-from-state API)" and "Reweave
 > (Phase 4+, demand-gated)" items — **one blocker surfacing in four places.**
 >
-> Largest root, lowest urgency (the honesty wins R1/R2 come first). But cheaper
+> Largest root, lowest urgency (the fidelity wins R1/R2 come first). But cheaper
 > than "large" suggests: the keystone already exists on `emu_t` and the value
 > producer merely bypasses it.
 >
@@ -37,7 +37,7 @@
 > **T4** (retire the Scrubber refusal): `dt_scrubber_replayable` (pure) decides —
 > when a producer-absent recording is emulator-replayable (Author/emulator, x86-64,
 > `codeimage` bytes) the Scrubber OFFERS "synthesize register history"; where not
-> (no code bytes / non-x86-64 / a live capture) it keeps the honest refusal naming
+> (no code bytes / non-x86-64 / a live capture) it keeps the genuine refusal naming
 > WHY. The synthesiser (`desktop/src/views/regsynth.cpp`, full-build-only, links
 > `emu.o`) re-runs the recorded code under the per-step ring and builds the SAME
 > `StepIndex` a `--steps` capture would, flagged `synthesized` so the deck carries a
@@ -159,7 +159,7 @@ step K and re-run forward, exact and labelled.
 2. Alignment UX reuses the existing take-view divergence card ("patient zero",
    `desktop/src/views/diff_view.h`) — a fork-from-K diverges from its parent at
    the edit, shown on the shared spacetime fabric.
-3. **The honesty label is mandatory (D7).** A reweave is emulator-replay, an
+3. **The fidelity label is mandatory (D7).** A reweave is emulator-replay, an
    explicit crossing of the native→virtual line — carry the existing forks
    banner ("forks re-run the emulator replay", 05 T6) and never present a
    counterfactual as observed silicon.
@@ -181,13 +181,13 @@ disclaims today.
    action that runs T2's ring path and populates the `StepIndex` — labelled as a
    re-derivation, not original capture.
 2. Where the recording is **not** replayable (a live non-Author capture, a
-   non-x86-64 guest), keep the current honest refusal and its deep link.
+   non-x86-64 guest), keep the current genuine refusal and its deep link.
 3. Update the pinned message + `test_scrubber` to reflect the new capability while
-   preserving the honest refusal on the non-replayable path.
+   preserving the genuine refusal on the non-replayable path.
 
 **Done when.** An emulator recording with no `regstate` gains a synthesized,
 clearly-labelled register history on demand; a non-replayable one still refuses
-honestly; `test_scrubber` updated to assert **both** branches.
+transparently; `test_scrubber` updated to assert **both** branches.
 
 ## Unblocks / downstream
 
@@ -195,10 +195,10 @@ Retires the "not a day-one feature" refusal (T4); lands the plan's Reweave
 expansion item (T3); makes the Loom's forks fork-from-anywhere (T3); and provides
 the general checkpoint/resume the growth-rung mid-run-edit views need.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Emulator-only, replay-only, forever.** A reweave never touches a live process
-  and is never evidence about silicon timing (plan Honest limits). This root does
+  and is never evidence about silicon timing (plan Acknowledged limits). This root does
   not add live-process resume — that stays killed.
 - **x86-64 guest only** until [R5](32-per-guest-value-producer.md) lands a
   per-guest value producer; a resumed run inherits the producer's guest scope.
@@ -214,4 +214,4 @@ Engine [asmtest_emu.h](../../../include/asmtest_emu.h) /
 [05](05-loom-day-one.md) (forks), Scrubber
 ([scrubber.cpp](../../../desktop/src/views/scrubber.cpp)). Depends on
 [R1](28-schema-freeze-completion.md) T1 (`code` header) for T4's replayability
-check. Honesty D7.
+check. Fidelity D7.

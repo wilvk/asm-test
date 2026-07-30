@@ -1,9 +1,9 @@
-// progress.h — determinate-vs-indeterminate progress feedback, decided honestly
+// progress.h — determinate-vs-indeterminate progress feedback, decided faithfully
 // (docs/internal/gui/14-quick-wins.md T3).
 //
-// A determinate bar (a real fraction) is shown ONLY when an HONEST total exists:
+// A determinate bar (a real fraction) is shown ONLY when a REAL total exists:
 // an .asmtrace `end` footer, or a bounded live budget. A torn recording (no
-// footer) or an unbounded live session has no honest total, so a fabricated
+// footer) or an unbounded live session has no real total, so a fabricated
 // percentage would be a lie — it gets the indeterminate bar instead. The
 // decision is pure + header-only so it is unit-tested without an ImGui context
 // (D4) and the draw half only picks a bar to render.
@@ -18,7 +18,7 @@ enum class ProgressMode { Hidden, Determinate, Indeterminate };
 
 // active   — is anything in flight worth a bar at all (a growing recording, a
 //            load underway). When false: Hidden.
-// has_total — an honest total EXISTS (end footer / bounded budget). Never an
+// has_total — a real total EXISTS (end footer / bounded budget). Never an
 //            inferred or guessed total; that is the whole point.
 inline ProgressMode progress_mode(bool active, bool has_total, uint64_t total) {
     if (!active)
@@ -41,13 +41,13 @@ inline float progress_fraction(uint64_t done, uint64_t total) {
 // Generalises this helper (14 T3) to any operation that can exceed a frame — a
 // PT decode, a symbol / codeimage load, a terrain / trajectory rebuild — so an
 // expert never has to guess whether the tool is working or hung. The DECISION
-// half only (still pure, header-only, ImGui-free): the elapsed clock, the honest
+// half only (still pure, header-only, ImGui-free): the elapsed clock, the faithful
 // determinate-vs-indeterminate mode, and a cancel flag. The draw half
-// (spinner/bar/Cancel button) is draw_progress() in views_draw.h. The honesty
-// rule is UNCHANGED: no honest total -> the indeterminate bar, never a fake %.
+// (spinner/bar/Cancel button) is draw_progress() in views_draw.h. The fidelity
+// rule is UNCHANGED: no real total -> the indeterminate bar, never a fake %.
 struct LongOp {
     bool active = false;    // is anything in flight worth a bar
-    bool has_total = false; // an HONEST total exists (never inferred)
+    bool has_total = false; // a REAL total exists (never inferred)
     uint64_t total = 0, done = 0;
     // Time is INJECTED (the caller sets `now`/`started_at` from ImGui::GetTime),
     // so elapsed() is pure and testable with no clock — the same reason the rest

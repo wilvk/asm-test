@@ -440,7 +440,7 @@ the changelog — one entry, extended).
 - Every divergence in the covered subset is either a red failure (DR bug) or a
   classified, named skip — no silent pass.
 
-### T6 — Named coverage-gap skips (the honest boundary)  (S, depends on: T5)
+### T6 — Named coverage-gap skips (the disclosed boundary)  (S, depends on: T5)
 
 **Goal.** libdft64's documented blind spots are enumerated as **named** skips the
 lane prints explicitly, and the SIMD fixtures are routed to the named-skip path,
@@ -477,7 +477,7 @@ no new files.
 `libdft-gap-*` / `libdft-partial-*` token; the SIMD fixtures print
 `libdft-partial-sse-avx` and do **not** turn the lane red.
 
-**Docs.** The gap enumeration is the honest-boundary record required by PIN-4's
+**Docs.** The gap enumeration is the disclosed-boundary record required by PIN-4's
 exit criteria; cite [data-flow-capture.md](../analysis/data-flow-capture.md) (which
 documents that even libdft punts on SIMD) in the changelog entry.
 

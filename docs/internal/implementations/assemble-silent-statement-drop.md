@@ -231,7 +231,7 @@ problem the guard does *not* solve is named rather than implied closed.
    statement in the source is assembled or the call fails — no partial output.
    Note that `stat_count` may exceed the instruction count (comments, labels,
    directives), so it is a statement counter, not an instruction counter.
-2. Record the residue honestly in the doc-tail: the guard catches a **dropped**
+2. Record the residue faithfully in the doc-tail: the guard catches a **dropped**
    statement. It does not catch a statement that assembles to something the
    caller did not intend (a real dialect ambiguity), and it rests on a
    Keystone behaviour measured at one pinned version — a Keystone bump should

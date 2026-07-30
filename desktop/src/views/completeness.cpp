@@ -17,7 +17,7 @@
 namespace asmdesk {
 
 namespace {
-// The shared honesty-chrome amber (ui/theme.h); a warn cell here reads the same
+// The shared fidelity-chrome amber (ui/theme.h); a warn cell here reads the same
 // as every banner elsewhere.
 const ImVec4 kWarnCell = dt_warn_col();
 } // namespace

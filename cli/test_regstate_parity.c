@@ -21,7 +21,7 @@
  *
  * x86-64-guest only (the ptrace producer single-steps x86-64; the emulator corpus
  * is host-arch too). The mk rule gates the build on x86_64 + libunicorn; a run-time
- * ptrace refusal (seccomp) or an off-arch producer self-skips honestly.
+ * ptrace refusal (seccomp) or an off-arch producer self-skips transparently.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -65,7 +65,7 @@ static int fails = 0;
  * once the routine has written it. XMM0 is (double)rdi — a function of the INTEGER
  * arg alone, so it is base-INDEPENDENT (the live producer needs no FP-arg
  * marshalling), and the two producers must byte-agree modulo the untouched entry
- * state. Skips honestly (no fail) when the live producer is unavailable. */
+ * state. Skips transparently (no fail) when the live producer is unavailable. */
 static void vec_parity(void) {
     /* movq xmm0, rdi ; ret — writes rdi into xmm0's low 64 bits and ZERO-EXTENDS
      * the upper 64 (that is `movq r/m64 -> xmm`'s defined behaviour), so the WHOLE

@@ -90,7 +90,7 @@ typedef struct at_vstep {
 
 /* The app-owned capture buffer the client fills in place. steps[] and mem[] are
  * caller-allocated with fixed caps; the client appends and flips `truncated` on
- * overflow (the honest-overflow contract of asmtest_trace_t / asmtest_valtrace_t),
+ * overflow (the faithful-overflow contract of asmtest_trace_t / asmtest_valtrace_t),
  * keeping the *_total counters advancing past the cap. */
 typedef struct at_drval {
     at_vstep_t *steps;
@@ -106,7 +106,7 @@ typedef struct at_drval {
      * at_tag_t per steps[] slot (step_taint[i] is the union tag observed at step i by
      * the inline dst_tag = union(src_tags) pass). The client fills it in buf_flush,
      * indexed identically to steps[]; entries past step_taint_cap are dropped with the
-     * same honest-overflow discipline as steps[]/mem[]. Additive under the flag — with
+     * same faithful-overflow discipline as steps[]/mem[]. Additive under the flag — with
      * the flag off this struct (and the value ABI) is byte-for-byte unchanged. */
     at_tag_t *step_taint;
     size_t step_taint_cap;

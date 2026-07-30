@@ -1,7 +1,7 @@
 // test_fonts.cpp — the real monospace font + merged Codicons (13-foundation-
 // moves.md F3), built headless via stb_truetype (no freetype needed here). Pins
 // that the vendored TTFs load, the atlas builds, a Codicons glyph is present, and
-// a missing font degrades honestly to the built-in bitmap.
+// a missing font degrades gracefully to the built-in bitmap.
 #include <cstdio>
 
 #include "imgui.h"
@@ -73,7 +73,7 @@ int main() {
     }
     ImGui::DestroyContext();
 
-    // 2) honest degrade: a missing TTF returns false and leaves a usable default.
+    // 2) graceful degrade: a missing TTF returns false and leaves a usable default.
     ImGui::CreateContext();
     ImGuiIO &io2 = ImGui::GetIO();
     io2.IniFilename = nullptr;

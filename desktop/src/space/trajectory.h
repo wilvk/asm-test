@@ -25,11 +25,11 @@ namespace asmdesk::space {
 enum TrajFlag : uint32_t {
     // A rel-basis trace: the vertices are routine-relative offsets, NOT true
     // addresses. The HUD labels it "routine-relative — not a true address-space
-    // path" and the renderer never draws it as an absolute trajectory (honesty:
+    // path" and the renderer never draws it as an absolute trajectory (fidelity:
     // a rel trace is not a real memory trajectory).
     TRAJ_RELATIVE_BASIS = 1u << 0,
     // survey-derived statistical residency: every point is Statistical and this
-    // trajectory is NEVER joined into an exact one (the honesty invariant).
+    // trajectory is NEVER joined into an exact one (the fidelity invariant).
     TRAJ_STATISTICAL = 1u << 1,
     // 36 T2: rel offsets PLACED against the recording's single codeimage span —
     // a DERIVED placement (base+off), not a measured absolute address. Set
@@ -67,7 +67,7 @@ struct TrajectorySet {
     uint64_t pc_placed = 0;     // of those, how many project onto it
     bool anchored = false;      // a rel path was PLACED against the single span
     std::string placement_note; // why a rel path was not (fully) placed
-    // 37 T2: HOW a rel path was placed — a real honesty grade, not cosmetics: a
+    // 37 T2: HOW a rel path was placed — a real fidelity grade, not cosmetics: a
     // wire-STATED base (df_step.rbase) and a DERIVED single-span anchor are
     // different claims and must not share a label. "wire" (every placed vertex
     // used its own rbase), "single-span" (36's derived anchor), "mixed" (both

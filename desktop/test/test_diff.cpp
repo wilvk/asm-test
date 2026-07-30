@@ -184,7 +184,7 @@ int main() {
     {
         std::string sa(64, 'c');
         // One side carries `code`, the other does not: the hashes cannot be
-        // compared, so the honest caveat STANDS — a code-less v1 recording is
+        // compared, so the faithful caveat STANDS — a code-less v1 recording is
         // still real, it just cannot prove sameness.
         Streams a = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sa.c_str());
         Streams b = mk({0, 2, 4}, {0});
@@ -308,7 +308,7 @@ int main() {
                   "a refused merge produces nothing");
     }
     {
-        // A code-LESS pair keeps the honest caveat (identity not checked) but
+        // A code-LESS pair keeps the faithful caveat (identity not checked) but
         // still merges what it has.
         Streams a = with_sd(mk({0, 2}, {0}), {{0, {}, false}});
         Streams b = with_sd(mk({0, 2}, {0}), {{0, {}, false}});

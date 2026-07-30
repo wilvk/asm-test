@@ -40,7 +40,7 @@ bool perspective_apply(const std::string &value, ImGuiID dockspace_id,
 
 // Apply a filter preset's query into a fixed view filter buffer (the syscall
 // name filter, the tree filter): a pure copy, capped to the buffer. The view is
-// unchanged otherwise, so the "showing N of M" honesty stays exactly as the
+// unchanged otherwise, so the "showing N of M" fidelity stays exactly as the
 // filter model renders it (D7). Returns the number of bytes written.
 size_t filter_preset_apply(const std::string &query, char *buf, size_t buf_size);
 

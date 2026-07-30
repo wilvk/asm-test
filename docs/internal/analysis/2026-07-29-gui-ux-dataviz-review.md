@@ -14,7 +14,7 @@ views ([slice](../../../desktop/src/views/slice_view_draw.cpp) /
 [shell/nav](../../../desktop/src/ui/shell.cpp), and the live
 [capture flow](../../../desktop/src/live/session.cpp). The review is held to the
 app's own tested design language — the semantic palette
-([ui/theme.h](../../../desktop/src/ui/theme.h)) and the graded honesty vocabulary
+([ui/theme.h](../../../desktop/src/ui/theme.h)) and the graded fidelity vocabulary
 ([ui/fidelity.h](../../../desktop/src/ui/fidelity.h)).
 
 **Method.** Eight reviewers each read one cluster of the *real draw code* and
@@ -41,7 +41,7 @@ published as an artifact: <https://claude.ai/code/artifact/77943c4c-0e96-4228-b7
 
 ## 1. Executive summary
 
-This is a mature, honesty-disciplined GUI: nearly every finding is a refinement inside an already-correct pure-model/draw-half split, not a broken invariant. Two patterns dominate the wins. First, the app repeatedly renders magnitude as a bare integer in sortable tables (canvas heat, hot-edge samples, topology cards, %CPU, completeness N/M, A/B heat deltas) — one shared in-cell-bar treatment, with the number kept as the second channel, is the single highest-leverage change and lands mostly draw-side. Second, the honesty grading in fidelity.h is applied unevenly: ordinary data-shape absences and capture-property notes are painted in the same loud caution amber reserved for real truncation, diluting the signal, and one live path (a failed ssh host) actually renders a hidden failure as "Session ended cleanly" — a genuine D7 violation. Beyond those, the biggest structural gaps are wired-but-undiscoverable affordances (the palette/history in menus, the 3D camera controls, an interactive slice DAG, an unreachable Loom lane deck) and missing spatial anchoring in the Loom fabric and 3D scene (no playhead marker, no region hue on terrain, no pick preview). The flagship dead interaction is the Loom fork/take + Reweave overlay, fully built and tested but never consumed in-app.
+This is a mature, fidelity-disciplined GUI: nearly every finding is a refinement inside an already-correct pure-model/draw-half split, not a broken invariant. Two patterns dominate the wins. First, the app repeatedly renders magnitude as a bare integer in sortable tables (canvas heat, hot-edge samples, topology cards, %CPU, completeness N/M, A/B heat deltas) — one shared in-cell-bar treatment, with the number kept as the second channel, is the single highest-leverage change and lands mostly draw-side. Second, the fidelity grading in fidelity.h is applied unevenly: ordinary data-shape absences and capture-property notes are painted in the same loud caution amber reserved for real truncation, diluting the signal, and one live path (a failed ssh host) actually renders a hidden failure as "Session ended cleanly" — a genuine D7 violation. Beyond those, the biggest structural gaps are wired-but-undiscoverable affordances (the palette/history in menus, the 3D camera controls, an interactive slice DAG, an unreachable Loom lane deck) and missing spatial anchoring in the Loom fabric and 3D scene (no playhead marker, no region hue on terrain, no pick preview). The flagship dead interaction is the Loom fork/take + Reweave overlay, fully built and tested but never consumed in-app.
 
 ---
 
@@ -99,13 +99,13 @@ Each finding carries three tags and cites the file(s) it was verified against.
 - **#15** Paint region-kind hue on the terrain plane
 - **#14** Show hover feedback and a pick preview on the 3D viewport
 - **#17** Show live capture rate and per-kind composition, not just a rising integer
-- **#58** Provide an honest GL-free 2D terrain fallback and a flat reading surface
+- **#58** Provide a faithful GL-free 2D terrain fallback and a flat reading surface
 
 ---
 
 ## 4. Findings by theme
 
-### 4.1 Honesty grading is applied unevenly
+### 4.1 Fidelity grading is applied unevenly
 
 *fidelity.h defines a three-tier language (Neutral chip / Caution amber collapsible / Integrity red non-collapsible), but many sites paint every ordinary capture-property in one loud caution amber, diluting the real refusals two lines away — and worse, one supported path renders a hidden failure as success. The fix is to route each note through its true tier and make one buried failure loud.*
 
@@ -117,7 +117,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 - **Change.** Add an EndCause (HostFailedNoData) taken when host_exited && host_status!=0 && !any_recording && !torn, BEFORE the StoppedClean return — Integrity tier, message naming a probable connection/auth failure, fix pointing at 'check the ssh host and that asmspy is on the remote $PATH'. Pure and unit-testable via EndFacts; the draw half already renders title/message/fix.
 - **Files.** `desktop/src/live/end_state.h` · `desktop/src/live/session.cpp` · `desktop/src/live/inspect.cpp`
 
-#### #10 Grade observer provenance and capture-property notes by honesty tier, not flat amber
+#### #10 Grade observer provenance and capture-property notes by fidelity tier, not flat amber
 
 `both` · **high** impact · medium effort — Observer deck — shared chrome_line() and per-invocation notes
 
@@ -129,7 +129,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 `dataviz` · **medium** impact · small effort — Unavailable-views (N) affordance
 
-- **Today.** draw_unavailable_views pushes dt_warn_col (caution amber) for every absent view's reason (shell.cpp:1363 and the docked copy 2613-2614), but these are ordinary data-shape absences (no df_step, no second recording, no regstate ring) that fidelity.h explicitly grades NEUTRAL — exactly the pre-honesty amber dilution the header was written to kill.
+- **Today.** draw_unavailable_views pushes dt_warn_col (caution amber) for every absent view's reason (shell.cpp:1363 and the docked copy 2613-2614), but these are ordinary data-shape absences (no df_step, no second recording, no regstate ring) that fidelity.h explicitly grades NEUTRAL — exactly the pre-fidelity amber dilution the header was written to kill.
 - **Change.** Drop the PushStyleColor at both sites so the verbatim reason renders in neutral/TextDisabled style; keep amber only if a ViewPresence ever carries a genuinely Caution-tier reason. Cleanest is to add a FidelityTier to ViewPresence and pick color from it; minimal is the two-site color drop.
 - **Files.** `desktop/src/ui/shell.cpp` · `desktop/src/ui/fidelity.h` · `desktop/src/ui/view_presence.cpp`
 
@@ -161,14 +161,14 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 ### 4.2 Magnitude is a bare integer — give it a visual channel
 
-*Across canvas, observer, completeness, processes and A/B diff the app prints exact counts as naked integers in sortable rankings, so the long-tail shape (is #1 10x #2 or a plateau?) is invisible. A row-height in-cell fill (dt_dim/dt_hot, number kept on top as the second channel and the null-backend fallback) is an honest, 2.0x-safe re-encoding that reuses existing accessors and adds no new color meaning.*
+*Across canvas, observer, completeness, processes and A/B diff the app prints exact counts as naked integers in sortable rankings, so the long-tail shape (is #1 10x #2 or a plateau?) is invisible. A row-height in-cell fill (dt_dim/dt_hot, number kept on top as the second channel and the null-backend fallback) is a faithful, 2.0x-safe re-encoding that reuses existing accessors and adds no new color meaning.*
 
 #### #1 In-cell magnitude bars for every naked-integer column ★
 
 `dataviz` · **high** impact · small effort — Canvas heat, hot-edge samples, topology cards, %CPU, completeness N/M, A/B heat deltas
 
 - **Today.** Magnitude is drawn as a bare integer in sortable rankings across the app: canvas heat as Text("%u") (canvas_draw.cpp:180), hot-edge samples as %llu (observer_draw.cpp:539), topology inv counts, the %CPU column (inspect_door.cpp:1148), completeness N/M (completeness_model.h:55-81) and A/B heat deltas (diff_view.cpp:109). The long-tail shape is invisible and severity never reads at a glance.
-- **Change.** Draw a row-height horizontal fill proportional to value/max behind each cell (dt_hot_col for execution heat, dt_dim_col for neutral rankings) with the exact number kept on top as the label / null-backend / 2.0x fallback. Compute the per-table max in the model (canvas heat_max; completeness needs numeric trace_insns/insns_truth added to CompletenessRow; A/B needs numeric a/b on the heat row). Honesty carve-outs: never bar an absence ('—' draws nothing), never bar statistical edge rows in the diff (keep the [statistical] chip), and use no new hue.
+- **Change.** Draw a row-height horizontal fill proportional to value/max behind each cell (dt_hot_col for execution heat, dt_dim_col for neutral rankings) with the exact number kept on top as the label / null-backend / 2.0x fallback. Compute the per-table max in the model (canvas heat_max; completeness needs numeric trace_insns/insns_truth added to CompletenessRow; A/B needs numeric a/b on the heat row). Fidelity carve-outs: never bar an absence ('—' draws nothing), never bar statistical edge rows in the diff (keep the [statistical] chip), and use no new hue.
 - **Files.** `desktop/src/views/canvas_draw.cpp` · `desktop/src/views/canvas.cpp` · `desktop/src/views/canvas.h` · `desktop/src/ui/theme.h` · `desktop/src/views/observer_draw.cpp` · `desktop/src/views/topo.cpp` · `desktop/src/ui/inspect_door.cpp` · `desktop/src/views/completeness.cpp` · `desktop/src/views/completeness_model.h` · `desktop/src/views/diff_view_draw.cpp` · `desktop/src/views/diff_view.cpp` · `desktop/src/views/diff_view.h`
 
 #### #22 Merge the redundant cov/blk columns in single-recording canvas mode
@@ -257,7 +257,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 #### #9 Surface the ABI x-ray's differing-register set, and withdraw it when panes aren't step-aligned ★
 
-`both` · **high** impact · small effort — ABI x-ray (cross-pane contrast + alignment honesty)
+`both` · **high** impact · small effort — ABI x-ray (cross-pane contrast + alignment fidelity)
 
 - **Today.** abixray.cpp:144-150 computes x.differ (the sorted differing-register names) and x.n_differ — the file's stated value-add — but the draw half surfaces it only as a per-row blue tint; the count and list are never displayed. Worse, when total_steps differ the builder sets x.aligned=false yet still populates row.differs at the same playhead (no !aligned guard), so it tints 'differs' on a comparison the misalignment invalidates.
 - **Change.** After the descriptor line render 'N registers differ across conventions: <names>' in dt_selected_col (matching the in-table tint, so summary and rows can never disagree). In the builder, when !x.aligned do NOT populate row.differs/x.differ (keep each pane's own values; withdraw only the invalid cross-pane claim); optionally escalate the not-aligned banner to a non-collapsible integrity refusal. Land both halves together.
@@ -276,7 +276,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `ux` · **high** impact · medium effort — ABI x-ray (locked comparison layout)
 
 - **Today.** Each convention is its own BeginChild+BeginTable(ScrollY) over the shared x.rows (abixray_draw.cpp:30,45-47), each with an independent scrollbar — so a deck taller than the pane (wide-vector rows) desyncs the panes and the cross-pane blue pairing drifts.
-- **Change.** Prefer the lower-risk scroll-sync: keep the two side-by-side panes (honoring the stated two-scrubber premise) but drive both BeginChild scroll offsets from one shared SetScrollY. If a single [register | SysV | Win64] table is chosen for adjacency it is viable, but you must port the per-pane torn_here early-out to per-cell UNKNOWN (sysv_known/win64_known already exist) and preserve the per-pane changed tint so no honesty signal is lost.
+- **Change.** Prefer the lower-risk scroll-sync: keep the two side-by-side panes (honoring the stated two-scrubber premise) but drive both BeginChild scroll offsets from one shared SetScrollY. If a single [register | SysV | Win64] table is chosen for adjacency it is viable, but you must port the per-pane torn_here early-out to per-cell UNKNOWN (sysv_known/win64_known already exist) and preserve the per-pane changed tint so no fidelity signal is lost.
 - **Files.** `desktop/src/views/abixray_draw.cpp`
 
 #### #34 Cap the A/B diff coverage block rows like heat does
@@ -377,7 +377,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 `ux` · **medium** impact · medium effort — Processes picker ('cannot trace' diagnostics)
 
-- **Today.** The why is drawn via unwrapped TextUnformatted (inspect_door.cpp:1159) and the procs table has ScrollY but no ScrollX, so a long refusal reason is CLIPPED at the cell boundary with no ellipsis — the tail of a first-class refusal reason is silently truncated (an honesty concern).
+- **Today.** The why is drawn via unwrapped TextUnformatted (inspect_door.cpp:1159) and the procs table has ScrollY but no ScrollX, so a long refusal reason is CLIPPED at the cell boundary with no ellipsis — the tail of a first-class refusal reason is silently truncated (a fidelity concern).
 - **Change.** In attach_verdict (pure + tested) add a short reason_tag ('i386 ABI','already traced','scope 1','different uid','kernel thread','self') alongside the full why; show the tag as the primary scannable text and render the full why with TextWrapped bounded to the column so it is no longer clipped. Keep remedy + command hint; nothing removed.
 - **Files.** `desktop/src/ui/inspect_door.cpp` · `desktop/src/live/inspect.cpp` · `desktop/src/live/inspect.h`
 
@@ -402,7 +402,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `ux` · **low** impact · small effort — Graph-nav canvas (topo / call-tree / hot-edges)
 
 - **Today.** graph nodes with addr==0 have has_link=false, but the draw half renders every node's label identically and gates double-click nav on has_link — while the panel advertises 'double-click a node to open it', so a dead-end node looks navigable but silently no-ops.
-- **Change.** Wrap the label draw (observer_draw.cpp:102) with PushStyleColor(ImGuiCol_Text, dt_dim_col())/Pop when !n.has_link so a dead-end reads as quiet/non-navigable, matching the app's greyed-shows-why idiom. Draw-half only; reuses the dim accessor; the node still renders with its edges — only its navigability affordance is made honest.
+- **Change.** Wrap the label draw (observer_draw.cpp:102) with PushStyleColor(ImGuiCol_Text, dt_dim_col())/Pop when !n.has_link so a dead-end reads as quiet/non-navigable, matching the app's greyed-shows-why idiom. Draw-half only; reuses the dim accessor; the node still renders with its edges — only its navigability affordance is made faithful.
 - **Files.** `desktop/src/views/graph_nav.cpp` · `desktop/src/views/observer_draw.cpp`
 
 #### #61 Carry the active invocation pass in the breadcrumb
@@ -410,7 +410,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `dataviz` · **low** impact · small effort — Wayfinding breadcrumb (position coordinate)
 
 - **Today.** shell_df_pass_pager draws 'pass k of N — following the latest / pinned' inline in each dataflow view, but breadcrumb_model never includes the pass, so switching to a non-pass-aware view drops the pass from the persistent 'where am I' band.
-- **Change.** Add a pass field to BreadcrumbModel populated read-only from s.seg_df/s.df_pass for active_tab ('pass 2/5' following latest / 'pinned'), only when passes>1, drawn between view and selection. Compute the applied index inline — do NOT call the mutating shell_apply_df_pass from the pure model. Honesty language reused, no fabricated continuity.
+- **Change.** Add a pass field to BreadcrumbModel populated read-only from s.seg_df/s.df_pass for active_tab ('pass 2/5' following latest / 'pinned'), only when passes>1, drawn between view and selection. Compute the applied index inline — do NOT call the mutating shell_apply_df_pass from the pure model. Fidelity language reused, no fabricated continuity.
 - **Files.** `desktop/src/ui/wayfinding.cpp` · `desktop/src/ui/shell.cpp` · `desktop/src/ui/shell.h`
 
 #### #62 Mark a vanished or broken recent in the Home list
@@ -440,7 +440,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `dataviz` · **high** impact · small effort — Slice explorer (def-use edges)
 
 - **Today.** slice_view.cpp:141 sets se.loc = loc_str(edge_loc) and dumps it in the golden text, but the draw half renders each edge as three bracket AddLine segments (slice_view_draw.cpp:120-123) and never references e.loc — so the value that flows along each def-use edge is invisible in the GUI.
-- **Change.** AddText e.loc at the midpoint of the top bracket segment in dt_dim_col — the trivial always-safe half needing no new infra. Defer the near-arc hover-tooltip variant to when the slice hit-test lands (arcs are raw ImDrawList lines with no InvisibleButton). Midpoint labels may overlap on dense DAGs at 2.0x, but that is honest surfacing of real data.
+- **Change.** AddText e.loc at the midpoint of the top bracket segment in dt_dim_col — the trivial always-safe half needing no new infra. Defer the near-arc hover-tooltip variant to when the slice hit-test lands (arcs are raw ImDrawList lines with no InvisibleButton). Midpoint labels may overlap on dense DAGs at 2.0x, but that is faithful surfacing of real data.
 - **Files.** `desktop/src/views/slice_view.cpp` · `desktop/src/views/slice_view_draw.cpp` · `desktop/src/views/slice_view.h`
 
 #### #14 Show hover feedback and a pick preview on the 3D viewport
@@ -456,7 +456,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `dataviz` · **high** impact · medium effort — Terrain fragment shading / terrain model
 
 - **Today.** kTerrainFrag colors every cell with one dark-blue->orange height ramp plus TF_* tints (embedded.h:45-52); region_style's six hues (code/stack/heap/data/mmap/unknown) are used only as HUD legend swatches, never on the plane. The ramp's hot color even coincides with the code hue, so stack/heap/data hills read identically today.
-- **Change.** Add a per-cell region-kind array to the Terrain model from the same proj.unproject already used per cell (pure, golden-testable), upload it as an R8UI lookup texture in Scene::set_terrain, and in kTerrainFrag tint the base by the region_style hue modulated by clamp(vHeight); apply the TF_* honesty tints AFTER so torn/churn/statistical still override. Cells with no region stay neutral.
+- **Change.** Add a per-cell region-kind array to the Terrain model from the same proj.unproject already used per cell (pure, golden-testable), upload it as an R8UI lookup texture in Scene::set_terrain, and in kTerrainFrag tint the base by the region_style hue modulated by clamp(vHeight); apply the TF_* fidelity tints AFTER so torn/churn/statistical still override. Cells with no region stay neutral.
 - **Files.** `desktop/src/scene3d/shaders/embedded.h` · `desktop/src/space/projection.cpp` · `desktop/src/scene3d/scene.cpp` · `desktop/src/scene3d/hud.cpp`
 
 #### #20 Wire the fork/take verdict overlay and Reweave gesture into the app
@@ -479,7 +479,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 `ux` · **medium** impact · small effort — Loom -> fabric canvas hover/tooltip
 
-- **Today.** note() surfaces a tooltip only for honesty prims; span/span_hollow/hop push empty text and their switch cases never call note(), so hovering an ordinary worldline yields nothing and there is no hover highlight; narrow spans additionally suppress their value chip.
+- **Today.** note() surfaces a tooltip only for fidelity prims; span/span_hollow/hop push empty text and their switch cases never call note(), so hovering an ordinary worldline yields nothing and there is no hover highlight; narrow spans additionally suppress their value chip.
 - **Change.** In loom_plan fill each span/hop prim's text with a compact identity ('<reg> = 0x.. @ step N', 'mem[lo..hi) store @ step N', '(value never captured)' for hollow, matching loom_biography's wording) and add note(p) calls to those switch cases; in the draw half redraw the hovered span with a brighter dt_selected outline. Golden-test the deterministic text.
 - **Files.** `desktop/src/loom/fabric_imgui.cpp` · `desktop/src/loom/fabric_plan.cpp`
 
@@ -520,7 +520,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `dataviz` · **medium** impact · small effort — Terrain fragment shading
 
 - **Today.** kTerrainFrag applies the height ramp + TF_* tints with NO lighting, no normals, no gridlines — relief is conveyed only by color + perspective on an unlit orbit height field, and there is no quantitative banding.
-- **Change.** In kTerrainFrag darken the base where fract(vHeight*kLevels) is near a small threshold to draw a few iso-density isolines (relief cue + honest banding), guarded so a zero/flat cell shows no line; optionally expose kLevels as a uniform. Contours are a faithful re-encoding of the height value — sparse stays sparse. Purely embedded.h.
+- **Change.** In kTerrainFrag darken the base where fract(vHeight*kLevels) is near a small threshold to draw a few iso-density isolines (relief cue + faithful banding), guarded so a zero/flat cell shows no line; optionally expose kLevels as a uniform. Contours are a faithful re-encoding of the height value — sparse stays sparse. Purely embedded.h.
 - **Files.** `desktop/src/scene3d/shaders/embedded.h`
 
 #### #49 Give the generation walk ([ / ]) spatial feedback on the fabric
@@ -563,11 +563,11 @@ Each finding carries three tags and cites the file(s) it was verified against.
 - **Change.** Change collapse to per-RUN: coalesce only contiguous sub-threshold spans into local ribbon segments and keep individually-resolvable spans as rectangles in the same lane — but weight/label the ribbon segment (intensity/height reflecting the hidden count, or a small 'N here' cue) so surviving wide neighbours cannot imply nothing dense happened, answering the documented rationale rather than reverting it. Pure model; golden-test the segmentation.
 - **Files.** `desktop/src/loom/fabric_plan.cpp`
 
-#### #58 Provide an honest GL-free 2D terrain fallback and a flat reading surface
+#### #58 Provide a faithful GL-free 2D terrain fallback and a flat reading surface
 
 `both` · **medium** impact · large effort — 3D overview pane — null-backend / no-GL path
 
-- **Today.** Under the null backend the pane shows a text placard + full HUD (an honest text degradation, so no constraint is broken), but the height field / trajectories have no VISUAL rendering, and even top_down() projects through mat4x4_perspective, so there is no perspective-free surface to read exact density. The pure Terrain slice makes a flat ImDrawList heatmap fully feasible.
+- **Today.** Under the null backend the pane shows a text placard + full HUD (a graceful text degradation, so no constraint is broken), but the height field / trajectories have no VISUAL rendering, and even top_down() projects through mat4x4_perspective, so there is no perspective-free surface to read exact density. The pure Terrain slice makes a flat ImDrawList heatmap fully feasible.
 - **Change.** Add a pure-model 2D top-down surface (views/scene2d_draw.cpp): one ImDrawList filled rect per Terrain cell colored by the same height ramp + TF_* flags (+ region hue via proj.unproject), each trajectory a proj.project polyline. Render it in the null-backend branch (a richer degradation than the placard) and expose it as a 'flat 2D' HUD toggle for the GL path. Keep the cell->color mapping in a golden-testable model helper. An enhancement, not a constraint fix.
 - **Files.** `desktop/src/ui/shell.cpp` · `desktop/src/scene3d/camera.h` · `desktop/src/ui/scene_host.h` · `desktop/src/space/terrain.h` · `desktop/src/space/types.h`
 
@@ -622,7 +622,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `dataviz` · **high** impact · medium effort — Live capture status (growing-recording feedback)
 
 - **Today.** draw_status shows only 'capturing: %llu event(s) so far' (inspect_door.cpp:359) plus an indeterminate bar — no rate, no composition — even though Recording::by_kind is a public map and event_count() sums it, so a per-kind tally and a rate derivative are both trivially available.
-- **Change.** Add a pure rate helper (ring of (now,event_count) samples -> events/sec over a trailing window, clock injected like s.stream_op) and render an events/sec figure or tiny dt_dim sparkline plus a one-line per-kind tally from g->by_kind ('df_step 1.2k · syscall 412 · mem 88'). Keep the indeterminate bar — no honest total is fabricated.
+- **Change.** Add a pure rate helper (ring of (now,event_count) samples -> events/sec over a trailing window, clock injected like s.stream_op) and render an events/sec figure or tiny dt_dim sparkline plus a one-line per-kind tally from g->by_kind ('df_step 1.2k · syscall 412 · mem 88'). Keep the indeterminate bar — no genuine total is fabricated.
 - **Files.** `desktop/src/ui/inspect_door.cpp` · `desktop/src/doc/recording.h` · `desktop/src/doc/recording.cpp`
 
 #### #18 Encode ptrace-vs-free in the mode picker and show the jack's occupant inline
@@ -646,7 +646,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 `both` · **medium** impact · medium effort — Invocations tab — discrete invocation paging
 
 - **Today.** draw_obs_region uses a '< prev / #k of N / next >' pager only, so finding the one large or truncated invocation among many is blind linear stepping, even though RegionInvocation carries insns_total, truncated and closed.
-- **Change.** Draw one discrete bar per invocation, length ∝ insns_total, selected highlighted with dt_selected_col, truncated/open flagged in caution amber; clicking a bar pages to it. Keep visible gaps between bars — never a continuous slider — so the 'never a scrub' honesty marker is complemented, not replaced. Discrete random-access is legitimate here.
+- **Change.** Draw one discrete bar per invocation, length ∝ insns_total, selected highlighted with dt_selected_col, truncated/open flagged in caution amber; clicking a bar pages to it. Keep visible gaps between bars — never a continuous slider — so the 'never a scrub' fidelity marker is complemented, not replaced. Discrete random-access is legitimate here.
 - **Files.** `desktop/src/views/observer_draw.cpp` · `desktop/src/views/region.cpp` · `desktop/src/views/region.h`
 
 #### #45 Make the interleaved call tree legible: thread count, boundaries, scroll

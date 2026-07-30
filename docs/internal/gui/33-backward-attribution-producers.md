@@ -62,15 +62,15 @@ producing location(s), by walking L1 def-use edges backward.
    freeze (D5).
 2. Implement the backward slice over the existing def-use edges (a pure pass — no
    engine re-run): from a value's def, follow last-writer edges to the
-   instruction(s) that produced its inputs, to a bounded depth, honestly flagging
+   instruction(s) that produced its inputs, to a bounded depth, faithfully flagging
    where provenance ends at instrumentation (a value born of untraced state has no
-   ancestry — reuse the lineage "born of untraced state" honesty,
+   ancestry — reuse the lineage "born of untraced state" fidelity,
    `desktop/src/loom/lineage.cpp`).
 3. Consumer: the blame **cone** view lights the existing 09 deep-link socket — a
    click routes through 04's `dt_nav_go` router to the producing location(s).
 
 **Done when.** A blame query on a golden fabric returns the correct backward cone;
-a value with no traced ancestry returns an honest "provenance starts at
+a value with no traced ancestry returns a faithful "provenance starts at
 instrumentation" result, not an empty one; `desktop-test` covers both.
 
 ### T2 — the `statediff` producer (step-to-step delta)  (M)
@@ -91,7 +91,7 @@ consecutive steps — so a two-recording merged view has an exact per-step basis
 
 **Done when.** Two `code`-matched recordings of the same routine produce a merged
 state-diff graph; a `code`-mismatched pair is refused (R1 T1); a `code`-less pair
-keeps the honest "identity is the reader's assertion" caveat; `test_diff` /
+keeps the faithful "identity is the reader's assertion" caveat; `test_diff` /
 `test_slice` extended.
 
 ## Unblocks / downstream
@@ -101,11 +101,11 @@ keeps the honest "identity is the reader's assertion" caveat; `test_diff` /
 - Slice-diff / two-recording state-diff rendering ([04](04-replay-views.md)) — the
   slice explorer's standing refusal lifts.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Exact-only, provenance-starts-at-instrumentation.** A blame cone never invents
   ancestry for pre-existing state, and never crosses threads (no cross-thread
-  value hops — plan Honest limits). Both are hard refusals, surfaced as such.
+  value hops — plan Acknowledged limits). Both are hard refusals, surfaced as such.
 - `statediff` is architectural state (the register file), not memory-content diff
   (that rides the `mem` / `wide[]` channels, [R2](29-mem-address-stream.md) /
   [R1](28-schema-freeze-completion.md)); a full two-recording memory diff is a
@@ -119,4 +119,4 @@ Depends on [R1](28-schema-freeze-completion.md) T1 (`code` header, for
 `statediff` pairing) and the L1 def-use substrate
 ([05](05-loom-day-one.md) T1). Schema/D5 [01](01-asmtrace-format.md); consumers
 [04](04-replay-views.md) (slice/diff), [09](09-teaching-producers.md) (blame
-socket). Golden/honesty D6/D7.
+socket). Golden/fidelity D6/D7.

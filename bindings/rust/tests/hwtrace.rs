@@ -205,7 +205,7 @@ fn window_region_free_whole_window() {
     // The closure ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
     assert_eq!(result, 42, "window: closure ran and code.call(20, 22) == 42");
     // Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
-    // honestly self-skips (armed == false), matching the C test_wholewindow_singlestep
+    // faithfully self-skips (armed == false), matching the C test_wholewindow_singlestep
     // and node's window test. Assert the arming-dependent bits only when it armed.
     if w.armed {
         assert!(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
@@ -439,7 +439,7 @@ fn auto_resolve_traces_live() {
         assert_eq!(result, 42, "auto-selected backend traces a live call");
         assert!(
             tr.covered(0) || tr.truncated(),
-            "auto-selected backend covers block offset 0 (or honestly truncates)"
+            "auto-selected backend covers block offset 0 (or faithfully truncates)"
         );
         if ab == Backend::Singlestep as i32 {
             // The pick off PT/AMD hosts: byte-exact parity with the shared fixture.

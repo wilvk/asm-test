@@ -96,7 +96,7 @@ non-trivial to hand-write and dictates the design:
 
 `asmtest_trace_call_auto(code, len, args, nargs, policy, result, trace, used)` walks, in
 order, stopping at the first tier that returns a **non-`truncated`** trace (or the last
-tier, honestly flagged):
+tier, transparently flagged):
 
 1. **Fast exact — best HWTRACE backend.** `asmtest_hwtrace_auto(BEST)` → `init(backend)`,
    `register_region(code,len,trace)`, `begin`, `*result = invoke(code,args,nargs)`, `end`,

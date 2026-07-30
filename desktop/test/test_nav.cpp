@@ -267,7 +267,7 @@ int main() {
         }
     }
 
-    // --- 18-T1: the honest keymap overlay's `wired` flag --------------------
+    // --- 18-T1: the faithful keymap overlay's `wired` flag --------------------
     // The overlay is generated ENTIRELY from this table, greying every !wired
     // row "planned" — so the advertised==wired invariant is a property of the
     // data. Today every advertised binding is wired (F1/F18's fix: no dead key

@@ -20,7 +20,7 @@
  * (descent needs trace_attached_ex). Call-outs to runtime helpers are stepped over
  * (call-depth aware).
  *
- * Honest by construction: a watchdog alarm bounds the stepping, so a re-tiered/moved
+ * Faithful by construction: a watchdog alarm bounds the stepping, so a re-tiered/moved
  * address self-skips instead of hanging; the resolve + attach checks are firm (they test
  * the library against real runtime output and a real /proc/maps) while the trace is
  * asserted when the runtime cooperates and skipped (never failed) otherwise — so the
@@ -390,13 +390,13 @@ static int trace_runtime(const char *engine, const char *method_substr,
                    asmtest_descent_depth_capped(dh) ? " (guard tripped)" : "");
             /* The guarded L3 lane asserts the GUARDS fire (self-skip), not
              * transparency. `nf >= 1` was VACUOUS (frame 0 always exists) — require a
-             * real descent (a second frame or an edge) OR an honest guard trip. */
+             * real descent (a second frame or an edge) OR a genuine guard trip. */
             CHECK(
                 descend_level < ASMTEST_DESCENT_DESCEND_ALL ||
                     asmtest_descent_truncated(dh) ||
                     asmtest_descent_depth_capped(dh) || nf >= 2 || ne >= 1,
                 "descent: guarded L3 lane made real progress (>=2 frames or an "
-                "edge) or self-skipped honestly");
+                "edge) or self-skipped transparently");
         }
         if (asmtest_disas_available()) {
             uint8_t *bytes = (uint8_t *)malloc(len);

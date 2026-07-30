@@ -140,7 +140,7 @@ validator + atomic report verbatim; the new surface is only the suspend/attach/r
 - **Accept the NO-GO.** The sanctioned managed-already-running path is **ptrace-attach + emulator
   replay** ([live-attach-dataflow-plan.md](live-attach-dataflow-plan.md)) — out-of-band, never
   seizes the runtime into a code cache, structurally immune to this crash (value/def-use, not
-  in-band taint). This is the honest default and is *not* a failure of this tier.
+  in-band taint). This is the faithful default and is *not* a failure of this tier.
 
 ## Risks and open points
 

@@ -7,7 +7,7 @@
 // The closest thing to the fully aspirational snippet that needs NO Intel PT: the empty
 // scope owns an in-process JIT map (JitMethodMap, a MethodLoadVerbose EventListener) and
 // attributes the captured window to managed methods — so an arbitrary cold method is
-// identified BY NAME. Runs via the single-step WEAK tier: honest but intrusive (it also
+// identified BY NAME. Runs via the single-step WEAK tier: faithful but intrusive (it also
 // single-steps the JIT compiling the cold method). The clean, non-intrusive path is the
 // STRONG whole-window PT tier (forward-look).
 

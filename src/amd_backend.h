@@ -80,7 +80,7 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
  *
  * The result is SAMPLED / PARTIAL COVERAGE — exact ~16-branch islands at the checkpoints,
  * nothing between them — NOT an exact whole-window trace (a hardware dead end on AMD,
- * DECLINED). Honest for WindowHot precisely because that surface is a hot-address
+ * DECLINED). Faithful for WindowHot precisely because that surface is a hot-address
  * histogram with no completeness claim; these must NEVER feed the exact insns[]/blocks[]
  * parity cascade.
  *

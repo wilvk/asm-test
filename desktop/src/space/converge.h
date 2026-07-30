@@ -80,7 +80,7 @@ struct ConvergenceSet {
 // does not upgrade it): a mark over an anchored path is a hint over a DERIVED
 // placement (doubly not a proof); and regions_from_codeimage keeps the widest
 // `len` across versions, so a shared cell may name bytes never at that offset in
-// that version (right base, aliased byte). An honest limit worth stating: a live
+// that version (right base, aliased byte). A real limit worth stating: a live
 // dataflow capture's `df_step` carries no `tid`, so it is ONE trajectory and yields
 // no marks whatever its flags — T5 produces marks only for a rel `trace` whose
 // events carry `tid`.

@@ -6,7 +6,7 @@
 // (imgui-node-editor). The library imposes NO layout: node-editor is fed the
 // app's own deterministic positions every frame, and its settings file is
 // disabled, so it can neither persist nor invent a position. **Force-directed
-// layout stays banned** (docs 04/08) — the honesty guardrail is that the layout
+// layout stays banned** (docs 04/08) — the fidelity guardrail is that the layout
 // lives HERE, in a pure, tested builder, not in the drawing library.
 //
 // This TU is the pure half: it turns an already-built view model into a
@@ -29,7 +29,7 @@
 
 namespace asmdesk {
 
-// The honesty guardrail, stated as a constant the draw half MUST hand to
+// The fidelity guardrail, stated as a constant the draw half MUST hand to
 // ed::Config::SettingsFile. nullptr disables node-editor's own settings file, so
 // it never persists a dragged position or invents one on load — the layout is
 // always the app's, every frame. Tested directly (a non-null value here would be

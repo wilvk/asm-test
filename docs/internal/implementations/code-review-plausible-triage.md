@@ -95,7 +95,7 @@ make docker-win64       # the Wine lane end to end — expect "win64 runner: …
 
 **Goal.** A `poll()` failure other than EINTR in the parallel scheduler must
 never produce a false-green result or a NULL suite/name in TAP output; every
-selected test still runs and reports honestly.
+selected test still runs and reports accurately.
 
 **Steps.**
 1. Open [src/asmtest.c](../../../src/asmtest.c) at `run_parallel` (1447).
@@ -135,7 +135,7 @@ existing `-j4` block (lines 194–207):
 par_pf=$(ASMTEST_DEBUG_FAIL_POLL=1 "$POS" -j4 2>/dev/null | grep '^ok')
 if [ "$par_pf" = "$serial" ]; then ok "-j4 survives poll failure (degraded reaps)"; else bad "-j4 survives poll failure (degraded reaps)"; fi
 expect_contains "poll-failure warning printed" "falling back to blocking reaps" env ASMTEST_DEBUG_FAIL_POLL=1 "$POS" -j4
-expect_fail_msg "-j4 still fails honestly under poll failure" "ASSERT_EQ" env ASMTEST_DEBUG_FAIL_POLL=1 "$NEG" --jobs=4 --timeout=1
+expect_fail_msg "-j4 still fails cleanly under poll failure" "ASSERT_EQ" env ASMTEST_DEBUG_FAIL_POLL=1 "$NEG" --jobs=4 --timeout=1
 ```
 
 Pre-fix, the first case fails (truncated/false-green `ok` lines, `(null)`
@@ -384,7 +384,7 @@ what memory the trampoline reads, and the assertions (`out[0].f64[i]`) still
 hold because slots 0–1 are unchanged. The over-read itself has no in-tree
 detector (Zig stack arrays, no ASan interop in this lane), so the manual
 verification is: `make docker-zig` passes on an AVX2 runner both before and
-after, and the diff review confirms 8 slots. State this honestly in the commit
+after, and the diff review confirms 8 slots. State this candidly in the commit
 message.
 
 **Docs.** Internal-only, no user-facing docs — a test fixture correction, no
@@ -421,7 +421,7 @@ thread's own faults are converted to test failures.
    `if (GetCurrentThreadId() != rt_test_tid) return
    EXCEPTION_CONTINUE_SEARCH;` — a foreign-thread fault must not disarm the
    facility either. A declined fault then takes the OS's normal
-   unhandled-exception path (process exit), the same honest outcome the
+   unhandled-exception path (process exit), the same genuine outcome the
    forked mode gets from child death. The watchdog `rt_timer_cb` (419–467)
    needs no change — it already targets `rt_test_thread` explicitly.
 4. Add `tests/win64/test_veh_scope_win64.c` with two argv-selected scenarios

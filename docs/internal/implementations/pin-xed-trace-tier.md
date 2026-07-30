@@ -613,7 +613,7 @@ the tier earns its keep.
    `pintool-test`'s live branch; the decode assertion (step 2) runs
    unconditionally in the lane, the execution halves behind the CPUID gate.
 
-**Code.** Honesty note to encode in the target's comment: XED *decode* of APX
+**Code.** Fidelity note to encode in the target's comment: XED *decode* of APX
 is verified; whether Pin 4.2 can *instrument* APX code is empirically
 unconfirmed (the 4.x manual never mentions APX — Research notes). This
 fixture IS the probe: if Pin fails to instrument on APX silicon, record the

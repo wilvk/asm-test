@@ -128,7 +128,7 @@ class LiveSession {
     // live host is not a file, and one bad line must not discard a session.
     void feed_line(const std::string &line);
     // The stream ended. An open recording becomes TORN — the schema's rule,
-    // and the honest reading of a producer that stopped mid-record.
+    // and the faithful reading of a producer that stopped mid-record.
     void mark_eof();
     uint64_t malformed_lines() const { return malformed_; }
 

@@ -21,7 +21,7 @@
 # *** freeze under load on such a boot, so the host's clocksource MUST read tsc.
 # *** Full evidence + one-time-install runbook: docs/internal/docker-osx-linux-host.md.
 #
-# Honest tradeoffs (per the plan): x86-only (the OpenCore path has no arm64
+# Candid tradeoffs (per the plan): x86-only (the OpenCore path has no arm64
 # guest); a "virtualized Hackintosh" that can break on macOS point-updates;
 # EULA-gray on non-Apple hosts; a tens-of-GB image; software-rendered graphics
 # (irrelevant for this headless CLI smoke). NOT a duplicate of the Rosetta CI

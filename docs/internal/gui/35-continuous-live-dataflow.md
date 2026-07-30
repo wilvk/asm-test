@@ -39,7 +39,7 @@
 >   `test_scrubber` drives the hand-authored `low-fidelity/continuous-df.asmtrace`
 >   fixture. (Def-use/streams per-pass segmentation is a scoped follow-on — the
 >   Scrubber is the primary continuous consumer; a continuous def-use view shows
->   the last pass's offsets, not a lie about honesty chrome.)
+>   the last pass's offsets, not a lie about fidelity chrome.)
 > - **T4 — DONE** (`fc836e0`): `InspectState.continuous` + a capture-pane checkbox;
 >   `inspect_start_params` sends `continuous:true` only for the dataflow engines
 >   (`test_shell`); the once-per-session perturb confirm covers the session. The
@@ -219,14 +219,14 @@ live-refreshing view of the latest invocation.
 recording and asserts the two passes are addressable separately and the tab shows
 the latest; `desktop-test` green.
 
-### T4 — UI arming + goldens + honesty fixtures  (S–M)
+### T4 — UI arming + goldens + fidelity fixtures  (S–M)
 
 **Steps.**
 1. A "continuous" checkbox in the capture pane (an `InspectState` flag beside
    `steps`); send `continuous:true`. Do **not** re-confirm the perturbation
    warning per pass — mark it session-confirmed on the first accepted start.
-2. D6/D7: a continuous golden (multi-invocation) **and** a dishonesty fixture
-   (a pass that skips / truncates), with the renderer test asserting the honest
+2. D6/D7: a continuous golden (multi-invocation) **and** a low-fidelity fixture
+   (a pass that skips / truncates), with the renderer test asserting the faithful
    placard per pass.
 
 **Done when.** `make docker-desktop` + `docker-cli` green; the checkbox drives a
@@ -248,7 +248,7 @@ can never grow into the "accumulate invocations" view. This brief specifies the
 durable engine-side form; the desktop-driven loop is a valid interim if urgency
 demands it.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Not resume-from-state / Reweave.** That is [R3](30-resume-from-state-and-reweave.md)
   (emulator snapshot/restore for counterfactuals); live-process resume stays
@@ -277,4 +277,4 @@ from [R3 / 30](30-resume-from-state-and-reweave.md). Schema/D5
 [01](01-asmtrace-format.md) + [asmtrace-schema.md](asmtrace-schema.md); consumers
 [04](04-replay-views.md) (dataflow/Scrubber), [09](09-teaching-producers.md).
 D9 (capture host): live `--dataflow` / `--serve` is `asmspy`-only; keep the
-desktop app engine-free (D4). Golden/dishonesty + honest-degradation D6/D7.
+desktop app engine-free (D4). Golden/low-fidelity + graceful-degradation D6/D7.

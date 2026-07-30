@@ -54,7 +54,7 @@ collapse the shipped `AsmTrace` constructor down to its aspirational **empty** f
 executed JIT assembly is captured and rendered on scope close with **no configuration,
 no `NativeCode`, and no `[base,len)`**. The developer-visible surface reduces to the
 **package import plus the scope**; everything else is discovered, armed, decoded, and
-degraded honestly behind it.
+degraded faithfully behind it.
 
 This is a **sibling** of the three scoped-tracing slice plans
 ([scoped-tracing-core-plan.md](scoped-tracing-core-plan.md),
@@ -69,7 +69,7 @@ surface and composes existing seams. Read
 *in what order*.
 
 The **only genuinely new** engineering is a region-free arm surface plus the arm-time
-composition and honest-degradation UX that wire shipped-but-disconnected pieces together —
+composition and faithful-degradation UX that wire shipped-but-disconnected pieces together —
 the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the split.
 
 > **Status: partially reached — the region-free WEAK path works end-to-end on any x86-64
@@ -155,7 +155,7 @@ using (new AsmTrace())             // empty ctor: no NativeCode, no [base,len); 
 
 **Determination: a qualified yes — reachable, but only on a narrow host and only after
 building §Z1–§Z4, and effectively a no-op self-skip on this AMD host and most others.** The
-empty ctor renders a real, honest whole-window trace of arbitrary synchronous same-thread
+empty ctor renders a real, faithful whole-window trace of arbitrary synchronous same-thread
 managed code **only** on **Intel bare-metal Linux with a one-time privilege grant**
 (`perf_event_paranoid < 0` / `CAP_PERFMON`, plus a live **.NET 8+** runtime for
 MethodLoadVerbose), and only once its decode (`asmtest_pt_decode_window`,
@@ -180,7 +180,7 @@ This plan adds **no new capture primitive**. Every way of getting instruction by
 running thread — single-step `EFLAGS.TF`, Intel PT, AMD LBR, the out-of-process ptrace
 stepper, the self `pid==0` code-image recorder — already exists and is owned by a sibling
 slice plan. The zero-config work here is **repackaging**: a region-free arm surface, an
-arm-time composition seam, an honest presentation, and the async-default decision.
+arm-time composition seam, a faithful presentation, and the async-default decision.
 
 ### Consumed — owned/specified by the sibling slice plans (some themselves forward-look); referenced, not re-specified
 
@@ -212,7 +212,7 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 | 2 | Parameterless `AsmTrace()` ctor + the nine mirror binding shims calling the region-free arm (no `NativeCode`, lazy arm, auto-name, render-on-close, closing-tid assert) | Z0 | The shipped ctor **requires** a `NativeCode` [HwTrace.cs:997](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L997), obtainable only via `NativeCode.FromBytes` [:421](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L421). No empty-ctor form over an arbitrary managed method exists in any binding. |
 | 3 | The arm-time **composition seam**: §D0.1 listener ⊕ Core §2 recorder image callback ⊕ `/proc/self/maps` DSO enumeration into one lazy arm (feeding `asmtest_codeimage_track`), plus the *managed*-tier `Dispose` swap onto `render_versioned` | Z3 | Each piece exists in isolation; the seam composing them for the region-free managed case is unbuilt, and `AsmTrace.Dispose` [:1016](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016) still calls the version-blind render [:2107](../../../../src/hwtrace.c#L2107). |
 | 4 | Single-step region-free **L3 DESCEND_ALL** degradation (descend every call; denylist + instruction-budget + `ITIMER_REAL`/`SIGALRM` watchdog; native-leaf/ptrace-only; managed routes to §D3) | Z1 | Shipped single-step only steps **known native leaves with a region** — `ss_on_sigtrap` records in-range offsets and silently drops the rest [ss_backend.c:143-148](../../../../src/ss_backend.c#L143). A range-less "trace whatever ran" contract has no upstream. |
-| 5 | The empty-ctor **honest-degradation UX** (skip_reason + §3.1 buckets + §3.2 banner through the scope's Path/sink; never emit partial-as-complete) **and** the zero-config async **DEFAULT** = honest thread-scope-with-mismatch-flag (stitching stays explicit opt-in) | Z4 (async default) · Z5 (presentation) | A ctor cannot detect whether its result was assigned, a whole-window trace is noisy/partial by nature, and the region-free arm carries no region record — so the "assume no knowledge, present honestly" contract is net-new integration. |
+| 5 | The empty-ctor **faithful-degradation UX** (skip_reason + §3.1 buckets + §3.2 banner through the scope's Path/sink; never emit partial-as-complete) **and** the zero-config async **DEFAULT** = faithful thread-scope-with-mismatch-flag (stitching stays explicit opt-in) | Z4 (async default) · Z5 (presentation) | A ctor cannot detect whether its result was assigned, a whole-window trace is noisy/partial by nature, and the region-free arm carries no region record — so the "assume no knowledge, present faithfully" contract is net-new integration. |
 | 6 | The composed, actionable **privilege-detection developer message** assembled from the raw self-probe | Z5 | `available()`/`skip_reason()` return a reason **code** (consumed); the human-readable, provision-me message the empty-ctor promise rests on was unbuilt. **LANDED** as `HwTrace.DegradationNote()` ([HwTrace.cs:899](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L899)) — in the .NET binding, not the C core, by decision (§Z5). |
 
 > Read the net-new column as three kinds of work only — **surface** (rows 1, 2, 4),
@@ -276,13 +276,13 @@ Add a **whole-window** arm that legitimately permits a `NULL` / zero-len range �
    `find_region(name); if (r != NULL && r->arm_tid != …) r->trace->truncated = true`
    ([:1885-1888](../../../../src/hwtrace.c#L1885)) — so on a region-free arm `find_region` returns
    NULL and it **cannot fire**. The region-free arm must therefore carry `arm_tid` and the
-   trace pointer on its own handle so [§Z4](#z4--async-hop-honesty-default-opt-in-stitching-default-landed-escalation-landed-2026-07-21--see-the-status-note)
+   trace pointer on its own handle so [§Z4](#z4--async-hop-fidelity-default-opt-in-stitching-default-landed-escalation-landed-2026-07-21--see-the-status-note)
    can re-implement the closing-vs-arming-tid check for this path (new integration, not
    the shipped region-keyed mechanism).
 4. **Defers record-policy and backend selection to [§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look).**
    Until Z1 fills the mode, the seam routes to the Z5 self-skip/degradation stub — the
    whole surface contract is exercised with **zero hardware** and no tier ever compiles
-   without an honest no-op path.
+   without a faithful no-op path.
 
 **Correctness constraints carried onto the new per-thread state:**
 
@@ -385,7 +385,7 @@ strengthened the auto-name assertion (T6).
 > tier is implemented + host-tested green (`test_wholewindow_singlestep`, `docker-hwtrace`
 > → 201/0): `asmtest_ss_begin_window` records ABSOLUTE RIPs into the shipped bounded ring
 > (overflow → `truncated`), and `asmtest_hwtrace_render_window` disassembles them from live
-> self memory — the **first** place `using (new AsmTrace())` renders a real, honestly-noisy
+> self memory — the **first** place `using (new AsmTrace())` renders a real, noisy-but-faithful
 > trace end-to-end on a no-hardware host (validated for a native leaf on this AMD box). The
 > **STRONG** PT tier stands up here but is **not believed until
 > [§Z2](#z2--live-whole-window-decode-validation-synthetic-fixture-decode-landed-live-pt-validated-2026-07-21-on-bare-metal-silicon)'s
@@ -405,9 +405,9 @@ recorder is driven per retired instruction and `ss_on_sigtrap` stores `rip − b
 in-range ([:143-148](../../../../src/ss_backend.c#L143)), so with no range it must replace the
 filter with an **absolute-RIP record + later attribution** and, lacking a range to step
 *over*, descend into every call — a best-effort, self-truncating **L3 `DESCEND_ALL`** walk.
-Auto-selects one of three honesty tiers.
+Auto-selects one of three fidelity tiers.
 
-### The three honesty tiers (auto-selected behind Z0's arm)
+### The three fidelity tiers (auto-selected behind Z0's arm)
 
 | Tier | Backend | Region-free capture is… | Host it needs | CI protection |
 |---|---|---|---|---|
@@ -423,8 +423,8 @@ on WEAK or §D3 — which is why the weak tier is the earliest developer-visible
 
 **The AMD fork, stated plainly.** AMD ships no PT equivalent on any Zen — a verified dead
 end, not a gap ([amd-tracing-plan.md](../../plans/amd-tracing-plan.md), *the governing constraint*) — so
-on AMD the ladder can never produce a *quiet complete* whole window. The honest choice is a
-fork: **bounded-but-quiet** (CEILING LBR — an honest ~16-branch tail, always `truncated` for
+on AMD the ladder can never produce a *quiet complete* whole window. The truthful choice is a
+fork: **bounded-but-quiet** (CEILING LBR — a faithful ~16-branch tail, always `truncated` for
 a real window) versus **complete-but-intrusive** (the §D3/W2 ptrace stepper running L3 — the
 same tier WEAK's managed routing already uses). A caller needing completeness re-resolves
 under the shipped `ASMTEST_HWTRACE_CEILING_FREE` policy
@@ -484,7 +484,7 @@ handle:
   > in-process window is **unbuilt forward-look**, not shipped behaviour — the sentence above
   > describes the design intent. Consequence for the empty ctor: a region-free window over a
   > leaf that calls into a **blocking** libc entry has nothing to step over it and nothing to
-  > time it out; the tier is honest about the result (`truncated`) but not bounded in *time*.~~
+  > time it out; the tier is truthful about the result (`truncated`) but not bounded in *time*.~~
   > — **CLOSED (noted 2026-07-21)**:
   > [zeroconfig-scoped-tracing-hardening.md](../../implementations/zeroconfig-scoped-tracing-hardening.md)
   > ☑ 9/9 ported the deny-region + instruction-budget guards (T1) and the
@@ -516,7 +516,7 @@ handle:
 
 #### §Z1.2 — STRONG: PT recorder-backed whole-window arm
 
-The out-of-band tier that makes the empty ctor honest *and* quiet. A per-thread `perf` AUX
+The out-of-band tier that makes the empty ctor faithful *and* quiet. A per-thread `perf` AUX
 event opened with **no** region, plus a self (`pid == 0`) code-image timeline
 (`asmtest_codeimage_new(0)`, [codeimage.c:314](../../../../src/codeimage.c#L314)) so `read_recorder`
 → `asmtest_pt_read_codeimage` ([pt_backend.c:47](../../../../src/pt_backend.c#L47)) serves
@@ -541,7 +541,7 @@ unprivileged); self-skips on AMD/ARM/VMs/Docker. Linux-only.
 > `using (new AsmTrace(HwBackend.AmdLbr)) { block }` shape — i.e. the region-free
 > whole-window scope this tier was for. **The design changed, and the header states why:**
 > exact whole-window on AMD is *"a hardware dead end (16-deep stack + throttle)"*, so rather
-> than render an honest-but-near-useless 16-branch tail, the shipped tier **samples** the
+> than render a faithful-but-near-useless 16-branch tail, the shipped tier **samples** the
 > branch stack at `sample_period > 1` while the block runs and returns the absolute branch
 > *target* endpoints, which the caller buckets by method into a **sample-weighted hot-method
 > histogram (AutoFDO/BOLT shape) — explicitly NOT an exact instruction trace.** It uses no
@@ -554,7 +554,7 @@ unprivileged); self-skips on AMD/ARM/VMs/Docker. Linux-only.
 Auto-selected when LBR is present and PT is not. LBR is a bounded ~16-branch window; a
 whole scope overruns it and the trace is flagged `truncated`.
 [amd-tracing-plan.md](../../plans/amd-tracing-plan.md)'s **Tier-B stitching** extends the *window*,
-**not** the PMI-per-branch economics — so a Zen host honestly renders the tail and flags
+**not** the PMI-per-branch economics — so a Zen host faithfully renders the tail and flags
 the rest. This tier is therefore a fast, quiet **complement**, never AMD's whole-window
 capture: the *complete* region-free trace on AMD is the §D3/W2 ptrace stepper (see *the
 AMD fork* above), reached via `ASMTEST_HWTRACE_CEILING_FREE`
@@ -652,7 +652,7 @@ shipped AMD backend.
 > **libipt at build (no PT hardware)** for the synthetic half; **bare-metal Intel PT** for the
 > live half.
 
-**Goal.** Prove `asmtest_pt_decode_window` is **honest on a known packet stream** — the
+**Goal.** Prove `asmtest_pt_decode_window` is **faithful on a known packet stream** — the
 region-free recorder-backed decode reconstructs the exact executed path with no in-region
 filter — *before* any downstream tier (§Z1 PT, §Z3, §Z4) is wired on top. The decoder's
 doc-comment ([:191-197](../../../../src/pt_backend.c#L191)) states the contract: *bytes for ANY
@@ -678,7 +678,7 @@ fixture or PT encoder in the tree"*), pulled forward as the plan's cheapest de-r
   `asmtest_pt_encode_*` helper (libipt ships an encoder — userspace, hardware-free). It rides
   the already-passing `asmtest_pt_read_codeimage`; the only *new* coverage is the decode loop
   between AUX bytes and `asmtest_trace_t` offsets.
-- **Build-gate honesty.** The real body compiles **only** under `ASMTEST_HAVE_LIBIPT` (guard
+- **Build-gate fidelity.** The real body compiles **only** under `ASMTEST_HAVE_LIBIPT` (guard
   [:62](../../../../src/pt_backend.c#L62); `#else` stub [:252](../../../../src/pt_backend.c#L252)), so the
   fixture needs **libipt at build** (no PT hardware) and **self-skips where libipt is absent**
   (probes `asmtest_pt_decoder_present()` [:65](../../../../src/pt_backend.c#L65), prints `# SKIP …
@@ -787,9 +787,9 @@ soft-dirty-versioned code-image — so tiered/moved/freed JIT bytes render again
 version live in the window, not stale live bytes. This swap is correct **only once its
 producer exists** (this seam); before then it would render `(no bytes @version)`.
 
-**Noise is honest; warming is a knob, not a precondition.** The trace is **noisy by
+**Noise is genuine; warming is a knob, not a precondition.** The trace is **noisy by
 construction** — the JIT that compiled the method and any GC that ran, interleaved with
-`HotPath`; §Z3 *captures* that full set, [§Z5](#z5--privilege-detection-self-skip-and-honest-degradation-ux-every-host-never-hard-fails)
+`HotPath`; §Z3 *captures* that full set, [§Z5](#z5--privilege-detection-self-skip-and-faithful-degradation-ux-every-host-never-hard-fails)
 *labels* it. Because decode is against the **version live in the window**,
 `DOTNET_TieredCompilation=0` / `[MethodImpl(NoInlining)]` only reduce noise (fewer tier-up
 moves) — they are **not** a correctness precondition the way the region form's stable-blob
@@ -818,7 +818,7 @@ when ptrace is denied. Linux-only.
 
 ---
 
-## §Z4 — Async-hop honesty default, opt-in stitching *(default landed; escalation landed 2026-07-21 — see the status note)*
+## §Z4 — Async-hop fidelity default, opt-in stitching *(default landed; escalation landed 2026-07-21 — see the status note)*
 
 > **Status: default + merge core landed AND host-tested (`test_asynchop_flag`, 2026-07-16);
 > escalation LANDED (noted 2026-07-21) —
@@ -850,7 +850,7 @@ The empty scope is a **thread window**: capture is armed on the constructing thr
 decision — **what zero-config does about that** — is deliberately not "auto-stitch." Owns
 **netNew #5 (async default span)**.
 
-### The default: honest thread-scope-with-mismatch-flag
+### The default: faithful thread-scope-with-mismatch-flag
 
 A synchronous open/close on one thread is byte-identical to a plain trace. A scope whose work
 hopped is **flagged**, never silently dropped. The naive failure mode is `asmtest_ss_end`
@@ -905,7 +905,7 @@ cross-thread merge is **Intel-PT-gated** and validated by a synthetic host test,
 
 **SPLIT.** The pure merge core is **host-tested on every host** by `test_stitch_slices`
 (synthetic `slice_t` values → ordered stream + `bounds`). ~~**Gap (found 2026-07-16): the
-honest default is IMPLEMENTED but UNTESTED.**~~ **CLOSED (2026-07-16): `test_asynchop_flag`
+faithful default is IMPLEMENTED but UNTESTED.**~~ **CLOSED (2026-07-16): `test_asynchop_flag`
 is written and green** ([examples/test_hwtrace.c](../../../../examples/test_hwtrace.c),
 `docker-hwtrace` → 433/0 then, 444/0 today). The mechanism ships —
 `asmtest_hwtrace_end_window`
@@ -995,7 +995,7 @@ AMD/ARM/VMs/Docker/macOS.
 
 ---
 
-## §Z5 — Privilege detection, self-skip, and honest degradation UX *(LANDED; every host; never hard-fails)*
+## §Z5 — Privilege detection, self-skip, and faithful degradation UX *(LANDED; every host; never hard-fails)*
 
 > **Status (revised 2026-07-16): LANDED — all three net-new pieces ship.** (1)
 > `AsmTrace.SkipReason` is a real scope-object surface
@@ -1041,7 +1041,7 @@ AMD/ARM/VMs/Docker/macOS.
 > the facility it fronts is **Linux-only**.
 
 The presentation capstone. The empty ctor promises capture from privilege/hardware the code
-cannot grant itself, over a trace that is **noisy and partial by nature** — so honesty rests
+cannot grant itself, over a trace that is **noisy and partial by nature** — so fidelity rests
 here: detect what is available, degrade to a **recorded no-op that says why**, never present a
 partial window as complete. Owns netNew **#5 (PRESENTATION)** and **#6** (the composed message);
 it adds **no probe** — it *composes* the shipped self-probe over every tier §Z1–§Z4 stands up.
@@ -1108,7 +1108,7 @@ or a self-skip note with `SkipReason`.
 
 ### §Z5.4 One-time provisioning + the Linux-only floor *(documented)*
 
-The one honest lever the message points at: **whole-window PT / AMD LBR** →
+The one genuine lever the message points at: **whole-window PT / AMD LBR** →
 `sysctl kernel.perf_event_paranoid=-1` **or** `setcap cap_perfmon+ep` (Intel bare metal / Zen 4+
 respectively); **ptrace stealth fallback** → Yama `PR_SET_PTRACER` or `CAP_SYS_PTRACE` (default
 Docker seccomp permits `ptrace(2)` on host kernel ≥ 4.8). Unprivileged PT still arms with a
@@ -1120,7 +1120,7 @@ hard failure.**
 **§Z5 tests** (all host-testable, every host, pure self-probe). **As shipped:**
 `test_wholewindow_banner` — a genuinely overflowed window (insns cap 8) renders a
 well-formed prefix that ENDS with the truncation banner, never cap-as-complete; the
-honesty assert runs even without Capstone. **As drafted but deliberately not built:**
+fidelity assert runs even without Capstone. **As drafted but deliberately not built:**
 `test_degradation_message` (drive the composed builder from a synthetic
 `(available, skip_reason)` tuple per §Z5.2 row; each string names the missing capability
 **and** the one-time grant) — there is no composed **C** builder to drive, by the decision
@@ -1179,7 +1179,7 @@ load-bearing dependency edges):
                                     │                          ⊕ recorder ⊕ /proc/self/maps; managed Dispose→render_versioned)
   Managed §D0.4+§D4, Core §0.2 ─► Z4 async ◄──┘   (DEFAULT = thread-scope + arm-tid carry; ESCALATION needs Z3 AND Z2)
                                     │
-  Core §3.1/§3.2 + inproc skip_reason ─► Z5 honest-degradation UX + privilege message
+  Core §3.1/§3.2 + inproc skip_reason ─► Z5 faithful-degradation UX + privilege message
                                              (compose every tier's skip_reason · every host · scaffolded at Z0 · NEVER hard-fails)
 
   VALUE LADDER: Z0 surface ─► Z1 WEAK (FIRST end-to-end, any Linux) ─► Z2 clean decode ─► Z3 managed ─► Z4 async ─► Z5 UX
@@ -1190,7 +1190,7 @@ bounded ring + versioned render), **Z2** (PT DECODE selection; the `PERF_EVENT_I
 filter is **consumed from Core §2**, not owned here); #2/#4 land in **Z0**/**Z1**; #3 in **Z3**;
 #5/#6 in **Z4**/**Z5**. Earliest CI protection is the phase gate above / the Net-new table's why.
 
-> **Gating honesty.** Only Z0, Z2's synthetic half (where libipt is built), Z1's
+> **Gating fidelity.** Only Z0, Z2's synthetic half (where libipt is built), Z1's
 > native-leaf/ptrace tier, Z4's default + merge core, and Z5 are protected by ordinary CI; the
 > strong PT/AMD and live managed/async chains are Intel-bare-metal/privilege-gated (see the
 > CI-protection asymmetry note under Tests). **Z2 and (largely) Z4 own no net-new capture
@@ -1214,15 +1214,15 @@ re-stated as they *bind the empty ctor* — a scope with **no `[base,len)` at al
   **region-keyed** (`find_region` → NULL region-free), the empty ctor carries `arm_tid` on its
   own handle (Z0) and flags `trace.truncated` there, rather than the no-frame result
   `asmtest_ss_end` ([:279](../../../../src/ss_backend.c#L279)) gives on the wrong thread. **Default
-  = honest-thread-scope-with-flag, not auto-stitching**; stitching through
+  = faithful-thread-scope-with-flag, not auto-stitching**; stitching through
   `asmtest_hwtrace_stitch` ([:2537](../../../../src/hwtrace.c#L2537)) is an **explicit opt-in
   escalation**.
 
-- **Whole-window is honest-but-noisy; region-scoped is clean (§Z1 mode, §Z5 presentation).**
+- **Whole-window is faithful-but-noisy; region-scoped is clean (§Z1 mode, §Z5 presentation).**
   With no range to filter to, an unwarmed body traces the JIT compiling it, GC, and BCL
   alongside `HotPath` — the shipped in-region filter (`read_region`
   [:74](../../../../src/pt_backend.c#L74); `ss_on_sigtrap` [:143-148](../../../../src/ss_backend.c#L143))
-  is exactly what the whole-window path lifts. Honesty is a presentation obligation: the noise
+  is exactly what the whole-window path lifts. Fidelity is a presentation obligation: the noise
   is *labelled* via Core §3.1's shipped `symbolize_bucket` + `region_name` reverse resolver
   (and the CAP_BPF/BTF-gated emission-slicer for the temporal split) + a §3.2 banner, never
   silently mixed.
@@ -1312,7 +1312,7 @@ shipped `test_pt_image_from_codeimage`, `test_stitch_slices`, `test_amd_reconstr
 | `test_wholewindow_ss_descend` — **LANDED** (2026-07-16, reduced form) | Z1 | The lifted **pre-allocated bounded absolute-RIP ring** replacing `ss_on_sigtrap`'s in-region filter ([:143-148](../../../../src/ss_backend.c#L143)), driving the **WEAK single-step L3 DESCEND_ALL** native leaf ([test_hwtrace.c:7254](../../../../examples/test_hwtrace.c#L7254)). **As built** (`docker-hwtrace` → 433/0 then, 444/0 today): a caller that calls out to a callee on its **own mapping** — run 1 (region-free) captures the callee's **out-of-(former-)range IPs**, the `DESCEND_ALL` claim; run 2 (the **same** caller, region-scoped) filters that callee out at exactly 3 in-region insns, so the lifted record policy is asserted as a **difference between the two runs**, never as a transparent walk; the **real** captured ring renders through `render_versioned` against a self (`pid==0`) codeimage — the only place a real region-free capture meets the versioned render; and a runaway window **self-truncates on the bounded ring**. The drafted **second** truncation path (§L3 budget/watchdog) was **struck as not-of-this-tier** — it is covered by the `test_descent_*` cases against the ptrace backend, not here. Neighbours: `test_wholewindow_singlestep` (live-memory `render_window`) + `test_wholewindow_buckets` | `hwtrace-test`, `docker-hwtrace` |
 | `test_wholewindow_decode` | Z2 | A checked-in / encoder-produced **TIP/TNT/PSB stream** feeding `asmtest_pt_decode_window`'s real libipt body ([:198](../../../../src/pt_backend.c#L198), guard `ASMTEST_HAVE_LIBIPT` [:62](../../../../src/pt_backend.c#L62)) through `read_recorder` ([:96](../../../../src/pt_backend.c#L96)) with **no in-region filter** — the only non-hardware route to this body, contrasting `read_region` ([:74](../../../../src/pt_backend.c#L74), which dies at the first out-of-range IP [:179-188](../../../../src/pt_backend.c#L179)). **Self-skips where libipt is absent** | `hwtrace-test` (front-loaded, ‖ Z0, x86_64) |
 | `test_zeroctor_managed_compose` — **SHIPPED** (`e5c7734`) | Z3 | A **synthetic `MethodLoadVerbose` stream** (no runtime): the listener→(addr,size,version) map feeds `asmtest_codeimage_track` on the self path (`pid==0`, [:314](../../../../src/codeimage.c#L314) / track [:373](../../../../src/codeimage.c#L373), soft-dirty-gated); `Dispose` re-points from the version-blind render ([:2107](../../../../src/hwtrace.c#L2107)) to `render_versioned` ([:2343](../../../../src/hwtrace.c#L2343)). **As built:** a W^X buffer is re-JIT'd in place (`add` → `sub`) and `refresh()`ed; `when0` renders the first body and `when1` the second while live memory holds only the second — decode-at-version proven | `hwtrace-test` |
-| `test_asynchop_flag` — **LANDED** (2026-07-16) | Z4 | The honest **default**: a cross-thread/awaited close rides the **handle-carried** arm-tid so the trace is flagged `truncated` (not the region-keyed §0.2 backstop, which can't fire region-free) rather than silently dropping the arming thread's TLS — hop **flagged, never dropped, never auto-stitched**. **As built** ([test_hwtrace.c:7467](../../../../examples/test_hwtrace.c#L7467), `docker-hwtrace` → 433/0 then, 444/0 today): a handle **genuinely armed on main** is **genuinely closed from a second OS thread** (asserted `!= gettid()`, so unlike `test_wholewindow_singlestep`'s phantom `{5,999}` handle it can see a cross-thread visibility regression) onto its **own** trace — so `truncated` there can only be the frame-lookup miss, never main's window overflowing; the hopped close returns **OK** (honest degradation, not an error); and main's own frame **survives** the foreign close. `test_arm_tid_mismatch` covers the **region-keyed** `begin_scope` path; the colliding-handle false-complete is `test_crossthread_handle_collision` | `hwtrace-test` |
+| `test_asynchop_flag` — **LANDED** (2026-07-16) | Z4 | The faithful **default**: a cross-thread/awaited close rides the **handle-carried** arm-tid so the trace is flagged `truncated` (not the region-keyed §0.2 backstop, which can't fire region-free) rather than silently dropping the arming thread's TLS — hop **flagged, never dropped, never auto-stitched**. **As built** ([test_hwtrace.c:7467](../../../../examples/test_hwtrace.c#L7467), `docker-hwtrace` → 433/0 then, 444/0 today): a handle **genuinely armed on main** is **genuinely closed from a second OS thread** (asserted `!= gettid()`, so unlike `test_wholewindow_singlestep`'s phantom `{5,999}` handle it can see a cross-thread visibility regression) onto its **own** trace — so `truncated` there can only be the frame-lookup miss, never main's window overflowing; the hopped close returns **OK** (faithful degradation, not an error); and main's own frame **survives** the foreign close. `test_arm_tid_mismatch` covers the **region-keyed** `begin_scope` path; the colliding-handle false-complete is `test_crossthread_handle_collision` | `hwtrace-test` |
 | `test_stitch_slices` *(shipped)* | Z4 | Existing pure seq-ordered merge over synthetic `slice_t` ([asmtest_hwtrace.h:246](../../../../include/asmtest_hwtrace.h#L246)); the opt-in producer is wired **into** it | `hwtrace-test` |
 | `test_wholewindow_banner` — **SHIPPED** (`e5c7734`) · `test_degradation_message` — **not built, by decision** | Z5 | Pure self-probe on **any** host: composes every tier's `skip_reason()` + §3.1 bucket labels (`symbolize_bucket` / `region_name`) + §3.2 banner into the scope's `Path`; asserts the **actionable privilege message** and that the empty ctor is **never a hard failure**. **As built:** `test_wholewindow_banner` proves an overflowed window (insns cap 8) renders a prefix ENDING with the truncation banner, asserting even without Capstone. `test_degradation_message` has no composed **C** builder to drive — the §Z5.2 ladder ships as `HwTrace.DegradationNote()` in the .NET binding instead | `hwtrace-test` (every host) |
 
@@ -1337,7 +1337,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 | Live async hop→tag→merge chain | Z4 | *(no CI coverage — forward-look)* | Live managed runtime + bare-metal Intel PT per-thread events (the §D3 single-thread stepper **cannot** exercise a hop) |
 | Bundled `asmtest-stealth-helper` supply-chain surface | Z1 / Z3 | `package-libs-verify` ([release.yml:77](../../../../.github/workflows/release.yml#L77), [mk/bindings.mk:474](../../../../mk/bindings.mk#L474)) | Fail-closed: the helper + `libasmtest_hwtrace` present and `$ORIGIN`-rpath'd per platform |
 
-> **CI-protection asymmetry (stated honestly).** Only Z0, Z2's synthetic half (where libipt is
+> **CI-protection asymmetry (stated transparently).** Only Z0, Z2's synthetic half (where libipt is
 > built), Z1's native-leaf/ptrace tier, Z4's default + merge core, and Z5 are guarded by
 > ordinary CI. Z1's strong PT / AMD tiers, Z3/Z4's live managed/async chains, and the
 > CAP_BPF/BTF eBPF slicer are silicon/privilege/runtime gated and self-skip on
@@ -1352,7 +1352,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
   form is "not built", which was true when drafted but is false since §Z0 + §Z1-WEAK
   landed.)* The empty ctor **is** built and renders a real whole-window trace of a native
   leaf on any x86-64 Linux. Add a **"Zero-config / whole-window scope"** subsection that
-  keeps the aspirational snippet **and** states the tier ladder honestly: WEAK single-step
+  keeps the aspirational snippet **and** states the tier ladder accurately: WEAK single-step
   ships everywhere (noisy, self-truncating, native-leaf in-process); CEILING ships on Zen 4+
   as a **sampled hot-method survey**, not an exact trace (§Z1.3); STRONG whole-window PT
   remains forward-look — its decode is validated on §Z2's synthetic fixture but is
@@ -1366,7 +1366,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
   (lines 162–166) — add a fourth **"Zero-config / whole-window"** row pointing here; `Owns` =
   *the region-free arm surface + empty-ctor across all ten bindings, the whole-window
   capture-mode selection + synthetic-fixture decode validation, arm-time managed composition,
-  the honest async default, and the honest-degradation UX*; `New-item coverage` = *1–6*. Note
+  the faithful async default, and the faithful-degradation UX*; `New-item coverage` = *1–6*. Note
   it adds **surface + integration only, no new capture primitive**.
 - Extend [docs/guides/tracing/hardware-tracing.md](../../../guides/tracing/hardware-tracing.md) with
   the three-tier region-free ladder and the synthetic-fixture decode-validation mode;

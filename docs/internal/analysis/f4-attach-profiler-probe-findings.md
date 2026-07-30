@@ -13,7 +13,7 @@ cleanly. **None of the four kill criteria tripped.**
 
 This retires the risk the F4 section of
 [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md) named as
-"the honest open question to spike first". F4's GC-move feed is **not** restricted to launched
+"the genuine open question to spike first". F4's GC-move feed is **not** restricted to launched
 targets, and the ptrace live-attach tier does **not** need the DR tier's startup-env-var wiring.
 
 Reproducible: identical result across **three** consecutive runs (same hr, same

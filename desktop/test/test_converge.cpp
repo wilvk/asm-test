@@ -198,7 +198,7 @@ static void test_detection() {
               detect_convergences(ts, proj).marks.empty(), "got a mark");
     }
 
-    // === relative-basis / statistical paths never converge (honesty) ========
+    // === relative-basis / statistical paths never converge (fidelity) ========
     // Both endpoints project and share a cell, but the paths are LABELLED, not
     // placed on the address plane — a convergence over them would be a false
     // address-space claim, so the detector skips them by flag, not by luck.
@@ -208,14 +208,14 @@ static void test_detection() {
             traj(1, TRAJ_RELATIVE_BASIS, {{0, 0x400800}}));
         rel.trajectories.push_back(
             traj(2, TRAJ_RELATIVE_BASIS, {{0, 0x400800}}));
-        check("honesty: two relative-basis paths do not converge",
+        check("fidelity: two relative-basis paths do not converge",
               detect_convergences(rel, proj).marks.empty(),
               "a rel path was placed on the plane");
 
         TrajectorySet stat;
         stat.trajectories.push_back(traj(1, 0, {{0, 0x400800}}));
         stat.trajectories.push_back(traj(2, TRAJ_STATISTICAL, {{0, 0x400800}}));
-        check("honesty: a statistical layer never joins a convergence",
+        check("fidelity: a statistical layer never joins a convergence",
               detect_convergences(stat, proj).marks.empty(),
               "a statistical residency was treated as a thread path");
     }

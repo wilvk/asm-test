@@ -236,7 +236,7 @@ time even when the stepped code blocks in a syscall: the SIGALRM breaks the bloc
    test's few seconds of legitimate stepping so existing assertions stay
    deterministic.
 
-**Code.** Note in comments the two honest limitations: (a) `ITIMER_REAL` SIGALRM
+**Code.** Note in comments the two disclosed limitations: (a) `ITIMER_REAL` SIGALRM
 is delivered process-wide — in a multi-threaded process the kernel may deliver it
 to a thread other than the blocked stepping one; the flag + the repeating
 interval make expiry eventually observed at the next trap, but breaking a
@@ -538,7 +538,7 @@ how the PT decode is validated without silicon.
 
 1. Insert a new `## The zero-config whole-window scope (region-free)` section
    after `## Auto-selecting a backend` (`:244`) and before
-   `## W^X executable memory` (`:301`). Mirror the tone and honesty of the
+   `## W^X executable memory` (`:301`). Mirror the tone and candor of the
    zero-config section at
    [docs/scoped-tracing-implementation.md:122](../scoped-tracing-implementation.md);
    this is a **published** page, so link the internal plan via its GitHub blob
@@ -549,7 +549,7 @@ how the PT decode is validated without silicon.
    `_render_window`), the .NET `using (new AsmTrace())` form, then the ladder as
    a short table:
    - **WEAK** — in-process single-step, descends into everything, any x86-64
-     Linux, unprivileged, ships today; honestly noisy and self-truncating
+     Linux, unprivileged, ships today; transparently noisy and self-truncating
      (bounded ring; after T1–T4 also deny/budget/watchdog-bounded — phrase this
      to match whatever has landed when the section is written);
    - **STRONG** — whole-window Intel PT: the decode
@@ -766,7 +766,7 @@ exactly why the tasks mirror rather than invent.
 - **AMD LBR documentation truth-up** (the Zen 4+ floor corrections across
   guides/headers/matrix, the freeze-gate retirement, the silicon-gated capture
   arm) — [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md); IBS window-lane
-  honesty — [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md).
+  fidelity — [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md).
 - **In-process block-step (BTF) as a cheaper whole-window record mode** —
   [inproc-btf-block-step.md](inproc-btf-block-step.md); this doc's guards land on
   the per-instruction TF path and must not block or pre-empt that work.

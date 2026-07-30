@@ -661,7 +661,7 @@ static inline uint64_t asmtest_cycle_counter(void) {
 /* carries whatever a producer wrote into the failure report, so a red  */
 /* test in CI names a `.asmtrace` file and a step inside it. A suite    */
 /* with no producer glue accepts --record-dir, writes nothing, and      */
-/* emits no `recording:` key — the honest degrade.                      */
+/* emits no `recording:` key — the graceful degrade.                    */
 /* ------------------------------------------------------------------ */
 
 /* Non-NULL iff --record-dir (or ASMTEST_RECORD_DIR) is armed AND a test is

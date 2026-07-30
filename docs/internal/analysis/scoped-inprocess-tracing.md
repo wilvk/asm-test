@@ -39,7 +39,7 @@ scope closes, and the assembly that executed appears.
 **Yes — and most of the mechanism already ships. The scoped model is the natural fit,
 because a `using` block is exactly an enable/disable window, and asm-test already
 brackets a region with `begin`/`end` markers that do in-process, self-attached,
-per-thread capture.** The honest qualifications are three host preconditions that no
+per-thread capture.** The candid qualifications are three host preconditions that no
 amount of API design can turn into code — it can only *hide* them and self-skip when
 they are absent (which is precisely this codebase's posture everywhere else).
 
@@ -114,7 +114,7 @@ attach nothing, restart nothing, cost confined to the scope.
 
 Only **out-of-band hardware trace** passes all five execution axes, because the recording
 happens in the CPU as a side effect of executing — the program cannot tell it is being
-traced short of probing MSRs. One honest caveat: the `using` block itself is code *in*
+traced short of probing MSRs. One candid caveat: the `using` block itself is code *in*
 the target, so the cooperative model is by definition not zero-footprint — but its
 intrusion is confined to the scope boundaries (today's `begin` opens the perf event and
 maps its rings each time, [src/hwtrace.c:671-704](../../../src/hwtrace.c#L671-L704); with
@@ -221,7 +221,7 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    the window is dominated by BCL plumbing — a single
    `Console.WriteLine("x is:" + x)` drags in `Int32.ToString`, `string.Concat`,
    console locking/encoding, and the write path: tens of thousands of instructions for
-   a few visible statements. That is honest — it *is* the assembly path that executed —
+   a few visible statements. That is faithful — it *is* the assembly path that executed —
    but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
    [examples/dotnet/jit_dotnet/Program.cs](../../../examples/dotnet/jit_dotnet/Program.cs) exists
    precisely to get a *clean* single-method trace instead of the runtime's plumbing.
@@ -262,7 +262,7 @@ compilable under hardware trace — but what comes back is the *thread's* instru
 stream, so the model is at its best bracketing synchronous, warmed, same-thread work,
 and it must self-flag when an async hop or window overflow breaks those assumptions.
 
-## Non-intrusiveness, backend by backend (honest ranking)
+## Non-intrusiveness, backend by backend (candid ranking)
 
 | Backend | In-process? | Intrusive? | Completeness | Precondition |
 |---|---|---|---|---|
@@ -368,7 +368,7 @@ native). It ships in three usage shapes:
    at `}`; `Dispose()` joins the helper and renders. The developer footprint stays
    **import + using**. It works on Zen 2 and inside Docker on an Intel Mac (modern
    default container profiles permit ptrace; older ones need `CAP_SYS_PTRACE` —
-   [Docker seccomp][docker-seccomp]). The honest cost: non-intrusive to *state*,
+   [Docker seccomp][docker-seccomp]). The candid cost: non-intrusive to *state*,
    intrusive to *timing* — the scoped thread crawls while siblings run free, so locks it
    holds stall them (the perturbation, not deadlock, form of the L3 hazard).
 
@@ -521,11 +521,11 @@ backends already filter to the region:
   toggles trade detail for bytes. Overflow already maps onto `truncated`. All standard PT
   knobs — the only gate is PT hardware to validate the filter.
 - **Single-step** has no I/O bandwidth; its budget is the fixed 512 KiB offset buffer
-  (`SS_STREAM_CAP`), and overflow is already handled honestly (`g_overflow → truncated`,
+  (`SS_STREAM_CAP`), and overflow is already handled faithfully (`g_overflow → truncated`,
   [src/ss_backend.c:99-102](../../../src/ss_backend.c#L99-L102), [:201-202](../../../src/ss_backend.c#L201-L202)).
   You can enlarge it, or make it a growable buffer sized between windows (never `malloc`
   in the handler — it must stay async-signal-safe). But the true ceiling is **time**: a
-  long region at a trap per instruction, which no buffer change fixes. The honest answer
+  long region at a trap per instruction, which no buffer change fixes. The candid answer
   there is "trace a smaller region," or fold loops (record body-once + count) at the cost
   of the ordered-stream contract.
 
@@ -584,7 +584,7 @@ picture:
 
 ## Where "only import + using" leaks — and what to do about it
 
-Three honest edges, in decreasing order of how often they bite. (They are written
+Three candid edges, in decreasing order of how often they bite. (They are written
 against the lowest common denominator; the next section shows how much dissolves when
 **.NET 8+** can be assumed.)
 
@@ -849,7 +849,7 @@ GC-callback keepalive (already solved per binding for `Descent`), and the thread
 close. **Recommended everywhere: lazy first-scope arm** — mere import must not claim the
 process-global slot or install the SIGTRAP sigaction.
 
-### The hard cases, called honestly
+### The hard cases, called candidly
 
 - **Go — thread migration is the defining hazard, already handled by pinning.** The M:N
   scheduler can move a goroutine across OS threads at any cgo boundary; since `EFLAGS.TF` is
@@ -874,7 +874,7 @@ process-global slot or install the SIGTRAP sigaction.
 - **The arm-on-import gap for C++/Rust/Zig.** None has a portable runtime module-init with
   C#'s "fires before first type touch" semantics; `__attribute__((constructor))` / `.init_array`
   is eager, compiler-specific, and exposed to static-init-order fiasco in a header-only lib. The
-  honest answer is a **lazy function-local `static` / `OnceLock` / `std.once` guard on first
+  candid answer is a **lazy function-local `static` / `OnceLock` / `std.once` guard on first
   scope entry** — which is *strictly better* here (arms only if used, self-skips cleanly) and
   keeps the developer footprint at import + scope. "Arm on import" is delivered as an *effect*,
   not a hook, for exactly these three.

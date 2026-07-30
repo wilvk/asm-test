@@ -342,9 +342,9 @@ do
 end
 
 -- window — §Z1 region-free whole-window scope (the empty-ctor form). Arms a REGION-FREE
--- single-step capture, runs fn, disarms, renders. HONEST-BUT-NOISY: it steps the LuaJIT
+-- single-step capture, runs fn, disarms, renders. FAITHFUL-BUT-NOISY: it steps the LuaJIT
 -- interpreter too, so the leaf's absolute addresses are a SUBSET and the 1M-insn ring may
--- overflow (both truncated outcomes are honest). Mirrors
+-- overflow (both truncated outcomes are faithful). Mirrors
 -- test_hwtrace.py::test_window_region_free_whole_window.
 do
   local code = NativeCode.from_bytes(ROUTINE)
@@ -353,7 +353,7 @@ do
   print(string.format("# window: armed=%s truncated=%s", tostring(w.armed), tostring(w.truncated)))
   eq(wresult, 42, "window: fn ran and call(20,22) == 42")
   -- Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
-  -- honestly self-skips (armed == false), matching the C test_wholewindow_singlestep
+  -- faithfully self-skips (armed == false), matching the C test_wholewindow_singlestep
   -- and node's window test. Assert the arming-dependent bits only when it armed.
   if w.armed then
     -- A decoder-present listing still holds the leaf's ret when the window did not
@@ -390,7 +390,7 @@ do
   tr:region("auto", function() result = code:call(20, 22) end)
 
   eq(result, 42, "auto: call(20,22) == 42")
-  ok(tr:covered(0) or tr:truncated(), "auto: covered(0) or honestly truncated")
+  ok(tr:covered(0) or tr:truncated(), "auto: covered(0) or faithfully truncated")
   if ab == SINGLESTEP then  -- the pick off PT/AMD hosts: byte-exact parity
     list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
             "auto (single-step): insn_offsets == {0,3,6,12,17}")

@@ -80,7 +80,7 @@ int main() {
 
     // A survey is exact:false BY CONSTRUCTION; a recording claiming otherwise
     // is a producer defect, and the view keeps rendering it as statistical.
-    Recording bad = vt::load_fixture("obs-survey-dishonest.asmtrace");
+    Recording bad = vt::load_fixture("obs-survey-low-fidelity.asmtrace");
     HotEdgeView b = obs_hotedges_build(bad);
     vt::check("provenance conflict caught", !b.provenance_conflict.empty(),
               "a survey declaring exact:true went unremarked");

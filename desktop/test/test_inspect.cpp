@@ -72,7 +72,7 @@ static void test_attach() {
         f.yama_scope = 1;
         AttachVerdict v = attach_verdict(f);
         // Whether the target opted in is NOT readable from outside, so the only
-        // honest answer is Unknown — a confident Yes here fails at attach.
+        // truthful answer is Unknown — a confident Yes here fails at attach.
         check("att/scope1-unknown", v.verdict == Attach::Unknown,
               "scope 1 without a known opt-in is Unknown, not Yes");
         check("att/scope1-why", has(v.why, "PR_SET_PTRACER"),
@@ -336,7 +336,7 @@ static void test_evidence() {
         std::string n = pick_walk_note(p);
         check("ev/walk-note", has(n, "candidate 2 of 3"),
               "the walk note must say which candidate this is");
-        check("ev/walk-honest", has(n, "not a fact about the target"),
+        check("ev/walk-fidelity", has(n, "not a fact about the target"),
               "the walk note must not let a refusal read as a finding");
     }
     {
@@ -353,15 +353,15 @@ static void test_evidence() {
                 json::parse(
                     R"({"state":"pick","pick":{"sampler":"sw-clock","func":"x"}})"),
                 &p),
-            "a pick with no evidence field cannot be presented honestly");
+            "a pick with no evidence field cannot be presented faithfully");
     }
     {
         // 39 T3: an IDLE-WINDOW retry marker rides the pick channel with the
-        // sentinel func "(idle window)". It must render as an honest "re-sampling"
+        // sentinel func "(idle window)". It must render as a faithful "re-sampling"
         // note, NOT as a region pick claiming an entry/residency observation.
         // Custom raw-string delimiter: the JSON's "(idle window)" contains a `)"`
         // sequence that would close a plain R"(...)" early. Evidence "idle" is the
-        // honest wire value — the window observed NOTHING, so it is not entry.
+        // truthful wire value — the window observed NOTHING, so it is not entry.
         json body = json::parse(
             R"J({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"idle","func":"(idle window)","base":0,"len":0,"weight":0,"sites":0,"attempt":2,"of":3}})J");
         AutoPick p;
@@ -476,7 +476,7 @@ static void test_front_door() {
     }
 }
 
-// The honest progress decision (14 T3): a real fraction ONLY with an honest
+// The faithful progress decision (14 T3): a real fraction ONLY with a real
 // total; torn / unbounded gets the indeterminate bar, never a fabricated %.
 static void test_progress() {
     check("prog/idle-hidden",
@@ -484,13 +484,13 @@ static void test_progress() {
           "nothing in flight -> no bar");
     check("prog/unbounded-indeterminate",
           progress_mode(true, false, 0) == ProgressMode::Indeterminate,
-          "an unbounded live session has no honest total");
+          "an unbounded live session has no real total");
     check("prog/torn-indeterminate",
           progress_mode(true, false, 500) == ProgressMode::Indeterminate,
           "a torn recording (has_total=false) is never a percentage");
     check("prog/footered-determinate",
           progress_mode(true, true, 200) == ProgressMode::Determinate,
-          "an end footer gives an honest total");
+          "an end footer gives a real total");
     check("prog/zero-total-not-determinate",
           progress_mode(true, true, 0) == ProgressMode::Indeterminate,
           "has_total but total==0 cannot form a fraction");

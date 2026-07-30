@@ -16,7 +16,7 @@
  * blocks, each with their own `*total`, follow). Text is parsed; the kit also
  * offers `-mix-format json`, but the text layout is trivial here.
  *
- * HONESTY LIMIT: `-mix` counts are PROCESS-WIDE dynamic totals, not region-scoped
+ * FIDELITY LIMIT: `-mix` counts are PROCESS-WIDE dynamic totals, not region-scoped
  * offsets, so insns/blocks offset arrays stay empty and blocks_total stays 0 —
  * the total is dominated by loader/libc startup. Scoping mix to a marker region
  * is future work for the Pin tracing tier, not this lane.

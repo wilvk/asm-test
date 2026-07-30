@@ -10,7 +10,7 @@
 // DOC CORRECTION (2026-07-24). 05-T1 says "02's reader materializes a
 // recording's dataflow-step + defuse-edge events back into an
 // asmtest_valtrace_t + asmtest_defuse_t". 02 shipped a decoded `DataflowStream`
-// instead (doc/streams.h), which is a better reader output — it is honest about
+// instead (doc/streams.h), which is a better reader output — it is faithful about
 // what the SCHEMA carries rather than about what the C struct holds. The code
 // wins: the materialization lives here, on the consumer side, exactly as
 // views/timeline.cpp already does it for the annotation grammar.

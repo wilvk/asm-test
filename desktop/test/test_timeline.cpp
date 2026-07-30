@@ -163,7 +163,7 @@ int main() {
                       t.rows[0].ann.find("[wide]") == std::string::npos,
                   t.rows.empty() ? "no rows" : t.rows[0].ann);
 
-        // Absent bytes still degrade honestly to "[wide]".
+        // Absent bytes still degrade gracefully to "[wide]".
         s.df.recs[0].bytes.clear();
         dt_timeline t2 = dt_timeline_build(s);
         vt::check("a bytes-less wide operand degrades to [wide]",

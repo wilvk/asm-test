@@ -37,7 +37,7 @@ internal static class Program
         Console.WriteLine("== annotated execution trace: each instruction next to its method ==\n");
 
         // No HwTrace.Init / Available pre-check: the whole-window ctor lazily brings up the
-        // portable single-step tier itself and reports honestly via Armed / SkipReason. So the
+        // portable single-step tier itself and reports faithfully via Armed / SkipReason. So the
         // setup is just the `using` — the aspirational zero-config form.
         AsmTrace ww;
         using (ww = new AsmTrace(emit: false, byMethod: true, withRundown: true))

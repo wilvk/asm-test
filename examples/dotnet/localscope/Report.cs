@@ -6,7 +6,7 @@
 // false only when the scope armed but did NOT name the block's own code, so CI exits nonzero
 // on a real §D0.1 regression.
 //
-// Honest scope note: a whole-window single-step captures EVERYTHING the thread runs (~1M
+// Candid scope note: a whole-window single-step captures EVERYTHING the thread runs (~1M
 // runtime instructions per arm — JIT, GC, the ctor's own rundown IPC), of which only a small
 // slice resolves to a managed name. So this names a SUBSET, not every BCL method each feature
 // reaches; for tight per-method attribution of one body, see the methods/ and descent/ demos.

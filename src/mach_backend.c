@@ -341,7 +341,7 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
     }
 
     /* MACH_MODE_STEP: subcode must be the single-step trap; anything else (e.g. a
-     * stray int3 the traced code itself executed) ends the trace honestly rather
+     * stray int3 the traced code itself executed) ends the trace faithfully rather
      * than mis-recording it as a step. */
     if (subcode != 1 /* EXC_I386_SGL */) {
         g_mach_ctx.err = KERN_FAILURE;

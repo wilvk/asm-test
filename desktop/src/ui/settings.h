@@ -2,7 +2,7 @@
 // one accessibility lever fully inside ImGui's control: a DPI-aware font atlas, a
 // user text-scale (~0.8x-2.0x), a persisted window size (retiring the hardcoded
 // 1280x720), and a light theme. ImGui exposes no OS screen-reader tree
-// (11-imgui-addons.md:461, recorded honestly), so this text-scale lever is the
+// (11-imgui-addons.md:461, recorded faithfully), so this text-scale lever is the
 // accessibility surface the platform actually permits — the Settings pane says so
 // rather than implying broader coverage.
 //

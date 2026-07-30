@@ -11,7 +11,7 @@ namespace asmdesk {
 // (ICON_CI_*) over it, so hex/registers/disasm read on a real monospace face and
 // the scrubber/observer/patch-bay can carry step-into/over/watch/breakpoint
 // glyphs. GRACEFUL by design: a missing/unreadable TTF leaves the built-in
-// bitmap font and returns false — the app degrades honestly rather than
+// bitmap font and returns false — the app degrades gracefully rather than
 // asserting on a stripped install. Works via stb_truetype; a build with
 // IMGUI_ENABLE_FREETYPE (the Docker desktop lane) simply rasterises it better.
 //

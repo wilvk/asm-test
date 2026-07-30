@@ -376,7 +376,7 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
              * and if it is a clean straight-line prologue, `to` is mid-run, NOT a real
              * block boundary, so suppress the block(to) the landing would add. If the
              * prologue is NOT clean (it holds an unrecorded branch), the entry cannot be
-             * reconstructed safely: prefer honest truncation over a leading-block
+             * reconstructed safely: prefer faithful truncation over a leading-block
              * undercount, so the cascade escalates rather than report a wrong count. */
             int filled = 0;
             if (!entered && to > base_ip) {
@@ -411,7 +411,7 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
      * branch. A mid-run conditional / indirect / call / in-region jmp we did not record
      * could have been TAKEN (its sample dropped) rather than fallen through, so decoding
      * straight-line past it would fabricate a path the CPU may not have run — stop and
-     * commit nothing, leaving the honest-truncation machinery to flag the fragment. When an
+     * commit nothing, leaving the faithful-truncation machinery to flag the fragment. When an
      * exit IS reached this way the routine's last block ran straight to it, so the
      * reconstruction is complete: *out_reached_exit reports that to the live ring parser's
      * Tier-A completeness check (asmtest_amd_ring_parse_decode), which OR-s it into the
@@ -540,7 +540,7 @@ static int amd_edge_eq(const struct perf_branch_entry *a,
  * code. On an internally-consistent hardware branch-stack window this always holds
  * (from+to adjacency implies byte adjacency), so it is a no-op there; it fires only when
  * DROPPED/throttled samples make the smallest-overlap heuristic splice non-contiguous
- * edges — where an honest gap beats a silently-wrong stitch. Accepts (cannot disprove)
+ * edges — where a faithful gap beats a silently-wrong stitch. Accepts (cannot disprove)
  * when either endpoint is outside [base_ip, base_ip+len) (the span is inside a callee
  * whose bytes we do not hold) or when Capstone is unavailable; rejects a backwards span,
  * an overshoot, or an undecodable byte. Follows a dropped direct unconditional jmp across
@@ -579,7 +579,7 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
                 o = tgt - base_ip;
                 if (o > fo)
                     return 0; /* followed jmp overshoots the splice target: the
-                               * source fo is not reached — reject (honest gap),
+                               * source fo is not reached — reject (faithful gap),
                                * matching the straight-line overshoot below. */
                 continue;     /* loop re-checks o < fo */
             }
@@ -613,7 +613,7 @@ static int amd_span_decodable(const void *base, uint64_t base_ip, size_t len,
  * only if the adjacency it would splice (the tail's newest branch target -> the first
  * newly-appended branch source) is real straight-line code (amd_span_decodable); an
  * indecodable splice — a dropped-sample artifact the from+to overlap alone cannot see —
- * is rejected in favor of a larger shift, and an honest gap if none decodes. */
+ * is rejected in favor of a larger shift, and a faithful gap if none decodes. */
 size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
                           const size_t *nrs, size_t n_samples, const void *base,
                           uint64_t base_ip, size_t len,
@@ -696,7 +696,7 @@ size_t asmtest_amd_stitch(const struct perf_branch_entry *const *samples,
 /* Decode a Tier-B stitched (already-complete) branch sequence: like
  * asmtest_amd_decode but WITHOUT the 16-entry overflow flag, since stitching, not
  * the window depth, established completeness. `gap` (from asmtest_amd_stitch) is the
- * honest loss signal: nonzero -> the sequence had an unrecoverable hole. */
+ * faithful loss signal: nonzero -> the sequence had an unrecoverable hole. */
 int asmtest_amd_decode_stitched(const struct perf_branch_entry *br, size_t nbr,
                                 const void *base, size_t len,
                                 asmtest_trace_t *trace, int gap) {

@@ -344,7 +344,7 @@ int main() {
 
     // --- 30 R3 T3: Reweave — fork from a chosen execution step K -----------
     // A one-register edit at step K, resumed forward. Straight-line code keeps
-    // the offsets aligned and diverges in VALUES; the honesty label is mandatory.
+    // the offsets aligned and diverges in VALUES; the fidelity label is mandatory.
     {
         // poly(a,b,c) — straight-line; step 3 (imul) is the reweave point.
         //   0 mov rax,rdi  1 add rax,rsi  2 add rax,rdx  3 imul rax,rax
@@ -400,7 +400,7 @@ int main() {
               !v.div.diverged &&
                   v.node.alignment == std::string(kLoomAlignedEndToEnd),
               dump);
-        // The MANDATORY honesty label (D7): a reweave IS emulator replay, never
+        // The MANDATORY fidelity label (D7): a reweave IS emulator replay, never
         // observed silicon — it carries the same crossing-the-line disclosure.
         check("the reweave carries the crossing-the-line disclosure",
               v.node.disclosure == std::string(kLoomForkDisclosure),

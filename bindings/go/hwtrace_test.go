@@ -146,7 +146,7 @@ func TestHwtrace(t *testing.T) {
 }
 
 // TestHwtraceScope exercises the closure-form scope construct: auto-name from the
-// call site, render-on-close, and the thread-scope honesty bit.
+// call site, render-on-close, and the thread-scope fidelity bit.
 func TestHwtraceScope(t *testing.T) {
 	if !HwTraceAvailable(SingleStep) {
 		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
@@ -232,10 +232,10 @@ func TestHwtraceCallScoped(t *testing.T) {
 
 // TestHwtraceWindow exercises the §Z1 region-free whole-window scope (the empty-ctor
 // form). Window arms a REGION-FREE single-step capture on THIS thread (no HwNativeCode,
-// no [base,len)), runs the closure, disarms, and renders. It is HONEST-BUT-NOISY — it
+// no [base,len)), runs the closure, disarms, and renders. It is FAITHFUL-BUT-NOISY — it
 // steps the Go cgo glue too — so the traced leaf's addresses are a SUBSET of the listing
 // and the generous 1M-insn ring may or may not overflow; both truncated outcomes are
-// honest. Self-skips (Armed false) on a non-single-step backend; the closure still runs.
+// faithful. Self-skips (Armed false) on a non-single-step backend; the closure still runs.
 // Mirrors test_hwtrace.py::test_window_region_free_whole_window + node's window case.
 func TestHwtraceWindow(t *testing.T) {
 	if !HwTraceAvailable(SingleStep) {
@@ -260,12 +260,12 @@ func TestHwtraceWindow(t *testing.T) {
 	}
 	t.Logf("window: armed=%v truncated=%v pathLen=%d", res.Armed, res.Truncated, len(res.Path))
 	// The single-step tier is up, so the region-free window arms here; a non-single-step
-	// backend would self-skip (Armed false), still an honest outcome.
+	// backend would self-skip (Armed false), still a faithful outcome.
 	if !res.Armed {
 		t.Fatalf("window did not arm on an available single-step backend")
 	}
 	// When a decoder is present the (noisy) listing still contains the traced leaf's ret;
-	// do not require non-empty text (no Capstone => an empty path is honest).
+	// do not require non-empty text (no Capstone => an empty path is faithful).
 	if res.Path != "" && !strings.Contains(res.Path, "ret") {
 		t.Fatalf("window listing present but missing a ret (pathLen=%d)", len(res.Path))
 	}
@@ -490,7 +490,7 @@ func TestHwtraceAutoLive(t *testing.T) {
 		t.Fatalf("Call(20,22): got %d, want 42", r)
 	}
 	if !tr.Covered(0) && !tr.Truncated() {
-		t.Fatalf("expected offset 0 covered (or honestly truncated)")
+		t.Fatalf("expected offset 0 covered (or faithfully truncated)")
 	}
 	if ab == SingleStep { // the pick off PT/AMD hosts: byte-exact parity
 		wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}
@@ -1106,7 +1106,7 @@ func TestHwtraceFlagday(t *testing.T) {
 	// exact producer is ever statistical.
 	for _, c := range ResolveTiers(TraceBest) {
 		if c.Mechanism == MechNone || c.Mechanism == MechStatistical || c.Fidelity == FidelityStatistical {
-			t.Fatalf("exact cascade row has dishonest mechanism/fidelity: %+v", c)
+			t.Fatalf("exact cascade row has mismatched mechanism/fidelity: %+v", c)
 		}
 		if c.Tier == TierHwtrace && c.Backend == SingleStep && c.Mechanism != MechTfStep {
 			t.Fatalf("single-step row mechanism: got %d, want MechTfStep", c.Mechanism)

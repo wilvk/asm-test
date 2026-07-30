@@ -168,7 +168,7 @@ hung exactly there), and the `/proc`/perf-map/jitdump resolvers. The ten binding
 wrappers' live A64 fixtures run natively in the `hwtrace-bindings-arm64` job +
 the python host step. `asmtest_ptrace_available()` still returns 0 under qemu-user
 (which cannot emulate the tracer/tracee relationship), so emulated environments
-keep self-skipping honestly — that posture is unchanged. The first arm64 box
+keep self-skipping transparently — that posture is unchanged. The first arm64 box
 record is committed (`benchmarks/boxes/arm-linux-arm64-gha/`, `native-oop`
 row `trace_insns=3 == insns_truth`). The **in-process BTF** variant (W3) has since
 landed as a raw-MSR pinned-envelope tier — the kernel-helper blocker this paragraph
@@ -264,7 +264,7 @@ harness; here it runs **live**, not against synthetic input).
 
 ---
 
-## Phase 3 — Robustness & honest truncation *(LANDED)*
+## Phase 3 — Robustness & faithful truncation *(LANDED)*
 
 **Goal.** Never emit a corrupt or partial trace as if complete.
 
@@ -325,7 +325,7 @@ Linux/x86-64 backend.
 > the per-binding surface across all ten bindings, six live real-JIT lanes (V8 /
 > CoreCLR / HotSpot × perf-map and jitdump), and — as of 2026-07-18 — the **in-process
 > BTF** variant (W3, see below): a raw-MSR pinned-envelope tier with per-trap re-arm and
-> honest truncation
+> faithful truncation
 > ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md)); the
 > "kernel helper / uapi patch" blocker this status note previously cited was not
 > load-bearing. **All fronts now closed:**
@@ -333,7 +333,7 @@ Linux/x86-64 backend.
 >   `ubuntu-24.04-arm` hosted runners (Azure Cobalt 100 / Neoverse-N2 VMs, real
 >   silicon), via the gating `hwtrace-arm64` job (205 live ok assertions, zero
 >   unexpected skips) plus `hwtrace-bindings-arm64` (the nine wrappers' A64 ptrace
->   fixtures live) and the python host step. qemu-user still self-skips honestly
+>   fixtures live) and the python host step. qemu-user still self-skips transparently
 >   (it cannot emulate the tracer/tracee relationship) — that posture is unchanged;
 >   only the "needs real hardware" gate is gone. Measured bonus: `NT_ARM_HW_BREAK`
 >   is *armed-but-silent* on this hypervisor (slots reported, arm accepted, the
@@ -420,7 +420,7 @@ Linux/x86-64 backend.
       harness finds the spinning loop thread by CPU-time delta and attaches that tid — an
       `int3` trap on a thread no tracer owns kills the process.
 
-    All three are honest by construction: a watchdog bounds the step so a re-tiered/moved
+    All three are faithful by construction: a watchdog bounds the step so a re-tiered/moved
     address self-skips rather than hangs; the resolve + attach checks (library vs. the
     runtime's real perf-map line and a real `/proc/maps`) are firm while the trace is
     asserted-or-skipped, so the lanes never flake. This closes the loop the W2 path was
@@ -565,7 +565,7 @@ Linux/x86-64 backend.
   `asmtest_ss_btf_available()` / `asmtest_ss_btf_trace()` in
   [src/ss_btf.c](../../../../src/ss_btf.c)): the same thread-pinned `/dev/cpu/N/msr`
   route [src/msr_lbr.c](../../../../src/msr_lbr.c) uses, with per-trap re-arm (BTF is a
-  hardware one-shot the CPU clears on every `#DB`) and honest truncation on any
+  hardware one-shot the CPU clears on every `#DB`) and faithful truncation on any
   observed context switch (Linux does not preserve a user-written BTF across one). The
   robust, context-switch-proof general form remains kernel-coupled and already ships
   as `PTRACE_SINGLEBLOCK` above — no non-ptrace block-step uapi exists upstream, so the

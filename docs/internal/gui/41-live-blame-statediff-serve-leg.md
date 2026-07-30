@@ -10,7 +10,7 @@
 > **not** those two kinds, so a live attach cannot produce a reproducible,
 > deep-linkable `blame` / `statediff` artifact.
 >
-> **This is genuinely low-value and honest about it** — [38](38-live-feed-completion-roadmap.md)
+> **This is genuinely low-value and candid about it** — [38](38-live-feed-completion-roadmap.md)
 > corrected the audit here: the backward-cone *view* already works live (it derives
 > client-side over the live `df_edge` graph, the `b`/`f` keys), and the statediff
 > *diff* is `dt_statediff_build` over two recordings' `regstate`, of which a live
@@ -83,14 +83,14 @@ serve leg omits both. Bringing them over is the whole task:
 3. Serve grammar: parse `"blame":true|false` into `p->blame`
    ([asmspy.c:4084](../../../cli/asmspy.c#L4084) is the `mem` template) and echo it in
    the started-params announce ([3651](../../../cli/asmspy.c#L3651)/[3674](../../../cli/asmspy.c#L3674))
-   — honesty on the wire, not just the pane.
+   — fidelity on the wire, not just the pane.
 4. CLI: `--blame` for `--dataflow --record` / the serve invocation (mirror `--mem`,
    [asmspy.c:7605](../../../cli/asmspy.c#L7605)); set the ctx flag.
 
 **Definition of done.** `cli_smoke` records a live `--dataflow hotfn` capture with
 `--blame` (and `--record`) and asserts the recording carries a `blame` event with a
 non-empty ascending `cone` and a `born_untraced` field; a value with no traced
-producer would read `born_untraced:true` (honest), never an empty cone. No new golden
+producer would read `born_untraced:true` (faithful), never an empty cone. No new golden
 (a live capture's addresses vary); the shared body builder is the format contract.
 Both `cli-smoke` lanes green.
 
@@ -117,7 +117,7 @@ still produces the stream (it self-arms the ring). Both `cli-smoke` lanes green.
 ### T3 — reconcile the roadmap and changelog
 
 Flip [38](38-live-feed-completion-roadmap.md)'s L3 row to **CLOSED (doc 41)** with the
-honest one-liner (the *views* already worked live; this lands the precomputed
+faithful one-liner (the *views* already worked live; this lands the precomputed
 convenience kinds), add the doc-41 row to [README.md](README.md), and a CHANGELOG line.
 Update this brief to ✅ 3/3.
 
@@ -131,7 +131,7 @@ Update this brief to ✅ 3/3.
 - **Not exact live↔recorder byte-parity.** The live leg captures a real process, the
   recorder emulates a corpus routine — different inputs. The shared body builders
   guarantee *format* identity; the cli_smoke asserts *shape*, not a golden.
-- **Honest limits carry over from R6** — exact-only, provenance-starts-at-instrumentation
+- **Acknowledged limits carry over from R6** — exact-only, provenance-starts-at-instrumentation
   (`born_untraced`), no cross-thread hops. A live dataflow capture is single-threaded by
   scope, so this is automatic.
 

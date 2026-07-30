@@ -42,7 +42,7 @@ const char *const kLoomForkDisclosure =
 namespace {
 
 // Buffer caps for one take. Generous enough that the day-one corpus never
-// truncates, and honest when it does: the producer flips `truncated` and the
+// truncates, and faithful when it does: the producer flips `truncated` and the
 // fabric's chrome tears rather than the fork quietly showing a short run.
 constexpr size_t kTakeSteps = 1u << 16;
 constexpr size_t kTakeRecs = 1u << 18;

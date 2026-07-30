@@ -32,7 +32,7 @@ internal static class Report
                           + (v0ok ? " ✓" : " (mismatch)") + $", seq {whenV1} the patched v1 (return 2)"
                           + (v1ok ? " ✓" : " (mismatch)") + ". This is the read a\n"
                           + "   branch-trace decoder needs when a JIT reuses an address for a different method.");
-        Console.WriteLine("   (Honest caveat: real tier0->tier1 relocates to a NEW address, so a fixed-region code\n"
+        Console.WriteLine("   (Candid caveat: real tier0->tier1 relocates to a NEW address, so a fixed-region code\n"
                           + "    image does not capture managed tiering — this shows the mechanism on a controlled blob.)");
     }
 

@@ -188,7 +188,7 @@ static int cap_x86_to_uc(uint32_t r) {
  * express (it returns a u64), so an FP/vector operand's bytes spill to the valtrace
  * `wide[]` side buffer exactly as a >8-byte memory value does (R1 T3 serializes them
  * as the `bytes` hex string). Returns false for a non-XMM reg (the caller then falls
- * back to the scalar GP path, or leaves the operand value-less — honest). */
+ * back to the scalar GP path, or leaves the operand value-less — faithful). */
 static bool df_reg_read_wide(uc_engine *uc, uint32_t cap_reg, uint8_t buf[16]) {
     if (cap_reg < X86_REG_XMM0 || cap_reg > X86_REG_XMM0 + 15)
         return false;
@@ -335,7 +335,7 @@ static bool df_reg_read(const df_guest *g, uc_engine *uc, uint32_t cap_reg,
  * On the wide path it stamps `size` to 16 so the serializer emits the full
  * register's bytes (the enumerator left it 0). A guest with no wide register file
  * (arm64) has read_wide == NULL and always takes the scalar path; a reg the value
- * channel cannot read leaves the record value-less (honest "not measured"). */
+ * channel cannot read leaves the record value-less (faithful "not measured"). */
 static void df_capture_reg_value(const df_guest *g, uc_engine *uc,
                                  asmtest_valtrace_t *vt, at_val_rec_t *r) {
     uint8_t wbuf[16];

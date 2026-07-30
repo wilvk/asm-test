@@ -4,7 +4,7 @@
  * hardware — these checks run and pass on EVERY CI host, exactly like test_ibs's
  * pure-decoder half.
  *
- *   Phase 0: asmtest_valtrace_append round-trips a fixture and truncates honestly
+ *   Phase 0: asmtest_valtrace_append round-trips a fixture and truncates faithfully
  *            when a buffer overflows; the wide[] side buffer round-trips.
  *   Phase 1: asmtest_defuse_build reconstructs a known def-use graph (a register
  *            move chain AND a load-after-store chain), and asmtest_slice_forward /
@@ -118,7 +118,7 @@ static void test_truncate(void) {
     asmtest_valtrace_append(v, 2, pair, 2); /* overflows steps AND recs */
 
     CHECK(v->steps_total == 3 && v->steps_len == 2,
-          "truncate: totals honest, steps capped at capacity");
+          "truncate: totals accurate, steps capped at capacity");
     CHECK(v->recs_len == 3 && v->recs_total == 6,
           "truncate: recs capped, total counts every record");
     CHECK(v->truncated, "truncate: overflow flag set");

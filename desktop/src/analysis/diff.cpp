@@ -78,7 +78,7 @@ bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,
     out.b_truncated = b.truncated;
     // Routine identity: with a matching `code` header on both sides it is now a
     // FINDING (the byte hashes agree), not the reader's assertion. When either
-    // side lacks the header the honest caveat stands — v1 recordings without a
+    // side lacks the header the faithful caveat stands — v1 recordings without a
     // producer that carries stable bytes still exist.
     if (a.code_present && b.code_present) {
         out.identity_note =

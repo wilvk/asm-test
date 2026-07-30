@@ -17,7 +17,7 @@ bindings, a Unicorn emulator tier, four native-trace backends, a broad CI matrix
 guard-page allocation, fork isolation, and no stray `TODO`/`FIXME` markers. The
 findings here sharpen a strong project rather than rescue a broken one. The
 highest-value class is not crashes but **"green CI, wrong artifact"** gaps and a
-**README that oversells** what the rest of the docs honestly describe as
+**README that oversells** what the rest of the docs accurately describe as
 self-skipping.
 
 ### Severity summary
@@ -231,7 +231,7 @@ the docs. On any host the following do not run live:
   **eBPF code-image detector** self-skips without libbpf/CAP_BPF/BTF.
 
 `docs/hardware-tracing.md`, `docs/native-tracing.md`, and `docs/features.md`
-already describe these honestly. **Fix:** split "ships and runs on any host"
+already describe these accurately. **Fix:** split "ships and runs on any host"
 (emulator, single-step, DynamoRIO on Linux-x86-64) from "compiles, self-skips off
 its hardware."
 
@@ -282,5 +282,5 @@ Highest leverage first:
 1. **#1** — ptrace child leak (real, common in normal use of that tier).
 2. **#6, #7** — version + Keystone-flag staleness (silent wrong artifacts).
 3. **#2, #4** — RNG crash + UBSan-tripping UB (small, self-contained, verifiable).
-4. **#9** — Lua arg-parity; **#12** — README honesty.
+4. **#9** — Lua arg-parity; **#12** — README fidelity.
 5. **#3, #8, #10** — conditional/hardening; **#15** — curation.

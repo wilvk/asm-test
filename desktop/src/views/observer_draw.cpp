@@ -54,7 +54,7 @@ void draw_graph_canvas(const char *id, const GraphLayout &g,
                        ed::EditorContext *&ctx) {
     if (ctx == nullptr) {
         ed::Config cfg;
-        // The honesty guardrail: no settings file, so node-editor persists no
+        // The fidelity guardrail: no settings file, so node-editor persists no
         // dragged position and loads none — the layout is the app's, always.
         cfg.SettingsFile = kGraphSettingsFile;
         ctx = ed::CreateEditor(&cfg);
@@ -147,7 +147,7 @@ void draw_graph_canvas(const char *id, const GraphLayout &g,
 
 namespace {
 
-// Warn / refusal from the shared honesty-chrome palette (ui/theme.h). The
+// Warn / refusal from the shared fidelity-chrome palette (ui/theme.h). The
 // Observer deck had drifted its own amber and red; a redaction or skip banner
 // must read the same here as in every replay banner.
 const ImVec4 kWarn = dt_warn_col();
@@ -422,7 +422,7 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
     skip_line(v.skip);
 
     // A src×dst edge-count HEATMAP (15 T1) — a direct display of the edge
-    // weights, never a stack (honesty R4). Guarded on the ImPlot context so the
+    // weights, never a stack (fidelity R4). Guarded on the ImPlot context so the
     // headless view tests (which create none) skip straight to the table; only
     // the real app plots. Rows/cols are in rank order; the names live in the
     // table below, so long labels don't fight the grid.
@@ -465,7 +465,7 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
     (void)rec_id;
     (void)go;
 
-    // Client-side type-to-narrow the DISPLAYED edges (22 T3 step 4): honesty-safe
+    // Client-side type-to-narrow the DISPLAYED edges (22 T3 step 4): fidelity-safe
     // because it narrows the display only and says "showing N of M" — every model
     // row stays (D7). Matches the from/to labels, in rank order. Deliberately NOT
     // the call tree, which stays engine-filtered so surviving depths never lie.
@@ -688,7 +688,7 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
         s.disasm_when = when < 0 ? 0 : static_cast<uint64_t>(when);
     // Marked as a DISCRETE logical-time step, not a continuous clock (24 T4):
     // the same intentional-discrete marker + registry reason the invocation
-    // pager carries, so the honesty choice reads the same across the deck.
+    // pager carries, so the fidelity choice reads the same across the deck.
     ImGui::SameLine();
     ImGui::TextColored(kWarn, "\xE2\x8F\xADlogical step");
     if (ImGui::IsItemHovered())
@@ -705,7 +705,7 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
         for (const CodeVersion &c : v.versions)
             addrs.push_back(c.base);
 
-    // Client-side type-to-narrow the DISPLAYED rows (22 T3 step 4): honesty-safe —
+    // Client-side type-to-narrow the DISPLAYED rows (22 T3 step 4): fidelity-safe —
     // narrows the display only, says "showing N of M", every row stays (D7).
     // Matches the address / recorded text. Not the tree (which stays engine-side).
     auto da_lower = [](std::string x) {

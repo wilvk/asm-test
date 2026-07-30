@@ -556,7 +556,7 @@ no watchpoint slots (qemu-user, some hypervisors)". Add a `CHANGELOG.md`
 ### T7 — Watchpoint arm-and-fire CI probe  (S, depends on: T6)
 
 **Goal.** Settle whether AArch64 hardware watchpoints actually **fire** on the
-CI runner (not merely report nonzero slots), and gate honestly on the answer.
+CI runner (not merely report nonzero slots), and gate faithfully on the answer.
 
 **Steps.**
 1. In `cli_smoke.sh`'s `--watch` block (currently around line 1590, x86-only
@@ -679,7 +679,7 @@ T1 (shim) ──┬── T2 (single-step/detach)  ─┐
   single-step engines to self-skip. The **docker `linux/arm64`** path (qemu binfmt
   on an x86 host) still self-skips — `asmtest_ptrace_available()` returns 0 under
   emulation — and that is correct; it is not the validation vehicle.
-- **The watchpoint-firing half IS an honest gate — but a probeable one.** Whether
+- **The watchpoint-firing half IS a genuine gate — but a probeable one.** Whether
   an armed `NT_ARM_HW_WATCH` slot actually delivers a `SIGTRAP` on the hosted
   hypervisor is undetermined by public evidence (T7 settles it in-repo). Record
   the CI outcome; if the runner never fires, that is a host fact to note, not an

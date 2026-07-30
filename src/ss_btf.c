@@ -17,7 +17,7 @@
  * silently unprotected. BTF is also a hardware ONE-SHOT: the CPU clears it the moment it
  * raises the branch-trap #DB (Intel SDM Vol 3B), so every trap must re-arm it before
  * resuming. This tier is therefore deliberately scoped to a PINNED, SMALL, LEAF-ROUTINE
- * envelope with per-trap re-arm and honest truncation on any observed context switch —
+ * envelope with per-trap re-arm and faithful truncation on any observed context switch —
  * never a general, context-switch-proof replacement for the shipped ptrace block-step
  * (which owns the kernel-coupled TIF_BLOCKSTEP form and stays the robust default).
  *
@@ -46,7 +46,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/resource.h> /* getrusage/RUSAGE_THREAD: the context-switch honesty belt */
+#include <sys/resource.h> /* getrusage/RUSAGE_THREAD: the context-switch fidelity belt */
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -300,7 +300,7 @@ size_t asmtest_ss_btf_pair_stops(const uint8_t *code, size_t len,
                                            base_ip, prev - base_ip, s, &term);
         if (r != ASMTEST_BS_OK) {
             /* AMBIGUOUS or FAIL: a lost trap leaves the next stop unreachable — the
-             * context-switch signature. Record the honest prefix, stop pairing. */
+             * context-switch signature. Record the faithful prefix, stop pairing. */
             if (gap != NULL)
                 *gap = 1;
             break;
@@ -423,7 +423,7 @@ int asmtest_ss_btf_trace(const void *base, size_t len, void (*run_fn)(void *),
                                               (uint64_t)(uintptr_t)base, stream,
                                               nstops, pairs, nstops, &gap);
             if (n == 0) {
-                /* Belt 4: zero provable waypoints is honest, never empty-complete
+                /* Belt 4: zero provable waypoints is faithful, never empty-complete
                  * (the msr_lbr.c shape) — asmtest_amd_decode_stitched itself refuses
                  * nbr==0 with EDECODE, which would misreport this as a hard failure. */
                 trace->truncated = true;

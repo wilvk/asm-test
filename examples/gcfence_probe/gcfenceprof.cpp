@@ -141,7 +141,7 @@ static HRESULT set_mask(Prof *p, IUnknown *pInfoUnk, const char *how) {
     // callbacks (GarbageCollectionStarted/Finished) and MovedReferences2.
     //
     // COR_PRF_MONITOR_SUSPENDS (0x40000) is ALSO in COR_PRF_ALLOWABLE_AFTER_ATTACH, and it is what
-    // makes this probe honest: it delivers RuntimeSuspendFinished / RuntimeResumeStarted, i.e. the
+    // makes this probe truthful: it delivers RuntimeSuspendFinished / RuntimeResumeStarted, i.e. the
     // window in which the EE is ACTUALLY fully suspended — which is NOT the same window as
     // GarbageCollectionStarted..Finished, and the assumption under test is worded about the former.
     // Ask for both; if the pair is rejected, fall back to GC alone and say so rather than measuring

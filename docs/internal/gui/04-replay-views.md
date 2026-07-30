@@ -64,7 +64,7 @@ under `desktop/src/` + `desktop/test/` (set D1).
 - [include/asmtest_valtrace.h](../../../include/asmtest_valtrace.h) — the dataflow types
   (plain structs; including it adds no link dep):
   [`at_val_rec_t`](../../../include/asmtest_valtrace.h#L61),
-  [`asmtest_valtrace_t`](../../../include/asmtest_valtrace.h#L93) (honest overflow:
+  [`asmtest_valtrace_t`](../../../include/asmtest_valtrace.h#L93) (explicit overflow:
   [`truncated`](../../../include/asmtest_valtrace.h#L113) + `*_total` counters past caps),
   [`asmtest_defuse_edge_t`](../../../include/asmtest_valtrace.h#L171)
   `{from_step, to_step, loc}`,
@@ -248,7 +248,7 @@ banner; hard refusal to mix basis tags.
    event carrying none at all, which the schema forbids defaulting) sets `basis_error`
    and the renderer draws a full-pane refusal placard ("mixed address bases: `rel` and
    `abs` events in one stream — …re-record, or open the streams separately"), **no rows**. Mixed bases mis-attribute every row; refusal is the
-   only honest output.
+   only faithful output.
 4. Truncation banner: when `truncated` is set or `insns_total` exceeds recorded events, a
    top banner (warning color, never collapsible): "TRUNCATED: heat computed over N of M
    instructions; drops: <provenance counters>". Heat comes from exact trace events only —
@@ -275,7 +275,7 @@ std::string dt_canvas_dump (const dt_canvas&);    // golden-test surface
 `tests/golden-asmtrace/` (01), compare a deterministic dump (`dt_canvas_dump`, one
 `off|heat|B?|C?|disasm` line per row) against files committed under
 `desktop/test/expected/`. Fixtures: `add_signed` (straight-line: every row heat 1, one
-block) and a branching/loop recording (heat > 1 on loop rows). Dishonesty (D7, T8):
+block) and a branching/loop recording (heat > 1 on loop rows). Low-fidelity (D7, T8):
 truncated-trace asserts `truncated == true` and a banner containing `"TRUNCATED"`, N, M;
 mixed-basis asserts `basis_error != ""` and `rows.empty()`; no-disasm asserts offset
 fallback and a byte-stable dump.
@@ -335,7 +335,7 @@ dt_timeline dt_timeline_build(const dt_recording&);   // + dt_timeline_dump for 
 operand records (01's emulator L0 producer is deterministic): assert exact `ann` strings —
 grammar per [:39–50](../../../cli/asmspy_dataview.h#L39): register writes `->0xV`,
 register reads skipped, memory `[0xEA]<-0xV` / `[0xEA]->0xV`, `?` for uncaptured, `[wide]`
-for >8-byte, trailing `...` past 4 tokens. Dishonesty: the dropped-records fixture asserts
+for >8-byte, trailing `...` past 4 tokens. Low-fidelity: the dropped-records fixture asserts
 the banner and that retained steps still annotate. Rowstyle: with a backward cone active,
 assert IN-SLICE/DIMMED for a hand-picked pair of steps.
 
@@ -391,7 +391,7 @@ dt_slice_view dt_slice_view_build(const dt_recording&, std::optional<uint32_t> s
 **and** a golden recording. Hand fixture: select step 4; assert styles — steps 0,1,2,3
 `back`, 5 `fwd`, 4 `both`, an edge-less step `dimmed`; the overlapping edges `0→2`/`1→2`
 get different, stable lanes. Golden: byte-stable dump; router link
-`...v=slice&rec=...&step=4` lands with `selected_step == 4`. Dishonesty: truncated
+`...v=slice&rec=...&step=4` lands with `selected_step == 4`. Low-fidelity: truncated
 fixture asserts the "cones incomplete" banner.
 
 **Docs.** `desktop/README.md`: what the cones mean; cones over a truncated recording are
@@ -471,7 +471,7 @@ Wire `dt_diff` into the view chrome and add the diff view proper.
    color scale), gutter shows ∪ / A-only / B-only marks, the divergence offset gets a
    "patient zero" marker; `n`/`p` jump divergences (one in v1 — first divergence).
    **Timeline:** rows past `div.step` render the unaligned treatment (dashed separator,
-   per-side columns) — never drawn as agreement (the Loom's honesty rule). **Slice
+   per-side columns) — never drawn as agreement (the Loom's fidelity rule). **Slice
    explorer:** single-recording in v1 — with `rec_b` set it renders A plus a status line
    "slice diff lands with the state-diff producer (Wave 2)"; never a fake merged graph.
 2. Add `desktop/src/views/diff_view.h/.cpp` (`dt_view::diff`): the summary panel — the
@@ -498,9 +498,9 @@ states) and a timeline post-divergence dump showing the dashed treatment.
   covered by the `keymap/diff_d_x` and `keymap/divergence_np` interaction tests in
   `make desktop-ui-test` (17-T1) — no longer a manual smoke.
 
-### T8 — Dishonesty fixtures + suite consolidation  (S, depends on: T3, T4, T5, T6, T7)
+### T8 — Low-fidelity fixtures + suite consolidation  (S, depends on: T3, T4, T5, T6, T7)
 
-**Goal.** Make D7 real for these views: every dishonesty path asserted by a committed
+**Goal.** Make D7 real for these views: every low-fidelity path asserted by a committed
 fixture; all view tests riding `desktop-test`; changelog.
 
 **Steps.**
@@ -530,7 +530,7 @@ fixture; all view tests riding `desktop-test`; changelog.
 **Done when.**
 - `make desktop-test` and `make docker-desktop` are green;
   `make asmtrace-golden && git diff --exit-code tests/golden-asmtrace/` passes (D6).
-- Every dishonesty fixture is asserted by at least one view test (grep the fixture names
+- Every low-fidelity fixture is asserted by at least one view test (grep the fixture names
   across `desktop/test/` — none unused).
 
 ## Task order & parallelism
@@ -553,7 +553,7 @@ independent once T1/T2 exist — three people can work them concurrently (differ
 - **Determinism.** Every builder/dump is a pure function of the recording bytes: no
   wall-clock, locale surprises, pointer-order iteration, or layout randomness. Golden
   byte-stability (D6) is the enforced form.
-- **Honesty chrome (asserted, not aspirational).** Truncation banners always visible;
+- **Fidelity chrome (asserted, not aspirational).** Truncation banners always visible;
   statistical hot-edge data labeled, never merged into exact heat; bounded diffs never
   claim identity; mixed bases refuse to render; cones on truncated recordings are labeled
   lower bounds. Each is pinned by a T3–T8 test.

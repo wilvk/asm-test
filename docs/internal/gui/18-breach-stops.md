@@ -1,4 +1,4 @@
-# Wave 0: stop the breaches — keymap honesty, real Reset, save guard, capability positives, perturb confirm, nav history — implementation
+# Wave 0: stop the breaches — keymap fidelity, real Reset, save guard, capability positives, perturb confirm, nav history — implementation
 
 > **Sources.** Actioned from the UX restructure plan
 > ([../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md))
@@ -56,7 +56,7 @@ misleading first impression — on shipped substrate:
   exit back — Nielsen's canonical emergency-exit gap, on the one choke point
   (`dt_nav_go`). A bounded, serialisable back/forward stack closes it.
 
-None of these removes a truth. Where a task touches honesty chrome (T1's overlay,
+None of these removes a truth. Where a task touches fidelity chrome (T1's overlay,
 T4's verbatim reasons, T5's perturb warning) it **restructures, never removes**
 (D7, and the review's standing note on F5): the verbatim machine reason stays as a
 floor; framing and grading layer on top.
@@ -162,7 +162,7 @@ not redesign:
 
 ## Tasks
 
-### T1 — Honest keymap overlay + convention-alignment keys (T1.1 remainder)  (M, depends on: 12; independent of doc 19)
+### T1 — Faithful keymap overlay + convention-alignment keys (T1.1 remainder)  (M, depends on: 12; independent of doc 19)
 
 > **LANDED.** `dt_binding.wired` added (`nav.h`); `dt_nav_bindings()` sets it per
 > row and now carries the convention keys; `draw_bindings_help` greys `!wired`
@@ -382,7 +382,7 @@ next step — verbatim reason stays as a floor, remedy layers on top.
    (`capability_panel.cpp:58-119`; the cascade + statuses come from `cap_probe`,
    `:29-56`). Compose it in a pure helper in `capview.h`/`capview.cpp` (so
    `test_capview` drives it), e.g. "This host: emulator + single-step available;
-   IBS/PT unavailable — details below", and always include the honesty floor the
+   IBS/PT unavailable — details below", and always include the fidelity floor the
    review names: "Learn and Author work here — no root, hardware, or attach
    needed" (both are engine-light doors that need none of the capture backends).
    Render this **first**, before any row.
@@ -390,7 +390,7 @@ next step — verbatim reason stays as a floor, remedy layers on top.
    (`capability_panel.cpp:88-116`) under an expandable "why can't I capture X?"
    (`ImGui::CollapsingHeader`, collapsed by default). Keep the verbatim machine
    reason (UI LAW 1, `capability_panel.cpp:109-116`) **collapsed under each row**,
-   not deleted — this is a restructure of honesty chrome, not a removal (D7).
+   not deleted — this is a restructure of fidelity chrome, not a removal (D7).
    Available backends stay visible above the fold.
 3. **Layer the remedy map.** For a row whose reason matches a recognised
    condition, call `attach_verdict` (`inspect.cpp:24-117`) — the map `inspect_door`
@@ -552,13 +552,13 @@ patch-bay; router). Two soft couplings only:
   positive summary, T5 for the least-perturbing default. Non-conflicting reads; no
   ordering needed.
 
-Prefer landing **T1** first (it establishes the honest-overlay substrate the plan
+Prefer landing **T1** first (it establishes the faithful-overlay substrate the plan
 makes a standing rule — "never advertise an affordance that is not wired"), but
 nothing blocks on it.
 
 ## Constraints & gates
 
-- **Honesty (D7) is restructured, never removed.** T1's overlay *shows* unwired
+- **Fidelity (D7) is restructured, never removed.** T1's overlay *shows* unwired
   keys greyed (never hides them); T4 keeps every verbatim machine reason under the
   fold; T5's confirm states the consequence in full. No task hides a truth (the
   review's standing note; F5).
@@ -594,7 +594,7 @@ nothing blocks on it.
 - **Workspace persistence + recents** (T2.5), **DPI/text-scale/Settings pane**
   (T2.8), **task-language entry rail** (T2.4), **data-driven outer tabs** (T2.3) —
   [20-workspace-and-settings.md](20-workspace-and-settings.md) / doc 19.
-- **Graded honesty tiers + schema `severity`** (T4.1), **session-end placard**
+- **Graded fidelity tiers + schema `severity`** (T4.1), **session-end placard**
   (T4.3), **split "paused"** (T4.4), **progress everywhere** (T4.6), and the whole
   **one-visual-language** theme (T5.1–T5.5) — Wave 3,
   [23-graded-truth-layer.md](23-graded-truth-layer.md) /

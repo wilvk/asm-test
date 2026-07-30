@@ -79,12 +79,12 @@ internal static class Program
             Console.WriteLine($"# every one of {attempt} attempts sampled outside the loop (the tiny\n"
                               + "  in-region window vs. the sampling rate) — AMD armed but nothing landed in-region.");
             code.Free();
-            return 0; // honest: armed, but the sampled path did not catch the region this run
+            return 0; // truthful: armed, but the sampled path did not catch the region this run
         }
 
         Console.WriteLine($"loop ran ({trips:N0} iters, sum={r}); AMD LBR reconstructed the loop body on\n"
                           + $"attempt {attempt + 1}" + (scope.Truncated ? " (truncated — the run exceeds one 16-deep window; Tier-B\n"
-                             + "   stitched what fit, honestly flagged truncated)" : "") + ":\n");
+                             + "   stitched what fit, transparently flagged truncated)" : "") + ":\n");
         Console.WriteLine(listing);
         Console.WriteLine("\n-> the SAME `using (new AsmTrace(code))` region scope, on the AMD LBR tier via\n"
                           + "   HwTrace.Init(AmdLbr) instead of single-step — hardware-attributed, out-of-band,\n"

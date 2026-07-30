@@ -114,7 +114,7 @@ make bindings-parity-report  # the symbol x binding coverage matrix
 ```
 
 Record a deliberate omission in [scripts/bindings-parity-allow.txt](scripts/bindings-parity-allow.txt)
-with a reason (stale exemptions fail the gate, so the list stays honest).
+with a reason (stale exemptions fail the gate, so the list stays accurate).
 
 See [docs/bindings/index.md](docs/bindings/index.md) for the shared model and the per-language
 pages, and [docs/internal/archive/plans/binding-parity-plan.md](docs/internal/archive/plans/binding-parity-plan.md)

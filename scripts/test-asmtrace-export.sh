@@ -3,7 +3,7 @@
 # (docs/internal/gui/02-exporters-and-readers.md T4).
 #
 # Every mode of the exporter is pinned BYTE-FOR-BYTE against a committed
-# expected file, and every honest refusal is pinned by exit code AND by a grep
+# expected file, and every genuine refusal is pinned by exit code AND by a grep
 # for the reason it must name. Byte-exactness is the point: speedscope and
 # Chrome Trace are stable public formats, so any change to what we emit shows up
 # here as a reviewable diff rather than as a viewer that quietly renders
@@ -68,7 +68,7 @@ refuse() {
     rc=$?
     set -e
     if [ "$rc" -ne 2 ]; then
-        bad "$fixture $mode: expected exit 2 (honest refusal), got $rc"
+        bad "$fixture $mode: expected exit 2 (a genuine refusal), got $rc"
         return
     fi
     if grep -q "$pattern" "$TMP/err"; then
@@ -103,7 +103,7 @@ run --dot-tree   tree-truncated tree-truncated.dot
 run --speedscope unknown-kind   unknown-kind.speedscope.json
 run --lcov       trace-truncated trace-truncated.info       --name=work
 
-# --- honesty: truncation and drops always surface (D7) ---------------------
+# --- fidelity: truncation and drops always surface (D7) ---------------------
 grep_out tree-truncated --speedscope ' (truncated)' \
     'each profile name carries the truncation suffix'
 grep_out tree-truncated --chrome '"truncated": true' \
@@ -112,7 +112,7 @@ grep_out tree-truncated --chrome '"lost": 3' \
     'otherData reports the lost samples'
 grep_out tree-truncated --dot-tree '# truncated recording' \
     'the DOT export carries the truncation trailer'
-# lcov has no comment syntax, so its honesty channel is stderr: the WARNING must
+# lcov has no comment syntax, so its fidelity channel is stderr: the WARNING must
 # be there and the record on stdout must stay pristine for genhtml.
 if "$EXPORT" --lcov "$FIX/trace-truncated.asmtrace" 2>&1 >/dev/null |
     grep -q 'LOWER BOUND'; then
@@ -127,13 +127,13 @@ else
     ok "trace-truncated --lcov: the record itself stays pristine"
 fi
 
-# --- honesty: the ordinal axis is never labelled as time -------------------
+# --- fidelity: the ordinal axis is never labelled as time -------------------
 grep_out trace-heat --chrome 'event ordinal' \
     'otherData.ts_unit says the axis is an event ordinal, not time'
 grep_out tree-small --speedscope '"unit": "none"' \
     'speedscope profiles declare unit=none (no timestamps were measured)'
 
-# --- honesty: survey events are never stacks, in any mode ------------------
+# --- fidelity: survey events are never stacks, in any mode ------------------
 for mode in --speedscope --chrome --dot-tree; do
     refuse survey-only "$mode" 'edges are not stacks'
 done
@@ -178,7 +178,7 @@ if [ -f "$corpus" ]; then
     "$EXPORT" --speedscope "$corpus" >/dev/null 2>&1
     rc=$?
     set -e
-    # A dataflow-only recording carries no call events, so the honest answer is
+    # A dataflow-only recording carries no call events, so the truthful answer is
     # the refusal — what is asserted is that the reader PARSED the real corpus
     # bytes rather than erroring on them (exit 1).
     if [ "$rc" = 2 ]; then

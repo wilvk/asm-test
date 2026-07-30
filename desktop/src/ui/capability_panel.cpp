@@ -131,7 +131,7 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
 
     // Demote the negatives under an expander, COLLAPSED by default (T4). The
     // verbatim machine reason (UI LAW 1) is preserved under each row — this is a
-    // restructure of the honesty chrome, not a removal (D7) — and a recognised
+    // restructure of the fidelity chrome, not a removal (D7) — and a recognised
     // condition also gets the shared attach_verdict remedy as a next step.
     if (any_negative && ImGui::CollapsingHeader(kCapWhyNotHeader)) {
         for (const cap_row &r : s.rows) {

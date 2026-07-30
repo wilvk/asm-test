@@ -8,7 +8,7 @@
 > **"3D overview"** tab you must *find*; and that tab moves through time via its
 > **own** playhead, unlinked from every other time-aware pane. This brief closes
 > the three seams that make the flow feel like one action — **without faking a
-> single global clock**, because there genuinely is not one (see the honesty note
+> single global clock**, because there genuinely is not one (see the fidelity note
 > below).
 >
 > **This is a desktop brief.** No producer, no engine, no schema change. Every
@@ -48,7 +48,7 @@ Three concrete friction points, each verified in the code:
    For a replay file, *"watch it change over time"* means dragging a slider by
    hand — there is no play/pause anywhere.
 
-## The honesty note that shapes the design (D7)
+## The fidelity note that shapes the design (D7)
 
 The obvious ask is "unify the playheads into one global clock." **We must not**,
 because the two playheads measure **different axes**, and equating them
@@ -63,11 +63,11 @@ numerically would fabricate position:
   ([`terrain.h`](../../../desktop/src/space/terrain.h) `:55`), i.e. `mem`/`trace`
   residency steps, a different and often differently-scaled sequence.
 
-So the honest unification is: **put the Scrubber on the execution-step axis it
+So the faithful unification is: **put the Scrubber on the execution-step axis it
 already belongs to** (T1), and give the terrain-time playhead its **own** labelled
 transport (T3) rather than chaining it to a step index it does not share. Each
 playhead is named by its axis (T4). This is a *better* answer than a fake global
-clock — it is the app's whole ethos (honest provenance) applied to time.
+clock — it is the app's whole ethos (faithful provenance) applied to time.
 
 ## What already exists (verified 2026-07-28)
 
@@ -114,7 +114,7 @@ from the shared selection when `selection.rec == a->id` and it has a step
 the one writer `s.selection.set(a->id, moved, std::nullopt)`. The clamp + the
 Scrubber's existing torn-edge handling (`at_step` returns null for a dropped
 prefix, [`stepindex.h`](../../../desktop/src/analysis/stepindex.h) `:75-78`) keep
-it honest: a brushed step in the evicted region shows the torn edge, never a
+it faithful: a brushed step in the evicted region shows the torn edge, never a
 neighbour's file. Extract the projection as a pure header-only seam
 (`ui/transport.h` `playhead_project`) so the test drives it directly.
 
@@ -169,10 +169,10 @@ synthetic `dt`.
   the terrain — the literal *"watch the 3D change over time"*, on its own axis.
 
 **Done when.** Play animates each playhead over its own axis at a steady rate,
-stops honestly at the end, and pausing holds position; `transport_tick` is a pure,
+stops faithfully at the end, and pausing holds position; `transport_tick` is a pure,
 tested function.
 
-### T4 — honesty: name each axis, wire the bindings help  (S, depends on: T1–T3)
+### T4 — fidelity: name each axis, wire the bindings help  (S, depends on: T1–T3)
 
 - **Axis labels.** The Scrubber pane and the execution-step transport read
   *"step (execution)"*; the 3D HUD playhead + its transport read *"step (trace
@@ -223,7 +223,7 @@ Order: `transport.h` → (`T1` ∥ `T2` ∥ `T3`) → `T4` → `T5`.
 ## Constraints & gates
 
 - **No fake global clock (D7).** The two playheads are different axes; each is
-  named and driven on its own. The only *link* is honest: the Scrubber and the flat
+  named and driven on its own. The only *link* is faithful: the Scrubber and the flat
   views share the execution-step basis, and the recording-scoping gate + the
   torn-edge handling keep a projected step from ever fabricating a row.
 - **One selection writer (D4).** Every Scrubber/transport brush funnels through
@@ -250,9 +250,9 @@ Order: `transport.h` → (`T1` ∥ `T2` ∥ `T3`) → `T4` → `T5`.
 - **A live "follow the tail" camera.** The live re-weave already keeps the whole
   trace and holds the camera (`:229-243`); an explicit "stick to newest step"
   toggle is a small follow-on, not this brief.
-- **Cross-axis linking (a 3D marker at the brushed execution step).** Honest only
+- **Cross-axis linking (a 3D marker at the brushed execution step).** Faithful only
   where the terrain-time ↔ execution-step correspondence is exact; establishing
-  that mapping is its own analysis rung, deliberately deferred (see the honesty
+  that mapping is its own analysis rung, deliberately deferred (see the fidelity
   note).
 - **An explicit "Attach & then 3D" one-shot from the Processes row.** The row's
   double-click stays "attach at full detail" (`:808`); the 3D handoff is the

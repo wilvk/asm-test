@@ -417,7 +417,7 @@ static LONG CALLBACK rt_veh_cb(EXCEPTION_POINTERS *info) {
      * correctly scoped via __thread tls_armed/tls_recover). Decline without
      * disarming, so the facility still catches the real test thread's own
      * fault; a foreign-thread fault then takes the OS's normal
-     * unhandled-exception path (process exit) -- the same honest outcome the
+     * unhandled-exception path (process exit) -- the same truthful outcome the
      * forked mode gets from child death. */
     if (GetCurrentThreadId() != rt_test_tid)
         return EXCEPTION_CONTINUE_SEARCH;

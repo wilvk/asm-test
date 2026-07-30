@@ -97,7 +97,7 @@ int main() {
         vt::golden("scrubber-add_signed.txt", scrub_dump(idx));
     }
 
-    // --- the dishonesty fixture: a torn edge --------------------------------
+    // --- the low-fidelity fixture: a torn edge --------------------------------
     {
         Recording r = load_rec("regstate-truncated.asmtrace");
         StepIndex idx = build_step_index(r);
@@ -140,7 +140,7 @@ int main() {
     }
 
     // --- a recording with no producer: the two branches (30 R3 T4) ----------
-    // BRANCH A — NOT emulator-replayable: the honest refusal stands, naming the
+    // BRANCH A — NOT emulator-replayable: the genuine refusal stands, naming the
     // reason, deep-linking the docs, and NEVER offering synthesis. sum_via_rbx is
     // an emu-l0 recording with a `code` header but NO codeimage bytes, so there is
     // nothing to re-run.
@@ -159,7 +159,7 @@ int main() {
         dt_scrubber sc = dt_scrubber_build(idx, 0, replay);
         vt::check("the view states the producer is absent", !sc.present,
                   "present must be false");
-        vt::check("the honest refusal does NOT offer synthesis here",
+        vt::check("the genuine refusal does NOT offer synthesis here",
                   !sc.synthesizable, "no codeimage -> no re-run");
         vt::check("the message names the --steps producer",
                   sc.absent_message.find("--steps") != std::string::npos,
@@ -269,7 +269,7 @@ int main() {
     }
 
     // --- 35 T3: a continuous recording segments into per-pass indexes --------
-    // The dishonesty fixture has three `df_invocation` passes: two clean (3 steps
+    // The low-fidelity fixture has three `df_invocation` passes: two clean (3 steps
     // each) and a truncated third (5 steps ran, only 2 held). A single flat index
     // would conflate all eight regstate events into one fake-monotonic run; the
     // segmented builder keeps each pass separately addressable, and the scalar
@@ -299,7 +299,7 @@ int main() {
         vt::check("pass 1 step 0 rax is its own (10, not pass 0's)",
                   p1rax && p1rax->value == 10, "not conflated with pass 0");
 
-        // The truncated pass carries its own honesty from the marker: 5 steps
+        // The truncated pass carries its own fidelity from the marker: 5 steps
         // seen, 2 held, marked truncated — the per-pass placard the reader tears.
         vt::check("pass 2 is marked truncated (its marker said so)",
                   p2.truncated, "the operand buffer filled mid-pass");

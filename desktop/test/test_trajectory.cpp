@@ -496,7 +496,7 @@ int main() {
         placed_or_explained("36 T2 rel trace", ts, proj);
     }
 
-    // === 36 T2: two code spans refuse HONESTLY (not pick-the-first) ==========
+    // === 36 T2: two code spans refuse FAITHFULLY (not pick-the-first) ==========
     {
         std::vector<Region> regs;
         Region a;

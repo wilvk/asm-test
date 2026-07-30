@@ -65,7 +65,7 @@
  * (recording NOTHING over the helper) and then resumes in-region single-stepping — so a
  * non-leaf routine is traced across its helper calls. The step-over is NOT re-entrancy
  * aware (it resumes at the FIRST arrival at the return address); a W^X callee page that
- * refuses the int3, or a callee that never returns, truncates honestly rather than
+ * refuses the int3, or a callee that never returns, truncates faithfully rather than
  * hanging. Whole-run capture is a non-goal by design (see the plan).
  *
  * Requires Capstone (the operand enumerator) and Linux x86-64; off-platform / without
@@ -92,7 +92,7 @@
 #define DF_PTRACE_OK    0 /* returned cleanly; a complete scoped trace     */
 #define DF_PTRACE_FAULT 1 /* routine faulted; a partial trace is filled    */
 /* No thread reached the region entry within the entry-wait bound. A POSITIVE, like
- * FAULT: an honest OUTCOME, not a failure — the attach worked, the region simply is
+ * FAULT: a truthful OUTCOME, not a failure — the attach worked, the region simply is
  * not arriving. It must NOT be folded into ETRACE: "we could not trace you" and "the
  * code you named is not running" send an operator to opposite places (ptrace_scope /
  * seccomp vs. a wrong symbol or an idle phase). */
@@ -394,7 +394,7 @@ static int read_ymm(pid_t pid, int idx, uint8_t out[32]) {
  * each) and MXCSR in ONE PTRACE_GETFPREGS — the per-step wide deck the register
  * ring carries when `--fpregs` armed it. Returns 1 on success; on a GETFPREGS
  * refusal (a hardened tracee) it zeroes the deck and returns 0, so the caller
- * records an honest "unrecorded" (has_vec=false) rather than stale bytes. The
+ * records a truthful "unrecorded" (has_vec=false) rather than stale bytes. The
  * cross-basis parity test compares the live XMM deck against the emulator's. */
 static int read_fpregs_all(pid_t pid, uint8_t xmm[16][16], uint32_t *mxcsr) {
     struct user_fpregs_struct fp;
@@ -492,7 +492,7 @@ static void recbuf_push(recbuf *rb, const at_val_rec_t *r) {
  * FAIL CLOSED: over the caps, or on any location whose change cannot be DECIDED (a
  * foreign read failure, an alias whose shape this file cannot resolve), the set flags
  * itself and the capture sets vt->truncated. An incomplete barrier is disclosed, never
- * silently trusted — the honest-overflow contract the whole sink already uses. */
+ * silently trusted — the faithful-overflow contract the whole sink already uses. */
 #define DFP_WIN_RISK_REGS 96 /* distinct register locations tracked         */
 #define DFP_WIN_RISK_BYTES                                                     \
     4096 /* distinct memory bytes tracked               */
@@ -532,7 +532,7 @@ typedef struct {
      * captured at open_step in the SAME instant as cur_regs (one PTRACE_GETFPREGS)
      * when the vector deck is armed (regfile_fp) — NOT read live at append time,
      * which would be the POST-instruction state. `cur_has_vec` says the stash is
-     * real for this step; a synthetic gap step leaves it false (honest). */
+     * real for this step; a synthetic gap step leaves it false (truthful). */
     uint8_t cur_xmm[16][16];
     uint32_t cur_mxcsr;
     int cur_has_vec;
@@ -589,7 +589,7 @@ typedef struct {
  * that overflows DFP_WIN_RISK_REGS/DFP_WIN_RISK_BYTES is silently absent from every
  * future gap diff — if a call-out then clobbers exactly that (untracked) location, the
  * barrier cannot detect it and a later read still resolves to the stale in-region
- * writer, even though `vt->truncated` is honestly set. A caller that inspects
+ * writer, even though `vt->truncated` is faithfully set. A caller that inspects
  * individual def-use edges/slices without first checking `truncated` can observe that
  * one fabricated edge; only a caller that discards the whole graph on `truncated` gets
  * the barrier's full guarantee. Raising the disclosure granularity to per-edge would be
@@ -851,7 +851,7 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
     /* 31 R4: the wide FP/vector deck's PRE-STATE, captured HERE (the process is
      * stopped at this instruction's pre-state) in one PTRACE_GETFPREGS — not live at
      * append time. Only when the deck is armed; a failed read leaves has_vec false
-     * (honest "not measured"). */
+     * (faithful "not measured"). */
     c->cur_has_vec = 0;
     if (c->vt->regfile != NULL && c->vt->regfile_fp)
         c->cur_has_vec = read_fpregs_all(c->pid, c->cur_xmm, &c->cur_mxcsr);
@@ -1127,7 +1127,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
              * flag immediately after delivering a signal fires a #DB on the handler's
              * first instruction, where SIGTRAP is masked by default, which the kernel
              * escalates to SIG_DFL and KILLS the target (the asmspy engines' MEASURED
-             * finding, cli/asmspy_engine.c). So the scoped capture ends here, honestly
+             * finding, cli/asmspy_engine.c). So the scoped capture ends here, faithfully
              * truncated, and the trap is DELIVERED via the crash-safe detach path
              * (fatal_sig = SIGTRAP) so the runtime's own signal machinery — a debugger
              * protocol handshake, an abort/crash handler, a safepoint redirect — runs
@@ -1217,7 +1217,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                  * sequence of call-outs self-truncates rather than looping unbounded.
                  * These are two different facts and must not share one return code (the
                  * --max fix above got this right; this site didn't): hitting the
-                 * backstop is an honest BOUND — whatever finalize_step already appended
+                 * backstop is a genuine BOUND — whatever finalize_step already appended
                  * to vt above is a valid truncated prefix, same shape as --max — while
                  * dfp_run_to failing is a real ptrace FAILURE (the callee exited,
                  * faulted, or its return byte could not be trapped, e.g. a W^X helper
@@ -1950,7 +1950,7 @@ static int dfp_run_to_multi(dfp_thrset *set, uint64_t base, pid_t only_tid,
             if (wait_ms > 0 && dfp_elapsed_ms(&t0) >= wait_ms) {
                 /* Nothing arrived in the window. Restore the byte and leave the threads
                  * running (dfp_remove_bp_any's contract) so the caller's detach walk does
-                 * not block on an already-stopped thread, then report the honest outcome
+                 * not block on an already-stopped thread, then report the truthful outcome
                  * rather than flattening it into a trace failure. */
                 dfp_remove_bp_any(set, base, orig);
                 return -2;
@@ -2416,7 +2416,7 @@ static void dfp_risk_snap(dfp_ctx *c) {
  * whole reason a multi-region survey may elide glue and still be sound.
  *
  * `gap_pc` (the glue's entry address, outside every region in the set by construction)
- * is the step's insn_off: a real address, honestly outside the survey's regions, so a
+ * is the step's insn_off: a real address, genuinely outside the survey's regions, so a
  * consumer classifying steps by region sees the barrier for what it is.
  *
  * A gap that changed nothing at risk appends NOTHING — the absence of a barrier step is
@@ -2559,7 +2559,7 @@ static int dfp_in_region_set(uint64_t pc, uint64_t win_base, uint64_t win_len,
  *                           (its destination state), then open a gap: snapshot the
  *                           register file, the vector file, and the at-risk memory.
  * Bounded by `max_insns` (recorded steps) and DFP_STEP_BACKSTOP (total stops); either
- * truncates honestly. */
+ * truncates faithfully. */
 static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
                            uint64_t win_ret, asmtest_addr_channel_t *chan,
                            asmtest_addr_rec_t *rset, uint32_t nreg,
@@ -2610,7 +2610,7 @@ static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
             }
             /* The target's OWN trap byte (Increment 5's split): a window cannot step
              * past it any more safely than a scoped region can — re-arming TF right
-             * after delivering a masked SIGTRAP kills the target. End honestly. */
+             * after delivering a masked SIGTRAP kills the target. End faithfully. */
             if (dfp_sigtrap_is_app(pid)) {
                 struct user_regs_struct aregs;
                 if (c->have_cur) {

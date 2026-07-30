@@ -23,7 +23,7 @@ Two smaller navigation/feedback gaps the survey found:
   `.asmtrace` save/torn warnings, long PT-replay decode completion. A toast
   (ImGuiNotify) surfaces them without stealing the pane. Toasts **supplement**
   the non-collapsible in-pane banners — refusals stay first-class where they
-  happen; a toast never replaces a banner (honesty note, doc 11 #11).
+  happen; a toast never replaces a banner (fidelity note, doc 11 #11).
 - **Zero client-side filtering exists anywhere** — for 10k-routine trace graphs
   that is a navigation gap, not polish. ImSearch wraps existing
   `Selectable`/`TreeNode` draws via callbacks so pure view-models stay untouched.
@@ -135,7 +135,7 @@ choice is recorded; it compiles on 1.91.9 and is in the compile-probe.
 > null test backend shows the plain list. First surface: the **Learn-door
 > walkthrough catalog** (`ui/learn_door.cpp`) — a flat `Selectable` list wrapped
 > with `BeginSearch`/`SearchBar`/`SearchableItem`, so typing narrows it by title.
-> **Honesty-safe by choice of target**: the call TREE was deliberately NOT
+> **Fidelity-safe by choice of target**: the call TREE was deliberately NOT
 > filtered client-side (its `tree.h` warns a client filter makes the surviving
 > depths lie — the engine-side filter stays the tree's narrowing). `imsearch.o`
 > rides the `learn_door.o` link sites.
@@ -160,11 +160,11 @@ choice is recorded; it compiles on 1.91.9 and is in the compile-probe.
 > - **Disasm** is an address-ordered byte/memory view (`imgui_memory_editor` +
 >   an address/bytes/disassembly table), with no routine-NAME list to narrow, so
 >   the doc's imagined "routine search in the listing" does not map to what the
->   view is — a category mismatch, not an omission. Its honest narrowing controls
+>   view is — a category mismatch, not an omission. Its faithful narrowing controls
 >   already exist: the "as of logical time" seek and the memory editor's range.
 >
 > Net: ImSearch is applied to the one surface it fits (the Learn catalog); the
-> order-significant lists narrow honestly (syscalls) or already had the right
+> order-significant lists narrow faithfully (syscalls) or already had the right
 > control (disasm); the tree keeps its engine-side filter. The value ImSearch
 > would have added on the ordered lists was a lie about order, so it was not
 > forced there.
@@ -189,7 +189,7 @@ untouched** (D4).
    - `ui/learn_door.cpp` — the walkthrough catalog.
    The view-models are not touched — ImSearch filters the *draw*, so the golden
    text surfaces (the source of truth) are unchanged.
-3. Keep the interaction honest: filtering hides rows, it never renumbers or
+3. Keep the interaction faithful: filtering hides rows, it never renumbers or
    summarises counts in a way that implies the hidden rows don't exist — show
    "showing N of M" where a count matters.
 
@@ -220,7 +220,7 @@ verify either.
   step of each task is a compile-check against the 1.91.9 pin; if it fails,
   that is a fact about the addon, and the fallback is doc 13 F4's 1.92 bump, not
   quietly editing the addon.
-- **Honesty (D7)** — toasts supplement refusal banners, never replace them;
+- **Fidelity (D7)** — toasts supplement refusal banners, never replace them;
   filtering shows "N of M" rather than implying hidden rows are gone.
 - **No multi-viewports** — ImGuiNotify renders inside the main window
   (`NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=false`); doc 13 keeps viewports off.

@@ -86,7 +86,7 @@ simd_hot_loop(uint64_t n) {
 }
 
 /* Throwaway capture buffer for the value/taint records under `mark` (we time the loop, not
- * the trace — the records overflow honestly and are never read). */
+ * the trace — the records overflow faithfully and are never read). */
 static at_vstep_t g_steps[64];
 static at_tag_t g_step_taint[64];
 static at_drval_t g_drval;

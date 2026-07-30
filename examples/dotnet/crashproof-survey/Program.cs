@@ -69,7 +69,7 @@ internal static class Program
         });
 
         // ---- Leg 3: AsmTrace.WindowHot — SAMPLED AMD-LBR survey. Guard on the AMD tier so the
-        // self-skip carries the honest reason; run a HOT loop so Work dominates the histogram.
+        // self-skip carries the genuine reason; run a HOT loop so Work dominates the histogram.
         bool amdRan = HwTrace.Available(HwBackend.AmdLbr);
         string amdSkip = amdRan ? "" : HwTrace.SkipReason(HwBackend.AmdLbr);
         long hotResult = 0;

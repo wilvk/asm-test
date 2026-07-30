@@ -57,7 +57,7 @@ struct ObserverState {
     // Client-side type-to-narrow filters for the hot-edges + disasm lists
     // (22-selection-and-search.md T3 step 4): they narrow the DISPLAY only (each
     // draw keeps every model row and shows "showing N of M"), so a filtered list
-    // never implies the hidden rows do not exist (D7) — the same honesty-safe
+    // never implies the hidden rows do not exist (D7) — the same fidelity-safe
     // idiom as the syscall filter. Deliberately NOT added to the call TREE, which
     // stays engine-filtered so surviving depths never lie (tree.h, D7).
     char hotedges_filter[96] = {0};

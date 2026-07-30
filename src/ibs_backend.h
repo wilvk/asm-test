@@ -87,7 +87,7 @@ typedef struct {
 } asmtest_ibs_fetch_sample_t;
 
 /* One aggregated fetch-address coverage bucket (a fetch hotspot). Miss counts and
- * latency_sum are honest sums over the `count` samples at this address — a mean is
+ * latency_sum are accurate sums over the `count` samples at this address — a mean is
  * latency_sum/count; they are statistical, never exact per-instruction truth. */
 typedef struct {
     uint64_t addr;        /* fetched linear instruction address (bucket key)  */
@@ -98,7 +98,7 @@ typedef struct {
 } asmtest_ibs_fetch_hot_t;
 
 /* A fetch-coverage survey: hot fetch addresses sorted by DESCENDING count, plus
- * honest provenance (valid/total sampled, aggregate miss counts, loss, throttle). */
+ * faithful provenance (valid/total sampled, aggregate miss counts, loss, throttle). */
 typedef struct {
     asmtest_ibs_fetch_hot_t *hot; /* malloc'd; free via _fetch_survey_free    */
     size_t n;                     /* number of distinct fetch addresses       */
@@ -152,7 +152,7 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
  * NULL-safe). Pure/host-independent. */
 void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s);
 
-/* --- Test seams (export OOM honesty) ----------------------------------------- */
+/* --- Test seams (export OOM fidelity) ----------------------------------------- */
 /* While armed, the next nonempty edge/fetch export fails as if its result
  * allocation OOM'd; the capture lanes must then return EUNAVAIL rather than a
  * complete-looking empty survey. Test-only. */

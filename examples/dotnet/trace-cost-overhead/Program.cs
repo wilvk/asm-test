@@ -1,4 +1,4 @@
-// examples/dotnet/trace-cost-overhead — the honest PRICE of each tracing tier.
+// examples/dotnet/trace-cost-overhead — the true PRICE of each tracing tier.
 //
 // Every other .NET example here demonstrates ONE tier's CAPTURE (what it records). This one
 // measures the COST: it runs the SAME native routine untraced, then under each tier, and prints
@@ -19,7 +19,7 @@
 //
 // The counted routine is a native spin loop (arg = iterations), so ONE call is measurable. The
 // untraced baseline averages many calls for a stable per-call figure; the ptrace legs trace ONE
-// call (as they fork per call). x-vs-untraced is the honest slowdown. Self-skips whole (exit 0)
+// call (as they fork per call). x-vs-untraced is the true slowdown. Self-skips whole (exit 0)
 // off the x86-64 single-step substrate; individual legs print n/a where their tier is absent.
 
 using System;

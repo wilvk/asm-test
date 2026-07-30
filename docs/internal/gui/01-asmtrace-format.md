@@ -19,7 +19,7 @@ yet — no `.asmtrace`, no `--record`, no JSON mode for `--log`/`--stream` anywh
 nine-doc set defines the **draft** schema (the v1 *freeze* is a Phase-3 checkpoint, not here),
 lands record modes as new sinks beside asmspy's existing print/JSON sinks, closes the
 state-descriptor precondition (`vec512_t` manifest row), and commits the golden corpus —
-including the dishonesty fixtures (D7) — that every sibling's tests replay. The honesty culture
+including the low-fidelity fixtures (D7) — that every sibling's tests replay. The fidelity culture
 is enforced by the format: provenance is mandatory on every stream; truncation/drop/redaction
 are fields, not renderer discipline.
 
@@ -128,7 +128,7 @@ are fields, not renderer discipline.
   - `syscall` — `{"line":str,"payload":str?,"tid":int?}`; `line` is **payload-free** (T4);
     `payload` is the separated channel renderers default-redact (D7).
   - `stream` — `{"text":str}`; the `--stream` engine hands a formatted line only
-    ([cli/asmspy.h:336](../../../cli/asmspy.h#L336)) — recorded honestly as text.
+    ([cli/asmspy.h:336](../../../cli/asmspy.h#L336)) — recorded faithfully as text.
   - `call` — the [`asmspy_tree_call_t`](../../../cli/asmspy.h#L404) fields (tid/depth/addr/name/module).
   - `graph` / `topo` — snapshots of gnode+gedge / asmspy_task_t fields.
   - `survey` — `{"sampler":"ibs-op"|"sw-clock","edges":[sample-edge
@@ -420,9 +420,9 @@ int main(int argc, char **argv); /* argv[1] = output directory */
   `disasm`) + `df_edge` events and a clean `end`.
 - `make asmtrace-golden-check` is byte-clean on consecutive runs inside the `docker-cli` image.
 
-### T7 — Golden corpus + dishonesty fixtures + stability checks  (M, depends on: T5, T6)
+### T7 — Golden corpus + low-fidelity fixtures + stability checks  (M, depends on: T5, T6)
 
-**Goal.** The committed `tests/golden-asmtrace/` corpus (D6) including the dishonesty fixtures
+**Goal.** The committed `tests/golden-asmtrace/` corpus (D6) including the low-fidelity fixtures
 (D7), with the byte-stability check wired into the existing cli-smoke entry point.
 
 **Steps.**
@@ -456,7 +456,7 @@ check.
 `low-fidelity/` is never regenerated; the docker-lane-authoritative rule).
 
 **Done when.**
-- `git ls-files tests/golden-asmtrace` shows the corpus + 4 dishonesty fixtures + README.
+- `git ls-files tests/golden-asmtrace` shows the corpus + 4 low-fidelity fixtures + README.
 - `make docker-cli` is green including `asmtrace-golden-check` and all `fixture.*` checks.
 
 ### T8 — Changelog  (S, depends on: T5, T6, T7)
@@ -510,13 +510,13 @@ reviewed), T4 and T6 in parallel with each other.
   any compressed-container implementation:
   [02-exporters-and-readers.md](02-exporters-and-readers.md) (the envelope only *reserves*
   `"container":"zstd-frames"`).
-- **Renderer-side honesty chrome** (banner, provenance chips, redaction reveal UX):
+- **Renderer-side fidelity chrome** (banner, provenance chips, redaction reveal UX):
   [03-desktop-shell.md](03-desktop-shell.md) / [08-observer-views.md](08-observer-views.md),
   replaying this doc's fixtures.
 - **`--serve`** — the same events live: [07-serve-live-host.md](07-serve-live-host.md).
 - **Producers for reserved kinds** (`mem`, `fpenv`, `statediff`, `blame`, `taint`, `take`) and
   the `stitch` writer — expansion waves / Phase 3. Likewise **structuring the `--stream` line**
-  into fields (engine work; v1 records the text honestly).
+  into fields (engine work; v1 records the text faithfully).
 - **Runner record mode** (per-test recordings + failure deep links) — the plan's separate medium
   engine item, owned by [04-replay-views.md](04-replay-views.md)'s phase.
 - **FP/vector corpus routines in the golden set** — the emulator L0 producer marshals integer

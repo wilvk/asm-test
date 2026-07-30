@@ -110,7 +110,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the per-guest emulator L0 value-fabric producer
   (`asmtest_dataflow_emu_run_arch`, `src/dataflow_emu.c`) instead of refusing
   it — never through the x86-64-only `emu_call_traced`/`emu_result_t` path, and
-  never touching `src/emu.c`'s register ring. The result is an honestly
+  never touching `src/emu.c`'s register ring. The result is a genuinely
   distinct shape (def-use edges + per-step operand values, no register file,
   no fault kind/address — the door says so explicitly rather than showing
   zeros) that materialises, on Save, into `trace`/`df_step`/`df_edge` events
@@ -131,7 +131,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sp`, `pc`, `nzcv`); the `arm64-df-chain` golden now also carries a
   `regstate` ring (steps_cap = 8, the arm64 analogue of `add_signed`'s worked
   example), and a new `arm64-regstate-truncated` golden proves the ring's
-  honest truncation (D7). No desktop/reader change: the Scrubber's existing
+  faithful truncation (D7). No desktop/reader change: the Scrubber's existing
   generic "unnamed integer field" fallback already renders the new register
   names (in a plain sorted rather than hand-curated order, a cosmetic
   follow-on).
@@ -166,7 +166,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   F18). The 3D spacetime overview was a mouse-only island; because Dear ImGui
   exposes no OS screen-reader tree, keyboard operability is the only accessibility
   substitute. Arrows now orbit, `+`/`-` (and `=`) dolly, `R` resets and `T` is the
-  honest top-down 2D-ish fallback — routed through the SAME `Camera` methods the
+  faithful top-down 2D-ish fallback — routed through the SAME `Camera` methods the
   mouse drag uses (a pure `camera_key`), so keyboard and mouse are one code path.
   The 3D viewport gains a Tab-reachable focus target that exists even under the
   null backend (no GL), which is what makes the keyboard camera headlessly testable;
@@ -195,10 +195,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   held no take set before — now accumulates forks with a working per-take **remove**
   and a **clear forks** action, both reversible; clearing removes a whole take node
   with its loud refusal intact, never silently dropping a failure (D7).
-- **Derivable `severity` honesty-chrome tier in the `.asmtrace` schema**
+- **Derivable `severity` fidelity-chrome tier in the `.asmtrace` schema**
   (docs/internal/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
   string (`neutral | caution | integrity`) names the tier a reader renders a
-  recording's honesty chrome at. It is **derivable** from the honesty fields the
+  recording's fidelity chrome at. It is **derivable** from the fidelity fields the
   schema already carries (torn / truncated / trust / redacted / skip / basis /
   drops), so a producer need not emit it and every old recording still grades;
   additive, no new envelope major, no field on any existing kind. Landed under doc
@@ -206,14 +206,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Phase-3-freeze checkpoint, D5). It grades *loudness*; it gates no truth off (D7).
 - **A uniform elapsed-time + Cancel busy signal on long operations, and a
   degrade-to-coarse 3D scrub** (docs/internal/gui/23-graded-truth-layer.md T4).
-  `progress.h` grows a pure `LongOp` (elapsed clock + honest determinate-vs-
+  `progress.h` grows a pure `LongOp` (elapsed clock + faithful determinate-vs-
   indeterminate mode + observable cancel flag) and a `draw_progress` half, so an op
   that can exceed a frame shows a spinner + elapsed + Cancel instead of a silent
   UI-thread stall an expert would mistake for a hang. The 3D scrub degrades to the
   labelled coarse terrain plane (a pure `should_degrade` decision + `coarse_slice`)
   while a full re-slice would exceed the frame budget, then swaps to the full slice
   — the coarse plane is the same labelled rung the terrain shows normally, so it
-  hides nothing. The no-fabricated-total honesty rule is unchanged.
+  hides nothing. The no-fabricated-total fidelity rule is unchanged.
 - **A Queue path on the live patch bay** (docs/internal/gui/23-graded-truth-layer.md
   T3). A blocked capture can be **queued** as a visible, cancellable chip; it starts
   automatically the moment the jack frees — and only then (never an auto-swap, so
@@ -229,8 +229,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   persist in the same store. A new **Settings pane** adds a user **text-scale**
   (0.8×–2.0× via `FontGlobalScale` with a DPI-aware atlas re-bake on content-scale
   change), a **remembered window size** (retiring the hardcoded 1280×720), and a
-  **light theme** that keeps the honesty-chrome (warn/refuse) contrast — and states
-  honestly that text-scale is the only in-app accessibility lever, because Dear
+  **light theme** that keeps the fidelity-chrome (warn/refuse) contrast — and states
+  transparently that text-scale is the only in-app accessibility lever, because Dear
   ImGui exposes no OS screen-reader tree.
 - **In-app term registry, per-view "?" caveats, domain-term-first headings, and a
   searchable Terms pane** (docs/internal/gui/24-one-visual-language.md T3). The
@@ -254,7 +254,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   once per session, never nags again, and is re-openable from the per-view "?".
   Until it is acknowledged the view holds its lean default (nothing heavier is
   front-loaded). State transitions are asserted headlessly.
-- **Convention-alignment keyboard shortcuts, honestly advertised**
+- **Convention-alignment keyboard shortcuts, accurately advertised**
   (docs/internal/gui/18-breach-stops.md T1). `Shift+F` fits / frames the current
   selection, `,`/`.` step to the previous / next sibling, `F10`/`F11` are step /
   step-back aliases of `j`/`k`, `W`/`S`/`A`/`D` drive camera zoom/pan when a
@@ -288,7 +288,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address in the region view). The node **positions are the app's own
   deterministic layout, fed every frame** — node-editor's settings file is
   disabled so it can neither persist a dragged position nor invent one on load:
-  **force-directed layout stays banned** (docs 04/08), the honesty guardrail is
+  **force-directed layout stays banned** (docs 04/08), the fidelity guardrail is
   that the layout lives in a pure, tested builder, never in the drawing library.
   Large graphs (a 10k-routine trace) cull off-viewport nodes before emitting them.
   imgui-node-editor is vendored (MIT, master `021aa0ea` — the last release fails to
@@ -334,7 +334,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-matching rows while keeping each row's original number and execution order
   and showing "showing N of M", so a filtered view never reads as if the trace
   only made those calls; it matches syscall names only, never the redacted
-  payload. (Filtering is applied only where it can stay honest: the time-ordered
+  payload. (Filtering is applied only where it can stay faithful: the time-ordered
   syscall stream uses an order-preserving filter rather than a relevance re-rank,
   and the address-ordered disassembly keeps its existing time/range controls.)
 - **The register scrubber and the ABI x-ray are now hosted in visible shell
@@ -348,7 +348,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leg, the `d` binding) — reusing the Diff tab's A/B mechanism — with the
   walkthrough rail rebuilt only when the pair changes; no B attached shows an
   "attach the Win64 leg" placard, the same shape Diff shows with no second
-  recording. Both degrade to their own honesty placards (absent producer,
+  recording. Both degrade to their own fidelity placards (absent producer,
   unaligned pair, torn ring) exactly as their standalone draws do. Both views
   are backend-free, so they ship in the render-only viewer too, and
   `desktop/test/test_shell.cpp` pins the wiring end to end: the seek index is
@@ -373,7 +373,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read). Because the scene links no engine it ships in the render-only viewer
   too (D4). `desktop/test/test_shell.cpp` drives `draw_scene_overview` under the
   null backend (models woven, code regions placed, terrain heat, the exact
-  trajectory, the terrain slice tracking the HUD playhead, and the honest
+  trajectory, the terrain slice tracking the HUD playhead, and the faithful
   no-regions placard for a `codeimage`-less recording); the GL scene stays pinned
   by the `test_scene_fbo` smoke and the pick router by `test_drillin`. This
   completes the deliberately-outstanding integration item — all ten GUI docs'
@@ -404,7 +404,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   asserted in the test's pure half too, so they hold on a host with no GL.
   `desktop/README.md` gains a **3D spacetime overview** section (controls, the
   coarse-vs-rich staging, and the "3D to find, 2D to read" rule).
-- **Drill-in router + honesty invariants for the 3D spacetime scene — every pick
+- **Drill-in router + fidelity invariants for the 3D spacetime scene — every pick
   reaches the right 2D view, and truncation/statistical survive it**
   (docs/internal/gui/10-spacetime-3d-overview.md T6). The scene is an *overview*,
   not a reading surface: `scene3d/pick.h`'s `resolve_pick` (pure, GL-free) now
@@ -413,7 +413,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (or the codeimage-versioned **disasm** pane, 08-T7, when the region **churned**);
   a **data cell** (rich `mem` rung) → the **slice** explorer at the step whose
   access last hit it; an exact **PC vertex** → the operand **timeline** at that
-  step. Two honesty invariants are pinned as tested behaviour: **truncation survives
+  step. Two fidelity invariants are pinned as tested behaviour: **truncation survives
   the drill-in** — opening a `TF_TORN` cell lands on a 2D view that still carries
   04/08's truncation banner, so the 3D tear is never the only signal; and
   **statistical is never exact** — a survey-only recording draws no exact trajectory
@@ -455,7 +455,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   panes together; the per-step register deltas do the animation, and a **cross-pane
   diff** marks the registers whose SysV and Win64 values disagree — so *a0 → rdi
   (SysV) vs rcx (Win64)*, the callee-saved rsi/rdi role reversal and struct-return
-  eightbyte classification are the register diff, made mechanical. Honest (D7):
+  eightbyte classification are the register diff, made mechanical. Faithful (D7):
   a pane with no `regstate` producer refuses and names `--steps`, two runs of
   different lengths are flagged **not aligned** (they cannot share a playhead), a
   dropped step renders *UNKNOWN* per pane, and a stop past the recorded window is
@@ -479,7 +479,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   steps showing the full register file at each step, seeked O(1) through a new
   shared `regstate` index (`desktop/src/analysis/stepindex.h`, which the Loom's
   now-column reads too). Registers that changed vs the previous held step are
-  highlighted. Honest about the ring's limits (D7): when the producer dropped a
+  highlighted. Truthful about the ring's limits (D7): when the producer dropped a
   prefix of steps the scrubber renders that region as a **torn edge** — seeking
   into it shows *UNKNOWN*, never zeros — and a recording with no `regstate`
   events states the producer is absent and deep-links the docs (the
@@ -496,7 +496,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gash, statistical residency is dimmed, JIT churn is tinted); exact paths draw as
   opaque lines while statistical residency is translucent and stippled and is
   never joined into an exact tube. An orbit camera (drag to orbit, wheel to dolly,
-  a "reset view" and an honest "top-down 2D-ish" preset) frames it, and every pick
+  a "reset view" and a faithful "top-down 2D-ish" preset) frames it, and every pick
   — resolved through an offscreen `R32UI` colour-ID framebuffer — leaves the 3D
   overview for the flat 2D view that reads it: a terrain cell opens the trace
   canvas at that code offset, a trajectory vertex the slice explorer at that step
@@ -514,7 +514,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caller-sized ring — the per-step producer a register time-travel scrubber and
   the ABI x-ray replay from. It is drop-accounted (when a run exceeds `cap` the
   earliest entries are evicted and `emu_step_dropped()` counts them, so a torn
-  timeline is honest data, not a silent gap), read back with
+  timeline is genuine data, not a silent gap), read back with
   `emu_step_count()` / `emu_step_at()`, and never armed by default: the arming is
   handle-level, persists across `emu_call_*` until `emu_step_capture_clear()`,
   and survives `emu_snapshot` / `emu_restore` (the Track F arming discipline).
@@ -535,7 +535,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an AMD IBS survey, an arm64 watchpoint refusal and a JIT code image are all
   asserted in CI on hardware that has none of them.
 
-  Each view carries the honesty rule that view can most easily lose. Redaction
+  Each view carries the fidelity rule that view can most easily lose. Redaction
   distinguishes *hidden here* from *withheld at record time* (and revealing
   cannot conjure bytes that are not in the file). A watchpoint's direction has
   **three** values, the third being "the trap fired and the instruction did not
@@ -602,7 +602,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flag matrix is the argument parser's, verbatim, so the two front ends cannot
   disagree about what is legal.
 
-  Honesty is preserved where it would have been easiest to lose: `pause`
+  Fidelity is preserved where it would have been easiest to lose: `pause`
   suspends emission but not tracing, so the events it swallows are **counted**,
   the recording is marked `truncated`, and the terminal event carries
   `paused_dropped`. And a skip reports the **measuring source's** reason —
@@ -675,7 +675,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bundled walkthroughs, and a walkthrough is not a document beside a recording —
   it IS a recording, with ordered `stop:true` notes in it, so a story cannot
   drift away from the run it narrates. Four ship (`square`, `demo-fail`,
-  `ct_eq`, and a truncated dishonesty fixture), regenerated byte-identically by
+  `ct_eq`, and a truncated low-fidelity fixture), regenerated byte-identically by
   `make asmtrace-walkthroughs`; the truncated one's last stop points past the
   recorded window and the player must say so rather than clamp. The **Author
   door** (full app only) assembles what you type, runs it, and renders faults as
@@ -719,7 +719,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proves nothing. **Forks** change exactly one fact — an entry argument or the
   routine's source — and re-run from entry, rendering an interventional
   `dim`/`hot`/`neutral` verdict per step, where `neutral` is what you get
-  whenever either side never captured the value. Five honesty rules are
+  whenever either side never captured the value. Five fidelity rules are
   structural and tested verbatim: a statistical producer is REFUSED with a
   reason and no partial fabric, an uncaptured value stays hollow, a value alive
   at the last recorded step gets a fade-out and never a death cap, a worldline
@@ -745,7 +745,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `cli/asmspy_dataview.h` helpers, so both frontends speak one dialect.
   Every position is addressable as `asmtrace-link:v=slice&rec=...&step=4`,
   round-trip byte-stable, and every view and keyboard binding routes through
-  one router. Honesty is enforced structurally: a recording mixing
+  one router. Fidelity is enforced structurally: a recording mixing
   region-relative and absolute events draws **no rows** (a placard instead), a
   truncated recording carries a non-collapsible banner naming how much is
   missing, cones over a truncated stream are labelled lower bounds, a dropped
@@ -778,7 +778,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--tree` call graph as Graphviz DOT (`--dot-tree`) — so a capture made in CI
   or a container can be rendered later, anywhere, without re-running the traced
   program. One TU, libc only: no engine objects, no Capstone, no JSON library.
-  Honesty is enforced rather than documented: statistical `survey` events are
+  Fidelity is enforced rather than documented: statistical `survey` events are
   never exported as stacks (exit 2, naming the reason), truncation and dropped
   samples surface in every mode, the time axis is labelled as the event ordinal
   it is — no producer records timestamps — and a mixed address basis, a newer
@@ -796,7 +796,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`scripts/fetch-imgui.sh`, `scripts/fetch-json.sh`), and `mk/desktop.mk` adds
   `make desktop` / `desktop-render` / `desktop-test` plus the `docker-desktop`
   lane. The `.asmtrace` loader groups events by kind, enforces the schema's
-  forward-compat and honesty rules (a stream with no provenance is refused, a
+  forward-compat and fidelity rules (a stream with no provenance is refused, a
   newer major is refused by name, and truncation / drops / redaction / a torn
   file each survive into the model), and the headless `desktop-test` drives ImGui
   through its null backend — no display, no GL, no engines — so it runs on any
@@ -1060,7 +1060,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hypervisor (slots reported, arm accepted, the debug exception withheld), so the
   forced-hardware `run_to` self-skips there with that named reason and bare-metal
   arm64 hw-breakpoint firing moves to self-hosted-runner territory. qemu-user keeps
-  self-skipping honestly. Also brought the asmspy CLI toward AArch64: fixed the
+  self-skipping transparently. Also brought the asmspy CLI toward AArch64: fixed the
   `SYS_stat`/`dup2` legacy-syscall gaps (arm64 uses `newfstatat`/`dup3` — the latter
   now decoded), the host-arch disassembly of traced code, and `R_AARCH64_JUMP_SLOT` /
   2-slot-PLT0 stub resolution (asmspy-aarch64-support.md T2/T7).
@@ -1112,7 +1112,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the slices at close (`op.Hops` / `op.Path`). PT-only by construction; off Intel PT it
   self-skips and runs the body uninstrumented. Built on the new per-tid PT hop capture
   primitive (`asmtest_hwtrace_pt_hop_open`/`_hop_close`) on the one shared `intel_pt`
-  perf-AUX arm. The default whole-window capture is unchanged (it stays the honest
+  perf-AUX arm. The default whole-window capture is unchanged (it stays the faithful
   per-thread window that flags `truncated` on a cross-thread hop — never auto-stitch).
 
 - **Runtime-enabled jitdump byte recovery on an already-running process** — turn jitdump
@@ -1138,7 +1138,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returning the new distinct `ASMTEST_HW_EMANAGED` status instead of single-stepping
   code whose `SIGTRAP` disposition the runtime's signal layer owns. The .NET empty-ctor
   `new AsmTrace()` builds on it to route a managed window to Intel PT where the silicon
-  exists, else the §D3 out-of-process stepper, else an honest self-skip — **never**
+  exists, else the §D3 out-of-process stepper, else a transparent self-skip — **never**
   in-process TF (`ww.Route` reports the chosen route). Default (env unset / no
   `safeManaged`) is byte-identical to today; `asmtest_hwtrace_managed_runtime_present()`
   exposes the probe.
@@ -1244,7 +1244,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-identical to the emulator L0 oracle on a deterministic region.
   `src/dataflow_pt.c` opens **no** perf event (it consumes a captured AUX blob +
   code-image); it reuses the block-step tier's purity/replayability verdicts and
-  **truncates honestly** on an impure, VEX/EVEX, or nondeterministic region (no
+  **truncates faithfully** on an impure, VEX/EVEX, or nondeterministic region (no
   single-step fallback), a per-step path cross-check catching a divergence. The
   synthetic-AUX **decode→rebase→materialize→replay bridge is validated in CI with
   no PT hardware** (libipt's own encoder, `libipt-dev` added to
@@ -1384,7 +1384,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `emu-bench` now emits a `model_cost` row beside each deterministic `insns` row:
   each executed instruction is classified with Capstone (new
   `asmtest_disas_class` → OTHER/MEM/BRANCH/MULDIV) and summed against a fixed
-  weight table (1/3/2/8), an honest cross-architecture cost *model* — comparable
+  weight table (1/3/2/8), a faithful cross-architecture cost *model* — comparable
   by construction, **not** silicon cycles. `bench-compare` renders it as its own
   *Model cost* matrix (never mixed with raw counts or real cycles). The metric
   needs Capstone: without it the bench emits the `insns` rows alone and every gate
@@ -1399,7 +1399,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   callee-saved `s0`–`s11`, and FP callee-saved `fs0`–`fs11` (checked by
   `ASSERT_ABI_PRESERVED` / `ASSERT_ABI_PRESERVED_VEC` after an `_fp`/`_fp_n`
   capture, since rv64gc has no vector file), plus rv64 bodies for every example
-  suite and the framework self-tests. Two ISA facts are surfaced honestly rather
+  suite and the framework self-tests. Two ISA facts are surfaced faithfully rather
   than faked: RISC-V has **no condition-flags register**, so `ASMTEST_NO_FLAGS` is
   set and `ASSERT_FLAG_*` is a compile error on rv64 (flag-only suites self-skip
   with a printed reason); and there is **no 128-bit vector capture** (`ASM_VCALL*`
@@ -1487,7 +1487,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
 
 - **`ioctl` requests and `fcntl` commands are named** (asmspy `--log`). `ioctl` renders
-  `TIOCGWINSZ`-style names, or an honest `_IOC(dir, type, nr, size)` decomposition for an
+  `TIOCGWINSZ`-style names, or a faithful `_IOC(dir, type, nr, size)` decomposition for an
   unknown request (never a guessed name); `fcntl` renders `F_GETFL`/`F_SETFD`/… with
   correct conditional arity (an arg-less command such as `F_GETFL` shows no third slot).
   `make docker-cli` cli-smoke PASS.
@@ -1635,7 +1635,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and degrade to per-instruction stepping — the probe catches this, a build
   check cannot); deliberately scoped to a pinned leaf-routine envelope with
   per-trap re-arm (BTF is a hardware one-shot the CPU clears on every `#DB`)
-  and honest truncation on any observed context switch (Linux does not
+  and faithful truncation on any observed context switch (Linux does not
   preserve a user-written BTF across one) — the general, context-switch-proof
   case stays owned by the shipped `PTRACE_SINGLEBLOCK` trio. Rides the
   existing `docker-hwtrace-msr` `--privileged` lane, no new capability. Live-
@@ -1711,7 +1711,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is **pre-callchain** (112B vs ~1032-1184B — it landed in `68b53850`, callchain
   in `a266b91` two days later and never touched it), leaving the loss heuristic
   ~10× short where `PERF_RECORD_LOST` provably cannot cover the gap →
-  `lost==0 && throttled==0` **silent** loss in an honesty-first lane; and
+  `lost==0 && throttled==0` **silent** loss in a fidelity-first lane; and
   `asmtest_amd_freeze_available()` is dead (`nm`: one definition, zero undefined
   refs) with a **flatly false string printed to a human**. The organising finding
   is process, not code: **no CI lane exercises AMD silicon** — the one
@@ -1739,7 +1739,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unprivileged envelope, with availability probed BY DOING and an
   errno-carrying reason (`asmtest_swclock_unavail_reason`) from birth — the
   `--sample` lesson, applied rather than re-learned. The pure ranking half
-  (`asmspy_autoregion_rank_ip`) is honest about being the WEAKER rule: an IP
+  (`asmspy_autoregion_rank_ip`) is transparent about being the WEAKER rule: an IP
   histogram measures residency, and residency's winner is often the
   entered-once-never-returns shape whose entry breakpoint can never fire —
   test_autoregion #15 pins the two rules DISAGREEING on the same behaviour.
@@ -1751,7 +1751,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   9 new pure checks (31 total); both cli lanes PASS.
 
 - **`cli/asmspy_ghash.h` + `test_ghash.c` — the graph's hash index gets the
-  collision test its honest-gap note demanded.** The `--graph` engine's
+  collision test its faithful-gap note demanded.** The `--graph` engine's
   open-addressed index shipped with a measured blind spot: a probe loop that
   trusts the hash and skips the key compare emits byte-identical smoke output,
   because ≤7-node graphs in a 128-slot table never collide (on a larger graph
@@ -1790,13 +1790,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layers the **JIT map over the ELF symtab**, so a hot JIT'd/managed method (perf-map or
   jitdump, real size) can win the pick and names the capture — proven live against a
   perf-map victim whose only entry arrival is an anonymous-mapping function the ELF
-  symtab cannot see. An idle target gets an honest refusal ("no function was observed
+  symtab cannot see. An idle target gets a truthful refusal ("no function was observed
   being ENTERED"), not a guess; zero-size symbols cannot win on their exact-start-only
   resolution technicality; `--auto --tid` is a usage error (the sampler carries no tid,
   so pinning could only arm a breakpoint on a thread that never arrives);
   `--module=` scopes the pick with the same substring rule as `--tree --module=`.
 
-- **`make docker-cli-ibs` — the lane that actually tests `--sample`, and honest skip
+- **`make docker-cli-ibs` — the lane that actually tests `--sample`, and accurate skip
   reasons everywhere.** The plain `docker-cli` lane runs under Docker's default seccomp,
   which blocks `perf_event_open` — so every `--sample` assertion had self-skipped since
   the view landed (a green gate over an untested view, on hosts where IBS works fine).
@@ -1858,7 +1858,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keyword and captures `GCBulkMovedObjectRanges` from a **compacting** GC — the live source
   the pure GC-move canonicalizer (`asmtest_gcmove_canonicalize`) was built to consume.
   Validated via `make docker-hwtrace-dotnet`: an induced compacting gen2 collection is
-  captured as 11 events / 20474 moved ranges (suite 169 → 177). Honest scope: in-proc
+  captured as 11 events / 20474 moved ranges (suite 169 → 177). Truthful scope: in-proc
   `EventListener` surfaces the reliable scalar range **count** but not the manifest
   struct-array `Values` payload, so the concrete `{old_base, new_base, len}` triples that
   drive the canonicalizer end-to-end are **deferred** to a raw EventPipe/nettrace path — the
@@ -1902,7 +1902,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   addresses (front-end / i-cache / ITLB view). A pure, host-independent decoder turns one
   `PERF_SAMPLE_RAW` fetch record into `{fetch_addr, valid, complete, icache_miss, itlb_miss,
   latency}` (unit-tested with synthetic records on every CI host), plus an availability probe
-  and a headless fetch-coverage survey with honest throttled/lost provenance, self-skipping
+  and a headless fetch-coverage survey with faithful throttled/lost provenance, self-skipping
   off IBS/permission. Kept **fully internal** (`src/ibs_backend.h`) — no public
   `asmtest_ibs_*` surface added, so no binding flag day. Verified live on Zen 5.
 
@@ -1916,7 +1916,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`hwtrace-privileged` CI job + AMD hardware-validation doc.** A CI job exercises
   `make docker-hwtrace-privileged` so the `--cap-add=PERFMON` lane can't bitrot (the
-  AMD-exact tests self-skip on GitHub's non-AMD runners — honest by design; it lights up
+  AMD-exact tests self-skip on GitHub's non-AMD runners — transparent by design; it lights up
   on a future AMD runner). `docs/internal/amd-hardware-validation.md` documents the manual
   pre-release validation on real Zen 3+/Zen 5 silicon — closing the gap that let the
   `call_auto` LBR truncation bug hide (the exact AMD paths never ran in CI).
@@ -2019,7 +2019,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   everything into one hot-edge histogram. `asmspy_engine_sample` resolves both endpoints of
   each edge through the existing ELF-symtab → JIT-perf-map chain, so managed Node/.NET/Java
   frames are named. Headless `asmspy --sample <pid> [ms] [--json]` prints the histogram —
-  `count  from -> to` with `[misp N%]`/`[ret]` tags and honest `branch/total samples` /
+  `count  from -> to` with `[misp N%]`/`[ret]` tags and faithful `branch/total samples` /
   `throttled` provenance — or machine-readable JSON; TUI menu item **"7) Hot edges (sample)"**
   shows the same table live, pausable + scrollable + Tab-sortable (count / mispredicts).
   Unlike the stream/graph/tree views this **never attaches ptrace and never single-steps** —
@@ -2079,7 +2079,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   detect-and-skip chain), `asmtest_ibs_decode_op()` (a **pure, host-independent** decode of one
   IBS-Op `PERF_SAMPLE_RAW` record into an edge — unit-tested with synthetic records on **every**
   CI host, AMD or not), and `asmtest_ibs_survey_pid()` (attach IBS-Op to one thread, drain for
-  N ms, return an aggregated hot-edge histogram sorted by count with honest provenance —
+  N ms, return an aggregated hot-edge histogram sorted by count with faithful provenance —
   `samples` / `branch_samples` / `lost` / `throttled`). **INVARIANT:** statistical only — it can
   prove a block *was* seen, never that one was *not*, so it never feeds the exact
   `insns[]`/`blocks[]` parity contract; it is a separate diagnostic producer, not a member of the
@@ -2126,7 +2126,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   routine under the fastest exact tier, then **automatically escalates to a ceiling-free tier
   when the trace comes back `truncated`** — walking the ladder *fast HWTRACE backend →
   MSR-direct AMD-LBR rung → BTF block-step → per-instruction single-step* until the capture is
-  complete (or the tiers are exhausted, honestly flagged). This closes the "arm → detect
+  complete (or the tiers are exhausted, transparently flagged). This closes the "arm → detect
   truncation → re-resolve → re-run" loop that was previously only a documented idiom. Landed
   C-first (`src/trace_auto.c`, the MSR rung folded in later), then wrapped
   in every binding (python/cpp/rust/zig/node/java/dotnet/ruby/lua/go), removing its former
@@ -2191,7 +2191,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thread** — the crash-proof counterpart to the in-process `callScoped`/`window` forms, mirroring
   dotnet's `AsmTrace.Method(..., outOfProcess: true)`. The `result` is exact (the helper reads
   the caller's RAX at the `ret`); the instruction stream is best-effort over a live runtime (its
-  async signals can truncate the per-instruction walk — honestly reported via `truncated`), so
+  async signals can truncate the per-instruction walk — faithfully reported via `truncated`), so
   the tests assert the exact `[0,3,6,c,11]` stream only when not truncated. Validated in the
   `docker-hwtrace-node` / `-java` lanes; self-skips cleanly where a Yama `ptrace_scope` refuses
   the reverse-attach.
@@ -2248,12 +2248,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   increment 1 of the dotnet-parity roadmap). `HwTrace.window(fn)` (Node) /
   `HwTrace.window(Runnable)` (Java) arm a single-step capture on the calling thread with NO
   registered region, run the body, disarm, and render the executed **absolute** addresses
-  from live memory — returning `{path, truncated, insns[]}`. It is HONEST-BUT-NOISY by design:
+  from live memory — returning `{path, truncated, insns[]}`. It is FAITHFUL-BUT-NOISY by design:
   single-stepping the managed runtime records everything between begin and end (the FFI
   dispatch + runtime), so the traced routine's own addresses appear as a *subset*. A single
   V8-dispatched call runs ~100k instructions (captured cleanly, subset verified); a HotSpot +
   FFM call exceeds the single-step whole-window's internal `SS_WINDOW_CAP` (1<<20), so the
-  Java capture honestly reports `truncated` (best-effort). Validated in `docker-hwtrace-node`
+  Java capture faithfully reports `truncated` (best-effort). Validated in `docker-hwtrace-node`
   / `-java`. The `begin_window`/`end_window`/`render_window` `ALL` exemptions stay in
   `scripts/bindings-parity-allow.txt`, now consumed by the seven bindings that don't wrap them.
 
@@ -2311,7 +2311,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pthread_create` that blocks `SIGTRAP` force-killed the process on slow hosts): it
   marshals through a `(long…)->long` shim table and, for signatures the shims can't
   express, **auto-falls back to the out-of-process stepper with a loud `SkipReason`**
-  — never a silent miss. `HwTrace.DegradationNote()` gains the honest managed-window
+  — never a silent miss. `HwTrace.DegradationNote()` gains the faithful managed-window
   warning. Host-tested (`test_call_scoped`, byte-for-byte parity with begin/end) and
   validated on the .NET lane; see
   [managed-singlestep-lazy-arm-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/managed-singlestep-lazy-arm-plan.md).
@@ -2374,7 +2374,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **.NET examples roadmap — the full remaining tail** (11 items from
   [dotnet-examples-roadmap.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/dotnet-examples-roadmap.md),
-  all instruction-count-honest, all green in the docker lane). Five new reports:
+  all instruction-count-faithful, all green in the docker lane). Five new reports:
   `flatprofile` (perf-report parity: self / Overhead % / cumulative %),
   `amplification` (user vs BCL vs native-runtime split + the WEAK-tier factor),
   `runtimegaps` (largest `RuntimeBefore` bursts by the method they precede),
@@ -2438,7 +2438,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Phase 5 — Tier-B stitch hardening.** `asmtest_amd_stitch` gained a
     decodable-distance guard: a smallest-overlap match is accepted only if the adjacency
     it splices is real straight-line code, so a dropped/throttled-sample mis-stitch
-    becomes an honest gap instead of a silently-wrong trace. The AMD data ring default
+    becomes a faithful gap instead of a silently-wrong trace. The AMD data ring default
     grew 64 KB → 256 KB to extend gapless stitch reach before the kernel drops samples;
     the `data_size` header comment now documents both backend defaults.
   - **Phase 0 — runtime branch-stack depth.** `asmtest_amd_lbr_depth()` reads the true
@@ -2473,9 +2473,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane it appears in, and only there. A pane that cannot show the entity shows
   *nothing selected* rather than a fabricated row (D7), and cross-highlighting
   brushes in place without yanking every pane's viewport.
-- **Honesty chrome is now a graded 3-tier system over a derivable `severity`
+- **Fidelity chrome is now a graded 3-tier system over a derivable `severity`
   field** (docs/internal/gui/23-graded-truth-layer.md T1, F5). The proliferating
-  honesty forms — a redaction placard, a statistical chip, a coarse chip, a
+  fidelity forms — a redaction placard, a statistical chip, a coarse chip, a
   bounded-window note and a torn banner, all equally loud and non-collapsible —
   collapse into ONE vocabulary: one banner, one inline chip, one glyph set, with
   mandated placement (a banner is pane-top, a chip is on a header row, enforced by
@@ -2484,8 +2484,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **caution** (truncated-but-usable / paused gap) is an amber banner that collapses
   to its chip after first read; **integrity** (torn / mixed-basis refusal / a drop
   on an exact capture) is a loud red banner that never collapses. This restructures
-  the honesty layer and removes no truth — every field still renders, graded
-  against the committed dishonesty fixtures (D7).
+  the fidelity layer and removes no truth — every field still renders, graded
+  against the committed low-fidelity fixtures (D7).
 - **The live session-end state is now a persistent, cause-distinguished in-pane
   placard with an inline fix** (docs/internal/gui/23-graded-truth-layer.md T2, F20).
   The single collapsed "ended" is fanned into its cause — stopped-clean, torn (host
@@ -2505,7 +2505,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (docs/internal/gui/20-workspace-and-settings.md T1/T2). Only the views a
   recording can actually fill are shown — a bare-log recording no longer presents
   empty Loom / ABI-x-ray / 3D / Scrubber tabs; the views it cannot fill collapse
-  into ONE honest **"unavailable views (N)"** affordance that still names each
+  into ONE faithful **"unavailable views (N)"** affordance that still names each
   absent view and its verbatim machine reason (D7 — restructured, never removed),
   and the set is scoped by the active mode. First run replaces the "choose a door"
   chooser with a **persistent task rail** (Learn how assembly runs / Open a trace /
@@ -2532,10 +2532,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a "showing N of M" count (`ui/filter.h`) replaces the ad-hoc client-side
   idioms, free ImGui column-sort landed on the hot-edge table (reordering the view,
   never the recorded model order), and ONE time-position widget (`ui/timepos.h`)
-  now carries two honest variants — a continuous scrub where a real total exists
+  now carries two faithful variants — a continuous scrub where a real total exists
   (the Loom/3D playheads) and a discrete step where it does not (Invocations, the
   disassembly logical-time control), the discrete case VISIBLY MARKED as an
-  intentional honesty choice with its verbatim reason. The counts, sort order and
+  intentional fidelity choice with its verbatim reason. The counts, sort order and
   discrete-reason registry are asserted headlessly.
 - **The capability panel leads with what the host *can* do**
   (docs/internal/gui/18-breach-stops.md T4). It opened with a wall of red errno
@@ -2566,7 +2566,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   holds the timeline and the scrubber together, and Reset rebuilds the default
   split (the recovery path for a stale/corrupt persisted dock `.ini`, whose
   auto-fallback lands with doc 18 T2.2). Every view keeps its exact body and its
-  honesty placards — the chrome was restructured into the panes, never removed
+  fidelity placards — the chrome was restructured into the panes, never removed
   (D7). The non-docked path (the null test backend's default) still draws the
   single-window tab layout unchanged, so nothing regresses without a dockspace.
   The panes are asserted headlessly (`make desktop-test` flips docking on and
@@ -2587,9 +2587,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Loom refusal placard — is deleted and routed through the accessors. A shared
   `ui/legend` component renders the palette (with a non-colour second-channel
   token beside each swatch) so a legend can never disagree with what a view
-  draws; the slice explorer uses it. The honesty chrome (D7) is unchanged — the
+  draws; the slice explorer uses it. The fidelity chrome (D7) is unchanged — the
   refuse red and caution amber keep their meaning; `statistical` is merely
-  *named* so a later graded-honesty change can move it off the amber without
+  *named* so a later graded-fidelity change can move it off the amber without
   touching a call site. Header-only and engine-free, so it links into the full
   app, the render-only viewer, and the null test backend alike.
 
@@ -2671,7 +2671,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `[base_ip, landing)` — a complete-reported reconstruction of a small routine undercounted
   its retired instructions (e.g. `insns=4` vs the block-step baseline `5`). `amd_entry_fill`
   now prepends the clean straight-line prologue all-or-nothing (a branch/ret/overshoot in
-  that run honestly truncates instead), with a symmetric trailing fill; anti-fabrication
+  that run faithfully truncates instead), with a symmetric trailing fill; anti-fabrication
   tests confirm no phantom instructions. New `test_amd_live_smallroutine` hard-asserts
   complete⇒full-count on a live AMD host. Verified across 3 privileged runs + a 30-iteration
   loop: every complete reconstruction now yields the full count, and the batch-3 case-(b)
@@ -2683,7 +2683,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   debug register each) via `asmtest_amd_all_exits` + `asmtest_amd_snapshot_begin_multi`, so
   whichever `ret`/tail-call a multi-exit routine leaves through hits a boundary — the old
   single-exit gate missed earlier exits and truncated. A BPF-side drop counter drives an
-  honest truncated-on-drop contract (F13: a dropped ring record marks the result truncated,
+  faithful truncated-on-drop contract (F13: a dropped ring record marks the result truncated,
   never silently complete — verified with a 1670-drop overflow fixture). >4 exits or any arm
   failure falls through to the sampled path unchanged. First live-validated on Zen 5 via the
   new privileged docker lane.
@@ -2709,7 +2709,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`asmtest_amd_snapshot_end` drains the BPF ring without blocking (followup Phase 8 /
   F15).** `ring_buffer__poll(rb, 200)` epoll-waited 200 ms on the no-hit /
-  honest-truncation path (the common case) before draining; `ring_buffer__consume` reads
+  faithful-truncation path (the common case) before draining; `ring_buffer__consume` reads
   the producer position directly and returns at once — every record is already committed
   by the time the events are disabled.
 
@@ -2767,7 +2767,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (P4 of the 2026-07-04 review). A maintained comparison against the four workflows
   people actually use instead — a C unit framework with `.s` files linked in
   (cmocka/Criterion/Unity/gtest), raw Unicorn scripting, qemu+gdb, and
-  asmUnit-style in-asm macros — including an honest "when the alternative is the
+  asmUnit-style in-asm macros — including a truthful "when the alternative is the
   better choice" for each, a "what asm-test does not try to be" calibration list,
   and a capability matrix. Linked from the README reference funnel and the docs
   index "Where to start".
@@ -2898,7 +2898,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The rest of the pass was clean at the same tree — `WERROR=1 test`/`check`
   (57/57), `asm-test` 16/16 (the new statement-drop guard green under the
   host's Keystone 0.9.2), the cpp 58 / ruby 57 / python 15+12-skip hwtrace
-  binding lanes, `WERROR=1 dataflow-test` build + honest self-skip, the
+  binding lanes, `WERROR=1 dataflow-test` build + transparent self-skip, the
   `make cli` OS-gate self-skip intact after the asmspy T2/T7 wave, and
   `mach-stepper-test` 25/25.
 
@@ -2944,7 +2944,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   residues (T3/T4/T5).** All four IBS lanes (`survey_pid`, `survey_process`,
   `window_end`, `survey_fetch_pid`) discarded `eh_export`/`fh_export`'s
   return, so an OOM'd export surfaced as `OK` with `n==0` beside
-  `branch_samples>0` — indistinguishable from an honestly-empty survey; they
+  `branch_samples>0` — indistinguishable from a genuinely-empty survey; they
   now return `EUNAVAIL`, mirroring the software-clock lane, with a test seam
   (`asmtest_ibs_test_set_export_fail`) proving the contract pure everywhere
   and live under injected OOM on an IBS host. T3: `g_open_errno` now resets
@@ -3095,7 +3095,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `auto()`, `resolveTiers()` and `autoTier()` threw `RuntimeException` with the
   library unloaded, contradicting the class's own "callers never see a throw"
   self-skip contract (masked only because the lib is always bundled); each now
-  degrades to its honest unavailable value (EUNAVAIL status/empty cascade/empty
+  degrades to its faithful unavailable value (EUNAVAIL status/empty cascade/empty
   Optional). New `hwtrace-java-test` leg runs `HwTraceTest --not-loaded-contract`
   in a second JVM with the resolver pointed off a cliff (bogus `ASMTEST_HWTRACE_LIB`,
   cwd outside the repo), with an anti-vacuity guard that fails if the library
@@ -3235,7 +3235,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **asmspy `cli-smoke`: deterministic unknown-arity arg-decode assertion (de-flake).**
   The `--log` syscall arg-decode smoke (`cli/cli_smoke.sh`) asserts that at least
-  one syscall in a 400-event window renders the honest unknown-arity form (`…`)
+  one syscall in a 400-event window renders the faithful unknown-arity form (`…`)
   rather than a fabricated arity-of-three. The only undescribed syscall the victim's
   stream produced was the *incidental* `restart_syscall` the kernel emits when a
   signal interrupts a blocking call — nondeterministic, and it flaked to zero
@@ -3354,7 +3354,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `test_window_region_free_whole_window` still hard-asserted `w.armed` — the
     one binding missed when the second pass guarded the C++/Ruby/Lua/Zig/Rust
     window tests. Now guards the arming-dependent checks on `armed` and notes the
-    honest self-skip, matching node's and cpp's shape.
+    transparent self-skip, matching node's and cpp's shape.
   - `bindings/ruby/dataflow.rb` used Ruby-3.0 endless-method syntax
     (`def steps = …`) that fails to parse on Ruby 2.6, violating the binding's
     own `required_ruby_version >= 2.6` (`asmtest.gemspec`) — and stock macOS
@@ -3387,7 +3387,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     self-skips on macOS single-step, where the region-based tier still works).
     The C++, Ruby, Lua, Zig, and Rust binding tests hard-asserted `w.armed`,
     failing on macOS; they now guard the arming-dependent checks on `armed` and
-    note the honest self-skip — matching node's already-correct shape and the C
+    note the transparent self-skip — matching node's already-correct shape and the C
     `test_wholewindow_singlestep` skip.
 
 - **macOS (Intel) native build + PT self-skip correctness**, surfaced by
@@ -3506,7 +3506,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   block-step reconstructor records it exactly once, so the block-step stream
   silently under-counted it. New `asmtest_disas_is_rep_string` lets
   `bs_record_run` and `window_block_walk` downgrade such a block to
-  `BS_AMBIGUOUS` (honest truncation), bounding the "byte-identical to
+  `BS_AMBIGUOUS` (faithful truncation), bounding the "byte-identical to
   per-instruction stepping" promise accordingly.
 
 - **The ptrace block-step reconstructors no longer record never-executed
@@ -3530,7 +3530,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `asmtest_ptrace_trace_attached_windowed[_window_stop]`, the fork-owned window
   driver (`asmtest_ptrace_trace_window_call`), and call descent
   (`asmtest_ptrace_trace_call_ex`/`_attached_ex`) each either deliver an
-  application `int3`/breakpoint via `PTRACE_CONT` (owned tracee) or end honestly
+  application `int3`/breakpoint via `PTRACE_CONT` (owned tracee) or end faithfully
   with the target left at its SIGTRAP delivery-stop (foreign) — never
   `PTRACE_SINGLESTEP`/`PTRACE_SINGLEBLOCK` with the signal attached (measured
   fatal: the re-armed trap fires inside a masked handler). `bs_sigtrap_is_app`
@@ -3622,7 +3622,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mid-compile with `SYS_open undeclared` / `no member named 'rip'` — or worse,
   fell into the missing-dependency branch and advised installing libncurses-dev,
   which cannot fix an architecture. A `uname -m` gate (checked before
-  `CLI_MISSING`, for exactly that reason) now prints an honest `# SKIP` naming
+  `CLI_MISSING`, for exactly that reason) now prints a truthful `# SKIP` naming
   the open ARM64-abstraction plan row and exits 0. Measured in a real
   linux/arm64 container: skip + rc 0 both targets; x86-64 unchanged.
   a Yama/seccomp skip.** The victim called the region once and `_exit(0)`'d, so on
@@ -3711,7 +3711,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   83-step region). It now returns OK with the truncated partial trace; the smoke asserts
   the EXACT step count per cap, so "cap ignored" cannot pass either.
 
-- **Three `asmspy --trace` honesty defects: a bound that wasn't, a diagnosis thrown
+- **Three `asmspy --trace` fidelity defects: a bound that wasn't, a diagnosis thrown
   away, and a documented self-skip that never happened.** (1) The entry wait's idle
   window reset on EVERY waitpid event — a target that stops more often than the window
   (a 1 Hz timer, a chatty clone) reset the budget forever and `--trace` blocked
@@ -3825,7 +3825,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `truncated` when a region falls outside the storable window — upholding the never-present-a-
   partial-trace-as-complete invariant.
 
-- **Native-trace "honesty" gaps — three places a partial capture could escape without its
+- **Native-trace "fidelity" gaps — three places a partial capture could escape without its
   `truncated` flag.** The framework's core invariant is that an incomplete trace is never
   presented as complete; a review found three leaks and they are now closed. (1) The
   whole-window single-step loops (`asmtest_ptrace_trace_attached_windowed` and the fork-internal
@@ -3859,10 +3859,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Latent AMD-LBR test flake in nine bindings' auto-select hwtrace test.** Each binding
   mirrors the C reference `test_auto_resolve_traces_live`: pick `auto(BEST)`, trace a tiny
   five-instruction routine, assert the result. On a privileged AMD Zen 3+ host `auto` picks
-  AMD LBR, which honestly *truncates* a too-fast-to-sample single-shot routine (so `covered(0)`
+  AMD LBR, which faithfully *truncates* a too-fast-to-sample single-shot routine (so `covered(0)`
   is false) — the C reference and .NET already asserted `covered(0) || truncated`, but the fix
   was never ported, so rust/cpp/python/lua/ruby/zig/node/java/go still asserted only
-  `covered(0)` and would fail on such a host. All nine now assert the honest invariant.
+  `covered(0)` and would fail on such a host. All nine now assert the faithful invariant.
 
 - **The hwtrace options struct under-allocated the AMD-LBR fields in all seven FFI-mirroring
   bindings (8-byte OOB read in `asmtest_hwtrace_init`).** When `lbr_period`/`branch_filter` were
@@ -3985,7 +3985,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   zero-config scope construct over the single-step hardware-trace tier:
   `using (new AsmTrace()) { … }` captures whatever the thread executes (no region,
   no `HwTrace.Init` — the ctor auto-inits the portable backend and self-skips with
-  an honest `SkipReason` where it cannot run). `byMethod: true` labels the captured
+  a faithful `SkipReason` where it cannot run). `byMethod: true` labels the captured
   window by managed method via an in-process `MethodLoadVerbose` listener
   (`JitMethodMap`), and `withRundown: true` also names warm + ReadyToRun BCL
   methods through a dependency-free `DOTNET_IPC_V1` jitdump rundown over the
@@ -4002,7 +4002,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `outOfProcess: true` (§D3) routes `Invoke` through the concealed ptrace-stealth
   stepper — a bundled helper reverse-attaches and steps the body out of band, so
   the calling thread is never armed with `EFLAGS.TF`.
-- **Honest-degradation surface.** `HwTrace.DegradationNote()` composes the tier
+- **Faithful-degradation surface.** `HwTrace.DegradationNote()` composes the tier
   ladder (Intel PT → AMD LBR → single-step → CoreSight, each with its skip
   reason, plus the ptrace fallback); cross-thread closes and overflows flag
   `Truncated` (native OS-tid assert + a complementary managed-thread guard);
@@ -4053,7 +4053,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `asmtest_hwtrace_begin_window`/`_end_window`/`_render_window` over a whole-window frame
     mode in `asmtest_ss_begin_window` (the single-step handler records ABSOLUTE RIPs into
     the bounded ring, overflow → `truncated`), rendered from live self memory. The .NET
-    reference shim gains the parameterless `new AsmTrace()` ctor + `SkipReason` (honest
+    reference shim gains the parameterless `new AsmTrace()` ctor + `SkipReason` (transparent
     self-skip). This is the single-step **WEAK** tier — native-leaf only, on any x86-64
     Linux (`test_wholewindow_singlestep`, `make docker-hwtrace` → 201/0; `.NET`
     `make docker-hwtrace-dotnet` → 33/0). The STRONG whole-window PT / AMD LBR tiers,
@@ -4452,7 +4452,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     unchanged. Completeness is gated on the precise loss signals — a stitch gap OR a
     `PERF_RECORD_LOST`/`PERF_RECORD_THROTTLE` record (the non-overwrite ring drops the
     *newest* samples on overflow and emits `LOST`, the signal the gaplessly-stitching
-    survivors cannot otherwise reveal) → honestly `truncated`. On a Zen 5 (Ryzen 9 9950X,
+    survivors cannot otherwise reveal) → faithfully `truncated`. On a Zen 5 (Ryzen 9 9950X,
     `make docker-hwtrace-amd`) a 20000-trip loop reconstructs ~290 instructions (≈95
     stitched branches, far past one 16-deep window's ~49) and stays truncated, as the
     perf ring size and `sample_period=1` throttling require; the live path is complete
@@ -5061,9 +5061,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trace yet reported it **complete** (`truncated=0`). It now keeps the sample
   **richest in in-region branches** (the one taken at/just after the routine, whose
   16-deep window still holds its branches) and sets `truncated` when none is found —
-  the honest dynamic-fallback signal. A branch-heavy loop now reconstructs exactly
+  the faithful dynamic-fallback signal. A branch-heavy loop now reconstructs exactly
   from the live LbrExtV2 stack; a tiny single-shot routine (too fast for an in-region
-  PMU sample) honestly truncates. New live regression `test_amd_live` +
+  PMU sample) faithfully truncates. New live regression `test_amd_live` +
   `make docker-hwtrace-amd` lane (hwtrace image run with `--security-opt
   seccomp=unconfined --cap-add=PERFMON`); the standard `docker-hwtrace` lane is
   unchanged (AMD self-skips without perf). Docs corrected across the trace-parity

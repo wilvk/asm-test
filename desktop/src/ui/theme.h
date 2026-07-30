@@ -1,4 +1,4 @@
-// theme.h — the shared honesty-chrome palette (11-imgui-addons.md, quick win
+// theme.h — the shared fidelity-chrome palette (11-imgui-addons.md, quick win
 // #6). The caution and refusal colours of plan D7's non-collapsible banners had
 // drifted to three different amber values across five draw TUs (canvas_draw,
 // fabric_imgui, hud, completeness, observer_draw); this is the ONE place they
@@ -11,7 +11,7 @@
 
 namespace asmdesk {
 
-// The active-theme flag (20-workspace-and-settings.md T5, F6). The honesty chrome
+// The active-theme flag (20-workspace-and-settings.md T5, F6). The fidelity chrome
 // (warn/refuse banners) must keep contrast in BOTH themes — the amber/red that
 // reads on the dark WindowBg washes out on a light one (D7: the warn/refuse
 // signal must never wash out). This flag is set once by the Settings pane; it is
@@ -49,7 +49,7 @@ inline ImVec4 dt_refuse_col() {
 // TU — three barely-distinguishable yellows meant three different things and two
 // reds both meant "refused". This is now the ONE place each of those meanings
 // lives, so a colour can never drift its meaning between panes. Each accessor
-// documents its ONE meaning; a later graded-honesty change (23 T4.1) re-tiers
+// documents its ONE meaning; a later graded-fidelity change (23 T4.1) re-tiers
 // these values in ONE place instead of hunting call sites. Doc-comment discipline
 // (one meaning per colour) is the F14 rule made explicit.
 

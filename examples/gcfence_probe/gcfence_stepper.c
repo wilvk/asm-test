@@ -10,7 +10,7 @@
  * It does NOT drag in src/dataflow_ptrace.c: the whole tier brings a value trace, region gating,
  * JIT method resolution and signal policy, none of which the question needs. The question is only
  * "does the step counter advance across a GC fence", so the probe carries the smallest thing that
- * can produce an honest counter.
+ * can produce a genuine counter.
  *
  * Three things beyond the counter, each of which turned out to matter:
  *  - BURSTS. It steps in K attach/step/detach cycles, each begun only when NO GC window is open, so

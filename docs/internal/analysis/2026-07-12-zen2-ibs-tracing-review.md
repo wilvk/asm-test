@@ -124,9 +124,9 @@ aggregated into a hot-edge / hot-block histogram. Three payoffs, all unprivilege
 can't carry a ringbuffer, so per-tid events race JIT/GC thread creation. The clean fix is a
 per-CPU IBS event set covering all threads (incl. future ones), filtered by pid — but that
 needs `paranoid<=0` / `--cap-add=PERFMON`. Worth a documented opt-in plus a docker lane;
-without it, stay per-tid and state the coverage hole honestly.
+without it, stay per-tid and state the coverage hole transparently.
 
-**3. Tier it honestly in `trace_auto.c`.** Add IBS as a distinct **STATISTICAL** fidelity
+**3. Tier it faithfully in `trace_auto.c`.** Add IBS as a distinct **STATISTICAL** fidelity
 producer (never feeding the exact parity contract) — which also motivates the review's
 F22/F26/F37 "rung/mechanism discriminator" so a statistical result is never mistaken for an
 exact one.
@@ -134,7 +134,7 @@ exact one.
 **4. IBS Fetch lane (lower priority).** Front-end fetch-address + i-cache/ITLB-miss
 coverage; complements Op's retire-side view and catches code the op-sampler missed.
 
-## 6. Honest limitations (record, do not fight)
+## 6. Disclosed limitations (record, do not fight)
 
 - **Statistical, not exact.** IBS tags one retired op per NMI window; cold edges are
   under-covered and coverage is probabilistic in the cold tail. It can *never* prove "block

@@ -16,7 +16,7 @@ packet stream — but nothing **produces** a real PT trace from a *running*
 process. Phase 1 only ever opens a PT event on `pid=0` (the calling thread). This
 doc adds the missing producer: open `perf_event_open` on the `intel_pt` PMU
 against a **foreign pid**, pair it with a temporal code-image recorder for that
-process, drain the AUX ring honestly, and hand the result to the existing decode.
+process, drain the AUX ring faithfully, and hand the result to the existing decode.
 The user-visible outcome is: attach to a live .NET / JVM / V8 process and get a
 deterministic disassembled trace of a JIT-generated routine, out of band, with no
 in-process agent and no code-cache collision.
@@ -434,7 +434,7 @@ behind the hardware gate below rather than in a portable unit test.
 **Docs.** Add the CHANGELOG `### Added` entry: "Intel PT attach-to-foreign-PID
 capture wired to the whole-window decode — `perf_event_open` on a live pid,
 paired with the temporal code-image recorder, dispatched into
-`asmtest_pt_decode_window` with honest truncation. Bare-metal Intel PT gated."
+`asmtest_pt_decode_window` with faithful truncation. Bare-metal Intel PT gated."
 Note the foreign-attach mode in
 [native-tracing.md](../../guides/tracing/native-tracing.md) under the hardware
 trace tier.

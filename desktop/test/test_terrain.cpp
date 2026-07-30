@@ -142,7 +142,7 @@ int main() {
               "got " + std::to_string(nonzero(full)));
 
         // No survey, no mem, no truncation, no churn — every provenance chip is
-        // in its coarse-but-honest state, never a silent zero.
+        // in its coarse-but-faithful state, never a silent zero.
         check("no statistical layer without survey", !m.has_stat,
               "a coarse recording has no STAT terrain");
         check("mem gate inert without the stream", !m.mem_present,
@@ -629,7 +629,7 @@ int main() {
     // === Fixture M: a single-span df capture whose offsets ALL clamp out =====
     // (adversarial-review finding) The df rung must NOT advertise "df residency"
     // over a zero-cell plane: height_source stays unset and anchor_error says why,
-    // so steps_explained holds — the same honesty guard the trace rung already had.
+    // so steps_explained holds — the same fidelity guard the trace rung already had.
     {
         Recording rec = mk_rec(
             "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","

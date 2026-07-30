@@ -15,7 +15,7 @@
  * Emits `insn` rows (kind=insns, deterministic=true, complete=!truncated) with a
  * `blocks` companion field and, when built with Capstone, a sibling `model_cost`
  * row per case (kind=model_cost, unit=model-cyc) carrying the Capstone-weighted
- * BM_MODEL_COST proxy — an honest cross-ISA cost model, not silicon cycles;
+ * BM_MODEL_COST proxy — a faithful cross-ISA cost model, not silicon cycles;
  * consumed by scripts/bench-report.sh into the report.
  */
 #include <stdint.h>

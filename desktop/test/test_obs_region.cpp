@@ -25,7 +25,7 @@ int main() {
     vt::eq("blocks belong to their invocation", v.invocations[1].blocks.size(),
            size_t{3});
     vt::check("coverage truncation kept", v.invocations[1].truncated,
-              "blocks_total > len(blocks) is an honest truncation signal");
+              "blocks_total > len(blocks) is a truthful truncation signal");
 
     // The cut-off tail is kept and marked, never presented as a short run.
     vt::eq("open tail kept", v.invocations[2].insns.size(), size_t{2});

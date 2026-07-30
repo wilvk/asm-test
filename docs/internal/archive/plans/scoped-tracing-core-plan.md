@@ -604,13 +604,13 @@ until a bare-metal Intel PT host is available (same gate as the hardware-trace p
 
 ## §3 — Whole-window completeness: noise attribution (Q2) + snapshot drain (Q3) *(host-testable halves DONE; live drains forward-look)*
 
-> **Status: host-testable halves landed + an AMD honesty fix.** §3.1(c)
+> **Status: host-testable halves landed + an AMD fidelity fix.** §3.1(c)
 > symbolize-and-bucket ships the new address→name **reverse resolver**
 > `asmtest_hwtrace_region_name` (keeps the maps pathname) + perf-map reverse search +
 > `asmtest_hwtrace_symbolize_bucket` ([src/hwtrace.c](../../../../src/hwtrace.c));
 > `test_symbolize_bucket` passes with no hardware. §3.2's AMD `data_tail` drain
 > **reconstruction** is covered by `test_amd_drain_reconstruction`. Separately, the AMD
-> end path now enforces the **never-empty-yet-complete honesty invariant** (a branch
+> end path now enforces the **never-empty-yet-complete fidelity invariant** (a branch
 > window that reconstructs to zero in-region instructions is flagged `truncated`),
 > which also de-flakes the live single-shot check.
 >
@@ -629,7 +629,7 @@ until a bare-metal Intel PT host is available (same gate as the hardware-trace p
 >   assertion; the reconstruction half is already tested.
 > - **PT `aux_tail` circular walk** — **Requires: bare-metal Intel PT**.
 
-**Goal.** Make the empty-scope *whole-window* mode usable, not just honest. §2 backs
+**Goal.** Make the empty-scope *whole-window* mode usable, not just faithful. §2 backs
 the decoder with the recorder (so whole-window decodes at all); this sub-phase adds
 the analysis's remaining Q2 and Q3 buildable refinements that §2 does not cover —
 so the "you get the runtime too" noise is *labelled* rather than silently mixed, and
@@ -685,7 +685,7 @@ follow-up ([:797-798](../../../../src/hwtrace.c#L797)). Two buildable drains:
   (`data_tail` only advances at [end])" ([src/hwtrace.c:578](../../../../src/hwtrace.c#L578),
   consume at [:641](../../../../src/hwtrace.c#L641)); advancing `data_tail` from a consumer
   thread *while the region runs* converts the ceiling from ring capacity to sustained
-  consumption. **Honest caveat (from the analysis):** the PMI-per-branch cost still
+  consumption. **Candid caveat (from the analysis):** the PMI-per-branch cost still
   grows with the region, so a long window trends toward stepper-like slowdown —
   stitching/draining extends the *window*, not the bandwidth economics. Reconstruction
   is host-testable with synthetic samples (the `test_amd_stitch` pattern,

@@ -1,7 +1,7 @@
 // test_progress.cpp — the uniform busy signal + the 3D-scrub degrade decision
 // (23-graded-truth-layer.md T4). Pure model, no GL, no ImGui context (D4).
 //
-// The honesty rule (14 T3) is preserved: an op with no honest total gets the
+// The fidelity rule (14 T3) is preserved: an op with no real total gets the
 // indeterminate spinner, NEVER a fabricated percentage. The generalisation adds
 // an elapsed clock + a cancel flag (observable), and a should_degrade() predicate
 // so the 3D scrub degrades to the labelled coarse plane instead of stalling.
@@ -21,21 +21,21 @@ static void check(const char *what, bool cond, const std::string &why) {
 }
 
 int main() {
-    // --- the no-fabricated-total honesty rule still holds ---------------------
+    // --- the no-fabricated-total fidelity rule still holds ---------------------
     check("mode/idle-hidden",
           progress_mode(false, true, 100) == ProgressMode::Hidden,
           "nothing in flight -> no bar");
     check("mode/unbounded-indeterminate",
           progress_mode(true, false, 0) == ProgressMode::Indeterminate,
-          "no honest total -> the indeterminate spinner, never a fake %");
+          "no real total -> the indeterminate spinner, never a fake %");
     check("mode/footered-determinate",
           progress_mode(true, true, 200) == ProgressMode::Determinate,
-          "an honest total gives a real fraction");
+          "a genuine total gives a real fraction");
     check("mode/zero-total-not-determinate",
           progress_mode(true, true, 0) == ProgressMode::Indeterminate,
           "has_total but total==0 cannot form a fraction");
 
-    // --- LongOp: honesty carried through + elapsed advances + cancel observable
+    // --- LongOp: fidelity carried through + elapsed advances + cancel observable
     {
         LongOp op;
         check("op/hidden-when-inactive", op.mode() == ProgressMode::Hidden,
@@ -61,7 +61,7 @@ int main() {
         check("op/cancel-rearmed", !op.cancel_requested,
               "begin() clears a prior cancel");
 
-        // A bounded op gets an honest fraction, clamped.
+        // A bounded op gets a real fraction, clamped.
         LongOp d;
         d.active = true;
         d.has_total = true;

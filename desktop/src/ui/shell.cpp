@@ -43,7 +43,7 @@
 #include "ui/terms.h"        // domain-term-first headings + Terms pane (24 T3)
 #include "ui/theme.h" // dt_set_light_theme (20 T5); dt_maybe_col coarse-scrub degrade (23 T4)
 #include "ui/timepos.h" // the one time-position widget: the df pass pager (40 T2)
-#include "ui/view_presence.h" // data-driven view set + honest absence (20 T1)
+#include "ui/view_presence.h" // data-driven view set + faithful absence (20 T1)
 #include "ui/wayfinding.h"    // persistent breadcrumb + disambiguation (21 T2)
 #include "views/abixray.h"
 #include "views/views_draw.h"
@@ -279,7 +279,7 @@ void shell_sync_live_tab(ShellState &s) {
 // ImGui — so test_shell drives it directly. want_open_tab selects the live
 // recording's outer tab (honoured by both shells); want_view_id selects its 3D
 // inner tab (mirroring the 1/2/3/4 want_view path). With no live tab yet, an
-// honest status line instead of a silent no-op (D7).
+// faithful status line instead of a silent no-op (D7).
 void shell_consume_scene_handoff(ShellState &s) {
     if (!s.inspect.want_scene)
         return;
@@ -634,7 +634,7 @@ void draw_home_rail(ShellState &s) {
     }
 }
 
-// A recording's summary pane: provenance chrome + the honesty banner + per-kind
+// A recording's summary pane: provenance chrome + the fidelity banner + per-kind
 // event counts. All of it is derived from the model, so tests assert it without
 // pixels via shell_banner (the banner) and the model fields (the chrome).
 static void draw_summary(const Recording &r) {
@@ -688,7 +688,7 @@ static bool scene_viewport_target(ImVec2 size) {
 }
 
 // Apply the keyboard camera (22 T2): arrows orbit, +/=/- dolly, R resets, T is the
-// honest top-down 2D-ish fallback. Routed through the SAME Camera methods the
+// plain top-down 2D-ish fallback. Routed through the SAME Camera methods the
 // mouse drag uses (scene3d::camera_key), so keyboard and mouse are one code path.
 // Guarded on WantTextInput exactly as handle_keymap is.
 static void scene_apply_camera_keys(scene3d::Camera &cam) {
@@ -732,7 +732,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "The terrain is the ADDRESS SPACE laid flat; a trajectory is one "
             "execution PATH threading across it over time. An exact path is a "
             "solid tube; statistical residency is stippled, never a solid tube "
-            "(the second channel keeps sampled evidence honestly distinct). "
+            "(the second channel keeps sampled evidence faithfully distinct). "
             "Use "
             "3D to FIND a place, then the flat 2D views to READ it. The "
             "playhead "
@@ -955,7 +955,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
 // Each view's exact body, factored out of its old `BeginTabItem` so the two
 // containers that host it — the non-docked single-window tab strip
 // (draw_recording_tab, below) and the docked panes (draw_docked_shell) — share
-// ONE implementation and cannot drift. The honesty placards move WITH the body
+// ONE implementation and cannot drift. The fidelity placards move WITH the body
 // (D7/F5: restructured, never removed). None of these touches `s.view`; the
 // caller sets that (a selected tab, or a focused pane) so a body drawn every
 // frame in an always-on pane does not clobber the current-view signal.
@@ -1184,7 +1184,7 @@ static void body_scrubber(ShellState &s) {
 static void body_abixray(ShellState &s, const Streams *a, const Streams *b) {
     // The ABI x-ray (09-T4): locks the active recording (the SysV leg) against
     // the attached B (the Win64 leg) — the Diff tab's A/B mechanism. The view's
-    // own honesty banners handle an unaligned pair / an absent per-pane producer.
+    // own fidelity banners handle an unaligned pair / an absent per-pane producer.
     dt_view_header("abixray");
     if (b == nullptr) {
         ImGui::TextDisabled(
@@ -1344,7 +1344,7 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
     }
 }
 
-// The ONE honest "unavailable views (N)" affordance body (T1 step 4, D7). It
+// The ONE faithful "unavailable views (N)" affordance body (T1 step 4, D7). It
 // names every absent view and its verbatim machine reason — the truth "this
 // recording cannot fill view X" stays on screen, graded below the present set
 // rather than shown as N empty peer tabs. `focus` is the view a keymap request
@@ -1968,7 +1968,7 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
 // re-opens from View ▸ Panels — so an irrelevant pane never clutters the workspace,
 // yet nothing is hidden (the menu still names a not-yet-available pane, greyed, D7).
 // A pane whose recording cannot fill it still shows its own placard when open (the
-// scrubber over a no-regstate recording, etc.) — that finer honesty is unchanged.
+// scrubber over a no-regstate recording, etc.) — that finer fidelity is unchanged.
 
 // --- dockable-pane management (open-on-demand + close + undock + menu) ------
 struct PaneDef {
@@ -2026,7 +2026,7 @@ static const PaneDef kManagedPanes[] = {
     {kPaneTimeline, true, pctx_recording, "open a recording first"},
     {kPaneScrubber, true, pctx_recording, "open a recording first"},
     // The Inspector stays always-available: it hosts BOTH the ABI x-ray (which
-    // needs a recording, and is self-honest per-tab with its own placard) AND the
+    // needs a recording, and is self-checking per-tab with its own placard) AND the
     // Backends decode-capability panel, which needs NO recording — gating the pane
     // on a recording would hide Backends at startup and show a false "open a
     // recording first" reason for it (D7). So R8's "only available tabs" is served
@@ -2177,7 +2177,7 @@ void shell_apply_live_panes(ShellState &s) {
 // The Log pane (docs R2): the live session's current status (moved out of the
 // capture pane) above a COLORED scrollback of everything the capture and the
 // other tabs emit — every session transition and every nav refusal — so those
-// tabs stay uncluttered. Lines are graded on the shared honesty axis: Error red,
+// tabs stay uncluttered. Lines are graded on the shared fidelity axis: Error red,
 // Warning amber, Success green, Info neutral. Auto-scrolls to the newest line only
 // while the reader is already at the bottom (so scrolling back to read holds).
 static void draw_log_pane(ShellState &s) {
@@ -2881,7 +2881,7 @@ static void draw_close_guards(ShellState &s) {
 }
 
 // The Settings pane (20 T5, F6): user text-scale, light theme, remembered window
-// size — and an HONEST statement of the a11y scope (ImGui exposes no OS
+// size — and a FAITHFUL statement of the a11y scope (ImGui exposes no OS
 // screen-reader tree). It also hosts the named filter presets (T4). The pure
 // Settings struct is what the tests assert; this only wires the widgets to it.
 static void draw_settings(ShellState &s) {
@@ -2946,7 +2946,7 @@ static void draw_settings(ShellState &s) {
         ImGui::PopStyleColor();
 
         // Named filter presets (20 T4) over the active recording's syscall
-        // filter. "Showing N of M" honesty stays exactly as the filter renders
+        // filter. "Showing N of M" fidelity stays exactly as the filter renders
         // it — a preset only writes the query string, it never claims coverage.
         ImGui::Separator();
         ImGui::TextUnformatted("Saved filter presets");
@@ -2985,7 +2985,7 @@ static void draw_settings(ShellState &s) {
 }
 
 // Help ▸ About: a standalone "what is this app" window, toggled from the menu
-// bar exactly as Settings / Keyboard bindings are. Deliberately spare and honest
+// bar exactly as Settings / Keyboard bindings are. Deliberately spare and faithful
 // — it names the app, what it is, and points at the two on-host answers (Details
 // and Backends) rather than reciting a version it cannot truthfully print.
 static void draw_about(ShellState &s) {
@@ -3082,7 +3082,7 @@ static void record_filter_undo(ShellState &s) {
 
 // --- 22 T3: the global find bar (Ctrl+F) --------------------------------------
 // Search-as-measurement (F17): highlight EVERY hit (the timeline paints them; find
-// never hides a row — the honesty distinction from a filter, D7), report the match
+// never hides a row — the fidelity distinction from a filter, D7), report the match
 // COUNT and the aggregate COST, and cycle with Enter / Shift+Enter. Cycling drives
 // dt_nav_go — the ONE spine — never the undo stack (T4's boundary).
 static void draw_find_bar(ShellState &s) {
@@ -3202,7 +3202,7 @@ void draw_shell(ShellState &s) {
             s.play.playing = false; // nothing to play in this recording
         }
     }
-    // Keep the honesty-chrome theme flag + the live text-scale in step with the
+    // Keep the fidelity-chrome theme flag + the live text-scale in step with the
     // Settings model every frame (20 T5): cheap, and it means a restored setting
     // takes effect without a special apply path.
     dt_set_light_theme(s.settings.light_theme);

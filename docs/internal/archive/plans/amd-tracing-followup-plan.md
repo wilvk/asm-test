@@ -34,7 +34,7 @@ forward from the audit.
 > remaining literally true on the Zen 2 one, which is where the IBS lane was
 > empirically built and validated. Already landed (context, out of scope here): the MSR spec-filter,
 > the MSR-direct cascade rung, and the internal `amd_backend.h` header (`37118ec`), and
-> the partial-never-complete honesty invariant (`07a9e7d`). House rule in force
+> the partial-never-complete fidelity invariant (`07a9e7d`). House rule in force
 > throughout: **no untested hardware code** — a path that cannot self-validate on its
 > silicon returns `available()→0` rather than emitting an unproven trace, so every item
 > below carries either a host-independent synthetic test or a self-skipping cap lane.
@@ -142,7 +142,7 @@ Use the constant `64` (not `amd_depth`, which is not computed until
 [src/hwtrace.c:862](../../../../src/hwtrace.c)) to keep the three parse sites byte-identical. Real AMD
 LBR is ≤16-deep, so a well-formed sample is never rejected; an `nr>64` record is corrupt
 and correctly dropped (the surrounding `lost`/near-full logic already flags truncation
-honestly).
+faithfully).
 
 **Acceptance.** Ideally, extract a shared `static amd_parse_sample()` helper used by all
 three sites and add a host-independent unit test that feeds a hand-built
@@ -270,7 +270,7 @@ a 3-`ret` region (`n==3`, ascending offsets, return==last); a 5-exit region with
 `CAP_PERFMON`, the codeimage image): a two-`ret` fixture in
 [examples/test_branchsnap.c](../../../../examples/test_branchsnap.c) driven with `opts.snapshot`
 **unset** (proving default-on) once down each path — entry block covered and `!truncated`
-on both. DR-slot arbitration self-skips honestly to sampled where a debugger holds a DR.
+on both. DR-slot arbitration self-skips transparently to sampled where a debugger holds a DR.
 
 ## Phase 6 — Cascade rung: no new code; correct the now-stale MSR-rung comment (`src/trace_auto.c`) *(LANDED 2026-07-12)*
 
@@ -421,7 +421,7 @@ audit's F47.
 (native-tracing.md delegates tier detail to it): (1) give `snapshot` its AMD
 deterministic-boundary meaning in the options paragraph and add a forward pointer;
 (2) insert a `### Tuning AMD LBR window reach` subsection before the scoped-tracing-primitives
-heading, covering `lbr_period` (Tier-B PMI-reduction, must be `<16`, honest stitch-gap
+heading, covering `lbr_period` (Tier-B PMI-reduction, must be `<16`, faithful stitch-gap
 truncation, the **self-similar-loop undercount** caveat — 231 vs 297 insns at period 4 vs 1)
 and `branch_filter` (drops direct-uncond-`jmp`, byte-identical, ~1.86× reach per window, the
 loop lever), both framed **fidelity-neutral by construction**. Link the internal plan via a
@@ -494,7 +494,7 @@ cases self-skip via `asmtest_hwtrace_available()`):
   `asmtest_hwtrace_init` to avoid a missed site; the manual-layout mirrors (java/dotnet/ruby)
   risk a wrong offset if the `+8` shift is mis-applied.
 - **P5 depends on system-wide DR arbitration** — the 4 x86 debug registers are shared with
-  gdb hw-watchpoints; require-all-N-else-sampled keeps this honest but a constrained host
+  gdb hw-watchpoints; require-all-N-else-sampled keeps this accurate but a constrained host
   silently degrades to the sampled path (loses the snapshot win, never correctness). Keep
   `bp_len = sizeof(long)` (the working Zen 5 value).
 - **P6 must follow P5** — the comment rewording is only true once the multi-exit snapshot is

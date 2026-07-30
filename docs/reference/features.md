@@ -133,7 +133,7 @@ hardware is absent. All are exposed through **all ten language wrappers**
   control-flow edges captured **out of band from any same-uid process,
   unprivileged** (user-only sampling at the default `perf_event_paranoid=2`), on
   **any AMD Zen** — including Zen 2, where every exact hardware backend
-  self-skips. A separate *statistical* producer with honest provenance
+  self-skips. A separate *statistical* producer with accurate provenance
   (`samples`/`lost`/`throttled`), never part of the exact-trace cascade; also the
   automatic fallback that keeps the AMD whole-window statistical survey working
   without a branch stack.
@@ -276,7 +276,7 @@ in [Packaging the bindings](packaging.md). Python is the reference/turnkey bindi
 
 The Python binding reads struct layout from the `asmtest_abi.json` manifest; the
 other nine go through opaque-handle accessors, so none mirror `regs_t`. Every
-binding is kept honest by the shared **conformance corpus** (one set of canonical
+binding is kept faithful by the shared **conformance corpus** (one set of canonical
 routines + expected captures every language must reproduce).
 
 ## Matrix 5 — Optional dependencies

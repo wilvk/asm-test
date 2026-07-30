@@ -221,7 +221,7 @@ resolution) — the managed-runtime path. Full reference in
 **Scoped tracing** — the *import + scope* form (`HwTrace::scope`). It auto-names the
 region from the call site (`#[track_caller]` + `Location::caller`); `close()` ends the
 scope, renders the executed assembly, and returns the listing (`Drop` closes it,
-emitting to stdout, otherwise). `was_truncated()` is the thread-scope honesty bit.
+emitting to stdout, otherwise). `was_truncated()` is the thread-scope fidelity bit.
 
 ```rust
 use asmtest::hwtrace::{Backend, HwTrace, NativeCode};

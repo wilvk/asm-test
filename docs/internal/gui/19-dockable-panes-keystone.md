@@ -89,7 +89,7 @@
   **off** and writes no file — so the `docking` branch in `draw_shell`
   (`shell.cpp:769-778`, `790-807`) is entirely un-exercised by the current tests.
   Turning it on in the new tests is step one.
-- **`theme.h` honesty colours + every view's own placards** already exist
+- **`theme.h` fidelity colours + every view's own placards** already exist
   (`desktop/src/ui/theme.h`, and e.g. the scrubber/ABI-x-ray/3D placards at
   `shell.cpp:428-431,492-494,296-301`). Pane conversion **moves** these into the
   panes; it removes none of them (D7, F5).
@@ -152,7 +152,7 @@ tear-out and Reset finally act on windows that exist. The five `kPane*` names ar
    - **`kPaneInspector`** (right) — the inspector role: ABI x-ray, Backends
      (`draw_completeness`), This host (`draw_capability_panel`). Diff lives with
      the reading views in `kPaneRecording` but its A/B chrome reads here.
-   Every view keeps its exact current body (the `draw_*` calls and their honesty
+   Every view keeps its exact current body (the `draw_*` calls and their fidelity
    placards) — only its *container* changes from a `BeginTabItem` to a pane.
 2. **Emit the panes only when docking is on**; when it is off (the null backend's
    default) keep drawing the old single-window tab layout so nothing regresses for
@@ -176,7 +176,7 @@ tear-out and Reset finally act on windows that exist. The five `kPane*` names ar
 then asserts via `ImGui::FindWindowByName(kPaneRecording)` (and each other
 `kPane*`) that the window **exists and is `WasActive`** — i.e. actually
 `Begin()`'d, the exact thing that is false today. Assert the pane bodies still
-show their honesty placards for a producer-absent view (feed `min-trace.asmtrace`
+show their fidelity placards for a producer-absent view (feed `min-trace.asmtrace`
 and assert the scrubber/3D placard strings survive the move). Model/window state,
 never pixels (D4/D7).
 
@@ -289,7 +289,7 @@ in Wave 1 starts until this lands: docs 20/21/22 assume visible panes.
 
 ## Constraints & gates
 
-- **Honesty (D7/F5) is restructured, never removed.** Every view's placards,
+- **Fidelity (D7/F5) is restructured, never removed.** Every view's placards,
   banners and provenance chrome (`theme.h`, the per-view "producer absent"
   placards at `shell.cpp:296-301,428-431,492-494`, the Observer gating at
   `observer_draw.cpp:562-598`) move *into* the panes intact. A view with no

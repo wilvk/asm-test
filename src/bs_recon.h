@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-/* Outcome of a block reconstruction. AMBIGUOUS is honest degradation, not an error:
+/* Outcome of a block reconstruction. AMBIGUOUS is graceful degradation, not an error:
  * what definitely ran is recorded and the caller flags the capture truncated. */
 #define ASMTEST_BS_FAIL                                                        \
     0                   /* undecodable / unreadable / desync / no terminator  */
@@ -83,7 +83,7 @@ void asmtest_bs_recon_probe_calls_reset(void);
  *
  * Anything that stops the scan from PROVING uniqueness once a candidate is in hand —
  * undecodable bytes (the fall-through may be jump-table data, not code), running off the
- * region, or the walk ceiling — is reported AMBIGUOUS, never OK: an honest truncated beats
+ * region, or the walk ceiling — is reported AMBIGUOUS, never OK: a faithful truncation beats
  * a silently short stream. Returns ASMTEST_BS_FAIL / ASMTEST_BS_OK / ASMTEST_BS_AMBIGUOUS. */
 int asmtest_bs_scan_terminator(asmtest_arch_t arch, const uint8_t *code,
                                size_t len, uint64_t base_ip, uint64_t from_off,

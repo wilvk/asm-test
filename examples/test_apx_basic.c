@@ -8,7 +8,7 @@
  * is in SUITE_EXCLUDES so a host GAS that predates APX never has to assemble it in
  * `make test`.
  *
- * The gate is what keeps the fixture honest in BOTH directions: bare on real
+ * The gate is what keeps the fixture truthful in BOTH directions: bare on real
  * pre-APX silicon every case reports `# SKIP` (proving it cannot rot into a
  * vacuous pass), while under SDE the gate opens and the assertions actually run.
  */

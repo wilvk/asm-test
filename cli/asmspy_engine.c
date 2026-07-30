@@ -1194,7 +1194,7 @@ static size_t ap_timespec(char *b, size_t cap, size_t o, pid_t pid,
 
 /* AF_* domain name, shared by socket()'s domain arg and the sockaddr decoder.
  * Only the families worth naming in a one-line trace; anything else keeps its
- * number (an honest raw form, never a guessed name). */
+ * number (an accurate raw form, never a guessed name). */
 static const char *af_name(int fam) {
     switch (fam) {
     case AF_UNIX:
@@ -1274,7 +1274,7 @@ static size_t ap_sockaddr(char *b, size_t cap, size_t o, pid_t pid,
 }
 
 /* An ioctl request word: a curated name (TCGETS/TIOCGWINSZ/...) when known, else
- * the honest _IOC(dir, type, nr, size) decomposition — never a guessed name. The
+ * the exact _IOC(dir, type, nr, size) decomposition — never a guessed name. The
  * name table is #ifdef-guarded off the host's <sys/ioctl.h> (the oflag_tab
  * discipline); the decomposition follows uapi/asm-generic/ioctl.h's bit layout. */
 static size_t ap_ioctlreq(char *b, size_t cap, size_t o, unsigned long long v) {
@@ -1810,7 +1810,7 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
          * had never established — which is how it rendered a write as
          * stat("", 0xf20f0e34, 0x1) = 1 and looked confident doing it. The same
          * three words are still shown (they are free, and often the useful
-         * ones); the ellipsis is the part that is now honest. */
+         * ones); the ellipsis is the part that is now truthful. */
         o = apf(b, cap, o, ", ...) = %ld", ret);
         break;
     }
@@ -2310,7 +2310,7 @@ static void psym_init(psym_tab_t *pt, pid_t root,
 
 /* Load (or re-load) one process's symbol table, JIT map and exe basename.
  * Best-effort throughout: a failure leaves an empty table, so the view falls
- * back to RAW ADDRESSES. That is the honest outcome — an unresolved "0x…" says
+ * back to RAW ADDRESSES. That is the truthful outcome — an unresolved "0x…" says
  * "I don't know", a stale name says something false. */
 static void psym_load(psym_t *p, pid_t tgid, int reload) {
     asmspy_symtab_t fresh;
@@ -2651,7 +2651,7 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
  * prevent, and an untracked clone child is exactly how one escapes it.
  *
  * So disarm and detach it here instead. We lose sight of that task, which is the
- * honest outcome of running out of memory — the alternative is killing the very
+ * truthful outcome of running out of memory — the alternative is killing the very
  * process we are supposed to be watching out of band. This is the policy the
  * seize path already applies on OOM (seize_threads/seize_one detach rather than
  * strand a thread seized); the resume paths simply never did.
@@ -3189,7 +3189,7 @@ static void rgn_disarm_entry(thr_tab_t *tab, int hw, pid_t only_tid,
  * indefinitely on a region that is never arriving. A bound whose whole job is to
  * bound must not be resettable by the thing it is bounding.
  *
- * Both rules are kept, because they answer different questions and the honest
+ * Both rules are kept, because they answer different questions and the truthful
  * answer differs: idle => "the region is quiet" (the fast, common case); wall =>
  * "we waited this long and it never came". 30 s is deliberately ~10x the idle
  * window — it is a backstop for the pathological target, not a second opinion on
@@ -3261,7 +3261,7 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
 
     /* Release every thread we are holding into the race. A thread we already let run
      * (a previous round's sibling) is not stopped, so its CONT would just ESRCH —
-     * skip it and keep the bookkeeping honest. */
+     * skip it and keep the bookkeeping accurate. */
     for (size_t i = 0; i < tab->n; i++) {
         if (!tab->v[i].stopped)
             continue;
@@ -3511,7 +3511,7 @@ int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
             rgn_race_to_entry(&tab, planter, base, only_tid, stop, &entrant);
         /* Only CAUGHT continues. IDLE ends sampling rather than retrying: the round
          * already waited longer than the pre-Theme-B engine's entire give-up budget,
-         * so retrying would only delay an honest "it isn't running" (and, with
+         * so retrying would only delay a truthful "it isn't running" (and, with
          * samples already taken, the region has simply gone quiet).
          *
          * KEEP the reason. This used to be a bare `break` that dropped rc on the
@@ -3663,7 +3663,7 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
 
     /* Caller-owned L0 buffers. Bound the step buffer by `max` when given, else a
      * generous default; recs/wide scale with steps x operands-per-step. Overflow is
-     * honest (vt->truncated), so a bigger region simply truncates rather than lying.
+     * faithful (vt->truncated), so a bigger region simply truncates rather than lying.
      * Cap the allocation so a huge --max can't ask for gigabytes up front. */
     size_t steps_cap = (max > 0) ? (size_t)max : 16384;
     if (steps_cap < 64)
@@ -3696,7 +3696,7 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
         /* 26 T3 / 31 R4: arm the per-step register ring (`--steps`) and the wide
          * XMM/MXCSR deck (`--fpregs`) when asked. The engine is x86-64-fixed here
          * (i386 was refused above), matching the `user_regs@x86_64/sysv`
-         * descriptor's arch; a failed arm degrades honestly (ringless / GPR-only),
+         * descriptor's arch; a failed arm degrades gracefully (ringless / GPR-only),
          * never fatal. */
         if (want_steps)
             asmtest_valtrace_arm_regfile(vt);

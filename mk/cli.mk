@@ -151,7 +151,7 @@ $(call shlib_dev,libasmspy): $(call shlib_real,libasmspy)
 # has no Mach body. Like the arch gate this is a REAL gate (nothing to apt-install),
 # and it is checked FIRST: on macOS `uname -m` is a SUPPORTED arch (x86_64), so
 # without an OS gate the build would fall through and HARD-FAIL at process_vm_readv /
-# pthread_timedjoin_np / <elf.h> instead of skipping honestly (per-file include guards
+# pthread_timedjoin_np / <elf.h> instead of skipping transparently (per-file include guards
 # cannot help — asmspy_engine.c alone carries ~473 Linux-only ptrace/user_regs refs).
 .PHONY: cli
 ifneq ($(UNAME_S),Linux)
@@ -382,7 +382,7 @@ $(BUILD)/test_view: cli/test_view.c cli/asmspy_dataview.h $(BUILD)/dataflow.o \
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_view.c $(BUILD)/dataflow.o
 
 # test_asmtrace — headless unit test for the .asmtrace NDJSON writer
-# (cli/asmtrace_ndjson.h) plus the reader-level honesty checks: the schema doc's
+# (cli/asmtrace_ndjson.h) plus the reader-level fidelity checks: the schema doc's
 # own embedded example is extracted and parsed here, so the written contract
 # (docs/internal/gui/asmtrace-schema.md) cannot drift from the writer silently.
 # Links ONLY the writer object — no ptrace, no ncurses, no Capstone — so it runs
@@ -549,7 +549,7 @@ endif
 # Links both producers — the asmtrace_record emulator objects PLUS the ptrace
 # producer (dataflow_ptrace.o + codeimage.o) — and Unicorn/Capstone. Same
 # x86_64 + libunicorn gate as the golden (ASMTRACE_GOLDEN_OK); a run-time ptrace
-# refusal (seccomp) self-skips honestly.
+# refusal (seccomp) self-skips transparently.
 $(BUILD)/test_regstate_parity: cli/test_regstate_parity.c \
                           $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                           $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
@@ -571,7 +571,7 @@ endif
 # agree on the base-independent structure (count + each access's step/size/rw)
 # while the effective addresses differ (real ASLR'd stack vs the emulator's fixed
 # DF_STACK_BASE). Same link set and x86_64 + libunicorn gate as the regstate parity
-# above; a run-time ptrace refusal (seccomp) self-skips honestly.
+# above; a run-time ptrace refusal (seccomp) self-skips transparently.
 $(BUILD)/test_mem_parity: cli/test_mem_parity.c \
                           $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                           $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
@@ -617,14 +617,14 @@ ifneq ($(UNAME_S),Linux)
 # Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
 # victims include <sys/prctl.h>/<linux/futex.h>, so there is nothing to smoke off
 # Linux — and the prerequisites below would hard-fail to compile before the smoke
-# ever runs. A green skip is honest: the smoke measures asmspy, and there is no
+# ever runs. A green skip is legitimate: the smoke measures asmspy, and there is no
 # asmspy off Linux.
 cli-smoke:
 	@echo "# SKIP cli-smoke: asmspy is Linux-only (this host is $(UNAME_S)); nothing to measure."
 else ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
 # Same architecture gate as `cli` above: without it, the smoke's prerequisites
 # try to compile TUs that have no register body for this machine and dump the raw
-# errors the gate exists to replace. A green skip here is honest — the smoke
+# errors the gate exists to replace. A green skip here is legitimate — the smoke
 # measures asmspy, and there is no asmspy to measure on this architecture
 # (recorded, per CLAUDE.md's hardware-gate rule).
 cli-smoke:
@@ -692,7 +692,7 @@ docker-cli: docker-bindings-base
 #   --cap-add=PERFMON + seccomp=unconfined   -> fd=3   OK
 # CAP_PERFMON BYPASSES perf_event_paranoid — the host sysctl does NOT need
 # lowering (mk/docker.mk:536 claims otherwise; that claim is measured false).
-# On a non-AMD host --sample still self-skips, honestly: that part IS hardware.
+# On a non-AMD host --sample still self-skips, transparently: that part IS hardware.
 .PHONY: docker-cli-ibs
 docker-cli-ibs: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.cli \

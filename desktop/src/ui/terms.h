@@ -31,7 +31,7 @@ std::string dt_term_lookup(const char *word);
 
 // --- the per-view domain-term-first metadata (one table) ---------------------
 // Each coined surface leads with the canonical DOMAIN term, the metaphor as a
-// subtitle, and carries the verbatim honest metric CAVEAT the "?" popover shows.
+// subtitle, and carries the verbatim truthful metric CAVEAT the "?" popover shows.
 // Stored next to the view (here), not in prose, so the words cannot drift.
 struct dt_view_meta {
     const char *key;      // stable id (matches the view/pane)

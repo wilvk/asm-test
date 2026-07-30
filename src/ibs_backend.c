@@ -1259,7 +1259,7 @@ static int sw_chan_open(ibs_chan *ch, pid_t tid, unsigned freq_hz, size_t pg,
 /* Drain one software-clock ring: PERF_SAMPLE_IP|TID records ({u64 ip; u32 pid,
  * tid} bodies — no RAW payload to decode), aggregated as {ip -> count} in the
  * edge hash with to = 0. That reuse is INTERNAL only: the public surface
- * exports honest ip buckets (asmtest_swclock_ip_t), never fake edges. The ring
+ * exports genuine ip buckets (asmtest_swclock_ip_t), never fake edges. The ring
  * walk mirrors ibs_drain, including the near-full-ring loss heuristic. */
 static void sw_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
                      edge_hash *h, asmtest_swclock_survey_t *out) {

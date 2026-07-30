@@ -1,11 +1,11 @@
 // examples/dotnet/descend-all — reporting (presentation only). Renders one DescendAll run: the
 // discovered frame tree (depth / parent / self insns), any calls the denylist refused (edges), and
-// the honest Truncated()/DepthCapped() flags. No tracing here — Program does that.
+// the accurate Truncated()/DepthCapped() flags. No tracing here — Program does that.
 //
 // NOTE on identifying frames: with DescendKnown (`descent`) each frame's base is the exact region
 // you AllowRegion()'d, so FrameBase names the callee. DescendAll declares NO extents — it discovers
 // callees mid-step, so every frame's base is the ENCLOSING executable mapping (all identical) and
-// FrameLen is the whole page. The honest callee identity is therefore the frame's FIRST recorded
+// FrameLen is the whole page. The accurate callee identity is therefore the frame's FIRST recorded
 // instruction offset (FrameInsns(f)[0]) — where the child actually entered — which is what we label by.
 
 using System;
@@ -55,7 +55,7 @@ internal static class Report
         Console.WriteLine("  " + new string('-', 51));
         PrintFrame(d, children, root, 0, entry, self, incl);
 
-        // Honest completeness signal: a depth/budget/watchdog cap folds the deeper callee's
+        // Faithful completeness signal: a depth/budget/watchdog cap folds the deeper callee's
         // instructions into its PARENT frame (no new frame) and flips DepthCapped — so the tree
         // is a PREFIX of the real one. (The denylist, by contrast, steps a call OVER as an edge.)
         if (d.DepthCapped())

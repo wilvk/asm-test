@@ -149,7 +149,7 @@ and are discarded.
 **Cost:** near-zero C changes. The JSON already carries everything
 (`unit`, per-case `median`/`cv`). This is a reporting + CI-artifact task.
 
-**Honest limitation to document:** Tier A compares *machines*, not *ISAs* in the
+**Disclosed limitation to document:** Tier A compares *machines*, not *ISAs* in the
 abstract. `ubuntu-latest` and `ubuntu-24.04-arm` differ in microarchitecture,
 frequency, and memory system, not just instruction set — so a difference is
 "this specific x86 box vs this specific ARM box," which is what most people
@@ -215,7 +215,7 @@ instruction and applies a per-class weight (e.g. mul/div heavier, branches with
 a misprediction penalty, loads/stores with a memory weight). This yields an
 approximate "model cycles" number that is comparable across ISAs *by
 construction* (same model, same weights). It is a model, not silicon — but it's
-a far better proxy for cross-ISA cost than a raw count, and it's honest about
+a far better proxy for cross-ISA cost than a raw count, and it's candid about
 being a model. This is a clean follow-on, not needed for the first slice.
 
 ### 4.4 Ergonomics problem to solve

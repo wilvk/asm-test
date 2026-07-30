@@ -27,7 +27,7 @@ WatchView obs_watch_build(const Recording &r, const ObsLifecycle *lc) {
             h.tid = e.body.value("tid", 0L);
             h.pc = e.body.value("pc", uint64_t{0});
             h.addr = e.body.value("addr", uint64_t{0});
-            // -1 is a legitimate value AND the honest default: a `watch` event
+            // -1 is a legitimate value AND the true default: a `watch` event
             // that carried no direction was not a write.
             h.is_write = e.body.value("is_write", -1);
             h.value_ok = e.body.value("value_ok", false);

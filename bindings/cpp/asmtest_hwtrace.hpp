@@ -712,7 +712,7 @@ class ScopedTrace {
 
 /// The outcome of `HwTrace::callScoped`: the traced call's return value, the
 /// executed body's disassembly (`path`, empty when no decoder is present), and
-/// the honesty bits. Mirrors the Python/Ruby `CallScopedResult`.
+/// the fidelity bits. Mirrors the Python/Ruby `CallScopedResult`.
 struct CallScopedResult {
     long result = 0;
     std::string path;
@@ -723,7 +723,7 @@ struct CallScopedResult {
 };
 
 /// The outcome of `HwTrace::window`: the executed body's disassembly (`path`,
-/// empty when no decoder is present), the `truncated` honesty bit, and `armed`
+/// empty when no decoder is present), the `truncated` fidelity bit, and `armed`
 /// (false when the window SELF-SKIPPED — a non-single-step backend or an older
 /// lib lacking the whole-window trio; the body still ran). Mirrors dotnet's
 /// empty-ctor `new AsmTrace()` whole-window scope / node's `HwTrace.window`.
@@ -976,7 +976,7 @@ class HwTrace {
     /// §Z1 region-free whole-window scope (the callback form of dotnet's empty-ctor
     /// `using (new AsmTrace())`). Arms a REGION-FREE single-step capture on THIS
     /// thread (no NativeCode, no [base,len)), runs `fn`, disarms, and renders the
-    /// executed body from live self-memory. HONEST-BUT-NOISY: it records EVERYTHING
+    /// executed body from live self-memory. FAITHFUL-BUT-NOISY: it records EVERYTHING
     /// between begin and end, so the traced leaf's ABSOLUTE addresses appear as a
     /// SUBSET of the listing. Keep the block TIGHT and native — EFLAGS.TF single-step
     /// is armed across `fn` (never step arbitrary managed code). Returns
@@ -1119,7 +1119,7 @@ class HwTrace {
 /// The outcome of `HwTrace::traceCallAuto`: the call's `result`, the filled `trace`
 /// (a queryable HwTrace the CALLER owns — freed by its RAII dtor, or query it via
 /// `trace->covered(...)`), the `TierChoice` that produced the final trace (`used` —
-/// inspect `used.backend` to see whether escalation fired), the `truncated` honesty
+/// inspect `used.backend` to see whether escalation fired), the `truncated` fidelity
 /// bit, and the raw `rc`. On a self-skip (no call-owning native tier) `trace` is
 /// std::nullopt, `used` is zero, and `rc` is negative. Mirrors the Python
 /// `TraceCallAutoResult`.

@@ -7,7 +7,7 @@
 // answers the question a crypto reviewer actually has: "at time T, who still
 // holds something descended from this secret?"
 //
-// TWO HONESTY RULES, both structural:
+// TWO FIDELITY RULES, both structural:
 //
 //  1. A born-of-untraced-state worldline has NO in-window ancestry. The
 //     selection says so and returns an empty closure rather than seeding the

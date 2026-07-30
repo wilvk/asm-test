@@ -55,7 +55,7 @@ Two benchmark **dimensions**, both run by one runner and merged into one report:
   recording `{available, skip_reason, fidelity}`. This is the
   [trace-parity matrices](../../analysis/trace-parity-matrix.md) (backend × OS/arch,
   vendor/uarch, binding, packaging) **instantiated as a per-system report**
-  instead of a hand-maintained table — the honest "what works *here*" answer.
+  instead of a hand-maintained table — the truthful "what works *here*" answer.
 
 A **system** here is the full `(OS, arch, CPU/uarch)` tuple, not just the ISA —
 asm-test runs on **Linux, macOS, and Windows** across x86-64 and AArch64, and the

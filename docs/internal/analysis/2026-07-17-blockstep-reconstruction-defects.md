@@ -2,7 +2,7 @@
 
 **Defect 1 (application `int3`): Status FIXED (T1 + T2, [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md))** in the region, attached, AND windowed block-step drivers — an app int3 is now recorded up to the trap byte, marked truncated, and the signal forwarded (region: PTRACE_CONT; attached: left in the delivery-stop; windowed: handed off to the per-instruction window loop, which runs the frame to its window end via `run_until_sig` and recovers `*result`). T2 additionally closed the same hole in every OTHER per-instruction ptrace loop in the file (`run_until`, the per-instruction region/attached/window-call drivers, and call descent) — none of them SINGLESTEP/SINGLEBLOCK across an app SIGTRAP any more.**
 
-**Defect 2 (`rep`-prefixed string ops): Status FIXED (T3, same doc)** — `bs_record_run` and `window_block_walk` now detect a `rep`-prefixed string op (via `asmtest_disas_is_rep_string`) and downgrade the block to BS_AMBIGUOUS, so the capture is honestly truncated instead of silently recording the op once where per-instruction stepping records it N times.**
+**Defect 2 (`rep`-prefixed string ops): Status FIXED (T3, same doc)** — `bs_record_run` and `window_block_walk` now detect a `rep`-prefixed string op (via `asmtest_disas_is_rep_string`) and downgrade the block to BS_AMBIGUOUS, so the capture is faithfully truncated instead of silently recording the op once where per-instruction stepping records it N times.**
 
 **Status (original filing, preserved unedited below): was OPEN at the 2026-07-17 filing — both defects were real and reproduced against the then-shipped `main` code; both have since been FIXED — see the banners above.**
 Filed so they are not lost: they were found while adversarially reviewing the W-1 windowed
@@ -90,7 +90,7 @@ existing fixtures (add/sub chains, `movabs`/`call`/`dec`/`jnz`) cannot see it.
 the block-step form "reconstruct[s] the identical per-instruction stream"
 (`include/asmtest_ptrace.h:119` on `main` for the region form; the windowed form restates it).
 Either bound that promise explicitly to exclude `rep`-prefixed string ops, or detect the `rep`
-prefix and set `truncated` (consistent with the ambiguity rule: honest degradation over a
+prefix and set `truncated` (consistent with the ambiguity rule: graceful degradation over a
 silently wrong stream). Do **not** try to infer the iteration count statically — it is `RCX` at
 entry, which the reconstructor does not have.
 
@@ -100,7 +100,7 @@ entry, which the reconstructor does not have.
 
 Neither is a "vacuous green" in the strict sense — no test passes for the wrong reason. Both are
 **non-exhaustive fixtures**: the block-step oracles compare block-step against per-instruction
-over fixtures containing neither an `int3` nor a `rep` prefix, so the differential is honest but
+over fixtures containing neither an `int3` nor a `rep` prefix, so the differential is truthful but
 blind. The lesson matching this repo's history is that a differential oracle is only as good as
 the shapes its fixture generates — 6,410 identical instructions proved nothing about the shapes
 that were absent.

@@ -620,7 +620,7 @@ a scratch GPR and the arithmetic flags (`drreg_reserve_register` /
 `drmgr` TLS slot (`drmgr_insert_read_tls_field`), compare, and **conditionally
 skip** the store when recording is inactive; when active, the store increments a
 per-block "seen" flag + hit counter in a client-side per-region table (or appends
-the offset to a client-side per-thread buffer). The honest cost of the guard is
+the offset to a client-side per-thread buffer). The true cost of the guard is
 one TLS load, a compare, a short forward branch, and possible `drreg`
 register/flag spills per registered block — still far cheaper than a per-block
 clean call, and **unavoidable** because (unlike drcov, which records all blocks

@@ -20,7 +20,7 @@
 
 namespace asmdesk::scene3d {
 
-// 36 T4: the placement-provenance chips, as PURE DATA so the honesty chrome is
+// 36 T4: the placement-provenance chips, as PURE DATA so the fidelity chrome is
 // testable without an ImGui frame — deleting a branch fails a named check. Bad is
 // a refusal (rendered ALL CAPS, in the refuse colour); Warn is a graded fact
 // (lowercase `label: explanation`, in the warn colour); Ok is a good state (green,
@@ -50,7 +50,7 @@ struct HudState {
     // Set true by draw_scene_hud when the user moved the playhead this frame, so
     // the caller re-slices T2 and rebuilds T3 for the new t. The caller clears it.
     bool playhead_moved = false;
-    // Camera preset requests (the "reset view" and honest "top-down 2D-ish"
+    // Camera preset requests (the "reset view" and plain "top-down 2D-ish"
     // buttons); the caller applies them to its Camera and need not clear them.
     bool req_reset_view = false;
     bool req_top_down = false;
@@ -59,7 +59,7 @@ struct HudState {
     // presets. `playing` is set by the caller before the draw so the button reads
     // "Play"/"Pause"; `req_play_toggle` is the HUD's intent, which the caller
     // applies to SceneView::play and clears. The 3D playhead walks trace-residency
-    // time, a DIFFERENT axis from the flat views' execution step (34 honesty note).
+    // time, a DIFFERENT axis from the flat views' execution step (34 fidelity note).
     bool playing = false;
     bool req_play_toggle = false;
 

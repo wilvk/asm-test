@@ -124,7 +124,7 @@ typedef struct {
                        interrupts — cutting sample-rate throttling / ring-overflow
                        truncation and so EXTENDING the exact window before the run
                        stops fitting. Must be < the LBR depth (16) to keep an overlap;
-                       an over-large value simply yields a stitch gap -> honest
+                       an over-large value simply yields a stitch gap -> faithful
                        truncation (never silent corruption). Ignored by every non-AMD
                        backend and by the deterministic snapshot mode. See
                        docs/internal/plans/amd-tracing-plan.md (window-size levers). */
@@ -452,7 +452,7 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 /* begin_window arms with no registered region; the trace's insns[]     */
 /* then hold ABSOLUTE addresses (not base-relative offsets).            */
 /*                                                                     */
-/* Backend reality (the honest, self-skipping envelope): the WEAK       */
+/* Backend reality (the faithful, self-skipping envelope): the WEAK     */
 /* single-step tier records every executed instruction and is           */
 /* CI-runnable on any x86-64 Linux for a NATIVE LEAF (pointing          */
 /* single-step at live managed code is forbidden — it fights the        */
@@ -490,7 +490,7 @@ int asmtest_hwtrace_managed_runtime_present(void);
 /* Close a region-free scope opened by begin_window. On the ARMING thread the frame
  * resolves and is closed + normalized; on any OTHER thread (the traced work hopped
  * and Dispose ran elsewhere) the frame is invisible, so `trace` is flagged
- * `truncated` — the §Z4 thread-scope honesty default (never present a thread window
+ * `truncated` — the §Z4 thread-scope fidelity default (never present a thread window
  * as a complete logical-operation trace). Returns ASMTEST_HW_OK. */
 int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
                                asmtest_trace_t *trace);
@@ -663,7 +663,7 @@ int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
  * end DISABLEs, drains the linear AUX ring, decodes through
  * asmtest_pt_decode_window against `img` as of `when` (img == NULL: the ctx's
  * own self code-image, refreshed at close), fills `trace` with ABSOLUTE
- * addresses and honest truncation, then frees the ctx and its fd/mmaps.
+ * addresses and faithful truncation, then frees the ctx and its fd/mmaps.
  * `trace == NULL` is a legal drain-less release (teardown only, ASMTEST_HW_OK)
  * — the shape a finalizer uses to reclaim a leaked scope. `img == NULL` with no
  * ctx-owned image returns ASMTEST_HW_EDECODE, still after a full teardown
@@ -686,7 +686,7 @@ int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter);
 /* §Z1.3 — Intel PT attach-to-foreign-PID capture                       */
 /* ------------------------------------------------------------------ */
 /* The foreign (pid>0) sibling of the begin/end window pair above: open an
- * intel_pt perf-AUX event against a RUNNING process, drain its AUX honestly, and
+ * intel_pt perf-AUX event against a RUNNING process, drain its AUX faithfully, and
  * dispatch the blob through the SAME asmtest_pt_decode_window decode as the
  * self-trace window pair — one decode, not two. Built entirely on the
  * substrate's pt_aux_open/stop/close helpers — no
@@ -709,7 +709,7 @@ int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter);
  * the software IP post-filter end() applies when no hardware filter is armed.
  * end: final drain, decode the accumulated AUX through asmtest_pt_decode_window
  * against `img` as of `when` (img==NULL uses the ctx's own foreign image), fill
- * `trace` with ABSOLUTE addresses + honest truncation, then free the ctx and its
+ * `trace` with ABSOLUTE addresses + faithful truncation, then free the ctx and its
  * fd/mmaps/buffers. `trace==NULL` is a legal drain-less release (teardown only). */
 typedef struct asmtest_pt_attach asmtest_pt_attach_t;
 
@@ -766,7 +766,7 @@ void asmtest_pt_ip_postfilter(asmtest_trace_t *trace, size_t insn0, size_t blk0,
 /* must disable before reading — the perf contract), drains [0, head) of  */
 /* the now-quiesced ring, decodes it through asmtest_pt_decode_window     */
 /* against `img` as of `when` (appending offsets from the first decoded   */
-/* IP into `out`, honest truncation on overflow), then frees the ctx and  */
+/* IP into `out`, faithful truncation on overflow), then frees the ctx and*/
 /* its fd/mmaps. `out == NULL` is a legal drain-less release (teardown    */
 /* only, ASMTEST_HW_OK). `img == NULL` returns ASMTEST_HW_EDECODE, still   */
 /* after a full teardown (never leaks). A NULL ctx is ASMTEST_HW_EINVAL.   */
@@ -836,7 +836,7 @@ int asmtest_hwtrace_stealth_window_begin(asmtest_addr_channel_t *chan,
 int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace);
 
 /* §D3 STATISTICAL AMD-LBR whole-window survey (region-FREE, in-process, crash-proof). The
- * honest AMD whole-window shape: exact whole-window is a hardware dead end (16-deep stack +
+ * faithful AMD whole-window shape: exact whole-window is a hardware dead end (16-deep stack +
  * throttle), so this SAMPLES the branch stack at sample_period=`period` (>1, clamped, to
  * stay under the sample-rate throttle) while `run_fn(arg)` runs on the CALLING thread, and
  * fills `ips[cap]` with the ABSOLUTE branch-TARGET endpoints of every drained sample — the
@@ -889,7 +889,7 @@ int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
  * the sample_period=1 flood: zero interrupts, no BPF toolchain (only CAP_SYS_ADMIN + the
  * `msr` module). The userspace freeze is a syscall whose glue eats stack slots, so this is
  * complete only for SMALL routines (amd_decode flags trace->truncated on window overflow —
- * honest, never partial-as-complete); the deterministic BPF boundary snapshot
+ * faithful, never partial-as-complete); the deterministic BPF boundary snapshot
  * (asmtest_amd_snapshot_trace) is the clean-boundary alternative where CAP_BPF is available.
  * See docs/internal/plans/amd-msr-direct-lbr-plan.md. Returns ASMTEST_HW_OK, EUNAVAIL when
  * the substrate/privilege is absent (see asmtest_amd_msr_available), ENOSYS off x86-64 Linux. */

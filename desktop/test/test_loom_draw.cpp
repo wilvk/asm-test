@@ -1,7 +1,7 @@
 // test_loom_draw.cpp — the Loom painter's smoke under ImGui's null backend
 // (05-loom-day-one.md T2 step 3). No display, no GL, no engines: it proves the
 // painter walks every prim kind the planner can emit without asserting inside
-// ImGui, which is the only thing a painter test can honestly claim.
+// ImGui, which is the only thing a painter test can faithfully claim.
 #include <cstdio>
 #include <string>
 #include <vector>

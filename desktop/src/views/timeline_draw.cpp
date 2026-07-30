@@ -69,7 +69,7 @@ void draw_timeline_overview(const dt_timeline &t, uint32_t nsteps, double *lo,
             ImPlot::EndPlot();
         }
     } else {
-        // Null backend / plots off: the honest text ratio, still whole-trace.
+        // Null backend / plots off: the true text ratio, still whole-trace.
         ImGui::TextDisabled(
             "  %zu step(s) recorded of %u; viewport [%.0f, %.0f]",
             strip.buckets.size(), strip.nsteps, *lo, *hi);

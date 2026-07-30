@@ -135,7 +135,7 @@ success, asserted by rendered-text smoke.
      abstract socket → `{AF_UNIX, "@<name>"}`; empty (len == 2) →
      `{AF_UNIX}`; otherwise `{AF_UNIX, "<sun_path>"}` (bound `strnlen` by
      `len - 2`, never trust a NUL to be present);
-   - anything else: `{family=%u, len=%lld}` — an honest raw form, never a
+   - anything else: `{family=%u, len=%lld}` — a plain raw form, never a
      guessed name.
    Use the host's `<netinet/in.h>`, `<sys/un.h>`, `<arpa/inet.h>` — the tracee
    is x86-64 like the tracer (i386 is refused at attach), so host layouts are
@@ -192,7 +192,7 @@ A failure prints `SMOKE FAIL: <reason>` and exits 1; a pass prints the block's
 summary line. Mutation check (run once, do not commit): revert the `connect`
 shape entry to `A_HEX` — the first assertion must fail.
 
-**Docs.** Update the "Argument decoding is a curated subset" honesty bullet in
+**Docs.** Update the "Argument decoding is a curated subset" fidelity bullet in
 [docs/guides/tracing/asmspy.md](../../../docs/guides/tracing/asmspy.md)
 (~line 626) and the decode paragraph (~line 385): `sockaddr` moves from the
 not-decoded list to the decoded list. Append to `CHANGELOG.md` under
@@ -273,7 +273,7 @@ Failure/pass shape is the block's existing one (`SMOKE FAIL` vs. the summary
 echo). Mutation check: revert `ioctl`'s second slot to `A_HEX` → the
 `TIOCGWINSZ` assertion fails.
 
-**Docs.** Same three touch points as T1 (guide honesty bullet + decode
+**Docs.** Same three touch points as T1 (guide fidelity bullet + decode
 paragraph, `CHANGELOG.md` `### Added`, plan rows 127–128 clause strike).
 
 **Done when.**
@@ -303,8 +303,8 @@ never silently dropped.
    discipline `ap_flagset` documents at `:840-843`.
 3. Shape table: `futex` →
    `SHAPE(A_HEX, A_FUTEXOP, A_INT, A_HEX, A_HEX, A_INT)` (only slot 1
-   changes; arg 4's meaning is op-dependent — timeout or val2 — and stays an
-   honest raw word, deliberately out of scope per the bundle).
+   changes; arg 4's meaning is op-dependent — timeout or val2 — and stays a
+   plain raw word, deliberately out of scope per the bundle).
 4. Extend `argdecode_victim.c`'s loop: a static `int futex_word = 0;` and
    `syscall(SYS_futex, &futex_word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL,
    NULL, 0)` — returns 0 waiters immediately, no blocking.
@@ -444,7 +444,7 @@ back to `from_addr`), reusing the existing drill-in idiom — no new UI concept.
 5. Update the bottom-row hints (`:3438-3450`) to advertise
    `Enter: data-flow drill-in` in the paused/finished states.
 6. About the plan's "doubles as mode 9's missing thread picker": say it in a
-   comment, honestly — `asmspy_sample_edge_t` carries no tid (`asmspy.h:502-509`;
+   comment, candidly — `asmspy_sample_edge_t` carries no tid (`asmspy.h:502-509`;
    the IBS drain drops it), so the drill-in cannot and does not pick a THREAD.
    What it provides is the effect a thread picker was wanted for:
    `asmspy_engine_dataflow` races every thread to the chosen region
@@ -816,12 +816,12 @@ headers rather than hardcoded offsets.
   formatting; the address space is gone), per the plan and the code comment.
 - **Naming a pipe's peer endpoint** — requires scanning every process's fds;
   rejected in the landed fd→endpoint work, stays rejected.
-- **The remaining ~700 undescribed syscalls** — they keep the honest
+- **The remaining ~700 undescribed syscalls** — they keep the faithful
   three-words-plus-`...` default; curating more shapes is future Theme E work,
   not this doc's.
 - **IBS reason-string consumers outside asmspy** (`examples/ibs_probe.c`,
   `make ibs-test` vacuous-green paths) — an AMD-tier concern owned by
-  [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md).
+  [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md).
 - **The ptrace block-step tracer and dataflow producer internals** — sibling
   territory: [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md),
   [dataflow-producer-correctness.md](dataflow-producer-correctness.md).

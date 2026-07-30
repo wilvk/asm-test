@@ -13,7 +13,7 @@ With `CAP_PERFMON` the previously-skipping tests all execute and pass:
 
 - `test_hwtrace` **389/389** (unprivileged baseline in the same image: 367 + 12
   SKIPs). Live AMD LBR capture, Tier-B stitch beyond one 16-deep window,
-  over-ring honest truncation, `#2A` period reach (period=1/4), concurrent
+  over-ring faithful truncation, `#2A` period reach (period=1/4), concurrent
   per-thread perf fds, `sample_window` (`nips=1024`, in-loop=1021, truncated=1),
   the IBS-Op survey fallback + begin/end split.
 - `test_ibs` **23/23** ×2. Live IBS out-of-band `survey_pid` (retired
@@ -43,7 +43,7 @@ Still expected-skipped: Intel PT (wrong vendor), AMD MSR-direct (needs
 > (freeze does not make a non-exit richest window complete); combined with the
 > existing `best_nr >= depth` overflow flag this is the airtight "complete iff a
 > non-overflowed exit-anchored window exists" invariant. `test_call_auto` case (b)
-> hardened with a `CEILING_FREE` honest-count baseline so a dropped-branch
+> hardened with a `CEILING_FREE` accurate-count baseline so a dropped-branch
 > fragment reported complete is now a HARD failure. Verified deterministic across
 > **16 privileged AMD runs** (every one escalates `backend=3 insns=77`; zero
 > `insns=3 truncated=0`). Both cosmetic misreports in §3 also fixed.
@@ -65,7 +65,7 @@ Observed live on Zen 5 (two runs, **intermittent**):
 So the `asmtest_trace_call_auto` AMD-LBR rung's completeness heuristic
 **intermittently misreads a freeze-on-PMI tail window as a complete capture** —
 `truncated=0` on a window that demonstrably dropped branches. The direct
-live-capture path is honest here (`sample_window` reports `truncated=1` on the
+live-capture path is truthful here (`sample_window` reports `truncated=1` on the
 same shape), so the bug is **rung-specific to the `call_auto` LBR path**, not the
 decoder.
 
@@ -80,7 +80,7 @@ lane is the first place this rung runs live, and it is **not yet in CI**.
 ### Suggested next step
 
 - Make the `call_auto` LBR rung derive truncation the same way the direct
-  capture path does (the honest `sample_window`/Tier-B truncation signal),
+  capture path does (the faithful `sample_window`/Tier-B truncation signal),
   rather than a rung-local heuristic — a statistical/partial LBR window must set
   `truncated` so the cascade escalates.
 - Harden `test_call_auto` case (b) so a short read is a **failure**, not a

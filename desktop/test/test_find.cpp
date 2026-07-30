@@ -160,7 +160,7 @@ int main() {
     }
 
     // Empty query -> no hits, no cost (a find that measures nothing measures
-    // nothing, honestly).
+    // nothing, truly).
     {
         FindState f;
         set_query(f, "");

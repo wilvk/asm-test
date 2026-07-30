@@ -3,7 +3,7 @@
   <!-- The DETERMINISTIC AMD boundary LBR snapshot: AmdSnapshot.Trace plants a HW breakpoint at
        a native region's exit, runs it once, and snapshots the frozen branch stack via
        bpf_get_branch_snapshot() — an EXACT in-region capture of the same tiny single-shot
-       routine the sampled survey (amdhot / amdlbr) honestly truncates. The AMD counterpart to
+       routine the sampled survey (amdhot / amdlbr) faithfully truncates. The AMD counterpart to
        `region` (single-step) and the exact sibling of the WindowHot sampled survey. A
        dependency-free console app that compiles the binding source (HwTrace.cs) directly and
        P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips

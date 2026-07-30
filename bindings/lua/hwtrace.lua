@@ -585,7 +585,7 @@ end
 -- §Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
 -- `using (new AsmTrace())`. Arms a REGION-FREE single-step capture on THIS thread (no
 -- code, no [base,len)), runs fn(), disarms, and renders the executed body from live
--- self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end, so a traced
+-- self-memory. FAITHFUL-BUT-NOISY: it records EVERYTHING between begin and end, so a traced
 -- leaf's ABSOLUTE addresses appear as a SUBSET of the listing. Keep fn a TIGHT native leaf
 -- — EFLAGS.TF single-step is armed across it (never step arbitrary managed code, which
 -- fights the runtime's SIGTRAP/JIT). A STATIC method (owns its own raw trace handle).

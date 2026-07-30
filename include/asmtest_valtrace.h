@@ -114,7 +114,7 @@ typedef struct asmtest_regfile {
 
 /* The L0 sink. Zero it (or use asmtest_valtrace_new) and point the three arrays at
  * caller-owned buffers; each fills append-only and flips `truncated` when a buffer
- * overflows — the same honest-overflow contract as asmtest_trace_t. `insn_off`
+ * overflows — the same faithful-overflow contract as asmtest_trace_t. `insn_off`
  * parallels asmtest_trace_t.insns (one entry per executed step); `recs` is the
  * flattened operand stream, every record stamped with its `step`. */
 typedef struct asmtest_valtrace {
@@ -168,7 +168,7 @@ void asmtest_valtrace_free(asmtest_valtrace_t *v);
  * sink: allocate `regfile` parallel to insn_off (steps_cap entries) so a producer
  * can record each step's PRE-STATE. Returns true when the ring is armed (or already
  * was — idempotent), false on a NULL sink, a zero steps_cap, or an allocation
- * failure (the capture then proceeds RINGLESS — honest, never fatal, `regfile`
+ * failure (the capture then proceeds RINGLESS — graceful, never fatal, `regfile`
  * stays NULL). The register semantics are x86-64; a non-x86-64 producer simply
  * never arms it. */
 bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v);
@@ -178,14 +178,14 @@ bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v);
  * that fills regfile[i] captures its XMM/MXCSR lanes too (has_vec set per step).
  * Returns true when both the ring is armed and the flag is set, false on a NULL
  * sink or when the ring could not be armed (the capture then stays GPR-only —
- * honest, never fatal). The x86-64 register semantics are the regfile's own; a
+ * graceful, never fatal). The x86-64 register semantics are the regfile's own; a
  * non-x86-64 producer simply never arms it. */
 bool asmtest_valtrace_arm_fpregs(asmtest_valtrace_t *v);
 
 /* Append one executed step at instruction offset `off`, copying its `n` operand
  * records and stamping each with the new step index. Append-only + truncate: when
  * a buffer is full the entry is dropped and `truncated` is set, but the *_total
- * counters still advance (so overflow is honest). A NULL sink is a no-op. */
+ * counters still advance (so overflow is faithful). A NULL sink is a no-op. */
 void asmtest_valtrace_append(asmtest_valtrace_t *v, uint64_t off,
                              const at_val_rec_t *recs, size_t n);
 

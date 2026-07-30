@@ -69,7 +69,7 @@ bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v) {
 bool asmtest_valtrace_arm_fpregs(asmtest_valtrace_t *v) {
     /* R4: the wide deck rides the same ring — arm it, then flag that a producer
      * should capture the XMM/MXCSR lanes too. If the ring cannot be armed the flag
-     * is meaningless (no slot to fill), so leave it clear and fail honestly. */
+     * is meaningless (no slot to fill), so leave it clear and fail truthfully. */
     if (!asmtest_valtrace_arm_regfile(v))
         return false;
     v->regfile_fp = true;
@@ -83,7 +83,7 @@ void asmtest_valtrace_append(asmtest_valtrace_t *v, uint64_t off,
     v->steps_total++;
     v->recs_total += n;
     /* No room to record this step's offset: drop the step (and its records) but
-     * keep the totals honest (mirrors trace_append_insn's truncate discipline). */
+     * keep the totals accurate (mirrors trace_append_insn's truncate discipline). */
     if (!(v->insn_off != NULL && v->steps_len < v->steps_cap)) {
         v->truncated = true;
         return;

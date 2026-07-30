@@ -121,7 +121,7 @@ def test_call_scoped_fp_traces_a_double_call(hwtrace):
 def test_window_region_free_whole_window(hwtrace):
     # window: §Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
     # `using (new AsmTrace())`. Arm a REGION-FREE single-step capture on THIS thread (no
-    # NativeCode, no [base,len)), run fn, disarm, render. HONEST-BUT-NOISY: it records
+    # NativeCode, no [base,len)), run fn, disarm, render. FAITHFUL-BUT-NOISY: it records
     # EVERYTHING between begin and end, so the leaf's ABSOLUTE addresses are a SUBSET of the
     # listing. Self-skips (armed False) on a non-single-step backend; fn still runs.
     code = NativeCode.from_bytes(ROUTINE)
@@ -129,7 +129,7 @@ def test_window_region_free_whole_window(hwtrace):
     w = HwTrace.window(lambda: box.__setitem__("r", code.call(20, 22)))
     assert box["r"] == 42  # fn ALWAYS runs, armed or self-skipped
     # Whole-window (§Z1) arms on Linux/x86-64 single-step; on a non-single-step host
-    # (macOS single-step lacks begin_window, AArch64) it honestly self-skips (armed
+    # (macOS single-step lacks begin_window, AArch64) it faithfully self-skips (armed
     # False) and fn still ran. The C suite's test_wholewindow_singlestep takes the same
     # skip, and node's/cpp's window tests guard their deep checks the same way. Assert
     # the arming-dependent bits only when the window actually armed.
@@ -160,7 +160,7 @@ def test_trace_call_auto_owns_the_call_and_completes():
     # fork+ptrace per-instruction rung (the hwtrace/MSR/block-step rungs are x86-only),
     # which EXECUTES the bytes in a forked child, so the fixture must be the host's
     # bytes exactly like the ptrace tests. Feeding x86 bytes there SIGILLed the tracee
-    # into an honest-but-failing truncated capture (result 0).
+    # into a faithful-but-failing truncated capture (result 0).
     code = NativeCode.from_bytes(PTRACE_ROUTINE)
     res = HwTrace.trace_call_auto(code, 20, 22)  # 42 <= 100 -> branch taken, dec skipped
     assert res.rc in (0, ASMTEST_HW_EUNAVAIL)
@@ -418,8 +418,8 @@ def test_auto_resolve_traces_live():
         with trace.region("auto"):
             result = code.call(20, 22)
         assert result == 42
-        # AMD LBR honestly truncates this tiny single-shot fixture on a Zen 3+ host;
-        # single-step covers block 0. The honest invariant is "covered OR truncated".
+        # AMD LBR faithfully truncates this tiny single-shot fixture on a Zen 3+ host;
+        # single-step covers block 0. The accurate invariant is "covered OR truncated".
         assert trace.covered(0) or trace.truncated()
         if ab == SINGLESTEP:  # the pick off PT/AMD hosts: byte-exact parity
             assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xC, 0x11]

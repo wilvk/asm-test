@@ -356,7 +356,7 @@ static void test_pt_replay_path_matches_emu(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* T3 — the purity / replayability gates truncate honestly, execute nothing          */
+/* T3 — the purity / replayability gates truncate faithfully, execute nothing        */
 /* ------------------------------------------------------------------ */
 
 static void test_pt_gates(void) {

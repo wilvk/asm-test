@@ -333,7 +333,7 @@ use because the client blocks first.
 ### T5 — Inspect door: attach picker + `--auto` front door  (M, depends on: T3, T4)
 
 **Goal.** The plan's front door: pick a process, see *why not* when attach is
-impossible, and land on a hot function via `--auto` with honest evidence
+impossible, and land on a hot function via `--auto` with genuine evidence
 labels.
 
 **Steps.**
@@ -401,7 +401,7 @@ instead of a second copy of the engine's drive loop.
 - No new C dependencies in `cli/`; the desktop side uses only what 03 vendored.
 - Sensitive payloads: serve emits the same payload-separated syscall events as
   record mode (01) — redaction stays a renderer duty (08), the wire carries
-  `redacted:false` provenance honestly.
+  `redacted:false` provenance faithfully.
 
 ## Out of scope
 

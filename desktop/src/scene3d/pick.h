@@ -55,7 +55,7 @@ std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 
 // Resolve a decoded pick to a 04 deep-link, or nullopt for None / a padding cell /
 // an id past the live geometry. Every pickable kind routes to the flat 2D view
-// that actually reads it ("3D to find, 2D to read", T6), with the two honesty
+// that actually reads it ("3D to find, 2D to read", T6), with the two fidelity
 // invariants folded in — statistical never opens an exact reader, and a churned
 // region opens the version-aware disasm pane rather than a plain canvas:
 //   Cell, exact code, not churned -> the trace CANVAS at the code offset;

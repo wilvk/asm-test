@@ -531,7 +531,7 @@ below.
 `ubuntu-24.04-arm` hosted runner (Azure Cobalt 100 / Neoverse-N2), with an anti-vacuity
 step that fails the build if the tier self-skips. It still self-skips under qemu-user,
 which cannot emulate the ptrace tracer/tracee relationship — `available()` self-probes
-and returns 0 there — so emulated builds stay honest. The `/proc`+jitdump readers, being
+and returns 0 there — so emulated builds stay truthful. The `/proc`+jitdump readers, being
 pure file parsing, run on any Linux arch.) The supported target is a
 deterministic, single-threaded routine (≤6 integer args) that **may call out to helpers**
 outside the registered region — call-outs (runtime helpers, GC barriers, PLT stubs) are
@@ -557,7 +557,7 @@ foreign path. The caller owns the attach/detach policy (which PID, and when:
 `PTRACE_ATTACH`/`PTRACE_SEIZE` then wait for the stop before the call, `PTRACE_DETACH`
 after), because those are integrator decisions; asm-test single-steps the target from
 its current stop, **reads the region bytes from the target via `process_vm_readv`** (so
-the tracer need not share the target's memory — the honest foreign-process read), and
+the tracer need not share the target's memory — the genuine foreign-process read), and
 records the same in-region offsets. `make hwtrace-test` exercises it live: a child that
 never called `PTRACE_TRACEME` is attached externally and its region traced to the exact
 same `[0x0, 0x3, 0x6, 0xc, 0x11]` stream.
@@ -625,7 +625,7 @@ or a **JVM bytecode index** — the runtimes already carry the data; asm-test in
   or CoreCLR from the jitdump: CoreCLR's PAL writer and the `linux-tools`
   `libperf-jvmti.so` agent both emit `JIT_CODE_LOAD` records only (no `JIT_CODE_DEBUG_INFO`
   in the builds validated here) — HotSpot's per-address route is the `java-bci` JVMTI lane
-  below, and CoreCLR's is the `IlToNativeMap` listener. One honest caveat: V8's tiny
+  below, and CoreCLR's is the `IlToNativeMap` listener. One candid caveat: V8's tiny
   Sparkplug (baseline) bodies emit source positions *at or past* the reported `code_size`,
   so the reader keeps at-or-above-base entries and drops only below-base prologue markers.
 
@@ -665,7 +665,7 @@ or a **JVM bytecode index** — the runtimes already carry the data; asm-test in
   like `a + b` compiles to a single `bci = -1` safepoint, so HotSpot yields real bcis only
   where the compiled code has bytecode-bearing safepoints — the loop back-edge does.)
 
-**The honest boundary: JIT-compiled code only.** Every feed above reads a JIT's own
+**The plain boundary: JIT-compiled code only.** Every feed above reads a JIT's own
 address→semantics map. **Interpreted** code (V8 Ignition, CPython, JVM before C1/C2, YARV,
 PUC-Lua) keeps its bytecode index in *VM state* — a `pc` field in the interpreter frame —
 that the native PC stream cannot see, so attributing interpreted execution needs a separate
@@ -760,7 +760,7 @@ whole pipeline at a live JIT — not a fixture — for **three** runtimes:
   entry sits at the nmethod's `code_begin` (no receiver inline-cache check) — exactly the
   address the perf-map reports, which is where `run_to` plants the breakpoint.
 
-These three are honest by construction: a watchdog alarm bounds the single-step so a
+These three are trustworthy by construction: a watchdog alarm bounds the single-step so a
 re-tiered/moved address self-skips instead of hanging, and the trace is asserted when the
 runtime cooperates and skipped (never failed) when it does not, while the resolution and
 attach checks — which validate the library against the runtime's real perf-map line and a
@@ -794,7 +794,7 @@ Both BCL lanes disassemble what they trace. `Console.WriteLine(string)` is a thi
 body is just `Out.WriteLine(value)` — so the 16 recovered instructions are dominated by the two
 call-outs the tracer steps **over**: `get_Out` at `0xb` and the virtual `TextWriter.WriteLine`
 at `0x1e`. Block-step reconstruction is byte-identical to per-instruction stepping with one
-honest exception: a `rep`-prefixed string op retires once per iteration but is reconstructed
+disclosed exception: a `rep`-prefixed string op retires once per iteration but is reconstructed
 **once**, so a block containing one is marked **truncated** rather than silently under-counted
 (the per-instruction path records it per iteration). This is the literal output of
 `make docker-hwtrace-jit-dotnet-bcl` (addresses are from one run; they vary with ASLR):
@@ -905,7 +905,7 @@ stepped over and recorded as an edge, exactly like a caller-supplied deny region
 foreign process gets the mapping-based set only (local symbol addresses would not be valid
 there). Caller-supplied deny regions and the denylist callback compose with the default set.
 
-Two honesty limits are load-bearing, not caveats-in-passing. **L2 still single-steps the full
+Two fidelity limits are load-bearing, not caveats-in-passing. **L2 still single-steps the full
 body of each descended method**, so the allow-set / resolver must be *method-exact*, never a
 broad module range that re-admits runtime glue. And a known method reachable only **through** a
 stepped-over intermediary is **invisible** to descent (the tracer never single-steps the
@@ -1097,7 +1097,7 @@ the out-of-process block-step trio above, which owns the general, context-switch
 case. Where that broader contract matters (a routine that may block, call out, or run
 long), use `asmtest_ptrace_trace_call_blockstep` / `_attached_blockstep` instead.
 
-**Honest-truncation belts.** `t->truncated` is set whenever completeness cannot be
+**Faithful-truncation belts.** `t->truncated` is set whenever completeness cannot be
 proven: the capture buffer filled, a pairing/decode gap (a lost trap made the next
 observed stop unreachable — the signature of exactly the context-switch case above),
 a failed BTF re-arm write, or — the belt unique to this tier — **any** context switch
@@ -1237,10 +1237,10 @@ with no single-step), supplies the bytes that were live at trace time from the
 and **replays that exact path through Unicorn** to derive per-instruction values. The
 result fills the same `asmtest_valtrace_t`, so def-use and slice run over it unchanged.
 
-The honest boundary, stated up front: **PT gives control flow and bytes, never values.**
+The candid boundary, stated up front: **PT gives control flow and bytes, never values.**
 All values come from the replay, so a region that consumes an **unrecorded input** — a
 syscall result, a concurrent sibling write, any nondeterminism — cannot be reconstructed
-from PT alone and is **truncated honestly**, never guessed. Unlike block-step, F5 has
+from PT alone and is **truncated faithfully**, never guessed. Unlike block-step, F5 has
 **no single-step fallback** (it is fully out of band): a region it cannot faithfully
 replay is truncated, not stepped. Two gates fire *before* any replay, reusing the
 block-step tier's own mutation-proven verdicts (no second scanner):
@@ -1334,5 +1334,5 @@ The full root-cause analysis and per-runtime fix matrix live in the
   `make docker-hwtrace-amd` — the hwtrace image run with `--security-opt
   seccomp=unconfined --cap-add=PERFMON` so `perf_event_open` is allowed. Note AMD's
   branch stack is delivered only at a PMU sample, so AMD LBR captures branch-heavy
-  routines and honestly `truncated`s a tiny single-shot routine (too fast to sample);
+  routines and faithfully `truncated`s a tiny single-shot routine (too fast to sample);
   single-step is the deterministic in-process backend for the latter.

@@ -119,12 +119,12 @@ second `emu_step_capture` re-arms with a new cap.
 > `emu_step_capture`) and emits one `regstate` event per held pre-state — the
 > full x86-64 integer file (16 GP + `rip` + `rflags`, XMM a documented v1
 > omission) by descriptor reference `emu_x86_regs_t@x86_64/sysv`. Eviction is
-> honest: the `end` footer flips `truncated` and carries the evicted count in
+> faithful: the `end` footer flips `truncated` and carries the evicted count in
 > `drops.lost`, so held events are steps `[dropped, dropped+count)`. The golden
 > `add_signed.asmtrace` now carries the worked example (baked cap 8, no
 > eviction, `--steps`-independent so `make asmtrace-golden` emits it) and a new
 > generated `regstate-truncated.asmtrace` (sum_via_rbx, cap 2 over 6 steps →
-> `drops.lost:4`) is the D7 register-ring dishonesty fixture. The concrete
+> `drops.lost:4`) is the D7 register-ring low-fidelity fixture. The concrete
 > descriptor field list is appended to
 > [asmtrace-schema.md](asmtrace-schema.md). Byte-stable across two
 > `asmtrace-golden-check` runs; 03's loader already lists `regstate`
@@ -137,12 +137,12 @@ drop-count note in the `end` footer when the ring evicted.
 
 **Steps.** Arm via T1 before the run; after the run, walk `emu_step_at` and
 emit; extend one golden corpus routine's recording (regen via
-`make asmtrace-golden`, 01's target) plus a **cap-2 dishonesty fixture** whose
+`make asmtrace-golden`, 01's target) plus a **cap-2 low-fidelity fixture** whose
 eviction must render as truncation (D7).
 
 **Done when.** the regenerated golden is byte-stable across two runs; 03's
 loader accepts `regstate` (it already must — 01 defined the kind); the
-dishonesty fixture carries the drop count.
+low-fidelity fixture carries the drop count.
 
 ### T3 — Register time-travel scrubber  (M, depends on: T2; 03, 04)  ✓
 
@@ -153,7 +153,7 @@ dishonesty fixture carries the drop count.
 > ImGui-free so 05's now-column reads the same lookup. `desktop/src/views/
 > scrubber.{h,cpp}` + `scrubber_draw.cpp` (**new**) is the playhead: the full
 > register file at a step, per-step diff-highlight (each register vs the previous
-> HELD step), a playhead slider + `[`/`]` step keys (04's bindings). D7 honesty:
+> HELD step), a playhead slider + `[`/`]` step keys (04's bindings). D7 fidelity:
 > a dropped prefix renders as a TORN region (seeking in shows UNKNOWN, never
 > zero, and the first held step carries no diff baseline — its predecessor was
 > evicted), and a no-`regstate` recording states the producer is absent and
@@ -179,8 +179,8 @@ held step; when the ring dropped steps, the timeline renders the torn-edge
 region (no data ≠ zero data); when a recording has **no** `regstate` events
 the view states the producer is absent and deep-links the docs — the
 re-run-with-increasing-`max_insns` fallback is documented as NOT day-one
-(plan's honest-limits stance). Golden-render tests: corpus fixture scrubs;
-dishonesty fixture shows the tear.
+(plan's acknowledged-limits stance). Golden-render tests: corpus fixture scrubs;
+low-fidelity fixture shows the tear.
 
 **Done when.** `desktop-test` covers seek, diff-highlight, tear, and the
 no-producer message; the Loom's now-column (05) can read the same index
@@ -198,7 +198,7 @@ no-producer message; the Loom's now-column (05) can read the same index
 > abixray.{h,cpp}` + `abixray_draw.cpp` (**new**) composes the T3 scrubber builder
 > over both legs at ONE locked playhead, driven by the 06 walkthrough player, and
 > adds the **cross-pane register diff** (the SysV-vs-Win64 marshalling contrast,
-> made mechanical). Honest (D7): a producer-absent pane refuses and names
+> made mechanical). Faithful (D7): a producer-absent pane refuses and names
 > `--steps`; unaligned lengths cannot share a playhead; a dropped step renders
 > UNKNOWN per pane; a stop past the window is refused, not clamped. `test_abixray`
 > (builder: locked panes, stop navigation, cross-pane deltas, both refusals) and

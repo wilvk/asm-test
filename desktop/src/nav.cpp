@@ -343,7 +343,7 @@ bool dt_nav_forward(dt_nav_table &t) {
 }
 
 const std::vector<dt_binding> &dt_nav_bindings() {
-    // `wired` is the honesty flag (18-breach-stops.md T1): every row here is a
+    // `wired` is the fidelity flag (18-breach-stops.md T1): every row here is a
     // key handle_keymap (shell.cpp) — or a view-local draw, for `[`/`]` — really
     // acts on, so all are wired:true. A future advertised-but-unmapped gesture
     // lands as wired:false and the overlay greys it "planned" rather than lying.

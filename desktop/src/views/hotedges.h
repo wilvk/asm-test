@@ -14,7 +14,7 @@
 //  - **The chrome is never optional.** `samples`, `branch_samples`, `lost`,
 //    `throttled`, the sampler and the window are how a reader knows whether the
 //    ranking means anything. A dropped-sample count that is only shown when it
-//    is inconvenient is not an honesty channel.
+//    is inconvenient is not a fidelity channel.
 //
 //  - **Statistical stays statistical.** A survey is `exact:false` BY
 //    CONSTRUCTION (schema: "Always exact:false"), so a recording that claims
@@ -51,7 +51,7 @@ struct HotEdgeView {
     std::vector<HotEdge> edges; // ranked; a FROZEN snapshot, never animated
     std::string sampler;        // "ibs-op" | "sw-clock" | "" when unstated
 
-    // The honesty channel, always rendered.
+    // The fidelity channel, always rendered.
     uint64_t samples = 0;
     uint64_t branch_samples = 0;
     uint64_t lost = 0;
@@ -73,7 +73,7 @@ struct HotEdgeView {
 // (15-plotting-and-graph-nav.md T1). Distinct `from` labels are the rows,
 // distinct `to` the cols (both in rank / first-seen order — the edges are already
 // ranked), and cells[r*cols + c] is that edge's sample count (0 = no such edge).
-// It is a direct display of the edge WEIGHTS — never a stack (honesty R4). Capped
+// It is a direct display of the edge WEIGHTS — never a stack (fidelity R4). Capped
 // at `cap` rows and cols so a large snapshot stays a bounded heatmap; `truncated`
 // records that some edges were dropped. Pure, so it is unit-tested without ImPlot
 // (D4) and the draw only feeds it to PlotHeatmap.

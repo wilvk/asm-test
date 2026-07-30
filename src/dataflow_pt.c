@@ -10,11 +10,11 @@
  * shared def-use (L1) and slice (L2) analysis run over it UNCHANGED (see
  * docs/internal/implementations/dataflow-pt-replay-tier.md).
  *
- * THE HONEST BOUNDARY (inherited from F1/F2). PT gives CONTROL FLOW and BYTES,
+ * THE FAITHFUL BOUNDARY (inherited from F1/F2). PT gives CONTROL FLOW and BYTES,
  * never VALUES. All values come from the replay, so a region that consumes an
  * unrecorded input — a syscall result, a concurrent sibling write, any
  * nondeterminism — cannot be reconstructed from PT alone and is TRUNCATED
- * HONESTLY, never guessed. Unlike the block-step tier (dataflow_blockstep.c), F5
+ * FAITHFULLY, never guessed. Unlike the block-step tier (dataflow_blockstep.c), F5
  * has NO single-step fallback: it is fully out-of-band, so a region it cannot
  * replay is truncated, not stepped. The STRUCTURAL residual, inherent to
  * PT+replay and not liftable by more code:
@@ -373,7 +373,7 @@ static void df_zero_gp(uc_engine *uc) {
  * the blockstep tier's own verdicts (no second scanner): a NON-REPLAYABLE region (any VEX/EVEX
  * encoding — Unicorn mis-executes VEX-128 SILENTLY with UC_ERR_OK and a wrong answer, so this is
  * a CORRECTNESS gate, not an optimization) and an IMPURE region (a syscall/rdtsc/cpuid whose
- * retired value PT never carries — the emulator would fabricate one). Either truncates honestly
+ * retired value PT never carries — the emulator would fabricate one). Either truncates faithfully
  * with the offending reason and executes NOTHING.
  *
  * Returns DF_PT_OK (clean, path matched step-for-step), DF_PT_FAULT (gate declined / path
@@ -585,7 +585,7 @@ int asmtest_dataflow_pt_replay(const uint8_t *aux, size_t aux_len,
                                              args, nargs, vt, info);
     free(region);
     free(path);
-    /* An in-region path that stopped at the region boundary is honestly truncated even when the
+    /* An in-region path that stopped at the region boundary is faithfully truncated even when the
      * replayed prefix itself was clean. */
     if (out_of_region) {
         vt->truncated = true;

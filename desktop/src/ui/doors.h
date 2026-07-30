@@ -119,7 +119,7 @@ void draw_capability_panel(CapState &s, const Recording *loaded);
 
 // --- the Inspect door (07-serve-live-host.md T4/T5) ------------------------
 // The live front door: pick a process, see WHY NOT when you cannot, and land on
-// a hot function via `--auto` with honest evidence labels.
+// a hot function via `--auto` with accurate evidence labels.
 //
 // It is in BOTH binaries, and that is the point of D9 rather than an oversight:
 // the door links no engine at all. It reads /proc itself to list processes, and

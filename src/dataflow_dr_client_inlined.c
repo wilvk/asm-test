@@ -335,7 +335,7 @@ static volatile int g_poller_done;
 /* Throwaway capture sink for the marker-less managed path: instrumentation needs a drval to
  * write into (so it runs + counts via g_inscount), but the managed workload registers none
  * and we are NOT oracle-diffing managed code here (that is Increments 5(3)/9). A small
- * client-internal buffer suffices; it overflows honestly and is never read. */
+ * client-internal buffer suffices; it overflows faithfully and is never read. */
 static at_vstep_t g_self_steps[256];
 static at_tag_t g_self_taint[256];
 static at_drval_t g_self_drval;
@@ -1011,7 +1011,7 @@ static void on_sink(uint64_t off, uint64_t ea, uint64_t kind, uint64_t rt_idx) {
      * unique slot with an atomic fetch-add on hits_total, then fill that DISJOINT slot —
      * no lock on the append path. hits_total is the true count; hits_len is a best-effort
      * mirror (the reader uses min(hits_total, hits_cap)). Overflow past the cap flips
-     * truncated (the honest-overflow contract of at_drval_t / asmtest_trace_t). */
+     * truncated (the faithful-overflow contract of at_drval_t / asmtest_trace_t). */
     if (g_report->hits == NULL)
         return;
     uint64_t idx =
@@ -1304,7 +1304,7 @@ static void buf_flush(void *drcontext, void *buf_base, size_t size) {
             st->mem_n++;
         }
 #ifdef ASMTEST_TAINT
-        /* Drain this step's taint witness parallel to steps[] (same index + honest
+        /* Drain this step's taint witness parallel to steps[] (same index + faithful
          * overflow); dropped only if steps[] itself did not truncate above. */
         if (dv->step_taint != NULL && dv->steps_len < dv->step_taint_cap)
             dv->step_taint[dv->steps_len] = rs->taint;

@@ -19,7 +19,7 @@ int asmtest_rec_emu(const emu_trace_t *tr, const emu_result_t *res,
                     const void *code, size_t code_len) {
     const char *path = asmtest_record_path();
     if (path == NULL)
-        return 0; /* not armed, or no test running — the honest no-op */
+        return 0; /* not armed, or no test running — the faithful no-op */
 
     /* The emulator tier is an isolated guest replaying bytes: exact about what
      * it executed, and explicitly NOT silicon. `trust` is the tier vocabulary
@@ -62,7 +62,7 @@ int asmtest_rec_emu(const emu_trace_t *tr, const emu_result_t *res,
         if (tr->blocks_len > 0 || tr->blocks_total > 0) {
             /* The emulator DOES measure basic blocks (its block hook fires on
              * every one), so unlike the L0 value producer it can write a
-             * `coverage` event honestly — including the totals that make
+             * `coverage` event faithfully — including the totals that make
              * truncation legible. */
             int n =
                 snprintf(body, sizeof body, "\"basis\":\"rel\",\"blocks\":[");

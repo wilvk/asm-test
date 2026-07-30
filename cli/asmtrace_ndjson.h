@@ -47,7 +47,7 @@ typedef struct {
     /* Optional `steps_total` footer field (28 R1 T2): the total step count the
      * producer SAW, counting past any ring cap. Set before asmtrace_close so a
      * truncation banner can read "N of M" instead of naming the gap. Absent
-     * (have_steps_total == 0) keeps the older honest wording. */
+     * (have_steps_total == 0) keeps the older truthful wording. */
     int have_steps_total;
     unsigned long long steps_total;
 
@@ -63,7 +63,7 @@ typedef struct {
     /* Optional GUEST-arch override for the header's "arch" field (R5, doc 32).
      * The default is the recording HOST's compiled-in arch, correct for a live
      * capture; but the emulator L0 producer can run a guest of a DIFFERENT arch
-     * (an AArch64 routine under Unicorn on an x86-64 host), and then the honest
+     * (an AArch64 routine under Unicorn on an x86-64 host), and then the accurate
      * `arch` is the guest's — set before asmtrace_header. have_arch == 0 (the
      * memset default) keeps the host arch, so every existing recording is
      * byte-unchanged. */
@@ -92,7 +92,7 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
  * SHA-256 identity of the routine's bytes, so a consumer can prove two recordings
  * are (or refuse them as not) the same routine. Call AFTER asmtrace_open* and
  * BEFORE asmtrace_header. `name` and `sha256_hex` are copied (bounded); a NULL
- * `sha256_hex` disarms it (nothing is emitted) — the honest state for a producer
+ * `sha256_hex` disarms it (nothing is emitted) — the truthful state for a producer
  * that lacks stable bytes. `sha256_hex` must be the 64-char lowercase-hex digest
  * (asmtrace_sha256_hex). */
 void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
@@ -102,7 +102,7 @@ void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
  * asmtrace_open* and BEFORE asmtrace_header. The default (unset) is the recording
  * host's compiled-in arch; the emulator L0 producer sets it to the arch of the
  * bytes it ran (e.g. "aarch64") so an AArch64 fabric recorded on an x86-64 host is
- * honestly tagged. A NULL or empty `arch` disarms the override. */
+ * accurately tagged. A NULL or empty `arch` disarms the override. */
 void asmtrace_writer_set_arch(asmtrace_writer_t *w, const char *arch);
 
 /* Arm the optional `steps_total` footer field (28 R1 T2): the total number of
@@ -222,7 +222,7 @@ size_t asmtrace_fpenv_body(char *dst, size_t cap, unsigned step,
  * INCLUDING the sink step S). `cone_steps`/`cone_offs` are parallel arrays of length
  * `ncone` (each cone step and its instruction offset). `born_untraced` is 1 when the
  * value has NO traced producer inside the window (cone is the sink alone) — the
- * honest "provenance starts at instrumentation" verdict, never an empty cone. `loc`
+ * truthful "provenance starts at instrumentation" verdict, never an empty cone. `loc`
  * NULL omits the field (blame is step-granular). Field order lives here. Returns the
  * body length written. */
 size_t asmtrace_blame_body(char *dst, size_t cap, unsigned step, uint64_t off,

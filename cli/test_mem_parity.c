@@ -32,7 +32,7 @@
  *
  * x86-64-guest only (the ptrace producer single-steps x86-64; the emulator corpus
  * is host-arch too). The mk rule gates the build on x86_64 + libunicorn; a run-time
- * ptrace refusal (seccomp) or an off-arch producer self-skips honestly.
+ * ptrace refusal (seccomp) or an off-arch producer self-skips transparently.
  */
 #include <stdint.h>
 #include <stdio.h>

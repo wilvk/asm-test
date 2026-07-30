@@ -7,7 +7,7 @@
 // Selection the timeline model, the slice-view model AND the Loom camera's
 // selected_steps all report that same entity (cross-highlight from one model),
 // and that a step ABSENT from a pane yields "nothing selected" there, never a
-// fabricated row (the honesty floor, D7).
+// fabricated row (the fidelity floor, D7).
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -97,7 +97,7 @@ int main() {
     check("loom/dim-own-worldline", dim == L.sel.steps,
           "the Loom's own pick lights its worldline");
 
-    // === honesty floor: a step ABSENT from a pane -> nothing selected ========
+    // === fidelity floor: a step ABSENT from a pane -> nothing selected ========
     const uint32_t absent = a->df.nsteps + 1000; // no such step in this stream
     s.selection.set(a->id, absent, std::nullopt);
     dt_timeline tl2 = dt_timeline_build(*a);
@@ -171,7 +171,7 @@ int main() {
               "on its own recording the timeline marks the brushed step");
     }
 
-    // === 34 T3: the play/pause transport is a pure, steady, honest advance =====
+    // === 34 T3: the play/pause transport is a pure, steady, faithful advance =====
     // transport_tick advances a playhead over ITS OWN axis while playing, at a
     // steady rate under a variable frame time, stopping exactly at max.
     {

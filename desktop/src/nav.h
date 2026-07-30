@@ -140,7 +140,7 @@ bool dt_nav_back(dt_nav_table &t);
 bool dt_nav_forward(dt_nav_table &t);
 
 // The keyboard bindings, as data: rendered in the help overlay AND the single
-// place the app maps keys, so the two cannot drift. `wired` is the honesty flag
+// place the app maps keys, so the two cannot drift. `wired` is the fidelity flag
 // (18-breach-stops.md T1, F1/F18): true for a binding handle_keymap (or a
 // view-local draw) actually acts on, false for one that is advertised as
 // "planned" but not yet mapped. The help overlay greys every !wired row so it

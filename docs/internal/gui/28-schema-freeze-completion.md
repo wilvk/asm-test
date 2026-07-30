@@ -2,7 +2,7 @@
 
 > **Root R1 of the [extension roadmap](27-extension-roadmap.md).** Three open
 > Phase-3-freeze items, all in the single `.asmtrace` writer, none needing a new
-> engine. Each closes a standing GUI honesty gap where a view today states a limit
+> engine. Each closes a standing GUI fidelity gap where a view today states a limit
 > instead of a finding. This is the cheapest root and a prerequisite for
 > [31 (wide register deck)](31-wide-register-deck.md) and
 > [33 (statediff)](33-backward-attribution-producers.md).
@@ -16,7 +16,7 @@
 
 ## Why this work exists
 
-Three GUI views today degrade honestly because a fact the render layer wants is
+Three GUI views today degrade gracefully because a fact the render layer wants is
 not on the wire — even though the producer already **has** it in memory:
 
 1. **The diff cannot verify two recordings are the same routine.** `dt_diff_build`
@@ -55,7 +55,7 @@ serializes them.
 - **The totals are measured but never written.** `asmtest_valtrace_t.steps_total`
   ("steps seen (counts past `steps_cap`)",
   [asmtest_valtrace.h:115](../../../include/asmtest_valtrace.h#L115)) and
-  `recs_total` (`:131`); both advance past the cap so overflow is honest.
+  `recs_total` (`:131`); both advance past the cap so overflow is faithful.
 - **The wide buffer is populated but not emitted.** `at_val_rec.wide` /
   `wide_off` and the sink's `wide[]` / `wide_len`
   ([asmtest_valtrace.h:81-83,133-136](../../../include/asmtest_valtrace.h#L81)).
@@ -90,7 +90,7 @@ where the producer has the routine bytes.
    window), **omit** the object — never emit a zero hash.
 4. Consumer: `dt_diff_build` ([04](04-replay-views.md) T6) upgrades from "identity
    is the reader's assertion" to a hard refusal when both recordings carry `code`
-   and the `sha256` differs; when either lacks it, it keeps the current honest
+   and the `sha256` differs; when either lacks it, it keeps the current accurate
    caveat. No new UI — the refusal rides the existing diff-mismatch placard.
 
 **Done when.** `desktop-test` diff over a `code`-bearing golden pair refuses a
@@ -118,7 +118,7 @@ the caveat. Golden bytes updated deterministically (D6).
    annotates with the same total.
 
 **Done when.** A truncated golden's banner prints the real ratio; a
-`steps_total`-less recording keeps the current honest wording;
+`steps_total`-less recording keeps the current faithful wording;
 `test_loom_plan` / `test_scrubber` updated.
 
 ### T3 — serialize the `wide[]` side buffer  (S–M)
@@ -136,8 +136,8 @@ the caveat. Golden bytes updated deterministically (D6).
 3. Consumer: `desktop/src/doc/streams.h` renders the hex (or a decoded
    little-endian view) instead of `[wide]`; absence still degrades to `[wide]`.
 
-**Done when.** A golden carrying an XMM operand shows its bytes; the dishonesty
-fixture (wide-but-invalid) still degrades honestly; `test_golden` updated.
+**Done when.** A golden carrying an XMM operand shows its bytes; the low-fidelity
+fixture (wide-but-invalid) still degrades gracefully; `test_golden` updated.
 
 ## Unblocks / downstream
 
@@ -151,7 +151,7 @@ fixture (wide-but-invalid) still degrades honestly; `test_golden` updated.
   [asmtest_valtrace.h:95-97](../../../include/asmtest_valtrace.h#L95) says the
   descriptor mechanism "absorbs it later, for both at once").
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **The fourth freeze-checklist item — "no block starts from the L0 producer"** —
   is out of scope here: it needs block information the value producer does not
@@ -178,4 +178,4 @@ fixture (wide-but-invalid) still degrades honestly; `test_golden` updated.
 
 Schema home [01](01-asmtrace-format.md) / D5; consumers
 [04](04-replay-views.md) (diff), [05](05-loom-day-one.md) (banner),
-`desktop/src/doc/streams.h`. Golden/honesty contract D6/D7.
+`desktop/src/doc/streams.h`. Golden/fidelity contract D6/D7.

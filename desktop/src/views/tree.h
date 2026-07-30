@@ -58,7 +58,7 @@ struct TreeView {
 
     // What the session was actually started with, off the `started` params
     // echo. A client must never assume its own request round-tripped: the echo
-    // is the effective parameters after defaulting, and it is the only honest
+    // is the effective parameters after defaulting, and it is the only faithful
     // source for what the engine ran.
     TreeFilter effective;
     bool have_effective = false;

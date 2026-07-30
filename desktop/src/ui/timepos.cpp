@@ -40,7 +40,7 @@ bool dt_timepos_step(const char *label, int *idx, int count,
     }
     // The always-visible "intentional discrete" marker (F16): a step glyph in
     // the caution amber, its verbatim reason on hover — so the discreteness
-    // reads as a deliberate honesty choice, never a missing scrubber.
+    // reads as a deliberate fidelity choice, never a missing scrubber.
     ImGui::SameLine();
     ImGui::TextColored(dt_warn_col(), "\xE2\x8F\xADstep");
     if (reason != nullptr && reason[0] != '\0' && ImGui::IsItemHovered()) {

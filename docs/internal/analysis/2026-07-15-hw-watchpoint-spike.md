@@ -221,7 +221,7 @@ Mirror the landed `NT_ARM_HW_BREAK` execution path
 
 ---
 
-## Limits (honest)
+## Limits (candid)
 
 - **Read/write direction is not free.** `R/W=11` traps both, but `DR6` doesn't
   say which; a one-instruction decode at the faulting site is required to label

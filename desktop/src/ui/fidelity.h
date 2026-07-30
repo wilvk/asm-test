@@ -1,13 +1,13 @@
-// fidelity.h — the ONE graded honesty vocabulary, decided purely
+// fidelity.h — the ONE graded fidelity vocabulary, decided purely
 // (docs/internal/gui/23-graded-truth-layer.md T1, F5).
 //
-// Before this, honesty chrome PROLIFERATED: a redaction placard, a statistical
+// Before this, fidelity chrome PROLIFERATED: a redaction placard, a statistical
 // chip, a coarse-provenance chip, a bounded-window note, an identity note and a
 // torn banner all rendered EQUALLY LOUD and non-collapsible, even though the
 // schema grades them very differently — so the one signal that means "do not
 // trust the tail of this data" (torn) drowned among four that mean "this is
 // normal" (redacted / statistical / skip / bounded). This header is the fix: it
-// grades every honesty signal into THREE tiers, so loudness follows the schema's
+// grades every fidelity signal into THREE tiers, so loudness follows the schema's
 // own severity gradient. It RESTRUCTURES, it removes NO truth (D7) — every field
 // still renders; the tier only decides how loud.
 //
@@ -23,9 +23,9 @@
 //                 NON-collapsible.
 //
 // Pure + header-only + ImGui-free (like progress.h), so fidelity_severity() is
-// unit-tested against the committed dishonesty fixtures with no context (D4) and
+// unit-tested against the committed low-fidelity fixtures with no context (D4) and
 // the fixtures pin the grading. The `severity` schema field is DERIVABLE from the
-// existing honesty fields (see fidelity_facts_of): a producer need not emit it,
+// existing fidelity fields (see fidelity_facts_of): a producer need not emit it,
 // old recordings still grade, and when it IS present the reader honours it.
 #ifndef ASMDESK_UI_FIDELITY_H
 #define ASMDESK_UI_FIDELITY_H
@@ -80,7 +80,7 @@ inline const char *fidelity_tier_token(FidelityTier t) {
 }
 
 // Parse the optional wire `severity` string. Unknown / empty -> nullopt (a reader
-// then derives the tier from the honesty facts, so an old or partial recording
+// then derives the tier from the fidelity facts, so an old or partial recording
 // still grades). Never guesses a tier from a malformed value.
 inline std::optional<FidelityTier> fidelity_tier_from_wire(const std::string &s) {
     if (s == "neutral")
@@ -92,7 +92,7 @@ inline std::optional<FidelityTier> fidelity_tier_from_wire(const std::string &s)
     return std::nullopt;
 }
 
-// The derivable honesty facts of a recording / stream. Every field is a fact the
+// The derivable fidelity facts of a recording / stream. Every field is a fact the
 // schema already carries; the tier is DERIVED from them, never a truth of its
 // own. A caller that has a fact the Recording model does not expose (a mixed
 // basis from the canvas, a coarse rung, a bounded window) sets it here directly.
@@ -129,7 +129,7 @@ inline FidelityTier fidelity_severity(const FidelityFacts &f) {
     return FidelityTier::Neutral;
 }
 
-// The tier of ONE signal in isolation, so a view can render each honesty field at
+// The tier of ONE signal in isolation, so a view can render each fidelity field at
 // its own tier (a statistical survey that also dropped shows a neutral chip for
 // the survey and — because it is statistical — still a neutral drop record, never
 // hidden: D7). `dropped_on_exact` distinguishes the integrity drop from the
@@ -161,7 +161,7 @@ inline FidelityTier fidelity_signal_tier(FidelitySignal s) {
     }
 }
 
-// Derive the honesty facts of a loaded recording. Reads only the fields the
+// Derive the fidelity facts of a loaded recording. Reads only the fields the
 // Recording model already lifts off the header / `end` footer — plus, when the
 // producer emitted one, the optional `severity` string off the provenance object
 // (provenance.raw), which then OVERRIDES the derivation. Additive: a recording

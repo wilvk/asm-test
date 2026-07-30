@@ -899,7 +899,7 @@ TEST(emu, step_capture_drops_oldest_and_counts) {
     ASSERT_UEQ(emu_step_dropped(E), 2); /* the earliest two were dropped */
 
     /* The survivors are the LAST two steps (2 then 3), oldest-held first — the
-     * eviction is honest data, not a silent truncation. */
+     * eviction is faithful data, not a silent truncation. */
     uint64_t si = ~0ULL;
     emu_x86_regs_t s;
     ASSERT_TRUE(emu_step_at(E, 0, &si, &s));
@@ -1129,7 +1129,7 @@ TEST(emu_arm64, step_capture_drops_oldest_and_counts) {
     ASSERT_UEQ(emu_arm64_step_dropped(e), 1); /* the earliest one was dropped */
 
     /* The survivors are the LAST two steps (1 then 2), oldest-held first —
-     * the eviction is honest data, not a silent truncation. */
+     * the eviction is faithful data, not a silent truncation. */
     uint64_t si = ~0ULL;
     emu_arm64_regs_t s;
     ASSERT_TRUE(emu_arm64_step_at(e, 0, &si, &s));

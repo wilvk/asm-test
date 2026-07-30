@@ -138,7 +138,7 @@ loom_take_view(const loom_fabric_t &base, const loom_fabric_t &take,
     } else if (edit.code_patch) {
         // Seed at the first ALIGNED step whose instruction bytes differ. The
         // step's own offset is the key: a patch that changed nothing the run
-        // executed seeds nothing, and the cone is honestly empty.
+        // executed seeds nothing, and the cone is genuinely empty.
         for (uint32_t s = 0; s < v.prefix && s < take.insn_off.size(); s++) {
             uint64_t off = take.insn_off[s];
             if (off == UINT64_MAX || off >= edit.base_code.size() ||

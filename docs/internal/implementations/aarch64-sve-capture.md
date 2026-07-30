@@ -571,7 +571,7 @@ reason) only where neither qemu interposition nor SVE hardware exists.
    # vq=3 -> 48B, vq=16 + default-vector-length=-1 -> 256B. On a NATIVE arm64
    # host there is no qemu to steer: QEMU_CPU is ignored and the test itself
    # self-skips without SVE silicon (Apple silicon has none) — that skip line
-   # is this lane's honest output there, not a failure. TCG timings are
+   # is this lane's genuine output there, not a failure. TCG timings are
    # meaningless; never point bench targets at this lane.
    DOCKER_SVE_IMAGE ?= asmtest-ci-arm64
    DOCKER_SVE_VQS   ?= 1 3 8 16
@@ -693,7 +693,7 @@ on real SVE silicon, and Track D's status flips to done.
    (VL=32B), NVIDIA Grace (VL=16B) or A64FX (VL=64B) would additionally cover
    wider *native* VLs, but the sign-off this task asks for — the trampoline
    executing on silicon rather than under TCG — is met on the hosted runner.
-   A remaining honest gate: no native VL **other than 16 B** has been executed
+   A remaining genuine gate: no native VL **other than 16 B** has been executed
    on hardware (the 48/128/256 B legs remain qemu-emulated).
 2. **Done** — `make WERROR=1 test && make WERROR=1 check` ran green on that
    runner with the SVE test *executing*, and the silicon facts are recorded
@@ -730,7 +730,7 @@ steering `QEMU_CPU`, now produced natively.
   Linux 6.17.0-1020-azure, VL=16 B; `check` 57/0).
 - The CI step above fails the arm64 `test` leg if that line ever self-skips,
   so the claim stays true rather than being re-asserted from memory.
-- Still honestly gated: a **native VL other than 16 B** (Graviton3 at 32 B,
+- Still candidly gated: a **native VL other than 16 B** (Graviton3 at 32 B,
   A64FX at 64 B). The 48/128/256 B legs are qemu TCG and are reported as such.
 
 ## Task order & parallelism

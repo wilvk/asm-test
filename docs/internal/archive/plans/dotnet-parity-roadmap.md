@@ -205,10 +205,10 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > **Increment 1 LANDED (2026-07-08, `c2327bc`).** The §Z1 in-process whole-window trio
 > (`begin_window`/`end_window`/`render_window`) now ships in Node (`HwTrace.window(fn)`) and
 > Java (`HwTrace.window(Runnable)`) — the empty-ctor `using (new AsmTrace())` substrate,
-> validated over a native leaf in each Docker lane. It is honest-but-noisy: single-stepping
+> validated over a native leaf in each Docker lane. It is faithful-but-noisy: single-stepping
 > the runtime records the FFI dispatch + runtime, so the traced routine's addresses are a
 > *subset* (a V8 call ~100k insns, captured cleanly and subset-verified; a HotSpot+FFM call
-> exceeds the internal `SS_WINDOW_CAP` 1<<20 and honestly truncates). **This form is SAFE
+> exceeds the internal `SS_WINDOW_CAP` 1<<20 and faithfully truncates). **This form is SAFE
 > only for a tight native-leaf body** — arming single-step on the managed thread for an
 > arbitrary managed block is the SIGTRAP footgun; the doc comments route that case to the
 > out-of-process path in [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md)
@@ -223,7 +223,7 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > the runtime's own thread** (the in-process single-step footgun the §Z1 `window()` form warns
 > about). The `result` is EXACT (read from the caller's RAX at the `ret`); the instruction STREAM
 > is **best-effort over a live runtime** — single-stepping the runtime thread can be interrupted
-> by its async signals, so the wrapper honestly reports `truncated` with a partial `offsets` (the
+> by its async signals, so the wrapper accurately reports `truncated` with a partial `offsets` (the
 > same posture dotnet takes: its `outOfProcess` test asserts result + armed, not stream
 > completeness). Live-validated on the host (yama `ptrace_scope=1` + `PR_SET_PTRACER`) and in the
 > `docker-hwtrace-node` / `-java` lanes; self-skips cleanly where the reverse-attach is refused.

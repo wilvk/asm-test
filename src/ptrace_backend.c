@@ -1599,7 +1599,7 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee,
  * active is REFUSED (returns 0, timer/handler left exactly as the first descent set them)
  * instead of silently clashing; the refused descent still terminates correctly — the
  * per-step CLOCK_MONOTONIC deadline check bounds it even with no watchdog — it is just
- * marked truncated + depth_capped up front (honest degradation, not a silent clash). */
+ * marked truncated + depth_capped up front (graceful degradation, not a silent clash). */
 static volatile sig_atomic_t descend_alarm_fired;
 static volatile sig_atomic_t descend_active;
 static void descend_alarm_handler(int sig) {
@@ -1705,7 +1705,7 @@ static int descend_core(dctx_t *c) {
         !descend_watchdog_arm(d->watchdog_ms, &saved_sa, &saved_it)) {
         /* A second L3 descent arrived while one is already active: run WITHOUT the
          * ITIMER_REAL watchdog (the per-step deadline check below still bounds it) and
-         * mark the honest degradation up front rather than silently clashing timers. */
+         * mark the graceful degradation up front rather than silently clashing timers. */
         watchdog = 0;
         asmtest_descent_mark_truncated(d);
         asmtest_descent_mark_depth_capped(d);
@@ -1788,7 +1788,7 @@ static int descend_core(dctx_t *c) {
             /* The tracee executed its OWN int3 (a JVM safepoint poll, a .NET
              * breakpoint) — descent cannot safely SINGLESTEP across a signal
              * delivery (measured fatal: the re-armed trap fires inside a masked
-             * handler), so the descent ends here, honestly, rather than mis-attribute
+             * handler), so the descent ends here, faithfully, rather than mis-attribute
              * a handler's instructions to the traced region. */
             asmtest_descent_mark_truncated(d);
             if (c->flat)
@@ -1876,7 +1876,7 @@ static int descend_core(dctx_t *c) {
                             uint32_t ndepth = top->depth + 1;
                             /* The parent's pending-call is consumed by this push; clearing
                              * it means a later non-return exit of the parent (a tail-jump)
-                             * degrades to honest truncation, not a mis-parented frame. */
+                             * degrades to faithful truncation, not a mis-parented frame. */
                             top->last_was_call = 0;
                             top_i++;
                             memset(&stack[top_i], 0, sizeof stack[top_i]);
@@ -2355,7 +2355,7 @@ asmtest_bs_precover_build(const uint8_t *code, size_t len, uint64_t base_ip,
             size_t l = asmtest_disas_probe(PTRACE_TRACE_ARCH, code, len, walk,
                                            &is_call, &is_ret);
             if (l == 0)
-                break; /* undecodable: run ends here, incomplete but honest */
+                break; /* undecodable: run ends here, incomplete but truthful */
             bs_pc_kind_t kind = BS_PC_NONE;
             uint64_t target = 0;
             if (asmtest_disas_is_branch(PTRACE_TRACE_ARCH, code, len, walk)) {
@@ -2644,7 +2644,7 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
              * breakpoint — the tier's stated managed-runtime target), NOT a BTF
              * block completion. BTF cannot bridge the kernel-injected transfer into
              * the handler, so record the executed run up to the trap (the int3
-             * included) and truncate honestly — never fabricate the instructions
+             * included) and truncate faithfully — never fabricate the instructions
              * after it. Forward the signal to the tracee via PTRACE_CONT: NEVER
              * SINGLEBLOCK/SINGLESTEP with the signal attached (measured fatal — the
              * re-armed trap fires inside the masked handler). With no handler the
@@ -2697,7 +2697,7 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
         if (br == ASMTEST_BS_AMBIGUOUS) {
             /* The definite prefix is recorded and the capture is truncated. We still
              * know exactly where the tracee IS (`pc`), so keep tracing from there —
-             * an honest gap beats abandoning the rest. But `last_off` is only the
+             * a faithful gap beats abandoning the rest. But `last_off` is only the
              * prefix's end, not a real terminator, so it must NOT be fed to
              * classify_region_exit: if the block also left the region, stop here. */
             overflow = 1;
@@ -2842,7 +2842,7 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
         if (bs_sigtrap_is_app(pid)) {
             /* The foreign target executed its OWN int3 (a JVM safepoint poll, a
              * .NET breakpoint), NOT a BTF block completion. Record the executed run
-             * up to the trap (int3 included) and truncate honestly, then leave the
+             * up to the trap (int3 included) and truncate faithfully, then leave the
              * target in its SIGTRAP signal-delivery stop for the caller — it is
              * foreign and is NEVER killed. A caller that wants the target's own
              * breakpoint semantics to proceed detaches with
@@ -2873,7 +2873,7 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
             break;
         }
         if (br == ASMTEST_BS_AMBIGUOUS) {
-            /* Honest gap: prefix recorded, capture truncated, keep tracing from the
+            /* Faithful gap: prefix recorded, capture truncated, keep tracing from the
              * stop we know. `last_off` is not a real terminator, so it must not reach
              * classify_region_exit — if the block also left the region, stop here.
              * The target is foreign: never killed, just left where it is. */
@@ -3461,7 +3461,7 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
             }
             if (wr == ASMTEST_BS_AMBIGUOUS)
                 overflow =
-                    1; /* honest gap: the definite prefix is recorded, the
+                    1; /* faithful gap: the definite prefix is recorded, the
                                * capture is truncated, and we know where the tracee
                                * IS (`pc`) — so keep capturing the rest. */
         }
@@ -3594,7 +3594,7 @@ int asmtest_ptrace_trace_attached_window_stop_blockstep(
                 break;
             }
             if (wr == ASMTEST_BS_AMBIGUOUS)
-                overflow = 1; /* honest gap: definite prefix recorded, capture
+                overflow = 1; /* faithful gap: definite prefix recorded, capture
                                * truncated, tracee position known — keep going */
         }
         if (at_mode) {
@@ -3958,7 +3958,7 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
 
         if (bs_sigtrap_is_app(pid)) {
             /* The foreign target executed its OWN int3/breakpoint. Truncate
-             * honestly and leave it in its SIGTRAP signal-delivery stop — it is
+             * faithfully and leave it in its SIGTRAP signal-delivery stop — it is
              * foreign and is NEVER killed; the caller owns signal/detach policy
              * (mirrors the attached block-step driver's app-trap handling). */
             if (entered)
@@ -4062,7 +4062,7 @@ static void descend_set_deadline(dctx_t *c, const asmtest_descent_t *d) {
  *    dlsym entry points of the classic blocking libc/pthread calls — one-byte
  *    deny regions, so only a call landing exactly on the entry is refused.
  *    The watchdog would eventually break a blocked descended syscall anyway;
- *    denying descent keeps the trace honest (an edge) instead of truncated.
+ *    denying descent keeps the trace faithful (an edge) instead of truncated.
  *
  * Failure here is deliberately soft: no /proc or no dlsym just leaves fewer
  * default regions — budget + watchdog remain the hard backstops. */

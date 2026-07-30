@@ -7,7 +7,7 @@
 // dt_nav_go. Nothing here draws (that is timeline_draw.cpp / fabric_imgui.cpp);
 // nothing here fabricates structure (docs 04/08 layout ban): a sparse trace
 // yields a sparse strip — one bucket per step the recording actually recorded,
-// never a padded [0, nsteps) range invented to look complete. That honesty rule
+// never a padded [0, nsteps) range invented to look complete. That fidelity rule
 // is the load-bearing constraint of the minimap and is pinned by test_overview.
 #ifndef ASMDESK_VIEWS_OVERVIEW_H
 #define ASMDESK_VIEWS_OVERVIEW_H

@@ -226,10 +226,10 @@ int main() {
     ImGui::GetIO().ConfigDebugHighlightIdConflicts = false;
     // Real monospace font + merged Codicons (13 F3), baked DPI-aware at the
     // window's content scale (20 T5). Paths are compiled in (ASMTEST_*_TTF); a
-    // stripped install degrades honestly to the bitmap font.
+    // stripped install degrades gracefully to the bitmap font.
     asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
                         ASMTEST_FA_TTF, 15.0f, settings.content_scale);
-    // The base style + honesty-chrome theme follow the persisted preference (T5).
+    // The base style + fidelity-chrome theme follow the persisted preference (T5).
     asmdesk::dt_set_light_theme(settings.light_theme);
     if (settings.light_theme)
         ImGui::StyleColorsLight();

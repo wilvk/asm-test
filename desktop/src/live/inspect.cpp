@@ -133,7 +133,7 @@ AttachVerdict attach_verdict(const AttachFacts &f) {
     if (f.yama_scope == 1) {
         // Scope 1 permits a DESCENDANT, or a target that opted in via
         // PR_SET_PTRACER. Whether we are a descendant is knowable, but whether
-        // the target opted in is not readable from outside — so an honest
+        // the target opted in is not readable from outside — so a truthful
         // Unknown beats a confident Yes that fails at attach.
         if (f.target_opted_in) {
             v.verdict = Attach::Yes;
@@ -172,7 +172,7 @@ std::string remedy_command(const std::string &advice) {
     //    "reboot", so running this over the REMEDY correctly yields "" there.
     //  - make cli: the protocol-mismatch fix (stale build/asmspy).
     // Everything else — a CAP_* relaunch, a uid change, an i386 ABI mismatch, a
-    // kernel rebuild, hardware — has no honest one-liner, so it returns "" and
+    // kernel rebuild, hardware — has no genuine one-liner, so it returns "" and
     // the caller keeps showing the prose remedy alone.
     if (has("perf_event_paranoid"))
         return "sudo sysctl -w kernel.perf_event_paranoid=2";
@@ -304,7 +304,7 @@ const char *local_inspect_unavailable() {
     // + /proc on Linux (libasmspy.h's preamble), so even a perfect macOS/BSD
     // process lister would enumerate targets that can never be attached — a
     // table of confident Yes verdicts none of which hold. Saying so is the
-    // honest output; `ssh <linux-host> asmspy --serve` is the path that works.
+    // correct output; `ssh <linux-host> asmspy --serve` is the path that works.
     return "local process inspection needs /proc, which this host does not "
            "have. The tracer engines are Linux-only besides, so a list here "
            "would offer targets that could never be attached. Capture against "
@@ -393,7 +393,7 @@ bool parse_auto_pick(const json &b, AutoPick *out) {
     a.attempt = p.value("attempt", 0);
     a.of = p.value("of", 0);
     // `evidence` is what the label turns on, so a pick without one is not a
-    // pick we know how to present honestly.
+    // pick we know how to present faithfully.
     if (a.evidence.empty())
         return false;
     if (out)
@@ -412,7 +412,7 @@ bool pick_is_weak_evidence(const AutoPick &p) {
 bool pick_is_idle_window(const AutoPick &p) {
     // The serve loop reuses the pick channel for an empty sample window (39 T3):
     // evidence "idle" (it observed nothing this window — NOT an entry/residency
-    // claim) with the sentinel func "(idle window)". Keyed on the honest evidence
+    // claim) with the sentinel func "(idle window)". Keyed on the genuine evidence
     // value; the func is a secondary tell.
     return p.evidence == "idle" || p.func == "(idle window)";
 }
@@ -465,7 +465,7 @@ std::string pick_walk_note(const AutoPick &p) {
     return "candidate " + std::to_string(p.attempt) + " of " +
            std::to_string(p.of) +
            " — the previous pick was not seen ENTERING within the entry wait, "
-           "which is an honest refusal about that candidate and not a fact "
+           "which is a genuine refusal about that candidate and not a fact "
            "about the target";
 }
 

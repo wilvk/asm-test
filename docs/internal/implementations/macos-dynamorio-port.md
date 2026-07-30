@@ -450,7 +450,7 @@ as T5.
   harnesses green.
 - The plan's M1a section records the native-Intel pass and the Rosetta verdict
   (pass or documented-unsupported with the observed failure).
-- The Rosetta leg self-skips honestly when no Apple Silicon host is available:
+- The Rosetta leg self-skips transparently when no Apple Silicon host is available:
   record "not run — no Apple Silicon hardware" rather than guessing.
 
 ### T7 — M1b: platform exec-memory helpers + arm64 ENOSYS in asm_exec_native  (M, depends on: T5)
@@ -540,7 +540,7 @@ hardened-interpreter limitation is documented as a limitation, not a TODO.
    (plan option (b)): `make drtrace-test-macos DYNAMORIO_HOME=<arm64 DR>` on
    Apple Silicon. Do not add arm64 byte fixtures — `ROUTINE[]`
    ([test_drtrace.c](../../../examples/test_drtrace.c) lines 47-54) stays
-   x86-64-only. Record honestly in the plan that on arm64 the `MAP_JIT`
+   x86-64-only. Record faithfully in the plan that on arm64 the `MAP_JIT`
    helpers are therefore exercised to compile + allocation smoke, not through
    a generated-code trace; a future arm64 fixture is a separate decision.
 4. Document the binding limitation (T9 ships the text): generated code is

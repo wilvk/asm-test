@@ -82,7 +82,7 @@ in step order, alongside its `df_step` stream.
 **Steps.**
 1. In `df_on_mem` ([dataflow_emu.c:295-297](../../../src/dataflow_emu.c#L295)),
    record `{step, ea, size, rw}` per access into a caller-owned buffer (a new
-   optional sink array, armed like the regfile ring — off by default, honest
+   optional sink array, armed like the regfile ring — off by default, faithful
    overflow via a `truncated` flag).
 2. Serialize the buffer through the shared sink loop next to `df_step`.
 3. Gate it behind an opt-in (`--mem` on the recorder), off by default so the
@@ -119,7 +119,7 @@ torn/perturbing under the labelled banner; parity test green in both docker lane
   divergence view is a new consumer (a follow-up brief, not this root).
 - **Misaligned / uninit-read** expansion rows become derivable from `{ea,size}`.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - `mem` carries the **effective address and width**, not the bytes read/written
   (that is the `wide[]` value channel, [R1](28-schema-freeze-completion.md) T3) and
@@ -147,4 +147,4 @@ torn/perturbing under the labelled banner; parity test green in both docker lane
 Schema/D5 [01](01-asmtrace-format.md); consumer [10](10-spacetime-3d-overview.md)
 ([terrain.cpp](../../../desktop/src/space/terrain.cpp)); producers
 [dataflow_emu.c](../../../src/dataflow_emu.c) (emulator) and the `--dataflow`
-engine (live, D9). Golden/honesty D6/D7.
+engine (live, D9). Golden/fidelity D6/D7.

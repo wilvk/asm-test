@@ -1,4 +1,4 @@
-// timepos.h — ONE time-position widget, two honest variants (24 T4 / F16).
+// timepos.h — ONE time-position widget, two faithful variants (24 T4 / F16).
 //
 // Five different "move through time" controls had drifted across the views
 // (SliderInt playheads in the scrubber/abixray/loom/3D-HUD, prev/next in
@@ -12,7 +12,7 @@
 //                       target ran unobserved; a slider would draw that gap as
 //                       elapsed captured time). The discrete case is VISIBLY
 //                       MARKED as intentional — a glyph + a hover carrying the
-//                       verbatim reason — so it reads as a deliberate honesty
+//                       verbatim reason — so it reads as a deliberate fidelity
 //                       choice, not a missing scrubber (F16).
 //
 // The reason strings live in ONE registry (dt_timepos_discrete_reason), so a
@@ -28,7 +28,7 @@ namespace asmdesk {
 // A continuous scrub. `t` in [0, total]. Returns true if it moved this frame.
 bool dt_timepos_scrub(const char *label, int *t, int total);
 
-// A discrete step. `idx` in [0, count). `reason` is the verbatim honesty note
+// A discrete step. `idx` in [0, count). `reason` is the verbatim fidelity note
 // (why this axis is discrete, not scrubbable); it is shown as an always-visible
 // marker with the reason on hover. Returns true if `idx` moved this frame.
 bool dt_timepos_step(const char *label, int *idx, int count, const char *reason);

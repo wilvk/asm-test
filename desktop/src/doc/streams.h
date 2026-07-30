@@ -136,7 +136,7 @@ struct SurveyEdge {
 
 // One `blame` backward-attribution (33 R6 T1): the value at `step`/`off`
 // (identified by the optional `loc`) and its ascending backward def-use cone —
-// the producing steps, INCLUDING the sink. `born_untraced` is the honesty
+// the producing steps, INCLUDING the sink. `born_untraced` is the fidelity
 // verdict: the value has no traced producer (the cone is the sink alone), so its
 // provenance starts at instrumentation — never presented as an empty cone.
 struct BlameAttr {
@@ -169,7 +169,7 @@ struct Streams {
     std::vector<BlameAttr> blame;      // `blame` events (33 R6 T1)
     std::vector<StateDelta> statediff; // `statediff` events (33 R6 T2)
 
-    // The Recording's honesty facts, lifted so a builder needs only this.
+    // The Recording's fidelity facts, lifted so a builder needs only this.
     bool truncated = false; // footer truncation OR torn OR a truncated coverage
     bool torn = false;
     uint64_t lost = 0;
@@ -189,7 +189,7 @@ struct Streams {
 
     // The header's `code` routine identity (28 R1 T1), lifted so dt_diff_build
     // can refuse a wrong-routine pair. code_present is false when the producer
-    // omitted it, and the diff then keeps its honest "identity not checked"
+    // omitted it, and the diff then keeps its faithful "identity not checked"
     // caveat rather than asserting sameness.
     bool code_present = false;
     std::string code_sha;  // lowercase-hex SHA-256 of the routine bytes

@@ -10,7 +10,7 @@
 
 ## Why this work exists
 
-Every view doc (04–09) needs a place to render into and a model to render from. This doc builds exactly that: the `desktop/` tree, pinned Dear ImGui + nlohmann/json fetched the way the repo pins DynamoRIO, `mk/desktop.mk` + `Dockerfile.desktop`, two binaries (full app, GPL-2.0 as a whole per D4; render-only viewer with zero engine deps), the `.asmtrace` document model enforcing the plan-D1 forward-compat and honesty rules, the reuse seam for the asmspy view-model headers, and the golden-recording smoke. Afterwards a view doc adds a `desktop/src/ui/*.cpp` file and a tab — no build or loader work. Two facts below were established by compiling, not reading: the asmspy headers do **not** build as C++17 as the plan implies (T4/T5 fix it), and the autoregion include-order dependency the plan's D5 records is real.
+Every view doc (04–09) needs a place to render into and a model to render from. This doc builds exactly that: the `desktop/` tree, pinned Dear ImGui + nlohmann/json fetched the way the repo pins DynamoRIO, `mk/desktop.mk` + `Dockerfile.desktop`, two binaries (full app, GPL-2.0 as a whole per D4; render-only viewer with zero engine deps), the `.asmtrace` document model enforcing the plan-D1 forward-compat and fidelity rules, the reuse seam for the asmspy view-model headers, and the golden-recording smoke. Afterwards a view doc adds a `desktop/src/ui/*.cpp` file and a tab — no build or loader work. Two facts below were established by compiling, not reading: the asmspy headers do **not** build as C++17 as the plan implies (T4/T5 fix it), and the autoregion include-order dependency the plan's D5 records is real.
 
 ## What already exists (verified 2026-07-23)
 
@@ -155,9 +155,9 @@ docker-desktop: docker-bindings-base
 - `make docker-desktop` exits 0; `make help` lists the four new targets.
 - Without GLFW, `make desktop` prints guidance and fails — no raw compiler errors.
 
-### T3 — Recording/Workspace model + NDJSON loader + dishonesty fixtures  (M, depends on: T1, T2)
+### T3 — Recording/Workspace model + NDJSON loader + low-fidelity fixtures  (M, depends on: T1, T2)
 
-**Goal.** The document model every view consumes: `.asmtrace` NDJSON → `Recording` (events grouped by kind + mandatory provenance), a `Workspace` set of them (plan D3: every view accepts one or two), forward-compat + honesty rules enforced.
+**Goal.** The document model every view consumes: `.asmtrace` NDJSON → `Recording` (events grouped by kind + mandatory provenance), a `Workspace` set of them (plan D3: every view accepts one or two), forward-compat + fidelity rules enforced.
 
 > **Schema reconciliation (code wins, done in this change).** An earlier draft of
 > this task assumed a `"kind"` event field, a `provenance.truncated`/`drops`
@@ -179,7 +179,7 @@ docker-desktop: docker-bindings-base
    - `"asmtrace" > 1` → error naming both majors (reject newer major, by name).
    - Header must contain a `"provenance"` object → else error (D7: a stream without provenance is not a recording). Within it, `"exact"` is mandatory and **must not be defaulted** (schema) → a missing/non-bool `exact` is a reject. `backend`/`trust`/`redacted` are read leniently; the top-level `producer` and `arch` are read when present.
    - Every event line must be a JSON object with string **`"k"`** → else error with line number. Exception: an unparseable **final** line (EOF with no trailing newline — a producer that died mid-write) is kept as `torn = true`, never silently dropped; an unparseable **non-final** line is a hard error.
-   - The `end` footer (`"k":"end"`) is lifted into the honesty fields, not stored in `by_kind`: `end.truncated` → `end_truncated`, `end.drops.{lost,throttled}` → `drops_*`, `end.events` → `declared_events` (a self-check). **No `end` event seen ⇒ `torn = true`** (schema: a file without an `end` is TORN).
+   - The `end` footer (`"k":"end"`) is lifted into the fidelity fields, not stored in `by_kind`: `end.truncated` → `end_truncated`, `end.drops.{lost,throttled}` → `drops_*`, `end.events` → `declared_events` (a self-check). **No `end` event seen ⇒ `torn = true`** (schema: a file without an `end` is TORN).
    - Unknown kinds load fine: grouped under their kind string in `by_kind`, counted in `unknown_kinds` (the v1 registry is the 16 kinds incl. `end`; the schema's *reserved* kinds are unknown to a v1 reader too). Unknown fields stay in `Event::body`, ignored. Never an error (forward compat).
    - D10: `trace`/`dataflow` events MAY carry a `"disasm"` string; it rides untouched in `Event::body` — absence is normal (views degrade to offsets).
 3. Commit hand-written fixtures under `desktop/test/fixtures/`, one per rule: `min-trace.asmtrace` (valid; one `trace` with `disasm`, one without), `truncated.asmtrace` (`end.truncated:true` + a truncated `coverage`), `dropped.asmtrace` (statistical `survey` + `end.drops.lost>0`/`throttled`), `redacted.asmtrace` (syscall events, no `payload` field, `provenance.redacted:true`), `unknown-kind.asmtrace` (an out-of-registry `k` **and** a known kind with an extra field), `newer-major.asmtrace` (`{"asmtrace": 99, …}`), `missing-provenance.asmtrace`, `torn-tail.asmtrace` (valid lines then a cut final line, no trailing newline).
@@ -210,7 +210,7 @@ struct Recording {
     std::string arch;
     std::map<std::string, std::vector<Event>> by_kind;   // never holds `end`
     uint64_t unknown_kinds = 0;  // events kept but not in the v1 registry
-    // honesty facts off the `end` footer (or its absence):
+    // fidelity facts off the `end` footer (or its absence):
     bool has_end = false;
     uint64_t declared_events = 0;  // footer's own count (a self-check)
     bool end_truncated = false;
@@ -243,7 +243,7 @@ struct Workspace {
 
 **Done when.**
 - `make desktop-test` runs `test_recording` green on a bare host and inside `make docker-desktop`.
-- Each dishonesty fixture produces its asserted outcome (error vs surfaced flag) — the D7 laws are executable, not prose.
+- Each low-fidelity fixture produces its asserted outcome (error vs surfaced flag) — the D7 laws are executable, not prose.
 
 ### T4 — graphsort comparator-context lift + C++ compat  (S, depends on: none)
 
@@ -372,7 +372,7 @@ const char *shell_banner(const Recording &r); // pure; nullptr when clean, else
 **Goal.** `desktop-test` proves the viewer opens every committed golden recording: parse + model invariants + a 3-frame null render — the schema-stability gate on the consumer side (plan DX golden-recording tests).
 
 **Steps.**
-1. Create `desktop/test/test_golden.cpp`: iterate `tests/golden-asmtrace/*.asmtrace` (dir from a make-provided define; corpus committed by 01 per D6). Per file: `load_recording_file` must succeed; invariants: `version == 1`, `provenance.producer`/`backend` non-empty, event count > 0, sum of `by_kind` sizes == parsed event lines, and — for the corpus's dishonesty fixtures (D7) — `truncated() ⇒ shell_banner(r) != nullptr`. Then open all recordings into one `ShellState` and run the 3-frame null loop. An empty or missing dir is a **FAILURE**: the corpus is committed, absence is a broken checkout, and a test that can only self-skip is not a test ([CLAUDE.md](../../../CLAUDE.md)).
+1. Create `desktop/test/test_golden.cpp`: iterate `tests/golden-asmtrace/*.asmtrace` (dir from a make-provided define; corpus committed by 01 per D6). Per file: `load_recording_file` must succeed; invariants: `version == 1`, `provenance.producer`/`backend` non-empty, event count > 0, sum of `by_kind` sizes == parsed event lines, and — for the corpus's low-fidelity fixtures (D7) — `truncated() ⇒ shell_banner(r) != nullptr`. Then open all recordings into one `ShellState` and run the 3-frame null loop. An empty or missing dir is a **FAILURE**: the corpus is committed, absence is a broken checkout, and a test that can only self-skip is not a test ([CLAUDE.md](../../../CLAUDE.md)).
 2. Add `test_golden` to the `desktop-test` recipe (after the other three) — it thereby runs inside `docker-desktop` with no extra wiring. **Land this task only after 01's corpus is committed**; never land it early behind a skip.
 3. Byte-stability round-trips are 01's gate (D6); this asserts openability + invariants only — no golden regeneration here.
 
@@ -418,7 +418,7 @@ Critical path: **T1 → T2 → T3 → T6 → T7**; off it: T4 → T5, and T8.
 ## Out of scope
 
 - **Any real view** (slice explorer, timelines, canvas, diff UI, the Loom) — docs [04](04-replay-views.md)/[05](05-loom-day-one.md); **door behavior** — docs 06/08; **live capture / `--serve`** — 07; **record modes, exporters, schema/serializers** — 01/02; **teaching producers** — [09](09-teaching-producers.md).
-- **Windows/macOS packaging, installers, signing** — the plan's distribution-honesty stance (build-from-source + docker lane) stands for v1.
+- **Windows/macOS packaging, installers, signing** — the plan's distribution-fidelity stance (build-from-source + docker lane) stands for v1.
 - **A file-picker dependency** — the open dialog is a text field until a view doc needs more.
 - **Editing `.github/workflows/ci.yml` or `hw.yml`** — recorded above as the follow-up gate.
 - **The asmspy TUI and engines** — untouched except T4's surgical cli/ edits, whose TUI behavior `test_graphsort` pins unchanged.

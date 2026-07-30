@@ -26,7 +26,7 @@ LBR waypoint model with **no 16-entry ceiling** and no ptrace child. External
 research (see Research notes) settled the open question the plan left: Linux
 does **not** preserve a user-written BTF across a context switch, so this tier
 is deliberately scoped to a pinned, small-routine envelope with per-trap
-re-arm and honest truncation — and a kernel helper is explicitly **not** built.
+re-arm and faithful truncation — and a kernel helper is explicitly **not** built.
 
 ## What already exists (verified 2026-07-17)
 
@@ -69,7 +69,7 @@ re-arm and honest truncation — and a kernel helper is explicitly **not** built
   `asmtest_amd_decode_stitched` (line 708) — unlike `asmtest_amd_decode`
   (line 530), it does **not** flag `truncated` when `nbr >=`
   `asmtest_amd_lbr_depth()` (the 16-deep check at lines 525–527), and it takes
-  a `gap` honest-loss parameter.
+  a `gap` faithful-loss parameter.
 - [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) — the
   declaration pattern to mirror: the `asmtest_amd_msr_trace` /
   `asmtest_amd_msr_available` block at lines 616–635 (callback-thunk capture +
@@ -283,7 +283,7 @@ docker-hwtrace-msr` prints `# SKIP in-process BTF: …` and exits 0.
 ### T3 — `asmtest_ss_btf_trace()`: the capture + `(from,to)` synthesis into the AMD replay loop  (M, depends on: T1, T2)
 
 **Goal.** One `SIGTRAP` per taken branch around `run_fn(arg)`, post-passed into
-the same `asmtest_trace_t` the other tiers fill, honestly `truncated` whenever
+the same `asmtest_trace_t` the other tiers fill, faithfully `truncated` whenever
 BTF persistence cannot be proven.
 
 **Steps.**
@@ -345,15 +345,15 @@ BTF persistence cannot be proven.
   ([src/amd_backend.c](../../../src/amd_backend.c) line 708) — chosen over
   `asmtest_amd_decode` because the synthesized sequence is unbounded and the
   16-deep overflow flag at lines 525–527 would falsely truncate it; `gap`
-  carries honest loss instead.
-- **Honest-truncation belts**, each ORed into `trace->truncated`:
+  carries the loss faithfully instead.
+- **Faithful-truncation belts**, each ORed into `trace->truncated`:
   (1) stop-buffer overflow; (2) `gap` from pairing/decode; (3) **any**
   context switch during the armed window —
   `(ru_after.ru_nvcsw + ru_after.ru_nivcsw) >
   (ru_before.ru_nvcsw + ru_before.ru_nivcsw)` — because a switched-out thread
   without `TIF_BLOCKSTEP` gets no BTF restore (Research notes), so
   completeness is unprovable; (4) zero in-region stops → `truncated = true`,
-  `rc = ASMTEST_HW_OK` (the `msr_lbr.c` lines 198–204 "honest, never
+  `rc = ASMTEST_HW_OK` (the `msr_lbr.c` lines 198–204 "faithful, never
   empty-complete" shape).
 - **Contract** (state it in the header comment): pure-compute **leaf**
   routines only — no syscalls, no `POPF`/`IRET`, no in-routine signal
@@ -454,7 +454,7 @@ else the test self-skips with a printed reason.
   DEBUGCTL.BTF`). Copy the `ROUTINE` mmap/`mprotect` setup from
   `test_singlestep_live` (lines 2099–2107); drive `fn(20,22)` through a
   static thunk (the `msr_run_loop` shape, line 1219). Assert `rc ==
-  ASMTEST_HW_OK`, result 42, and honest coverage
+  ASMTEST_HW_OK`, result 42, and faithful coverage
   (`insns_total > 0 || truncated`); when `!truncated`, assert the exact
   5-instruction stream `[0x0,0x3,0x6,0xc,0x11]` and the `{0, 0x11}` block
   pair — the same `EXPECT` array as line 2124, which IS the cross-backend
@@ -462,7 +462,7 @@ else the test self-skips with a printed reason.
 - `test_ss_btf_loop`: the differentiator — a 20-trip `LOOP` run takes 19
   back-edges, past any 16-entry LBR window; when `!truncated` assert
   `insns_total == 62` (1 + 20×3 + 1, the same 62-step count the W2 plan
-  validated) and always assert honesty (`62 || truncated`).
+  validated) and always assert fidelity (`62 || truncated`).
 - Both tests must tolerate `truncated` (a context switch mid-region is
   legitimate and flagged, not a bug) — but assert that a truncated run never
   reports the full parity stream as complete.
@@ -480,7 +480,7 @@ self-skip; live assertions run only on the bare-metal MSR lane.
 - Bare-metal AMD box (Zen 5 9950X or Zen 2 4900HS — BTF is baseline AMD64,
   both qualify): `make docker-hwtrace-msr` exits 0 with the live `CHECK`
   lines passing; run it 20× in a loop and confirm any `truncated=1` runs
-  still pass (honesty, not flakes).
+  still pass (fidelity, not flakes).
 - `make hwtrace-test` directly on this macOS host still exits 0 (the Darwin
   stub returns 0 → skip).
 
@@ -495,7 +495,7 @@ distrust this tier; the two source plans stop calling W3 "forward-look".
    "In-process BTF block-step (branch-granular, privileged)": what it is (one
    trap per taken branch, no fork, no 16-entry ceiling), the gates
    (bare-metal x86-64 Linux, `msr` module + `CAP_SYS_ADMIN`, i.e.
-   `docker-hwtrace-msr`), the leaf-routine contract, the honest-truncation
+   `docker-hwtrace-msr`), the leaf-routine contract, the faithful-truncation
    belts (context-switch delta, lost-trap desync, buffer overflow), and a
    short `asmtest_ss_btf_available()` / `asmtest_ss_btf_trace()` snippet.
    Position it in the cascade: below the shipped ptrace block-step (which is
@@ -508,7 +508,7 @@ distrust this tier; the two source plans stop calling W3 "forward-look".
    amend the three W3 status sites — the "stays forward-look" sentence at
    lines 154–155, the Phase-5 status bullet at lines 311–312, and the W3
    paragraph at lines 509–521 — from "needs a kernel helper / uapi patch" to:
-   landed as the raw-MSR pinned-envelope tier with per-trap re-arm and honest
+   landed as the raw-MSR pinned-envelope tier with per-trap re-arm and faithful
    truncation; the robust general (context-switch-proof) form remains
    kernel-coupled and already ships as `PTRACE_SINGLEBLOCK`; no non-ptrace
    block-step uapi exists upstream (link this doc).
@@ -568,8 +568,8 @@ Critical path: `T1 → T3 → T5 → T6` (T2 overlaps T1; T4 overlaps T5).
   An out-of-tree module is rejected: it cannot be validated in any Docker
   lane (loading a module is a host-kernel change, the same class of gate as
   hardware), and it would duplicate a shipped capability. The raw-MSR tier
-  covers only the no-fork niche, honestly.
-- **Honesty invariant.** Never emit partial as complete: every unprovable
+  covers only the no-fork niche, candidly.
+- **Fidelity invariant.** Never emit partial as complete: every unprovable
   window (context switch observed, lost-trap desync, ambiguity, overflow,
   zero in-region stops) sets `truncated`. On AMD validation runs, remember
   the binding global position: `truncated=0` where escalation must fire is a
@@ -632,7 +632,7 @@ Externally verified for this doc; do not re-derive:
 - AMD LBR capture/docs work, the Zen 4+ floor correction, and the
   `asmtest_amd_freeze_available` retirement —
   [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md); IBS backend
-  honesty — [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md).
+  fidelity — [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md).
 - Whole-window/zero-config scoped-tracing composition that might one day
   cascade into this tier —
   [managed-wholewindow-compose.md](managed-wholewindow-compose.md),

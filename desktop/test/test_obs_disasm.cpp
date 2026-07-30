@@ -64,7 +64,7 @@ int main() {
     // --- obs_disasm_byte_at: the memory editor's ReadFn (14 T4) --------------
     // The single-byte form the interactive byte view resolves each cell with. It
     // agrees with the run form, contrasts across versions (JIT churn), and — the
-    // honesty point — reports UNKNOWN rather than fabricating a byte.
+    // fidelity point — reports UNKNOWN rather than fabricating a byte.
     bool known = false;
     vt::eq("byte_at resolves the historical version",
            obs_disasm_byte_at(v, kBase + 4, 2, &known), uint8_t{0x55});
@@ -110,7 +110,7 @@ int main() {
            std::string("endbr64"));
     vt::eq("...LABELLED as the weaker source", grows[0].source,
            std::string("recorded disasm"));
-    vt::eq("neither bytes nor text is honest about it", grows[1].source,
+    vt::eq("neither bytes nor text is truthful about it", grows[1].source,
            std::string("unknown"));
 
     vt::golden("obs-codeimage.txt", obs_disasm_dump(v));

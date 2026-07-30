@@ -138,7 +138,7 @@ byte-identical). Both `docker-desktop` lanes green.
 
 ### T2 — surface the passes: a per-pass selector on the dataflow views, latest by default
 
-Make "per-pass Slice/Loom/Timeline" (the L2 headline) reachable, honestly. Cache the
+Make "per-pass Slice/Loom/Timeline" (the L2 headline) genuinely reachable. Cache the
 `SegmentedDataflow` per recording alongside `Streams` in the shell
 ([shell.cpp:231](../../../desktop/src/ui/shell.cpp#L231)) and add a per-recording
 **selected-pass** index defaulting to `latest()`. When a recording has **> 1** df

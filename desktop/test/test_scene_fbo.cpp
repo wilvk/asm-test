@@ -782,8 +782,8 @@ int main() {
     // 18 bytes wide on a 64x64 plane, so at 160x160 in the three-quarter view a
     // cell is barely a pixel and the plane's far corner disappears behind its
     // neighbour. The top-down preset is the view the doc prescribes for reading
-    // a cell ("3D to find, 2D to read" — camera.h's honest 2D-ish fallback), so
-    // asserting the recorded heat through it is the honest measurement, and it
+    // a cell ("3D to find, 2D to read" — camera.h's plain 2D-ish fallback), so
+    // asserting the recorded heat through it is the faithful measurement, and it
     // exercises the preset as a side effect.
     const int GW = 384, GH = 384;
     ColorFbo gcf;
@@ -886,7 +886,7 @@ int main() {
               "a sampled residency rendered as an exact tube");
 
         // The two checks above only say WHICH TOGGLE owns those pixels. They do
-        // not say the sampled mark LOOKS sampled — and that is the honesty
+        // not say the sampled mark LOOKS sampled — and that is the fidelity
         // invariant (scene.h "opaque exact tubes vs stippled statistical
         // residency"; terrain.h "a sampled residency ... must never render as
         // [an exact density]"; the doc's "different marks — solid tube vs

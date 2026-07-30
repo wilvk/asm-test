@@ -1,4 +1,4 @@
-# AMD IBS backend: honesty, record sizing, ABI guards, and the validation gate — implementation
+# AMD IBS backend: fidelity, record sizing, ABI guards, and the validation gate — implementation
 
 > **Sources.** Actioned from
 > [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P1, P3,
@@ -15,7 +15,7 @@
 
 ## Why this work exists
 
-The AMD IBS statistical-sampling lane is the project's "honest gaps" tier — it
+The AMD IBS statistical-sampling lane is the project's "disclosed gaps" tier — it
 exists to say truthfully what it saw and what it could not. Today it lies in
 four places: `ibs_probe` prints **AVAILABLE** on hosts where no sampling can
 open; the ring-loss heuristic is sized ~10× too small for callchain-enabled
@@ -379,7 +379,7 @@ the tree consumes.
    commit message ("the optional 5b asmspy `--graph` consumer is deferred").
 2. Rewrite the comment. Keep the `#define` itself — removing it breaks
    source-compatibility for any external caller and the phase-5 test; the fix
-   is honest labelling, not an ABI break.
+   is accurate labelling, not an ABI break.
 3. `make ibs-test` (compile check), `make docker-fmt` (pinned clang-format 18;
    plain `make fmt` needs `CLANG_FORMAT=clang-format-18`).
 
@@ -387,7 +387,7 @@ the tree consumes.
 
 ```c
 /* attach a frame-pointer caller stack per sample (PERF_SAMPLE_CALLCHAIN +
- * exclude_callchain_kernel). HONESTY NOTE: no in-tree consumer decodes the
+ * exclude_callchain_kernel). FIDELITY NOTE: no in-tree consumer decodes the
  * callchain — the drain parses PAST it to reach the RAW payload — so today
  * this flag buys no call-graph output; it costs ring bandwidth (records grow
  * to ~1.2 KB worst case) and a kernel get_callchain_buffers allocation that
@@ -724,7 +724,7 @@ Critical path: `T1+T2` → `T3+T4`; total is a few days of work for one person.
   `make docker-cli-ibs`. Everywhere else those paths self-skip with a printed
   reason — that is correct per CLAUDE.md (hardware gate). **Every deliverable
   in this doc except the positive-path observations is verifiable off-AMD**,
-  which is the point of the honesty work: record in the commit message which
+  which is the point of the fidelity work: record in the commit message which
   Done-when items were observed on AMD and which await the next
   [amd-hardware-validation.md](../amd-hardware-validation.md) run.
 - **No new dependencies**: no Dockerfile or pinning changes anywhere in this
@@ -819,5 +819,5 @@ Kernel facts below were verified against fetched pinned-tag sources
 - **The IBS-Op data channel** (DcLinAd/OpData2/OpData3 decoding) — a recorded,
   dated non-goal (review §3); no sibling doc owns it and none should.
 - **Wiring an actual callchain consumer** (asmspy `--graph` 5b): deliberately
-  NOT done here — T4 documents the deferral honestly instead of shipping an
+  NOT done here — T4 documents the deferral candidly instead of shipping an
   unconsumed capture path.

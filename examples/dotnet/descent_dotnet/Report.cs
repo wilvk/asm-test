@@ -61,7 +61,7 @@ internal static class Report
         else if (edges.Length > 0)
             Console.WriteLine("-> descent ran out of process against the live JIT'd Chain and recorded its call edges;\n"
                               + "   the callee reached through a runtime stub was stepped over (Leaf's final body was not\n"
-                              + "   in the allow-set at that address). The edges are the honest out-of-process record.");
+                              + "   in the allow-set at that address). The edges are the faithful out-of-process record.");
         else
             Console.WriteLine("-> descent ran out of process against the live JIT'd Chain; this pass recorded only its\n"
                               + "   own frame (the call-out did not resolve to the allow-listed Leaf body this run).");

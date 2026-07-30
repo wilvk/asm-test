@@ -259,7 +259,7 @@ bool pick_is_weak_evidence(const AutoPick &p);
 // reuses the pick channel to report each empty sample window — the sampler ran
 // and nothing qualified — with the sentinel func "(idle window)". It is NOT a
 // region pick: rendering it through the entry/residency label would claim the
-// capture observed something it did not. The pane shows the honest retry note
+// capture observed something it did not. The pane shows the faithful retry note
 // instead.
 bool pick_is_idle_window(const AutoPick &p);
 

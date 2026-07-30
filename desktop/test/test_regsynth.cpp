@@ -1,7 +1,7 @@
 // test_regsynth.cpp — 30 R3 T4: the Scrubber's register-history SYNTHESISER.
 // FULL BUILD (links emu.o): it re-derives an emulator-replayable recording's
 // per-step register file by re-running the recorded code under the emulator ring,
-// and refuses honestly where it cannot. The pure Scrubber decision that OFFERS
+// and refuses transparently where it cannot. The pure Scrubber decision that OFFERS
 // this (replayable vs not) is asserted engine-free in test_scrubber; this proves
 // the re-run the offer promises.
 #include <cstdio>
@@ -85,7 +85,7 @@ int main() {
               s0 && !s0->has_prev, "step 0 cannot diff against a predecessor");
     }
 
-    // --- honest refusal: no codeimage -> nothing to re-run -------------------
+    // --- genuine refusal: no codeimage -> nothing to re-run -------------------
     {
         Recording r;
         r.arch = "x86_64";
@@ -98,7 +98,7 @@ int main() {
               err.find("codeimage") != std::string::npos, err);
     }
 
-    // --- honest refusal: a non-x86-64 guest is outside the ring's scope -------
+    // --- genuine refusal: a non-x86-64 guest is outside the ring's scope -------
     {
         Recording r = emu_recording(code, "aarch64");
         StepIndex idx;

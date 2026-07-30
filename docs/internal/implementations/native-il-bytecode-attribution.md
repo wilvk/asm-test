@@ -62,7 +62,7 @@ re-JITted method resolves against the body that was live at capture time.
   the perf JVMTI agent (`libperf-jvmti.so`), whose jitdump "interleaves
   debug/unwinding records the reader must skip" (comment :578–593) and only
   flushes on clean JVM shutdown (SIGTERM, not SIGKILL). All lanes self-skip
-  honestly when the runtime is absent or does not cooperate.
+  transparently when the runtime is absent or does not cooperate.
 - Make targets ([mk/native-trace.mk](../../../mk/native-trace.mk#L2219)):
   `hwtrace-jit-jitdump` (:2226), `hwtrace-jit-dotnet-jitdump` (:2256),
   `hwtrace-jit-java-jitdump` (:2315, resolves `PERF_JVMTI` by glob :2214).
@@ -603,7 +603,7 @@ guide, and the changelog records the feature.
    schema with the enclosing-point granularity ceiling and the
    codeimage-sequence version key; the .NET `IlToNativeMap` listener
    (construct-before-JIT, no in-proc rundown, ReJITID-does-not-key-tiers
-   caveat); the `java-bci` JVMTI lane; and the honest boundary: interpreted
+   caveat); the `java-bci` JVMTI lane; and the candid boundary: interpreted
    code (Ignition/CPython/YARV/PUC-Lua) keeps its bytecode index in VM state
    the PC stream cannot see — attribution here covers **JIT-compiled** code
    only. Link the analysis via GitHub blob URL (published pages must not

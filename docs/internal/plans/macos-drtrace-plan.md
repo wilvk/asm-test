@@ -470,7 +470,7 @@ documented-unsupported).
 > harness in the same invocation.
 > **Rosetta: not run — no Apple Silicon hardware on this host.** The Rosetta
 > leg (`make CC="cc -arch x86_64" drtrace-test-macos` on an arm64 Mac) stays
-> must-verify and is recorded as gated, per T6's honesty rule.
+> must-verify and is recorded as gated, per T6's fidelity rule.
 > **CI reproduction (same day):** the dispatched `drtrace-macos` job — run
 > 29903901986 — reproduced the extended lane on a fresh `macos-15-intel`
 > runner (macOS 15 / Xcode 16): M0 `13 passed, 0 failed`, then the

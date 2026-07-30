@@ -1,12 +1,12 @@
 // fabric_plan.h — the Loom's draw plan (05-loom-day-one.md T2).
 //
 // `loom_plan` is a PURE function of (fabric, camera) producing an ordered list
-// of primitives. Nothing about zoom, collapse, or honesty chrome lives in the
+// of primitives. Nothing about zoom, collapse, or fidelity chrome lives in the
 // painter — which is what makes every one of those rules assertable headlessly,
 // and what makes "two identical cameras produce byte-identical plans" a test
 // rather than a hope. `fabric_imgui.cpp` walks the list and calls ImDrawList.
 //
-// The honesty prims are not decoration. Each one is the visual form of a fact
+// The fidelity prims are not decoration. Each one is the visual form of a fact
 // the fabric knows and the user must not have to infer:
 //   torn_edge            the recorded window ended before the run did
 //   fade_out             this worldline was still live at the last recorded
@@ -34,7 +34,7 @@ enum class loom_prim {
     value_chip,
     density_ribbon,
     byte_row,
-    // honesty chrome
+    // fidelity chrome
     torn_edge,
     fade_out,
     born_untraced_glyph,

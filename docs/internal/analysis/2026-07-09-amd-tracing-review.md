@@ -123,7 +123,7 @@ block) instead of redefining. `ss_backend.c` has the same issue.
 `hwtrace_end_amd` (line 731 of [hwtrace.c](../../../src/hwtrace.c)) does
 snapshot drain, ring linearization, two-pass record walk, richest-window
 selection, Tier-A→Tier-B escalation, decode dispatch, freeze gate, loss
-detection, honesty invariant, and cleanup — all in one function. Breaking it into
+detection, fidelity invariant, and cleanup — all in one function. Breaking it into
 subfunctions (e.g. `amd_linearize_ring()`, `amd_select_richest()`,
 `amd_escalate_tierb()`) would materially improve auditability without changing
 behavior.

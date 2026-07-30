@@ -6,7 +6,7 @@ these positions; never repeat the refuted claim, even when quoting a source.
 
 1. **`trace_call_auto` AMD-LBR completeness bug is FIXED** (commit 5d8e0d2).
    `docs/internal/amd-hardware-validation.md` saying "not yet fixed" is stale —
-   the `amd-ibs-backend-honesty` doc owns rewriting it. On AMD validation,
+   the `amd-ibs-backend-fidelity` doc owns rewriting it. On AMD validation,
    `truncated=0` where escalation must fire is a REGRESSION signal, not "the
    known open finding".
 2. **Zen 3 BRS was never opened by this tree.** `amd-tracing-plan.md` Phase 0's

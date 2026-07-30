@@ -194,7 +194,7 @@ signal mask irrelevant.* Four pieces:
    `HwTrace.cs`), decoding against the `asmtest_codeimage` version live at each stop.
 
 The result is a whole-window scope that (a) survives every managed feature by
-construction, (b) reuses the shipped attribution, and (c) is honest — BTF-degraded
+construction, (b) reuses the shipped attribution, and (c) is faithful — BTF-degraded
 hosts and dropped stops self-truncate exactly as the region path does.
 
 ## Opt-in surface (where it makes sense)
@@ -241,7 +241,7 @@ default that changes a whole-window scope's cost/permission profile:
    2026-07-08b; the deep mid-window JIT elision it originally shipped with was CLOSED by
    E3 on 2026-07-12 — see the status block above). `localscope_oop/` is the
    native-fixture demo of the same primitive.
-4. **W-3 — cost controls + honesty.** An instruction/stop budget with self-truncation
+4. **W-3 — cost controls + fidelity.** An instruction/stop budget with self-truncation
    (a ~1M managed window is seconds out-of-process — bound it and flag `truncated`
    rather than hang), BTF-degrade / dropped-stop truncation parity, and the
    `SkipReason` wording for ptrace-denied hosts.

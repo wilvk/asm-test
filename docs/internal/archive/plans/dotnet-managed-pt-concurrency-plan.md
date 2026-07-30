@@ -33,7 +33,7 @@ no racy privileged lane ships).
 > day: an independent validating agent re-ran the T5 table on this i7-8559U PT box at
 > clean main `4cf5d17` and stamped both affected rows **✅** (see the VALIDATED note in
 > T5 and [intel-hardware-validation.md](../../intel-hardware-validation.md)). The one
-> recorded residue — T4's honest `MethodsObserved==0` note — is closed by
+> recorded residue — T4's truthful `MethodsObserved==0` note — is closed by
 > [dotnet-pt-inwindow-jit-premise.md](../../implementations/dotnet-pt-inwindow-jit-premise.md)
 > T1 (2026-07-23), which owns it now. Nothing in this plan remains open, so it moves to
 > `archive/plans/` under the done⇒archive rule.
@@ -344,7 +344,7 @@ the stitch. Fixed by having `Complete()` wait out `_inFlight` before the snapsho
 survived until a repetition lane existed. Lane now green ×3, `1..576`, 0 `not ok`.
 
 *Timing flake.* `unwarmed/PT compose: >=1 method JIT'd inside the window` now
-self-skips with an honest reason instead of asserting when `MethodsObserved == 0`
+self-skips with a genuine reason instead of asserting when `MethodsObserved == 0`
 (and returns, since the dependent `InstructionsIn` check has nothing to resolve
 against). The in-process sibling at
 [HwTraceProgram.cs:1221](../../../../bindings/dotnet/hwtrace/HwTraceProgram.cs#L1221)
@@ -352,7 +352,7 @@ deliberately **keeps** its hard assert — it arms EFLAGS.TF around the very fir
 so the first-JIT is guaranteed in-window; only the PT variant depends on whether the
 runtime got round to compiling before a hardware ring closed.
 
-> **Honest note for the validating agent:** on this i7-8559U box `MethodsObserved` is
+> **Candid note for the validating agent:** on this i7-8559U box `MethodsObserved` is
 > `0` *consistently*, not intermittently — so this check now self-skips on **every**
 > run here rather than occasionally. The capture itself is fine and is still asserted
 > (`ok … UnwarmedPtPath resolves in the trace …` reports 320032 insns, 17 methods,
@@ -427,13 +427,13 @@ the implementer).** Re-ran the table above on this i7-8559U PT box at clean `mai
 0 `not ok`, 0 crashes; inline ctor armed + `ambient: >=2 stitched slices captured (3)`
 every run), `make docker-hwtrace-dotnet-ambient-stress` (`1..576`, 25/25 iterations
 captured live), `dataflow-pt-live` ×3 (`1..29`), plain `docker-hwtrace` /
-`docker-hwtrace-dotnet` green with the honest permission self-skip, `docker-fmt-check`
+`docker-hwtrace-dotnet` green with the transparent permission self-skip, `docker-fmt-check`
 / `docker-docs` / host `check-bindings-parity` (142×10) clean. Both README rows
 ([intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md),
 [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)) are
 stamped `✅`; the run is appended to
 [intel-hardware-validation.md](../../intel-hardware-validation.md) (2026-07-23 entry).
-T5's Done-when is fully met; the one recorded residue is T4's honest note above
+T5's Done-when is fully met; the one recorded residue is T4's candid note above
 (`MethodsObserved==0` on this box → the in-window-JIT premise self-skips; forcing a
 guaranteed in-window JIT is the remaining optional follow-up).
 

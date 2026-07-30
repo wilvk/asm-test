@@ -56,7 +56,7 @@
 ## Why this work exists
 
 Phase 3's promise is the TUI's view family, exceeded: the same engines, driven
-over 07's sessions, rendered with the chrome the honesty culture demands —
+over 07's sessions, rendered with the chrome the fidelity culture demands —
 redaction by default, measured skip reasons, statistical-vs-exact separation —
 plus the two things the TUI never had (the tree filter panel, and
 codeimage-versioned JIT disassembly). Every view here is a consumer of
@@ -122,7 +122,7 @@ offers it for this view).
 schema); reveal swaps in `payload` for that row only; a session-level
 "reveal all" needs a second confirmation. Tests: fixture recordings with
 payloads; golden-render asserts the default state shows no payload bytes and
-the dishonesty fixture's `redacted` provenance renders its chip.
+the low-fidelity fixture's `redacted` provenance renders its chip.
 
 **Done when.** `desktop-test` proves default-redacted rendering; a live run
 against `spy_victim` shows rows; reveal is per-row.
@@ -242,14 +242,14 @@ gate). Suggested order: T1 → T5 → T2 → T3 → T4 → T6 → T7 → T8.
   smoke can run unattended — a follow-up gate, not edited here).
 - Statistical never renders as exact — `survey` data stays in its own visual
   family (table/heat), never woven into instruction listings.
-- Redaction is renderer-enforced here but wire-honest (provenance `redacted`);
+- Redaction is renderer-enforced here but wire-faithful (provenance `redacted`);
   the reveal action never mutates the recording.
 - All views must render identically from a recording — that is how CI tests
   them without hardware.
 
 ## Out of scope
 
-- Flame graphs (edges, not stacks — R4 of the view catalog's honesty rules);
+- Flame graphs (edges, not stacks — R4 of the view catalog's fidelity rules);
   live force-directed layouts (frozen snapshots only); `only_tid` for the
   syscall engine (plan work-item); Windows/macOS live capture; editing
   `hw.yml` (recorded as the follow-up gate).

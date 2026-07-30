@@ -167,7 +167,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    `xor`-to-zero for exactly this reason. A direct experiment (swap `mov eax,0` →
    `xor eax,eax`, whose `AF` is undefined, and re-run) came out **byte-identical anyway** on
    this host — Unicorn 2.0.1 and this Zen 5 silicon coincidentally agree (both yield `AF=0`
-   for logic ops). This is reported honestly as a *risk*, not a demonstrated failure: a
+   for logic ops). This is reported truthfully as a *risk*, not a demonstrated failure: a
    production replay should either mask officially-undefined flag bits at capture or restrict
    replay to instructions with fully-defined flags, since a different silicon/emulator pairing
    could diverge where this one did not.

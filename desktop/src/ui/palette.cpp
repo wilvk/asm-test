@@ -117,7 +117,7 @@ std::vector<PaletteEntry> build_palette(const ShellState &s) {
                    [](ShellState &st) { st.want_layout_reset = true; }});
 
     // 7. ROUTINE / SYMBOL — the v1 `.asmtrace` header carries NO routine identity
-    // (diff.cpp says so), so the honest stand-in is the recorded code offsets and
+    // (diff.cpp says so), so the faithful stand-in is the recorded code offsets and
     // their recorded disassembly: each dispatches dt_nav_go to that offset. Bound
     // so a pathological trace cannot build a million rows every frame.
     if (const Streams *a = shell_a(s)) {

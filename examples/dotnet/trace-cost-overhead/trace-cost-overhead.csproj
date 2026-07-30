@@ -3,7 +3,7 @@
   <!-- The cost demo: runs ONE native routine untraced and under each tracing tier
        (in-process single-step, out-of-process block-step, out-of-process single-step,
        and AMD LBR region) and prints a slowdown-multiplier + stop-count table — the
-       honest price of fidelity, where every other example shows only a tier's capture.
+       true price of fidelity, where every other example shows only a tier's capture.
        A dependency-free console app that compiles the binding source (HwTrace.cs)
        directly and P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works
        offline. Run by `make hwtrace-dotnet-example`; self-skips (exit 0) off the

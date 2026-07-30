@@ -95,7 +95,7 @@ is buffered and reads partial mid-process, add a bounded settle (poll the file f
 growth to stop, with a short timeout) before parsing — determined empirically during
 the build, not assumed.
 
-## Self-skip / honesty
+## Self-skip / fidelity
 
 - No socket (`DOTNET_EnableDiagnostics=0`), connect/protocol error, or no perf-map file
   → self-skip to the cold-only result; the feature never throws and never blocks the

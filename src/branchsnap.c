@@ -140,7 +140,7 @@ static void bsnap_teardown(void) {
  * ringbuf). The region begin marker calls this when snapshot mode is selected; on ANY
  * failure it returns nonzero having released everything, so the caller can fall back to
  * the sample_period=1 path. ALL-OR-NOTHING: every listed exit is armed or none is — a
- * partially-covered exit set could silently miss the taken exit and misreport an honest
+ * partially-covered exit set could silently miss the taken exit and misreport a faithful
  * truncation, so a host where a debugger holds a needed debug register degrades to the
  * sampled path instead (P5). `branch_filter` nonzero requests the reduced LBR filter
  * (drops direct uncond jmp; the decoder follows them) — the deterministic snapshot's
@@ -290,7 +290,7 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
     /* P8: NON-BLOCKING drain. The exit breakpoint fires synchronously during run_fn and
      * the BPF program bpf_ringbuf_submit()s immediately, so by here every record is
      * already committed; the disable above guarantees no later producer. ring_buffer__poll
-     * (…, 200) did a 200 ms epoll_wait FIRST — and on the no-hit / honest-truncation path
+     * (…, 200) did a 200 ms epoll_wait FIRST — and on the no-hit / faithful-truncation path
      * (now the common case, snapshot is default-on) nothing ever wakes epoll, so it burned
      * the full 200 ms and drained nothing. ring_buffer__consume reads the producer position
      * directly, drains all queued records, and returns at once (libbpf >= 0.4.0; the only
@@ -308,10 +308,10 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
          *     the window, every in-region edge (all newer) survived too — the
          *     in-region history is COMPLETE since that point, and the pre-entry
          *     entries carry no region content (amd_replay skips them). Passing the
-         *     trimmed suffix keeps the decoder's depth-ceiling honesty flag
+         *     trimmed suffix keeps the decoder's depth-ceiling fidelity flag
          *     (nbr >= 16 -> truncated) armed EXACTLY when it should be: a window
          *     still full after trimming is all-region-involved, so in-region edges
-         *     (the entry edge included) may have been evicted -> honest truncation
+         *     (the entry edge included) may have been evicted -> faithful truncation
          *     stands. A glue-padded window of a tiny routine no longer misreports
          *     its complete reconstruction as truncated. The decoder's depth ceiling
          *     therefore counts HARDWARE slots only (`use`), passed as hw_nbr to
@@ -372,7 +372,7 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
      * >=1 boundary hit (bpf_ringbuf_reserve returned NULL and the program counted it).
      * The dropped hit may have been the RICHEST in-region window — a data-dependent
      * deeper path late in a hot run — so the selected best cannot be trusted as the
-     * complete picture. Flag honest truncation, never a silent drop. (The .bss counter
+     * complete picture. Flag faithful truncation, never a silent drop. (The .bss counter
      * starts at zero on every arm: the skeleton is freshly loaded per _begin_multi.) */
     if (g_bsnap.skel->bss->asmtest_bsnap_drops > 0) {
         ASMTEST_HWDBG(
@@ -447,7 +447,7 @@ struct btile_state {
     uint64_t *ips;
     size_t cap;
     size_t n;
-    int islands; /* checkpoint hits drained (0 = never hit: honest, not an error) */
+    int islands; /* checkpoint hits drained (0 = never hit: truthful, not an error) */
     int overflow; /* ips[] filled with island entries left to merge                */
 };
 static struct btile_state g_btile;
@@ -480,7 +480,7 @@ static void btile_teardown(void) {
  * The checkpoint PC itself is NOT synthesized. Where a checkpoint is a branch target —
  * a managed method entry, the intended use — the window's NEWEST entry IS the call that
  * reached it, so `to` == the checkpoint and it enters the histogram naturally. A
- * checkpoint planted mid-block would not appear, which is honest: we record what the
+ * checkpoint planted mid-block would not appear, which is faithful: we record what the
  * hardware retired, never what we assume ran. */
 static int btile_on_event(void *ctx, void *data, size_t sz) {
     struct btile_state *s = (struct btile_state *)ctx;
@@ -511,7 +511,7 @@ static int btile_on_event(void *ctx, void *data, size_t sz) {
  * ALL-OR-NOTHING, mirroring _begin_multi: a partially-armed checkpoint set would
  * silently tile less than asked, and nothing downstream could tell that from "the
  * checkpoint never ran" — so any failure releases everything and returns nonzero. The
- * caller then runs the survey UNTILED and reports islands == 0, which is honest and
+ * caller then runs the survey UNTILED and reports islands == 0, which is truthful and
  * visible rather than a quiet shortfall. */
 int asmtest_amd_tile_begin(const uint64_t *cp_addrs, int ncp) {
     if (cp_addrs == NULL || ncp < 1 || ncp > ASMTEST_AMD_MAX_EXITS)

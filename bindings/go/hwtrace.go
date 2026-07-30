@@ -1112,7 +1112,7 @@ func renderRegion(name string) string {
 }
 
 // ScopedResult carries a Scope's outcome: the auto-generated region name, the
-// rendered assembly listing, whether the scope armed, and the thread-scope honesty
+// rendered assembly listing, whether the scope armed, and the thread-scope fidelity
 // bit (truncated on a cross-thread close / capture overflow, Core §0.2/§1).
 type ScopedResult struct {
 	Name      string
@@ -1160,7 +1160,7 @@ func (t *HwTrace) Scope(code *HwNativeCode, emit bool, fn func()) ScopedResult {
 // CallScopedResult carries a CallScoped outcome: the traced call's return value
 // (Result, meaningful only when OK), whether the scope armed and ran (OK == rc 0),
 // the executed body's disassembly (Path, "" when the decoder is absent), the
-// thread-scope honesty bit (Truncated), and the raw ASMTEST_HW_* status (RC).
+// thread-scope fidelity bit (Truncated), and the raw ASMTEST_HW_* status (RC).
 // Mirrors the Python/Ruby CallScopedResult.
 type CallScopedResult struct {
 	Result    int64
@@ -1218,7 +1218,7 @@ func CallScoped(code *HwNativeCode, args ...int64) CallScopedResult {
 }
 
 // WindowResult carries a Window outcome: the executed body's disassembly (Path, ""
-// when the decoder is absent), the Truncated honesty bit, and Armed (false when the
+// when the decoder is absent), the Truncated fidelity bit, and Armed (false when the
 // region-free window SELF-SKIPPED — a non-single-step backend or an older lib lacking
 // the whole-window trio; the closure still ran). Mirrors dotnet's empty-ctor
 // new AsmTrace() whole-window scope / the C++/Python WindowResult.
@@ -1231,7 +1231,7 @@ type WindowResult struct {
 // Window runs body under a §Z1 region-free whole-window single-step capture — the
 // callback form of dotnet's empty-ctor `using (new AsmTrace())`. It arms a REGION-FREE
 // capture on THIS thread (no HwNativeCode, no [base,len)), runs body(), disarms, and
-// renders the executed body from live self-memory. HONEST-BUT-NOISY: it records
+// renders the executed body from live self-memory. FAITHFUL-BUT-NOISY: it records
 // EVERYTHING between begin and end, so a traced leaf's ABSOLUTE addresses are a SUBSET
 // of the listing. Keep body a TIGHT native leaf — EFLAGS.TF single-step is armed across
 // it (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT).
@@ -1278,7 +1278,7 @@ func Window(body func()) WindowResult {
 // value (Result, meaningful only when OK), the filled Trace (a queryable *HwTrace
 // the CALLER frees via Trace.Free() — inspect it with Covered/BlockOffsets/etc.),
 // the Used TierChoice that produced the final trace (inspect Used.Backend to see
-// whether escalation fired), the completeness honesty bit (Truncated), whether
+// whether escalation fired), the completeness fidelity bit (Truncated), whether
 // some tier ran (OK == rc 0), and the raw ASMTEST_HW_* status (RC). On a self-skip
 // (no call-owning native tier) Trace is nil, Used is the zero TierChoice, and RC
 // is negative. Mirrors the Python TraceCallAutoResult.

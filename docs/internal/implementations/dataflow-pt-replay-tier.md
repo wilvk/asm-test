@@ -21,11 +21,11 @@ def-use (L1) and slice (L2) analysis run over it unchanged. It matches the
 single-step oracle on a deterministic region and self-skips cleanly where Intel
 PT silicon is absent (the dev boxes are AMD; VMs and CI hide the PMU).
 
-The honest boundary, stated up front and inherited from F1/F2: **PT gives control
+The disclosed boundary, stated up front and inherited from F1/F2: **PT gives control
 flow and bytes, never values.** All values come from the replay. So a region that
 consumes an unrecorded input — a syscall result, a concurrent sibling write, any
 nondeterminism — cannot be reconstructed from PT alone and is **truncated
-honestly**, never guessed.
+^faithfully**, never guessed.
 
 **Ownership (binding, from the doc-set conflict resolution, position 9).** There
 is exactly **one** Intel PT arm. The self-trace `perf_event_open`/AUX
@@ -368,7 +368,7 @@ source-incompatibility note there.
 - `asmtest_pt_decode_window`'s existing callers still pass with the new
   `base_ip_out` argument (`make docker-hwtrace` green).
 
-### T3 — Inherit F1/F2's OS-interaction tiering; truncate honestly  (S, depends on: T1)
+### T3 — Inherit F1/F2's OS-interaction tiering; truncate transparently  (S, depends on: T1)
 
 **Goal.** Before replaying, decline any region PT+replay cannot faithfully
 reconstruct — impure (OS-interacting/nondeterministic) or non-replayable
@@ -422,7 +422,7 @@ truncated, not stepped.
    - **Nondeterminism** — any input from an unrecorded source makes Unicorn's
      branch resolution diverge from the PT path → T1's cross-check truncates.
 
-**Code.** No new capture or decode code — this task is purely the gate + honest
+**Code.** No new capture or decode code — this task is purely the gate + faithful
 truncation + the residual documentation. The verdicts come from `region_scan`
 inside `dataflow_blockstep.c`, which is a single, mutation-proven implementation;
 F5 reuses it rather than growing a second scanner (which could disagree — F1's
@@ -636,7 +636,7 @@ T1 ──> T2 ──> T3 ──┐
   [Dockerfile.hwtrace](../../../Dockerfile.hwtrace) uses; apt distro packages need
   no `scripts/third-party-digests.txt` line.
 - **No single-step fallback:** unlike the block-step tier, F5 is fully out-of-band,
-  so an impure/non-replayable/nondeterministic region **truncates honestly** (T3).
+  so an impure/non-replayable/nondeterministic region **truncates transparently** (T3).
   A `truncated == false` where a real divergence occurred would be a correctness
   regression, not an acceptable degradation.
 - **License:** libipt is BSD; no new obligations. Unicorn/Capstone are already this

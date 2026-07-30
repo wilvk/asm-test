@@ -138,7 +138,7 @@ inside the window.
      `MethodLoadVerbose` fires after arm because nothing called it before);
    - `ww.InstructionsIn("UnwarmedHotPath") > 0 || ww.Truncated` — the
      covered-or-truncated posture `WindowLiveJitChecks` already uses (a 1<<20
-     window ring can honestly truncate under the JIT+GC noise; a full miss on an
+     window ring can genuinely truncate under the JIT+GC noise; a full miss on an
      untruncated capture is a regression);
    - `ww.Truncated || ww.Addresses.Length > ww.LabelledInstructions` — the
      window captured runtime (JIT/GC) instructions beyond the labelled method,
@@ -208,7 +208,7 @@ event plumbing — only the per-name version count.
 
 **Done when.**
 - With the env set in the T4 lane, the check either passes with two observed
-  versions or prints the honest `# SKIP` — never `not ok` on tiering timing.
+  versions or prints the candid `# SKIP` — never `not ok` on tiering timing.
 - Without the env, the suite output is unchanged.
 
 ### T3 — Unwarmed §D3 out-of-process prong  (S, depends on: T1)
@@ -434,7 +434,7 @@ the OOP route is exercised live; the PT route self-skips). The `Route == "oop"`
 assert is the live routing gate; T9 is its C-core twin.
 
 **Docs.** `CHANGELOG.md` `Added`. Extend the hardware-tracing guide's
-whole-window section: routing table (PT → OOP stepper → honest skip) + the env /
+whole-window section: routing table (PT → OOP stepper → graceful skip) + the env /
 ctor parameter. Note the default remains the convention-mitigated in-process form.
 
 **Done when.**
@@ -511,7 +511,7 @@ arm is unchanged.
    because the seam did not exist and a C binary has no managed runtime; T6 built
    the seam and gave the probe an override, so the revived test asserts the
    ROUTING MECHANICS with `setenv("ASMTEST_ASSUME_MANAGED", "1", 1)` +
-   `setenv("ASMTEST_WHOLEWINDOW_SAFE_MANAGED", "1", 1)`. Put that honesty in the
+   `setenv("ASMTEST_WHOLEWINDOW_SAFE_MANAGED", "1", 1)`. Put that fidelity in the
    test comment: managed-ness is faked here; the live managed routing is the .NET
    suite's `SafeManagedRoutingChecks` (T7).
 2. Asserts: (a) `asmtest_hwtrace_begin_window` returns `ASMTEST_HW_EMANAGED` (the
@@ -565,14 +565,14 @@ capture half of the §Z4 opt-in stitching escalation.
 3. Declare both in `asmtest_hwtrace.h`; parity-exempt the nine non-dotnet
    bindings (T6 pattern).
 4. Host-testable twin `test_pt_hop_surface` in `test_hwtrace.c`: where libipt is
-   absent or no `intel_pt` PMU, `hop_open` returns the honest status (assert +
+   absent or no `intel_pt` PMU, `hop_open` returns the accurate status (assert +
    `# SKIP`); where libipt is built, drive `hop_close`'s decode path directly by
    constructing a ctx around a synthetic AUX buffer from
    `asmtest_pt_encode_fixture` (:305) — the decode leg is then exercised with
    zero silicon, exactly like `test_wholewindow_decode` (:3160). Expose the
    internal ctx constructor under a test-only `asmtest_pt_hop_ctx_for_fixture`
    or make the twin drive `asmtest_pt_decode_window` through the same code path
-   the real `hop_close` calls (either is acceptable; keep it honest about which
+   the real `hop_close` calls (either is acceptable; keep it candid about which
    leg is covered).
 5. `make hwtrace-test` (self-skips or synthetic-decodes), `make docker-hwtrace`.
 
@@ -655,7 +655,7 @@ live chain needs bare-metal Intel PT **and** a live managed runtime — a real
 hardware gate with no CI coverage; say so in the class doc-comment.
 
 **Docs.** `CHANGELOG.md` `Added`. Hardware-tracing guide: an "ambient stitched
-operations (opt-in, Intel PT)" subsection — the default remains the honest
+operations (opt-in, Intel PT)" subsection — the default remains the faithful
 thread-window with the `Truncated` hop flag (never auto-stitch), per §Z4.
 
 **Done when.**

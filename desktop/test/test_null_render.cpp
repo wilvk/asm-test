@@ -1,7 +1,7 @@
 // test_null_render.cpp — proves Dear ImGui builds and renders headlessly with no
 // display, no GL context and no app backend (the example_null pattern:
 // $(IMGUI_HOME)/examples/example_null/main.cpp). This is the smoke that keeps the
-// desktop build honest on any host with only a C++17 compiler — the same null
+// desktop build faithful on any host with only a C++17 compiler — the same null
 // backend every desktop-test drives (03-desktop-shell.md T2).
 //
 // No GLFW, no OpenGL, no engines: it links the four ImGui core TUs and nothing

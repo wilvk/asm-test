@@ -55,7 +55,7 @@ contradicts; fix the doc in the same change that records the run).
   present but LbrExtV2 is **absent**. The Zen 2 dev box (**Ryzen 9 4900HS**:
   `ibs_op` present, no `amd_lbr_v2`) is the only place that degradation path
   runs.
-- **Record:** IBS survey paths run while the AMD-LBR tier degrades honestly (no
+- **Record:** IBS survey paths run while the AMD-LBR tier degrades gracefully (no
   LbrExtV2), `0 not ok`, no unexpected skips.
 
 ### 2. MSR-direct capture
@@ -119,11 +119,11 @@ loaded, kernel 6.14. Three lanes, all **exit 0, 0 `not ok`**:
   edges, 5818/24431 branch/total samples, throttled`), whole-process survey
   `3/3 worker functions covered, 39 edges`, fetch survey (`4 addrs, 21795/21795
   valid, 0 ic-miss, 0 itlb-miss`), phase5 callchain + record-bound checks all
-  `ok`. ONE honest skip: system-wide capture (`needs CAP_PERFMON / paranoid<=0
+  `ok`. ONE genuine skip: system-wide capture (`needs CAP_PERFMON / paranoid<=0
   (substrate present) — EACCES`). This is exactly the IBS-present /
   LbrExtV2-absent path the Zen 4/5 runner can never reach.
 - **`make docker-hwtrace-amd`** (CAP_PERFMON): `test_hwtrace` `1..645` +
-  `test_ibs` `1..84` — 729 ok, 0 failed. The AMD-LBR tier degrades honestly on
+  `test_ibs` `1..84` — 729 ok, 0 failed. The AMD-LBR tier degrades gracefully on
   this box: every AMD-LBR live test self-skips with `no AMD branch records
   (needs Zen 3 BRS / Zen 4 LbrExtV2)`, never a false AVAILABLE; with CAP_PERFMON
   the system-wide IBS capture also ran (**zero** `# SKIP IBS` lines). The
@@ -170,7 +170,7 @@ loop).
 
 Box: `amd_lbr_v2` + `ibs_op`/`ibs_fetch` present, `perf_event_paranoid=4`,
 kernel 6.17, Docker (no `--privileged`). Two lanes were run — the positive paths
-and the honesty/blocked path — both **exit 0, 0 `not ok`**:
+and the fidelity/blocked path — both **exit 0, 0 `not ok`**:
 
 - **`make docker-hwtrace-privileged`** (CAP_PERFMON, default seccomp — bypasses
   paranoid=4): `test_hwtrace` **`1..658`**, the AMD LBR live tests ran (not
@@ -184,12 +184,12 @@ and the honesty/blocked path — both **exit 0, 0 `not ok`**:
   rc=0 result=25 used.backend=3 insns=77 truncated=0 (escalated off the LBR
   window)` — **escalation fired**, not a regression; the small-routine case is
   complete without escalation (`insns=5`, `ok`).
-- **Honesty/blocked path — `make docker-hwtrace-ibs`** (seccomp=unconfined, NO
+- **Fidelity/blocked path — `make docker-hwtrace-ibs`** (seccomp=unconfined, NO
   CAP_PERFMON, so paranoid=4 refuses the open): `ibs_probe` printed `IBS-Op:
   substrate present but sampling is BLOCKED — perf_event_open refused (EACCES)`
   and the live IBS tests self-skipped with the real `unavail_reason` — a
   substrate-only host prints BLOCKED, never AVAILABLE. `1..60`, 0 `not ok`. (This
-  is the *EACCES-honesty* use of the target; the **Zen 2 degradation** use in
+  is the *EACCES-fidelity* use of the target; the **Zen 2 degradation** use in
   residue item 1 — IBS present, `amd_lbr_v2` absent — is a different path and
   needs a Zen 2 box.)
 - Not run here: `docker-hwtrace-msr` (host `msr` module not loaded), the Zen 2

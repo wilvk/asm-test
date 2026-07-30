@@ -1,5 +1,5 @@
 // recording.cpp — the .asmtrace NDJSON loader (03-desktop-shell.md T3). The
-// reject rules and the honesty accounting here make the schema's D7 laws
+// reject rules and the fidelity accounting here make the schema's D7 laws
 // executable: a stream without provenance is refused, a newer major is refused
 // by name, and truncation/drops/redaction/torn each survive into the model
 // rather than being silently smoothed away.

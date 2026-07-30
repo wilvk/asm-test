@@ -178,7 +178,7 @@ static const uint8_t callout_helper[] = {
 
 /* A helper that NEVER returns to its caller — a direct _exit(0) syscall. The step-over's
  * run-to-return breakpoint is thus never hit, so the producer must catch the target's
- * exit and truncate HONESTLY (vt->truncated) rather than hang waiting for a return. */
+ * exit and truncate FAITHFULLY (vt->truncated) rather than hang waiting for a return. */
 static const uint8_t callout_helper_noreturn[] = {
     0xb8, 0x3c, 0x00, 0x00, 0x00, /* mov eax, 60  (__NR_exit) */
     0x31, 0xff,                   /* xor edi, edi (status 0)  */
@@ -1403,7 +1403,7 @@ static void test_window_survey(void) {
           "read back from silicon (SENT2), not a guess");
     uint64_t uv = 0;
     CHECK(reg_read_low8(v, s_r10_use, REG_R10, &uv) && uv == F6_SENT2,
-          "window_survey/B: the VALUE at the read was always honest (SENT2) — "
+          "window_survey/B: the VALUE at the read was always faithful (SENT2) — "
           "it is the EDGE that elision corrupts, which is why a value-only "
           "check could never have caught this");
 
@@ -1520,7 +1520,7 @@ static void test_window_subreg_alias_gap(void) {
     uint64_t uv = 0;
     CHECK(reg_read_low8(v, s_cx_use, REG_CX, &uv) && uv == F6_SUBREG_POST,
           "window_subreg_alias_gap: the cx read's own captured value was "
-          "always honest — it is the EDGE that elision without T3 would "
+          "always faithful — it is the EDGE that elision without T3 would "
           "have gotten wrong, which is why a value-only check could never "
           "have caught this");
 
@@ -1623,7 +1623,7 @@ static void test_window_vec_gap(void) {
     uint64_t uv = 0;
     CHECK(reg_read_low8(v, s_xmm_use, REG_XMM0, &uv) && uv == F6_VSENT2,
           "window_vec_gap: the post-gap read's own captured value was "
-          "always honest (VSENT2) — it is the EDGE that elision without "
+          "always faithful (VSENT2) — it is the EDGE that elision without "
           "this fixture would never have exercised");
 
     long c0 = ctl->counter;
@@ -2238,7 +2238,7 @@ static void test_callout_gap_overflow_discarded(void) {
 
 static void test_callout_noreturn(void) {
     /* Increment 2 exit criterion (c): a callee that NEVER returns must truncate
-     * HONESTLY, not hang. The helper is a direct _exit syscall, so the step-over's
+     * FAITHFULLY, not hang. The helper is a direct _exit syscall, so the step-over's
      * run-to-return breakpoint is never hit; the producer catches the target's exit and
      * flags truncated, having recorded the region up to (and including) the call. */
     void *helper =
@@ -2256,7 +2256,7 @@ static void test_callout_noreturn(void) {
           "callout-noreturn: non-returning helper did NOT complete the region");
     CHECK(
         v->truncated,
-        "callout-noreturn: truncated HONESTLY (no hang on the missing return)");
+        "callout-noreturn: truncated TRANSPARENTLY (no hang on the missing return)");
     CHECK(v->steps_len >= 2 && v->insn_off[0] == 0x00 && v->insn_off[1] == 0x03,
           "callout-noreturn: captured the region up to the call before "
           "truncating");
@@ -2268,7 +2268,7 @@ typedef long (*fn1_t)(long);
 
 static void test_callout_step_backstop(void) {
     /* dataflow_ptrace.c's call-out step-over used to fuse two different facts into one
-     * DF_PTRACE_ETRACE: hitting the whole-run step backstop (an honest BOUND, same
+     * DF_PTRACE_ETRACE: hitting the whole-run step backstop (a genuine BOUND, same
      * shape --max already gets right) and dfp_run_to failing (a real ptrace FAILURE).
      * ASMTEST_DF_STEP_BACKSTOP shrinks the 2^20-step bound to 2 so it trips
      * deterministically: 1 step for `mov`, 1 for `call`, then the call-out check's own
@@ -2341,7 +2341,7 @@ static void test_callout_step_backstop(void) {
           "callout-step-backstop: bound reached is OK, not ETRACE (mutation: "
           "un-splitting the || makes this ETRACE again)");
     CHECK(v->truncated,
-          "callout-step-backstop: truncated HONESTLY at the bound");
+          "callout-step-backstop: truncated TRANSPARENTLY at the bound");
     CHECK(v->steps_len == 2 && v->insn_off[0] == 0x00 && v->insn_off[1] == 0x03,
           "callout-step-backstop: captured exactly mov+call before the bound, "
           "never reached the helper's return");

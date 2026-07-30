@@ -114,7 +114,7 @@ frame as a contradictory success toast, *"session ended: max"*.
   algorithm, duplicated, tangled with the engine call.
 - **`serve_emit_pick`** already reports each attempt on the wire with a
   sampler/rule label (`"ibs-op"`/`"entry"` vs `"sw-clock"`/`"residency"`) and an
-  `attempt/total` pair — the honest-substitution channel already exists; the IBS
+  `attempt/total` pair — the faithful-substitution channel already exists; the IBS
   path just hardcodes `0, 0, 1, 1` ([asmspy.c:3733](../../../cli/asmspy.c#L3733)).
 - **The lanes.** `cli-smoke` runs on `ubuntu-latest` **and** `ubuntu-24.04-arm`
   (real Neoverse-N2, not qemu). `docker-cli-ibs` exists
@@ -208,11 +208,11 @@ regions."
    the `serve_emit_pick` attempt/total channel.
 
 **Tests.** The retry *policy* is pure — put it in `test_autoregion` with the T1 walk
-(empty window advances until the bound, then reports honestly). The param plumbing
+(empty window advances until the bound, then reports faithfully). The param plumbing
 is asserted in `cli_smoke.sh` and in the desktop's `test_shell` start-params case,
 both of which run with no sampler.
 
-**Done when.** A deliberately idle target reports an honest *"idle window, N
+**Done when.** A deliberately idle target reports a faithful *"idle window, N
 attempts"* rather than a bare `NEVER_RAN`; the window is settable from the GUI and
 the CLI; the default is byte-identical to today.
 
@@ -292,10 +292,10 @@ first, or the new bars land on an already-failing suite.
 **Done when.** Start + Arm a target that ends one-shot: the pane returns to idle, the
 jack frees, no refusal appears, and a second Start works without a Swap.
 
-### T6 — honesty chrome and doc reconciliation  (S, depends on: T2, T3, T4, T5)
+### T6 — fidelity chrome and doc reconciliation  (S, depends on: T2, T3, T4, T5)
 
 **Steps.**
-1. Surface the pick honestly in the capture pane: which sampler and rule was used,
+1. Surface the pick faithfully in the capture pane: which sampler and rule was used,
    which attempt of how many, and — when it skipped — the substrate reason verbatim.
    The wire already carries all of it via `serve_emit_pick`; the pane discards it.
    A user on an Intel host and one on an AMD box are getting **different
@@ -356,7 +356,7 @@ feels first — it can ship alone.
   explicit force should not silently do something else) but say so in the skip
   reason.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Not a new sampler, and not a hardware unlock.** Nothing here makes IBS work off
   AMD or lifts the arm64 gate. It makes the *policy* around whichever sampler exists
@@ -367,7 +367,7 @@ feels first — it can ship alone.
 - **Not "capture everything."** Every pass stays scoped and bounded; the walk stays
   bounded; the retry stays bounded. Widening the window is a knob, not a default.
 - **Not a fix for an idle target.** If a process genuinely executes nothing in any
-  window, no policy recovers a region — the honest report is the deliverable. What
+  window, no policy recovers a region — the faithful report is the deliverable. What
   changes is that *"idle for 400 ms once"* stops being spelled *"this target has no
   regions."*
 - **Does not make the 3D terrain rich.** `auto`/`dataflow` still emit no
@@ -383,7 +383,7 @@ follow-on and inherits its recorded serve-loop caveat (`max` bounds insns-per-pa
 not pass count). The desktop consumers whose emptiness prompted this are
 [36](36-anchor-the-3d-plane.md)/[37](37-region-tag-on-df-step.md). The live host and
 budget patch-bay are [07](07-serve-live-host.md); the capture pane is
-[08](08-observer-views.md). Honesty chrome D7 / [23](23-graded-truth-layer.md);
+[08](08-observer-views.md). Fidelity chrome D7 / [23](23-graded-truth-layer.md);
 wording D7 / [24](24-one-visual-language.md). Host ledgers:
 [amd-hardware-validation.md](../amd-hardware-validation.md) (which already records
 this 9950X — the 2026-07-20 and 2026-07-22 Zen 5 entries), the Zen 2 empirical

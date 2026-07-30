@@ -20,7 +20,7 @@ executed when the traced code contains an application `int3` (a JVM safepoint po
 .NET breakpoint — the tier's stated managed-runtime target), and silently under-record
 `rep`-prefixed string ops. The level-0 call-out step-over resumes in the wrong
 invocation when a stepped-over helper re-enters the traced region. Fixing these makes
-"the trace is byte-identical to per-instruction stepping" an honest promise instead of a
+"the trace is byte-identical to per-instruction stepping" a genuine promise instead of a
 fixture-shaped one. On top of that correctness base, this doc wires the already-shipped
 statistical IBS covered-block set into the block-step fallback so its per-stop decode
 work shrinks on the hosts (Zen 2) where block-step is the only exact capture.
@@ -130,7 +130,7 @@ windowed block-step drivers, proven by a differential fixture.
 3. Region driver `asmtest_ptrace_trace_call_blockstep` (loop at :1756): at the
    SIGTRAP path, before treating the stop as a BTF `#DB`, call `bs_sigtrap_is_app`.
    On app-trap: if a block is open and in-region, run the cut recorder for
-   `[prev_off, pc - base_ip)`; set `overflow = 1` (honest truncation — BTF cannot
+   `[prev_off, pc - base_ip)`; set `overflow = 1` (faithful truncation — BTF cannot
    bridge the kernel-injected transfer into the handler); set
    `pending_sig = SIGTRAP` **but deliver it via `PTRACE_CONT`**, not the loop's
    `PTRACE_SINGLEBLOCK` (see Constraints — SINGLESTEP/SINGLEBLOCK+SIGTRAP is the
@@ -188,7 +188,7 @@ truncated. All of these need only ptrace-of-own-child: they run in
 `asmtest_ptrace_blockstep_available()` gate on aarch64/BTF-masked hosts.
 
 **Docs.** `CHANGELOG.md` under `## [Unreleased]` / `Fixed`: one entry naming the
-misclassification and the honest-truncation outcome. Update the three block-step
+misclassification and the faithful-truncation outcome. Update the three block-step
 contract comments in `include/asmtest_ptrace.h` (:100-107, :117-124, :152-176) to
 state the app-breakpoint behaviour. Internal: add a "Status: FIXED (T1, this doc)"
 line for Defect 1 at the top of
@@ -208,7 +208,7 @@ line for Defect 1 at the top of
 
 **Goal.** No per-instruction ptrace loop in `src/ptrace_backend.c` swallows an
 application's own SIGTRAP any more; each either delivers it (owned tracee, via
-`PTRACE_CONT`) or ends honestly with the target left at the trap stop (foreign).
+`PTRACE_CONT`) or ends transparently with the target left at the trap stop (foreign).
 
 **Steps.** Make the `bs_sigtrap_is_app` helper available outside the x86-64
 block-step section (move it next to `ptrace_read_mem` (:311); on aarch64 the
@@ -267,10 +267,10 @@ here; the SP-aware rewrite of :210-217 belongs to T4.
 - `make docker-hwtrace-jit-dotnet` and `make docker-hwtrace-jit-java` still pass
   (live CoreCLR/HotSpot methods — the tier's real consumers — are unharmed).
 
-### T3 — `rep`-prefix honesty in the block-step reconstructors  (S, depends on: none)
+### T3 — `rep`-prefix fidelity in the block-step reconstructors  (S, depends on: none)
 
 **Goal.** A `rep`-prefixed string op in a block-stepped region sets `truncated`
-(honest degradation) instead of silently diverging from the per-instruction stream,
+(graceful degradation) instead of silently diverging from the per-instruction stream,
 and the header promise is bounded accordingly.
 
 **Steps.**
@@ -346,7 +346,7 @@ so a helper that recurses into or re-enters the region no longer hijacks the tra
    same arithmetic the descent shadow stack already relies on
    (`call_sp`/`sp_ret`, :830-846).
 3. Rewrite the header caveat at `include/asmtest_ptrace.h:210-217`: the step-over
-   is now depth-aware; keep an honest residual note (a callee that *longjmps* past
+   is now depth-aware; keep a candid residual note (a callee that *longjmps* past
    the return address is still swept only by region-exit/truncation handling).
 4. `make fmt && make docker-hwtrace`.
 
@@ -402,7 +402,7 @@ the block-boundary rule.
    `descend_watchdog_arm`, cleared in `_disarm`; a second L3 descent arriving while
    it is set runs WITHOUT arming the watchdog (deadline checks still bound it,
    :1016-1027) and marks the descent truncated+depth_capped with a comment naming
-   why — honest degradation, no clobbered timers.
+   why — graceful degradation, no clobbered timers.
 3. **Block-boundary dedup.** The rule "new block iff `!have_prev || off !=
    expected_next`" lives thrice: `normalize`
    ([src/ptrace_backend.c:626-649](../../../src/ptrace_backend.c)),
@@ -451,7 +451,7 @@ gone.
 1. `examples/jit_trace.c:384-388`: the L3 CHECK's `nf >= 1` arm is vacuous (frame 0
    always exists). Replace with a falsifiable disjunction: truncated OR
    depth-capped OR `nf >= 2` OR `ne >= 1` (a real descent produced a frame or an
-   edge, or a guard honestly fired).
+   edge, or a guard genuinely fired).
 2. `examples/test_hwtrace.c` `test_descent_attach` (:6949): both skip paths leak —
    :6967-6970 returns without unmapping whichever of the two `mmap`s succeeded;
    :6988-6994 (yama skip) returns without unmapping either. Add the `munmap`s.
@@ -566,11 +566,11 @@ byte-identical to today.
 
 **Steps.**
 1. `include/asmtest_trace_auto.h`: add `#define ASMTEST_TRACE_IBS_PRECOVER 0x4`
-   beside `0x1`/`0x2` (:136-141), documented honestly: *opt-in; when IBS is
+   beside `0x1`/`0x2` (:136-141), documented candidly: *opt-in; when IBS is
    available it runs the routine additional times in a fork-isolated warm-up child
    (bounded, ~30 ms) to gather statistical coverage — non-idempotent side effects
    repeat; capture fidelity is unchanged* (the framing precedent is the MSR rung's
-   in-process-re-run honesty note, `src/trace_auto.c:239-256`).
+   in-process-re-run fidelity note, `src/trace_auto.c:239-256`).
 2. `src/trace_auto.c`, block-step rung: when the bit is set and
    `asmtest_ibs_available()` (declare via `#include "asmtest_ibs.h"`), fork a
    warm-up child that loops `call_auto_invoke(code, args, nargs)` until a pipe
@@ -678,9 +678,9 @@ provenance:
 
 ## Out of scope
 
-- IBS header/window-lane honesty (retiring the unconsumed `PERF_SAMPLE_CALLCHAIN`
+- IBS header/window-lane fidelity (retiring the unconsumed `PERF_SAMPLE_CALLCHAIN`
   advertisement, callchain-aware `IBS_MAX_RECORD`) and the AMD validation-doc
-  rewrite — [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md).
+  rewrite — [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md).
 - AMD LBR docs corrections (Zen 4+ floor, `asmtest_amd_freeze_available`
   retirement) — [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md).
 - A DynamoRIO-side pre-cover consumer: the drtrace tier executes in a native-speed

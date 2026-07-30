@@ -74,7 +74,7 @@ deterministic, since the process-global slot would have refused the second) pass
 the capped `make docker-hwtrace-amd` lane. The **PT / CoreSight** per-thread *code* is
 in place but the live per-thread-AUX validation needs the silicon (Intel PT board /
 AArch64 CoreSight board). Separately, the AMD end path now enforces the
-**never-empty-yet-complete honesty invariant** (a branch window that reconstructs to
+**never-empty-yet-complete fidelity invariant** (a branch window that reconstructs to
 zero in-region instructions is flagged `truncated`).
 
 ### §2 — recorder-backed image callback (host-testable adapter DONE; live PT forward-look)
@@ -123,7 +123,7 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
   `asmtest_ss_begin_window` ([src/ss_backend.c](../../src/ss_backend.c)): the frame carries
   no `[base,len)`, so the SIGTRAP handler records the **absolute** RIP of every
   instruction the thread runs in the window (no in-range filter) into the shipped bounded
-  ring — overflow honestly flags `truncated`. The `.NET` reference shim gains the
+  ring — overflow transparently flags `truncated`. The `.NET` reference shim gains the
   parameterless `new AsmTrace()` ctor + `SkipReason` ([bindings/dotnet/hwtrace/HwTrace.cs](../../bindings/dotnet/hwtrace/HwTrace.cs)).
 - **§Z1 WEAK tier (DONE).** `asmtest_hwtrace_render_window` disassembles the recorded
   absolute addresses from **live self memory** (valid for non-moving native code); moving
@@ -139,7 +139,7 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
   **capture** half is silicon-gated (no `intel_pt` PMU on AMD/VMs/containers) — the
   synthetic-fixture decode runs in CI, the live arm is `make hwtrace-pt-live`.
 - **§Z4 default + §Z5 scaffold (DONE).** `end_window` flags `truncated` when the handle
-  does not resolve on the closing thread (the cross-thread-hop honesty default); the empty
+  does not resolve on the closing thread (the cross-thread-hop fidelity default); the empty
   ctor self-skips with an actionable `SkipReason` (never throws) where no faithful backend
   exists.
 - **§Z3 live compose (DONE, Docker-testable).** `make docker-hwtrace-dotnet-unwarmed` runs the
@@ -256,7 +256,7 @@ needs.
 
 | Item | Lane | Needs |
 |---|---|---|
-| Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD honesty invariant | `make docker-hwtrace-amd` | AMD Zen 4+ + `--cap-add=PERFMON` (this box) |
+| Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD fidelity invariant | `make docker-hwtrace-amd` | AMD Zen 4+ + `--cap-add=PERFMON` (this box) |
 | §D3 reverse-attach ptrace-stealth stepper **+ standalone `asmtest-stealth-helper` binary** (both paths, `test_ptrace_scoped_stealth` checks 158–166) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
 | §D3 helper **package embedding** — full `package-libs` slot, complete-set `package-libs-verify`, in-slot Capstone resolution, dladdr-sibling discovery from the bundled `.so` | `make package-libs && make package-libs-verify` (bindings-base image) | x86-64 Linux + emu toolchain (Capstone/patchelf) |
 | Core §0/§1-single-step/§2-adapter/§3-symbolize/§D4-merge + all 10 binding scopes | `make docker-hwtrace` + per-binding lanes | any x86-64 Linux |

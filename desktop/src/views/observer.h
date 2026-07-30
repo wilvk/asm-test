@@ -21,7 +21,7 @@
 
 namespace asmdesk {
 
-// The provenance + honesty facts an observer view shows above its rows.
+// The provenance + fidelity facts an observer view shows above its rows.
 struct ObsChrome {
     std::string backend; // the MEASURED producer id ("ibs-op", "hwdebug-watch")
     std::string trust;   // "exact" | "statistical" | "weak" | "strong"
@@ -68,7 +68,7 @@ struct ObsLifecycle {
 ObsLifecycle obs_lifecycle_of(const Recording &r);
 
 // The `params` echo of the last `started` event for `mode`, or nullptr. This is
-// the EFFECTIVE parameters after defaulting — the only honest answer to "what
+// the EFFECTIVE parameters after defaulting — the only faithful answer to "what
 // is this session actually running with", which is never the same question as
 // "what did the client ask for".
 const nlohmann::json *obs_started_params(const ObsLifecycle &lc,

@@ -239,7 +239,7 @@ int main() {
     }
     {
         // A patch that changed nothing the run executed seeds NOTHING, and the
-        // cone is honestly empty rather than defaulting to step 0.
+        // cone is genuinely empty rather than defaulting to step 0.
         loom_edit_desc_t e;
         e.code_patch = true;
         e.label = "code patch: no executed byte changed";

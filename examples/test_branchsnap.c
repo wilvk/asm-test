@@ -79,7 +79,7 @@ static unsigned long long snap_reach(const unsigned char *code, size_t nbytes,
 /* P5 multi-exit DEFAULT-ON: run `code(a,b)` through the ordinary begin/end markers
  * with opts.snapshot UNSET — hwtrace_begin_amd must select the multi-exit boundary
  * snapshot by DEFAULT (1..4 exits) — and require the entry block covered with
- * truncated==false: the sampled fallback honestly TRUNCATES a tiny single-shot
+ * truncated==false: the sampled fallback faithfully TRUNCATES a tiny single-shot
  * routine, so a clean non-truncated reconstruction proves the deterministic path
  * armed and the taken exit hit its breakpoint. Returns 1 on pass. */
 /* `want_off`/`other_off` are the two exits' own path-specific blocks (NOT block 0 —
@@ -329,7 +329,7 @@ int main(void) {
      * ORDINARY region begin/end markers route to this same deterministic capture —
      * no explicit exit offset, no run_fn callback; hwtrace derives the exit (the
      * region's last ret) and arms/drains around the user's own call. The same tiny
-     * single-shot routine that the sampled path honestly truncates must reconstruct
+     * single-shot routine that the sampled path faithfully truncates must reconstruct
      * its entry block through the plain begin/end surface. */
     {
         asmtest_hwtrace_options_t opts;
@@ -380,7 +380,7 @@ int main(void) {
     /* P5 multi-exit default-on (the plan's Phase 5 cap-lane fixture): a TWO-ret
      * routine — max2 = (rdi < rsi) ? rsi : rdi — driven with opts.snapshot UNSET,
      * once down EACH exit path. The old single-exit gate (nexit == 1) routed any
-     * multi-exit region to the sampled path, which honestly truncates a tiny
+     * multi-exit region to the sampled path, which faithfully truncates a tiny
      * single-shot routine; the multi-exit snapshot plants one breakpoint per ret
      * (2 of the 4 debug registers), so BOTH paths end on a deterministic boundary:
      * entry block covered and !truncated on both. Gated on the direct capture above
@@ -433,7 +433,7 @@ int main(void) {
      * pre-entry glue slot; trimming drops the glue -> use==15, n_dec==16 with the
      * synthetic boundary edge — exactly the count that spuriously tripped the old
      * ceiling. It must reconstruct !truncated with 15 in-region insns (14 jmp +
-     * ret). JMP15 saturates all 16 slots (use==16) and must truncate honestly (an
+     * ret). JMP15 saturates all 16 slots (use==16) and must truncate faithfully (an
      * older in-region edge may have been evicted). Pre-fix, JMP14 fails here with
      * truncated=1 — run it once against the unfixed tree to watch it discriminate.
      * Gated on the direct capture above having run live (rc==OK). */
@@ -453,7 +453,7 @@ int main(void) {
                                        "reconstructs !truncated (T1 boundary)");
         int ok16 = snap_jmpchain_check(JMP15, sizeof JMP15, 0x1E, -1, 1,
                                        "use16: 16 saturated hw slots truncate "
-                                       "honestly");
+                                       "transparently");
         if (!(ok15 && ok16)) {
             munmap(p, sizeof ROUTINE);
             return 1;

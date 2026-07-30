@@ -13,7 +13,7 @@
  * userspace is a /dev/cpu/N/msr write syscall whose glue branches occupy stack slots. A
  * user-only LBR_SELECT drops the syscall's kernel branches; the surviving userspace glue
  * (~a few) plus the routine's own branches must fit the 16-deep window, so this is complete
- * only for small routines and amd_decode honestly flags `truncated` when the window overflowed
+ * only for small routines and amd_decode faithfully flags `truncated` when the window overflowed
  * (its existing depth check) — never partial-as-complete. Needs amd_lbr_v2 + /dev/cpu/N/msr
  * openable; self-skips (asmtest_amd_msr_available() -> 0) otherwise.
  */
@@ -199,7 +199,7 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
                           "frozen stack (n=%zu)",
                           n);
             trace->truncated =
-                true; /* nothing in-region: honest, never empty-complete */
+                true; /* nothing in-region: faithful, never empty-complete */
             rc = ASMTEST_HW_OK;
         }
     }

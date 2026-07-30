@@ -5,7 +5,7 @@
 // backend drives them directly (D4):
 //
 //   transport_tick   — advance a playhead over ITS OWN step axis while playing,
-//                      at a steady rate, stopping honestly at the end.
+//                      at a steady rate, stopping cleanly at the end.
 //   playhead_project — the shared execution-step brush projected onto a local
 //                      playhead, gated on the recording so a brush in ANOTHER
 //                      recording never moves this pane (22 T1, the shell.cpp
@@ -14,7 +14,7 @@
 // There is deliberately NO single global clock here: the register/flat views
 // share the execution-step axis, while the 3D overview walks a different
 // terrain-time axis, and each transport advances its own (see the brief's
-// honesty note). Both axes reuse the SAME tick function — that is the only thing
+// fidelity note). Both axes reuse the SAME tick function — that is the only thing
 // they share.
 #ifndef ASMDESK_UI_TRANSPORT_H
 #define ASMDESK_UI_TRANSPORT_H
@@ -67,7 +67,7 @@ inline uint64_t transport_tick(Transport &t, uint64_t cur, uint64_t max,
 // keeps a step brushed in another recording from moving this pane after a tab
 // switch (22 T1 — the same `selection.rec == a->id` test shell_timeline_model
 // applies). The clamp keeps a projected step inside the local axis; the pane's
-// own honesty handling (e.g. the Scrubber's torn-edge at_step) covers a step the
+// own fidelity handling (e.g. the Scrubber's torn-edge at_step) covers a step the
 // axis cannot show.
 inline std::optional<uint64_t> playhead_project(const Selection &sel,
                                                 const std::string &rec_id,

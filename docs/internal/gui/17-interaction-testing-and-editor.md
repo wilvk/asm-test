@@ -28,7 +28,7 @@ Two larger, higher-leverage adoptions:
 - **ImGuiColorTextEdit (goossens)** + **TextDiff** replaces the Author door's
   64 KB `InputTextMultiline` hack with a real editor (undo/redo, find/replace,
   and error markers anchored to the assembler's loud-drop line — verbatim
-  machine reasons where they happened, the honesty ethos), gives `disasm` an
+  machine reasons where they happened, the fidelity ethos), gives `disasm` an
   address/bytes gutter + current-PC highlight, and upgrades `diff_view` with
   side-by-side mode.
 
@@ -227,7 +227,7 @@ happened.
    `InputTextMultiline`-over-`s.source.data()/capacity()` 64 KB hack (`doors.h:85`
    — the silent-truncation risk) with the editor: undo/redo, find/replace, and
    **error markers anchored to the assembler's loud-drop line** (the verbatim
-   machine reason, anchored where it happened — the honesty ethos). Write a
+   machine reason, anchored where it happened — the fidelity ethos). Write a
    bounded, testable **x86/ARM asm language def** via the editor's
    state-transition colorizer API.
 4. **disasm** (`views/disasm.cpp`): read-only mode + line decorators give an
@@ -266,7 +266,7 @@ T1 must bump its engine tag in lockstep with any imgui repin (doc 13 F1/F4).
   admission, and only because it is fetched-at-build for test builds and never
   vendored/shipped (doc 12 admission rule, exception 1). It must never compile
   into `desktop` or `desktop-render`.
-- **Honesty (D7)** — the editor's error markers carry the assembler's **verbatim
+- **Fidelity (D7)** — the editor's error markers carry the assembler's **verbatim
   machine reason** on the exact loud-drop line; the Author door no longer
   silently truncates at 64 KB.
 - **The 2-line guard is mandatory on 1.91.9** — ICTE master is 1.92-only without

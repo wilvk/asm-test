@@ -26,7 +26,7 @@ unsigned long fonts_rebuild_count() { return g_rebuilds; }
 
 bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf,
                 const char *fa_ttf, float base_px, float content_scale) {
-    // No monospace TTF on disk -> keep the built-in bitmap font (honest degrade).
+    // No monospace TTF on disk -> keep the built-in bitmap font (graceful degrade).
     if (!readable(jbm_ttf))
         return false;
 

@@ -35,7 +35,7 @@ internal static class Report
         if (!ww.RundownEnabled)
         {
             Console.WriteLine("-> rundown self-skipped (diagnostics off?); only cold methods are named.");
-            return true; // honest degradation, not a failure
+            return true; // graceful degradation, not a failure
         }
         if (writePath > 0)
             Console.WriteLine($"-> the R2R BCL Console write path is NAMED ({writePath} instructions in\n"

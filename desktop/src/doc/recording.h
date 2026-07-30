@@ -1,7 +1,7 @@
 // recording.h — the .asmtrace document model every desktop view renders from
 // (docs/internal/gui/03-desktop-shell.md T3). One NDJSON recording -> a
 // Recording: its events grouped by kind, its mandatory provenance, and the
-// honesty facts a reader MUST surface (truncation, drops, redaction, torn).
+// fidelity facts a reader MUST surface (truncation, drops, redaction, torn).
 //
 // Field names follow the schema (docs/internal/gui/asmtrace-schema.md, owned by
 // 01); this file owns loader BEHAVIOUR. Where the schema and an older draft
@@ -49,7 +49,7 @@ struct Provenance {
 // The header's optional `code` object (schema, 28 R1 T1): the identity of the
 // routine's bytes, so a consumer can prove two recordings are — or refuse them
 // as not — the same routine. `present` is false when the header omitted it (a
-// producer without stable bytes), and a consumer then keeps its honest caveat
+// producer without stable bytes), and a consumer then keeps its faithful caveat
 // rather than asserting sameness.
 struct Code {
     bool present = false;
@@ -75,7 +75,7 @@ struct Event {
 };
 
 // A loaded recording. by_kind holds every event EXCEPT the `end` footer, whose
-// facts are lifted into the honesty fields below.
+// facts are lifted into the fidelity fields below.
 struct Recording {
     int version = 0;
     Producer producer;
@@ -87,7 +87,7 @@ struct Recording {
     uint64_t unknown_kinds = 0; // events kept but outside the v1 kind registry
     uint64_t next_seq = 0;      // the stream position the next event will take
 
-    // Honesty facts, off the `end` footer (schema `end`) or its absence.
+    // Fidelity facts, off the `end` footer (schema `end`) or its absence.
     bool has_end = false;
     uint64_t declared_events = 0; // the footer's own event count (a self-check)
     bool end_truncated = false;
@@ -97,7 +97,7 @@ struct Recording {
 
     // The footer's `steps_total` (28 R1 T2): the total step count the producer
     // saw, past any ring cap. `has_steps_total` is false when the footer omitted
-    // it (older/non-step recordings), and a consumer keeps its honest fallback.
+    // it (older/non-step recordings), and a consumer keeps its plain fallback.
     bool has_steps_total = false;
     uint64_t steps_total = 0;
 

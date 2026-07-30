@@ -23,7 +23,7 @@ when a human runs `make bench-record` and commits. After this work, every OS
 leg produces and uploads a per-system report, the deterministic golden gate
 runs on real Windows for the first time, a nightly job auto-commits per-box
 history into `benchmarks/`, and the reporter gains the Capstone-weighted
-`BM_MODEL_COST` metric — the honest cross-ISA cost proxy the analysis
+`BM_MODEL_COST` metric — the faithful cross-ISA cost proxy the analysis
 recommended and the plan deferred.
 
 ## What already exists (verified 2026-07-17)

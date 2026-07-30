@@ -9,7 +9,7 @@
 // lands in a managed method THROUGH a native runtime stub shows as a RuntimeBefore gap, and the
 // edge is inferred from the mnemonic (`call`/`ret`) of the last labelled instruction. The exact,
 // noise-free call tree is the out-of-process descent example (Ptrace + Descent); this is the
-// honest in-process reconstruction. Single-step WEAK tier; the ctor auto-inits it.
+// faithful in-process reconstruction. Single-step WEAK tier; the ctor auto-inits it.
 
 using System;
 using System.Runtime.CompilerServices;

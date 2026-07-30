@@ -210,7 +210,7 @@ int main() {
     }
 
     // ---------------------------------------------------------------------
-    // loom-truncated — the D7 dishonesty fixture (recs_cap = 4).
+    // loom-truncated — the D7 low-fidelity fixture (recs_cap = 4).
     // ---------------------------------------------------------------------
     {
         Loaded L = load("loom-truncated.asmtrace");

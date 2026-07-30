@@ -18,7 +18,7 @@ are listed here only so the set reads as one:
 | `../scene-abs-loop-truncated.asmtrace` | parent (**generated**) | the same bytes with the trace buffer capped at 6 of 13 steps, so the producer flips `truncated` and `drops.lost` counts the rest: every touched cell is `TF_TORN` |
 | `mem-rich-synthetic.asmtrace` | **here** (hand-authored) | the **rich rung**, which has no producer at all — see below |
 
-The statistical half of the honesty pair (`TF_STAT` isolation) needs no new file:
+The statistical half of the fidelity pair (`TF_STAT` isolation) needs no new file:
 [`desktop/test/fixtures/obs-survey-ibs.asmtrace`](../../../desktop/test/fixtures/obs-survey-ibs.asmtrace)
 is already a committed `ibs-op` `survey` (`exact:false`), and
 `desktop/test/test_scene_fbo.cpp` renders it as the third scene.

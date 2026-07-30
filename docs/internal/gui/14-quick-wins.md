@@ -140,20 +140,20 @@ placards (D7 unchanged).
 ### T3 — Progress bars for loads and live sessions  (S, depends on: none)
 
 > **Implemented 2026-07-27 — green.** `desktop/src/ui/progress.h` (pure,
-> header-only) makes the honest decision: `progress_mode(active, has_total,
-> total)` returns Determinate **only** when an honest total exists (an `end`
+> header-only) makes the faithful decision: `progress_mode(active, has_total,
+> total)` returns Determinate **only** when a genuine total exists (an `end`
 > footer / a bounded budget), else Indeterminate — a torn recording or an
 > unbounded live session never gets a fabricated percentage. `inspect_door.cpp`'s
 > live status draws the built-in **indeterminate** `ImGui::ProgressBar` (negative
-> fraction) while a growing recording streams (no `end` footer yet, so no honest
+> fraction) while a growing recording streams (no `end` footer yet, so no genuine
 > total). `test_inspect` covers the decision table + the clamped fraction. No
 > fetch (built into 1.91.9). The determinate file-load bar is a natural extension
 > of the same helper once loads report incremental progress.
 
-**Goal.** Honest progress feedback using **built-in `ImGui::ProgressBar`** (in
+**Goal.** Truthful progress feedback using **built-in `ImGui::ProgressBar`** (in
 1.91.9 already; zero fetch): **determinate** for file loads that have an `end`
 footer (a real total exists), **indeterminate** for live/torn sessions where no
-honest total exists.
+genuine total exists.
 
 **Steps.**
 1. Determinate: on `.asmtrace` file load, drive `ProgressBar(fraction)` from
@@ -162,7 +162,7 @@ honest total exists.
    `ProgressBar(-1.0f * ImGui::GetTime(), …)` indeterminate mode — because a
    total would be a lie.
 2. Live sessions (`desktop/src/live/session.*`): indeterminate while attached
-   with no bound; determinate only if the session carries an honest budget/total
+   with no bound; determinate only if the session carries a genuine budget/total
    (patch-bay budgets, `live/budget.*`).
 3. Optionally one subtle spinner style to distinguish "attached-but-no-events
    stall" from a dead UI (doc 11). Keep it built-in / hand-drawn — do **not**
@@ -171,10 +171,10 @@ honest total exists.
 **Tests.** `test_shell` / the relevant view test: assert the load path chooses
 determinate for a footered fixture and indeterminate for the torn fixture (the
 model-level choice, not the pixels — expose a tiny `progress_mode(recording)`
-helper so the *decision* is testable, per D4/the honesty-is-tested rule).
+helper so the *decision* is testable, per D4/the fidelity-is-tested rule).
 
 **Docs.** CHANGELOG `Added`: progress feedback for loads/live sessions. One
-`desktop/README.md` line noting the determinate-vs-indeterminate honesty rule.
+`desktop/README.md` line noting the determinate-vs-indeterminate fidelity rule.
 
 **Done when.** a footered file load shows a determinate bar; a torn file and an
 unbounded live session show indeterminate (never a fabricated percentage); the
@@ -192,7 +192,7 @@ mode decision is unit-tested.
 > bytes dim-red (never a fabricated value) and bytes that differ from the latest
 > version amber (JIT churn). `test_obs_disasm` covers the resolver: historical vs
 > refreshed byte (0x55→0x90), and the two UNKNOWN cases (pre-earliest gap,
-> untracked address). The span is bounded (64 KB cap, with an honest placard).
+> untracked address). The span is bounded (64 KB cap, with a truthful placard).
 
 **Goal.** Byte-level interaction on the codeimage/region bytes — the cheapest
 strong upgrade (doc 11 #4, confirmed outright). `region.cpp` today shows bytes
@@ -399,8 +399,8 @@ better* after F3 fonts (doc 13 T4) — not a blocker.
 - **View-models stay pure (D4).** Every addon here overlays draws via callbacks
   or read-fns; none becomes the place a rule is decided. The golden-text tests
   stay the source of truth.
-- **Honesty (D7).** T3's indeterminate mode exists *because* a torn session has
-  no honest total; T4's foreground colour is not faked; the diff fix (T1) makes
+- **Fidelity (D7).** T3's indeterminate mode exists *because* a torn session has
+  no genuine total; T4's foreground colour is not faked; the diff fix (T1) makes
   a dead link show `last_error` rather than silently copying.
 - **Testable lanes (CLAUDE.md).** T7's pure-ImGui dialog is chosen specifically
   so `docker-desktop` can test open/save without native dialog daemons.

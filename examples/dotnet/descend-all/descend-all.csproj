@@ -2,10 +2,10 @@
 
   <!-- DescendAll (DescentLevel.DescendAll): the ptrace stepper walks INTO every call-out by
        default, discovering the callee tree with NO allow-set, bounded only by the guardrails
-       (SetMaxDepth / SetInsnBudget / SetWatchdogMs / UseDefaultDenylist) and reporting honestly
+       (SetMaxDepth / SetInsnBudget / SetWatchdogMs / UseDefaultDenylist) and reporting faithfully
        via Truncated()/DepthCapped(). The inverse of `descent`, which descends only the exact
        regions you AllowRegion(). Native (the same 3-level A->B->C blob), run twice — generous vs.
-       a clamped max-depth — to show discovery then honest early-stop. Dependency-free: compiles
+       a clamped max-depth — to show discovery then graceful early-stop. Dependency-free: compiles
        the binding source (HwTrace.cs) directly and P/Invokes libasmtest_hwtrace — no NuGet, so
        `dotnet run` works offline. Self-skips (exit 0) where ptrace is denied.
        EnableDefaultCompileItems=false so it compiles exactly Program.cs + Report.cs + the one

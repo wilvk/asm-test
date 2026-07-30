@@ -89,7 +89,7 @@ def _load():
         # Declared unconditionally: this lib is the one `make shared-dataflow`
         # builds, and it always contains them (off Linux x86-64 / without Capstone
         # they are ENOSYS stubs, which is a RUNTIME answer live_attach_available()
-        # reports honestly — not a missing symbol). A getattr-guarded registration
+        # reports faithfully — not a missing symbol). A getattr-guarded registration
         # here would turn a mislinked lib into a silent skip.
         lib.asmtest_dataflow_ptrace_attach_pid.restype = _C.c_int
         lib.asmtest_dataflow_ptrace_attach_pid.argtypes = [
@@ -218,7 +218,7 @@ def live_attach_available():
 
     Probed, not guessed: an argument-rejecting call (pid 0) returns ``EINVAL`` from
     the real producer but ``ENOSYS`` from the off-platform stub, which is the only
-    honest way to tell them apart — the symbol resolves either way. Side-effect
+    genuine way to tell them apart — the symbol resolves either way. Side-effect
     free; it attaches to nothing.
     """
     lib = _load()

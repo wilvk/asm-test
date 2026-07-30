@@ -1,5 +1,5 @@
 // examples/dotnet/crashproof-showdown — reporting + verdict (presentation only). Interprets the
-// fatal child's exit code honestly (133 = the predicted SIGTRAP force-kill; anything else stated
+// fatal child's exit code faithfully (133 = the predicted SIGTRAP force-kill; anything else stated
 // as-is) and renders the surviving out-of-process leg. Returns nonzero only on a real regression:
 // the safe leg CRASHED (it never should) or the fatal child died some way we cannot explain.
 
@@ -44,7 +44,7 @@ internal static class Report
                 return true;
             case SigabrtExit:
                 Console.WriteLine($"in-process child exit code = {code} (128+SIGABRT) — the child aborted, a DIFFERENT");
-                Console.WriteLine("   failure than the predicted SIGTRAP force-kill. Reporting it honestly, not as the win.");
+                Console.WriteLine("   failure than the predicted SIGTRAP force-kill. Reporting it faithfully, not as the win.");
                 return false;
             case 0:
                 Console.WriteLine("in-process child exit code = 0 — the child did NOT die: single-step self-skipped there");
@@ -61,7 +61,7 @@ internal static class Report
     {
         if (!w.Armed)
         {
-            // Gated on Ptrace.Available() above, so this is a late/honest degradation — the block
+            // Gated on Ptrace.Available() above, so this is a late/graceful degradation — the block
             // still RAN (uninstrumented) and, crucially, did not crash. Not a regression.
             Console.WriteLine($"out-of-process leg: block ran but did not arm — {w.SkipReason}");
             Console.WriteLine("   (still no crash: the SAME block the in-process leg died on ran clean here).");

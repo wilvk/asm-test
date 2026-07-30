@@ -251,9 +251,9 @@ begin
   cs_code.free
 
   # ---- window: §Z1 region-free whole-window scope (the empty-ctor form) ----
-  # Arms a REGION-FREE single-step capture, runs the block, disarms, renders. HONEST-BUT-
+  # Arms a REGION-FREE single-step capture, runs the block, disarms, renders. FAITHFUL-BUT-
   # NOISY: it steps the Ruby VM too, so the leaf's absolute addresses are a SUBSET and the
-  # 1M-insn ring may overflow (both truncated outcomes are honest). Mirrors
+  # 1M-insn ring may overflow (both truncated outcomes are faithful). Mirrors
   # test_hwtrace.py::test_window_region_free_whole_window.
   w_code = NativeCode.from_bytes(ROUTINE)
   w_result = nil
@@ -261,7 +261,7 @@ begin
   puts "# window: armed=#{w.armed} truncated=#{w.truncated}"
   ok(w_result == 42, "window: block ran and call(20,22) == 42 (got #{w_result.inspect})")
   # Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
-  # honestly self-skips (armed == false), matching the C test_wholewindow_singlestep
+  # faithfully self-skips (armed == false), matching the C test_wholewindow_singlestep
   # and node's window test. Assert the arming-dependent bits only when it armed.
   if w.armed
     if !w.truncated && !w.path.empty? # decoder present + ring not overflowed
@@ -296,7 +296,7 @@ begin
 
   ok(auto_result == 42, "auto call(20,22) == 42 (got #{auto_result})")
   ok(auto_trace.covered?(0) || auto_trace.truncated?,
-     "auto-selected backend covers block offset 0 (or honestly truncates)")
+     "auto-selected backend covers block offset 0 (or faithfully truncates)")
   if pick == SINGLESTEP # the pick off PT/AMD hosts: byte-exact parity
     ok(auto_trace.insn_offsets == [0x0, 0x3, 0x6, 0xC, 0x11],
        "auto pick (single-step) insn_offsets == [0,3,6,12,17] (got #{auto_trace.insn_offsets.inspect})")

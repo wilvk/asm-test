@@ -9,7 +9,7 @@
 // allow-set (AllowRegion(B); AllowRegion(C)) and descends only into those exact regions. DescendAll
 // takes NO allow-set: at every call-out it steps INTO the callee by default, discovering the tree as
 // it goes — best-effort, and bounded only by the guardrails (max-depth / insn-budget / watchdog /
-// denylist). Because it is best-effort it reports honestly: Truncated() when a pool overflowed or a
+// denylist). Because it is best-effort it reports faithfully: Truncated() when a pool overflowed or a
 // byte failed to decode, DepthCapped() when descent stopped at a policy limit. So DescendAll is the
 // tool when you DON'T know the callees in advance and are willing to bound blast-radius; `descent`
 // is the tool when you know EXACTLY which regions you want and nothing else.
@@ -81,7 +81,7 @@ internal static class Program
             Report.Print("tight (SetMaxDepth 1) — same blob, guardrail bites", code, d, result);
         }
 
-        Console.WriteLine("-> DescendAll DISCOVERED the tree with no allow-set (run 1), then reported HONESTLY when a\n"
+        Console.WriteLine("-> DescendAll DISCOVERED the tree with no allow-set (run 1), then reported TRUTHFULLY when a\n"
                         + "   guardrail stopped it early (run 2: DepthCapped=true, C folded into B, no C frame). The\n"
                         + "   result is 107 in BOTH runs — the guardrail bounds what is RECORDED, never what EXECUTES.\n"
                         + "   Contrast `descent` (DescendKnown): it descends ONLY the exact regions you AllowRegion().");

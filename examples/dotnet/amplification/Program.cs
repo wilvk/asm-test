@@ -5,7 +5,7 @@
 //     // Addresses.Length = the whole window; LabelledInstructions = the managed slice;
 //     // the remainder is the native runtime (RyuJIT/GC/PAL) single-step amplifies enormously.
 //
-// The honest envelope every single-step managed example lives inside: a one-line managed Work()
+// The genuine envelope every single-step managed example lives inside: a one-line managed Work()
 // single-steps ~1M runtime instructions. This one MEASURES that — total captured vs the managed
 // (labelled) slice vs the native-runtime remainder, then splits the managed slice into user code
 // and BCL by AsmMethod.Assembly. Counts only; the ctor auto-inits the single-step tier.

@@ -98,7 +98,7 @@ dt_abixray dt_abixray_seek(const StepIndex &sysv_idx,
     x.sysv = dt_scrubber_build(sysv_idx, playhead);
     x.win64 = dt_scrubber_build(win64_idx, playhead);
 
-    // Torn honesty, per pane: no data is not zero data.
+    // Torn fidelity, per pane: no data is not zero data.
     if (x.sysv.torn_here || x.win64.torn_here) {
         std::string which;
         if (x.sysv.torn_here)

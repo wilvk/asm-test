@@ -359,7 +359,7 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
         float ua = 0, va = 0, ub = 0, vb = 0;
         if (!proj.project(m.addr_a, &ua, &va) ||
             !proj.project(m.addr_b, &ub, &vb))
-            continue; // an unplaced endpoint draws no arc (honest: no false line)
+            continue; // an unplaced endpoint draws no arc (faithful: no false line)
         const float ya = static_cast<float>(m.t_a) * scale;
         const float yb = static_cast<float>(m.t_b) * scale;
         // A quadratic-bezier bow: the control point sits above the higher endpoint

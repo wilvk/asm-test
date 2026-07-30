@@ -5,9 +5,9 @@ The six in-process [examples/dotnet](../../../../examples/dotnet/) demos each re
 trace (execution order, *with repeats*), and several binding capabilities have **no example at
 all**. This roadmap is the deduped, feasibility-checked output of a design pass over the binding
 surface; it separates what can be **reported** (mostly cheap `Report.cs` additions) from new
-**example projects**, and records what the single-step tier honestly *cannot* do.
+**example projects**, and records what the single-step tier genuinely *cannot* do.
 
-> **The honest currency is instruction counts, not time.** The single-step WEAK tier records
+> **The genuine currency is instruction counts, not time.** The single-step WEAK tier records
 > instruction *offsets in execution order* — no timestamps, no cycles — and amplifies ~1M
 > runtime instructions per managed call. Any "time"/"overhead"/"ns" number would be meaningless;
 > everything below is counts, coverage, or structure.
@@ -55,7 +55,7 @@ by `make hwtrace-dotnet-example` and self-skipping cleanly where a capability is
   confirmed structurally via `Disas.IsCall/IsBranch/IsRet`.
 - **callgraph** ✅ — reconstruct the call tree/flame graph from the labelled stream: walk
   `Disassembly` with a shadow stack, classify transitions call/return by the prior mnemonic.
-  Honest caveat: only labelled instructions, so approximate.
+  Accuracy caveat: only labelled instructions, so approximate.
 - **perfannotate** ✅ — `perf annotate` but instruction-exact: per-instruction execution-count
   histogram of a native region with proportional bars. Source: `HwTrace.InsnOffsets()`.
 - **loops** ✅ — per-loop trip counts from backedges (backward transitions in the ordered
@@ -74,7 +74,7 @@ by `make hwtrace-dotnet-example` and self-skipping cleanly where a capability is
   where `Program::Chain` calls `Program::Leaf` twice → the stepper descends INTO `Leaf` as two
   nested frames in a live CoreCLR).
 - **codeimage** ✅ — one address holding two code bodies over logical time (`CodeImage.BytesAt`);
-  a self-patched blob (honest: real tier0→tier1 relocates to a *new* address, so a fixed-region
+  a self-patched blob (caveat: real tier0→tier1 relocates to a *new* address, so a fixed-region
   code-image does not capture managed tiering).
 
 **Needs a small helper:**
@@ -84,13 +84,13 @@ by `make hwtrace-dotnet-example` and self-skipping cleanly where a capability is
   classifiers (`IsCall`/`IsBranch`/`IsRet`/`TryCallTarget`); `callgraph` and `instructionmix`
   now use them.
 
-## Honestly NOT feasible (for calibration)
+## Genuinely NOT feasible (for calibration)
 
 - **Wall-clock / cycle timing flame graph** — no timestamps or cycles; ~1M-insn amplification makes
   any "time" meaningless. Counts only.
 - **In-process EXACT managed call tree** — `Descent` runs only through the out-of-process ptrace
   stepper; in-process there is no shadow stack and the native runtime is elided between labelled
-  runs, so inclusive cost cannot be honestly attributed to a frame. The exact tree is the
+  runs, so inclusive cost cannot be accurately attributed to a frame. The exact tree is the
   out-of-process `descent` example; in-process, only the approximate `callgraph` reconstruction.
 - **N-region `attribute_window`** — needs the LIVE scope handle, which `AsmTrace` frees in
   `Dispose`; the surviving post-close primitive is `symbolize_bucket` (the `runtimebuckets` report),

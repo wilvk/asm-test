@@ -1,4 +1,4 @@
-# AMD branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, and the Zen 3 BRS story (doc honesty now, silicon-gated capture arm) — implementation
+# AMD branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, and the Zen 3 BRS story (doc fidelity now, silicon-gated capture arm) — implementation
 
 > **Sources.** Actioned from
 > [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P2, P4,
@@ -191,7 +191,7 @@ LbrExtV2.
      trip point. Assert `truncated == false` and `insns_total == 15`.
    - `JMP15`: 15 × `{0xEB, 0x00}` + `0xC3`; exit_off `0x1E`. All 16 window
      slots are region-involved → `use == 16`. Assert `truncated == true`
-     (honest ceiling: an older in-region edge may have been evicted).
+     (genuine ceiling: an older in-region edge may have been evicted).
 2. Frame the fixture comment per the review: this is a **near-saturated
    window**, not a "tiny routine" (the review refuted that framing — shipped
    fixtures run `use` ≈ 1-4 and the trim already rescues them).
@@ -424,7 +424,7 @@ outside this grep's scope, so it no longer needs a `grep -v` exclusion):
    capture needs an AMD Zen 3 (BRS) / Zen 4 / Zen 5 (LbrExtV2) host") →
    Zen 4/5, noting the Zen 3 arm is unbuilt.
    ([src/branchsnap.c](../../../src/branchsnap.c):21 already says "Zen 3 BRS
-   remain unmeasured" — honest; leave it.)
+   remain unmeasured" — accurate; leave it.)
 8. Do **not** touch the runtime strings in
    [src/hwtrace.c](../../../src/hwtrace.c) (244, 275-278, 386, 1192, 1359,
    2586): the skip-reason split is runtime behavior and belongs to T8's
@@ -486,7 +486,7 @@ validated `ret` and tail-`jmp` exits.
 2. Add check 3b after the existing check 3 (273-296): the island prefix
    `ips[0..ntiled)` must contain `(uint64_t)&preamble_leaf` — disjoined with
    `tile_truncated` (never the survey-wide `truncated`; the file's own
-   comment at 274-280 explains why that term is the only honest escape).
+   comment at 274-280 explains why that term is the only faithful escape).
    Unlike island[0] (present **by hardware construction** — the file's
    comment at 16-18), the preamble entry is only present if the 2-3
    next-newest slots survived the #DB: this is the discriminating
@@ -527,7 +527,7 @@ user-facing docs — tiling semantics are unchanged, only newly evidenced.
   across all `TRIALS` trials.
 - The mutation run's flip was observed and is recorded in the comment.
 - branchsnap.c:419-426 and the plan's residual paragraph state the
-  three-shapes-validated fact (Zen 4 and Zen 3 BRS coverage remain honestly
+  three-shapes-validated fact (Zen 4 and Zen 3 BRS coverage remain transparently
   unmeasured there).
 - Off AMD, `branchtile-test` still self-skips (exit 0).
 
@@ -570,7 +570,7 @@ hardware code. Everything below is safe to prepare behind the probe.)
    **never** Tier-B stitching (which is load-bearing on the period-1 overlap
    and stays untouched, per the plan's own caveat). One window per region;
    decode through the existing `asmtest_amd_decode_reach`; `truncated`
-   honesty and the depth ceiling (16 — the CPUID `0x80000022` leaf is absent
+   fidelity and the depth ceiling (16 — the CPUID `0x80000022` leaf is absent
    on Zen 3 and `asmtest_amd_lbr_depth()` already falls back to 16,
    [src/amd_backend.c](../../../src/amd_backend.c):160-175) apply unchanged.
    Keep the two survey opens (1347-1349, 1608-1610) generic — they self-skip
@@ -708,17 +708,17 @@ line 24):
 ## Out of scope
 
 - **The AMD validation-checklist repair
-  (P1 → [amd-ibs-backend-honesty.md#T2](amd-ibs-backend-honesty.md#T2)),
+  (P1 → [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md#T2)),
   `IBS_MAX_RECORD`/callchain
-  (P3 → [amd-ibs-backend-honesty.md#T3](amd-ibs-backend-honesty.md#T3)),
+  (P3 → [amd-ibs-backend-fidelity.md#T3](amd-ibs-backend-fidelity.md#T3)),
   installing `asmtest_ibs.h`
-  (P6 → [amd-ibs-backend-honesty.md#T7](amd-ibs-backend-honesty.md#T7)), the
+  (P6 → [amd-ibs-backend-fidelity.md#T7](amd-ibs-backend-fidelity.md#T7)), the
   IBS caps append-order note
-  (P7 → [amd-ibs-backend-honesty.md#T5](amd-ibs-backend-honesty.md#T5)), and
+  (P7 → [amd-ibs-backend-fidelity.md#T5](amd-ibs-backend-fidelity.md#T5)), and
   the `sample_period`/`period_jitter` test gap
-  (P8 → [amd-ibs-backend-honesty.md#T6](amd-ibs-backend-honesty.md#T6))** —
+  (P8 → [amd-ibs-backend-fidelity.md#T6](amd-ibs-backend-fidelity.md#T6))** —
   all owned by
-  [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md), including
+  [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md), including
   rewriting `amd-hardware-validation.md` (remember: post-5d8e0d2, a
   `truncated=0` where escalation must fire is a **regression** signal, not a
   known finding). The P-numbers are the followup plan's; the `#T<n>` anchors

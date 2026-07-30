@@ -48,7 +48,7 @@ lane (`--cap-add=PERFMON`, plus `--cap-add=BPF` for the snapshot) runs them live
 ## Deferred (with reasons)
 
 Five ideation candidates were NOT shipped — each would land as an always-self-skipping, duplicative,
-misconceived, or CI-flaky example on this box. Deferring is the honest call; the capability is not lost.
+misconceived, or CI-flaky example on this box. Deferring is the truthful call; the capability is not lost.
 
 - **`exception-anatomy`** (name the CLR's throw/unwind machinery over an `AsmTrace.Window`) — the OOP
   single-stepper reliably captures a *single* in-scope throw (as `localscope_oop_managed` shows), but a

@@ -187,7 +187,7 @@ $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/test_ct_eq.o`, linked with
 
 **Tests.** `make ct-eq-test` green on x86-64; invert the union assertion once
 by hand to confirm the control fails. `make docker-emu` runs both suites —
-no self-skip except the honest non-x86-64-host gate.
+no self-skip except the candid non-x86-64-host gate.
 
 **Docs.** The examples.md edit; one `### Added` CHANGELOG bullet.
 
@@ -280,7 +280,7 @@ grow, and the leaky control that does.
 
 **Goal.** The first door: bundled-walkthrough list; the player renders
 ordered stops with step-anchored text beside the replay views,
-expected-vs-got framed, honesty chrome enforced (D7).
+expected-vs-got framed, fidelity chrome enforced (D7).
 
 **Steps.**
 1. `desktop/src/walkthrough.h` — **pure view-model header** (C++17, no
@@ -293,7 +293,7 @@ expected-vs-got framed, honesty chrome enforced (D7).
    `ASMTRACE_LEARN_DIR`); player pane: stop text, prev/next, expected-vs-got
    side-by-side; an anchored stop navigates the replay views through 04's
    router.
-3. Honesty chrome (D7, tested): add dishonesty fixture
+3. Fidelity chrome (D7, tested): add low-fidelity fixture
    `tests/golden-asmtrace/walkthroughs/square-truncated.asmtrace` (generated:
    the square recording with the truncation flag set and one stop anchored
    past the recorded window). The player must render the truncation banner
@@ -344,7 +344,7 @@ fault cards, land in the replay views on a recording of what just ran.
 3. Run: v1 executes the **x86-64 guest only** via
    [emu_call_traced](../../../include/asmtest_emu.h#L178); other arches
    assemble and show bytes + a labeled "run/trace is x86-64-only in v1" (the
-   plan's honest limit). Cap `max_insns` (default 1<<20) so a spin cannot
+   plan's acknowledged limit). Cap `max_insns` (default 1<<20) so a spin cannot
    hang the UI; run on a worker thread, marshal the result back.
 4. Fault cards, not errors: when `emu_result_t.faulted`, render fault kind
    (READ/WRITE/FETCH, [emu_fault_kind_t](../../../include/asmtest_emu.h#L77)),
@@ -438,7 +438,7 @@ each string comes from.
 arms per-test `.asmtrace` recording; a failing test's TAP/JUnit output
 carries recording path + failing step id; the GUI's failure list deep-links
 via 04's router. **Scoped to emulator-tier tests first**; everywhere else the
-flag is accepted and simply produces no recordings (the honest degrade).
+flag is accepted and simply produces no recordings (the graceful degrade).
 Subtlest task: **do the spike before any code.**
 
 **Steps.**
@@ -541,13 +541,13 @@ Critical path: **T1 → T2 → T3 → T4**; off it: T5, T6, T7.
   The Author door never links a ptrace engine.
 - **No self-skipping lanes.** Everything here is installable (Unicorn,
   Keystone, ImGui, GLFW) and runs inside `docker-emu` / `docker-desktop` per
-  the CLAUDE.md rule. Honest skips only: `REQUIRE_X86_HOST` on tests driving
+  the CLAUDE.md rule. Genuine skips only: `REQUIRE_X86_HOST` on tests driving
   host-compiled bytes (host-ISA gate) and T6's hardware rows rendering
   measured reasons.
 - **Determinism (D6).** Goldens regenerate byte-identically **in-lane**
   (pinned Keystone); the double-run `cmp` is the gate. Never hand-edit a
   committed `.asmtrace`.
-- **Honesty is tested behavior (D7).** The truncated-walkthrough fixture and
+- **Fidelity is tested behavior (D7).** The truncated-walkthrough fixture and
   player assertions (T4), verbatim-reason assertions (T6), and loud-drop
   passthrough assertion (T5) are requirements, not polish.
 - **Cross-doc naming.** `asmtest_record_path`, `asmtest_note_recording`,

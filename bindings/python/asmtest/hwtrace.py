@@ -539,7 +539,7 @@ class StealthResult:
     """The outcome of :meth:`HwTrace.stealth_trace`: the §D3 out-of-process stepper's
     EXACT :attr:`result` plus its best-effort instruction stream.
 
-    The two honesty bits are not interchangeable. :attr:`result` is EXACT — the helper
+    The two fidelity bits are not interchangeable. :attr:`result` is EXACT — the helper
     reads it from the caller's RAX at the region's ``ret``, so it witnesses that the leaf
     really ran to completion under the reverse-attach. :attr:`offsets` is BEST-EFFORT:
     single-stepping a live runtime out of band can be interrupted by its async signals,
@@ -569,7 +569,7 @@ class StealthResult:
 
 class CallScopedResult:
     """The outcome of :meth:`HwTrace.call_scoped`: the call's return value, the executed
-    body's disassembly (:attr:`path`), and the honesty bits."""
+    body's disassembly (:attr:`path`), and the fidelity bits."""
     __slots__ = ("result", "path", "truncated", "rc")
 
     def __init__(self, result, path, truncated, rc):
@@ -585,7 +585,7 @@ class CallScopedResult:
 
 class WindowResult:
     """The outcome of :meth:`HwTrace.window`: the executed body's disassembly
-    (:attr:`path`, empty when no decoder is present), the :attr:`truncated` honesty bit,
+    (:attr:`path`, empty when no decoder is present), the :attr:`truncated` fidelity bit,
     :attr:`armed` (``False`` when the region-free window SELF-SKIPPED on a
     non-single-step backend — ``fn`` still ran), and :attr:`insns`, the number of
     instructions the closed window recorded. Mirrors dotnet's empty-ctor
@@ -615,7 +615,7 @@ class TraceCallAutoResult:
     """The outcome of :meth:`HwTrace.trace_call_auto`: the call's ``result``, the filled
     ``trace`` (a queryable :class:`HwTrace` — the CALLER frees it via ``trace.free()``),
     the :class:`TierChoice` that produced the final trace (``used`` — inspect
-    ``used.backend`` to see whether escalation fired), the ``truncated`` honesty bit, and
+    ``used.backend`` to see whether escalation fired), the ``truncated`` fidelity bit, and
     the raw ``rc``. On a self-skip (no call-owning native tier) ``result``/``trace``/
     ``used`` are ``None`` and ``rc`` is negative."""
     __slots__ = ("result", "trace", "used", "truncated", "rc")
@@ -715,7 +715,7 @@ class _ScopedTrace:
     populate :attr:`path`, and — when ``emit`` — writes that text to stdout (or a
     tid-suffixed file on an explicit ``sink``, so concurrent same-named scopes neither
     clobber nor interleave). The C core flags the trace ``truncated`` if the close
-    hops OS threads (§0.2/§1), so :attr:`truncated` is the honest thread-scope check."""
+    hops OS threads (§0.2/§1), so :attr:`truncated` is the faithful thread-scope check."""
 
     def __init__(self, lib, handle, name, emit, sink):
         self._lib = lib
@@ -745,7 +745,7 @@ class _ScopedTrace:
             self.path = buf.value.decode(errors="replace")
         else:
             self.path = ""
-        # Capture the thread-scope honesty bit BEFORE freeing the handle.
+        # Capture the thread-scope fidelity bit BEFORE freeing the handle.
         self.truncated = bool(
             self._lib.asmtest_emu_trace_truncated(self._handle))
         if self._emit and self.path:
@@ -1030,7 +1030,7 @@ class HwTrace:
         """§Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
         ``using (new AsmTrace())``. Arms a REGION-FREE single-step capture on THIS thread
         (no :class:`NativeCode`, no ``[base, len)``), runs ``fn()``, disarms, and renders the
-        executed body from live self-memory. HONEST-BUT-NOISY: records EVERYTHING between
+        executed body from live self-memory. FAITHFUL-BUT-NOISY: records EVERYTHING between
         begin and end, so a traced native leaf's ABSOLUTE addresses appear as a SUBSET of the
         listing. Keep ``fn`` a TIGHT native leaf — EFLAGS.TF single-step is armed across it
         (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT). Returns a

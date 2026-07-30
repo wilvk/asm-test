@@ -122,7 +122,7 @@ multi-threaded live-PT race). All runs exit 0, 0 `not ok`:
 - **Hygiene:** `make docker-fmt-check` + `make docker-docs` clean; host-side
   `make check-bindings-parity` **OK — 142 tier symbols × 10 bindings** (run on
   the host, per the recorded dubious-ownership gotcha).
-- **Honest residue (recorded, not hidden):** on this box `MethodsObserved` is 0
+- **Candid residue (recorded, not hidden):** on this box `MethodsObserved` is 0
   consistently, so the `unwarmed/PT compose: >=1 method JIT'd inside the window`
   check self-skips every run (the capture itself is asserted live); forcing a
   guaranteed in-window JIT remains the concurrency plan's recorded follow-up.

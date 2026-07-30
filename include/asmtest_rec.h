@@ -7,7 +7,7 @@
  * whole scoping mechanism: FRAMEWORK_OBJS stays engine-free, and only a suite
  * that ALREADY links the emulator tier can link this glue and produce
  * recordings. Everywhere else `--record-dir` is accepted and simply produces
- * nothing, which is the honest degrade rather than a silent one.
+ * nothing, which is the graceful degrade rather than a silent one.
  *
  * Dependency tiers, deliberately: this header is pure (asmtest_trace.h +
  * asmtest_emu.h, both plain declarations); the TU behind it links the shared

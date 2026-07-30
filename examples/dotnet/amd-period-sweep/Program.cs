@@ -13,7 +13,7 @@
 //   - LARGER period (e.g. 256) = coarser but cheaper — fewer PMIs, fewer endpoints to bucket.
 // The survey is SAMPLED, not exact: h.IsStatistical is true, and h.Methods[].Count is a
 // branch-target endpoint WEIGHT, not an instruction count. AMD sampling is non-deterministic per
-// attempt — a given period can land 0 endpoints on a run; that is honest, so (like amdlbr/) we
+// attempt — a given period can land 0 endpoints on a run; that is legitimate, so (like amdlbr/) we
 // retry a period a few times and report 0 when nothing lands. Needs Zen 3+/LBR + CAP_PERFMON —
 // self-skips (exit 0) in the plain lane; the docker-hwtrace-amd-style permissioned lane runs live.
 
@@ -47,7 +47,7 @@ internal static class Program
         if (!HwTrace.Available(HwBackend.AmdLbr))
         {
             Console.WriteLine($"# self-skip: AMD LBR unavailable: {HwTrace.SkipReason(HwBackend.AmdLbr)}");
-            return 0; // honest degrade off Zen 3+/LBR or without CAP_PERFMON — nothing to sweep
+            return 0; // graceful degrade off Zen 3+/LBR or without CAP_PERFMON — nothing to sweep
         }
 
         Console.WriteLine("AMD LBR samples the branch stack out of band while the block runs at native speed.\n"
@@ -74,13 +74,13 @@ internal static class Program
                 if (!h.Armed)
                 {
                     Console.WriteLine($"# self-skip: {h.SkipReason}");
-                    return 0; // armed check per honest-degrade contract (Available() passed above)
+                    return 0; // armed check per graceful-degrade contract (Available() passed above)
                 }
                 endpoints = h.Addresses.Length;
                 if (endpoints > 0) break; // caught a survey; else resample the same period
             }
 
-            // Two distinct honest outcomes: zero endpoints sampled at all, vs. endpoints sampled
+            // Two distinct genuine outcomes: zero endpoints sampled at all, vs. endpoints sampled
             // but none resolved to a named managed method (heavy throttling can leave the few
             // survivors in native-runtime code) — both are real properties of sampled surveys.
             string top = endpoints == 0 ? "(0 endpoints sampled)" : "(no named method resolved)";
@@ -97,7 +97,7 @@ internal static class Program
                           + "   period = the PMU fires more often = a finer survey, but more PMIs and more\n"
                           + "   throttling (Truncated flags dropped/throttled samples); larger = coarser but\n"
                           + "   cheaper. The endpoint counts are SAMPLED, so they wobble run-to-run and 0 on a\n"
-                          + "   run is honest, not an error — Hot stays the top method because it owns the\n"
+                          + "   run is accurate, not an error — Hot stays the top method because it owns the\n"
                           + $"   branch traffic at every period. (grand={grand})");
         return 0;
     }

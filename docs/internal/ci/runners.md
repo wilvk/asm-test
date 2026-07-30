@@ -194,7 +194,7 @@ a `hw.yml` invariant.
   the failure mode the macOS Track E deferral explicitly avoided. Flipping one
   variable to `1` lights exactly one lane.
 - **Dedicated, non-sudo runner user.** The runner service runs as a dedicated
-  `runner` account with no sudo. **Honest caveat:** on the Linux boxes that
+  `runner` account with no sudo. **Candid caveat:** on the Linux boxes that
   account must be in the `docker` group to run the `docker-*` lanes, and
   **docker-group membership is root-equivalent** on that host. The box must
   therefore be **dedicated to CI, hold no credentials, and be rebuildable from

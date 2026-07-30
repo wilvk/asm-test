@@ -597,7 +597,7 @@ else
 	$(MAKE) --no-print-directory $(BUILD)/pin_taint $(BUILD)/taint_oracle_diff; \
 	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
 	echo "=== dr-taint-oracle-test (DR ≡ libdft64 on the GP/integer-memory subset) ==="; \
-	echo "# libdft64 coverage-gap tokens (honest-boundary record, PIN-4 exit criterion):"; \
+	echo "# libdft64 coverage-gap tokens (disclosed-boundary record, PIN-4 exit criterion):"; \
 	echo "#   libdft-partial-sse-avx    XMM/YMM: basic SSE/AVX, rules unverified upstream -> INFORMATIONAL skip"; \
 	echo "#   libdft-gap-avx512-zmm     ZMM has no tag slot; AVX-512 taint silently dropped"; \
 	echo "#   libdft-gap-eflags         EFLAGS ignored; kind-1 routed through the flag-defining reg"; \

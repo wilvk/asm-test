@@ -586,7 +586,7 @@ static asmtest_gcmove_t *build_separated(const gccanon_move_t *in, uint32_t n, u
          * and a wrapped stamp forwards everything while a zeroed one forwards nothing, quietly
          * turning the ORACLE (the thing that decides whether the lane passes) into a liar. Every
          * caller derives K from the same feed's max_gcs_in_group, so this refuses rather than
-         * corrects: a NULL here surfaces as an honest "oracle unavailable". */
+         * corrects: a NULL here surfaces as a truthful "oracle unavailable". */
         if (K < m) {
             ok = 0;
             break;
@@ -1075,7 +1075,7 @@ int main(int argc, char **argv) {
     }
 
     /* Caller-owned L0 buffers, sized for one small managed region (the shipped tier's own sizing
-     * discipline: overflow is honest via vt->truncated rather than a lie). */
+     * discipline: overflow is faithful via vt->truncated rather than a lie). */
     g_vt = asmtest_valtrace_new(4096, 4096 * 8, 4096 * 16);
     if (!g_vt) {
         printf("GCCANON_TRACER_FAIL out of memory\n");
@@ -1125,7 +1125,7 @@ int main(int argc, char **argv) {
      * the entry-wait bound. Before that bound existed this case HUNG here, so anything
      * that reaches this line is new information, not a regression. Fail loudly rather
      * than fall through and drain an empty feed as though the capture succeeded — and
-     * name the lever, because on a slow/loaded box the honest fix is a longer wait, not
+     * name the lever, because on a slow/loaded box the genuine fix is a longer wait, not
      * a code change. */
     if (prc == DF_PTRACE_NEVER) {
         printf("not ok - the traced region never arrived within the entry-wait bound "
@@ -1135,7 +1135,7 @@ int main(int argc, char **argv) {
 
     /* Give the victim a bounded moment to stamp at least one POST-capture move (increment 4 / T2):
      * its driver keeps dropping compacting gen2 GCs after the capture, but the drain runs within
-     * milliseconds of detach, so without this the post-move observable would race. Bounded + honest:
+     * milliseconds of detach, so without this the post-move observable would race. Bounded + faithful:
      * it waits for the first post move or ~3 s, whichever comes first, and never stalls the lane. */
     for (int w = 0; w < 600 && g_ch->post_moves_total == 0; w++) {
         struct timespec pw = {0, 5 * 1000 * 1000}; /* 5 ms */

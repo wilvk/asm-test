@@ -174,7 +174,7 @@ and ties each growth rung to a named planned item.
   builds and runs on macOS Intel via the pinned fork (nightly `drtrace-macos`
   lane), so the macOS-Intel backend column is emulator + Mach + DR — but **Apple
   Silicon remains emulator-only** ([include/asmtest_mach.h](../../../include/asmtest_mach.h)
-  is x86-64 Darwin only), and the platform matrix below says so honestly.
+  is x86-64 Darwin only), and the platform matrix below says so accurately.
 - **Hardware-backed GUI CI now exists to ride — asymmetrically.** `hw.yml`
   (05:00 UTC nightly + owner dispatch, `HW_RUNNER_*` variable gates + owner-only
   actor guard) has a **standing** bare-metal Intel PT lane in REQUIRE mode (the
@@ -200,7 +200,7 @@ and ties each growth rung to a named planned item.
 | **Compiler / libc / runtime author** | Author + Observer | Conformance-corpus goldens as reference behavior; managed-runtime views (srcmap IL/bci attribution, stitched per-tid PT timelines) for JIT work. |
 | **Windows developer** | Author + recordings | The Win64 native tier ([src/ss_win64.c](../../../src/ss_win64.c) VEH stepper, `asmtest_abi_win64.json`) produces recordings; the viewer builds and renders on Windows. **Live attach on Windows is out of scope for v1** — the engines are ptrace/Mach. |
 
-### Platform honesty matrix (rendered in-app, never glossed)
+### Platform fidelity matrix (rendered in-app, never glossed)
 
 | Platform | Author mode | Observer mode (live attach) |
 |---|---|---|
@@ -260,7 +260,7 @@ amended with the three expansion-driven properties:
 - **Provenance is mandatory on every stream**: producer + backend, exact vs
   statistical, truncation flags, drop/loss accounting (`lost`, `THROTTLED`,
   ring-drop counts, IBS EUNAVAIL-on-OOM), window parameters, skip reasons,
-  trust-ladder tier where applicable. The honesty culture is enforced by the
+  trust-ladder tier where applicable. The fidelity culture is enforced by the
   format, not by renderer discipline.
 
 Everything else is a reader or writer of this: record modes are NDJSON
@@ -418,7 +418,7 @@ place × intervention** into one selectable object.
   srcmap labels where available), escapes, producer tier, truncation state. A
   **zeroization audit** is a selection mode: forward closure ∩ last-writer
   residency at playhead T lights every lane still holding descendants of a
-  selected birth — honestly bounded to the traced window.
+  selected birth — faithfully bounded to the traced window.
 - **Lane inspector (place-indexed cross-feed annex).** Clicking a lane header
   joins everything every other instrument recorded about that address, from
   shipped address-keyed structs: trace offsets, operand effective addresses,
@@ -443,7 +443,7 @@ place × intervention** into one selectable object.
   (dependence without consequence); steps whose values changed render hot — the
   interventional answer drawn on the observational fabric. This is what
   separates "the slice says it depends" from "it actually mattered".
-- **Honesty chrome.** Torn edge on truncation; fade-out (never thread-death)
+- **Fidelity chrome.** Torn edge on truncation; fade-out (never thread-death)
   for values alive at trace end; a "born of untraced state" glyph; producer-tier
   outline colors; the isolated-guest badge on emulator fabrics; a standing rule
   that statistical producers can never appear as fabric.
@@ -473,7 +473,7 @@ control-flow occupancy (never cross-thread value hops — valtrace has no tid
 dimension); Wave 2 blame → failures deep-link into the fabric with the bad
 value's thread pre-selected (the D4 spine ends here, not at a table).
 
-**Honest limits (what the Loom must never pretend):** exact-only fabric;
+**Fidelity limits (what the Loom must never pretend):** exact-only fabric;
 lifetimes are trace-relative ("still holding the key" = "not overwritten within
 the traced window"); value fabrics are x86-64-guest-only until a per-guest
 valtrace producer exists; no syscall-born threads until a structured buffer-EA
@@ -513,7 +513,7 @@ as day-one work (no resume-from-state API exists); syscall-buffer thread births
    real first-trace barrier, so it gets a first-class explanation surface, not
    an error toast.
 
-**Honesty culture as UX law** (inherited, enforced by schema + chrome):
+**Fidelity culture as UX law** (inherited, enforced by schema + chrome):
 truncation is loud; statistical ≠ exact, always visually distinct with
 provenance in the chrome; self-skip shows why; crawl warnings on single-step
 views, live-JIT targets steered to IBS; sensitive captures redacted by default
@@ -537,9 +537,9 @@ same events.
 - **Golden-recording tests:** a committed corpus of `.asmtrace` files (generated
   from the conformance corpus, deterministic) drives renderer tests —
   schema-stability is CI-enforced the way `asmtest_abi.json` layouts are. The
-  corpus deliberately includes **dishonesty fixtures** — recordings carrying
+  corpus deliberately includes **low-fidelity fixtures** — recordings carrying
   truncated/dropped/redacted data — and the renderer tests assert the banner,
-  the provenance chrome, and the redaction defaults, so the honesty-culture UX
+  the provenance chrome, and the redaction defaults, so the fidelity-culture UX
   laws are tested behavior, not aspiration.
 - Capture smokes ride existing lanes: docker lanes for record-mode round-trips;
   `hw.yml` nightly for hardware-backed capture (PT REQUIRE-mode, AMD Zen), per
@@ -549,7 +549,7 @@ same events.
   only hardware and credentials self-skip.
 - The render-only viewer builds with no engine deps (fast contributor loop);
   the full app adds the engines.
-- **Distribution honesty:** v1 ships as build-from-source + the docker lane,
+- **Distribution fidelity:** v1 ships as build-from-source + the docker lane,
   consistent with the repo's current posture (nothing is on any registry yet);
   signed/notarized per-OS installers are deferred until the bindings' registry
   go-live proves the credential path. Per-door artifact requirements: **Learn**
@@ -562,7 +562,7 @@ same events.
    **done** — [01-asmtrace-format.md](../gui/01-asmtrace-format.md) landed the
    draft schema, the writer TU, `--record` on every headless mode, `--json` for
    `--log`/`--stream`, the `vec512_t` row, and the committed golden corpus with
-   its dishonesty fixtures. What remains of this phase is the reader/exporter
+   its low-fidelity fixtures. What remains of this phase is the reader/exporter
    half: [02-exporters-and-readers.md](../gui/02-exporters-and-readers.md)
    T1–T4.)*
    `.asmtrace` v1 schema doc + NDJSON serializer
@@ -651,10 +651,10 @@ same events.
 | Backward-slice blame (W2) | slice-blame attachment on failure events | failure → backward cone, one click (the spine completes) |
 | Metamorphic / KAT / mutation-adequacy / latency-axis (W3) | test + stats kinds | verdict chips; mutation killed/survived dashboard (accessors exist) |
 | SARIF export + HTML visualizer (W4) | `.asmtrace` is the shared schema | HTML visualizer = web renderer of `.asmtrace`; SARIF as exporter |
-| Object-slicer front door R7 (W3) | new source descriptor on recordings | "open object file" path (honest v1: self-contained PIC leaf routines only) |
+| Object-slicer front door R7 (W3) | new source descriptor on recordings | "open object file" path (candid v1: self-contained PIC leaf routines only) |
 | Misaligned-access detector (W3) | mem-address event kind | alignment-fault chips on the trace canvas |
 | Secret-residue / zeroization audit (W3) | dataflow + mem-address kinds | residue lanes at end-of-trace (bounded to the traced window) |
-| Uninit-read, reshaped R6 (W3) | mem-address + watch-hit kinds | never-written-byte-read markers (memory-only, honestly labeled) |
+| Uninit-read, reshaped R6 (W3) | mem-address + watch-hit kinds | never-written-byte-read markers (memory-only, accurately labeled) |
 | llvm-mca report backend, reshaped R2 (W3) | run-stats fields (report, never a gate) | port-pressure annex panel beside the canvas |
 | Triton prove-or-counterexample, reshaped R5 (W4) | test-result kind + counterexample attachment | verdict chip; counterexample opens as a recording |
 

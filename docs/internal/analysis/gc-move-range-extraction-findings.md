@@ -193,7 +193,7 @@ then vcalls a slot past the `Callback4` vtable. With those, the whole profiler i
 EventPipe fallback is no longer needed unless a later constraint (e.g. not wanting
 `COR_PRF_MONITOR_GC` to disable background GC) forces it.
 
-## Caveats / open questions (honest)
+## Caveats / open questions (candid)
 
 - **SINGLE BIGGEST GAP — DR-vs-profiler coexistence is not verified.** No source confirmed
   that an `ICorProfiler` `.so` coexists cleanly with a process running under DynamoRIO on

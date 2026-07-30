@@ -23,12 +23,12 @@
   and two reds encode the same "refused" (T1).
 - **F15 — no colour-blind-safe palette.** Back-cone vs forward-cone, dim vs hot,
   refused vs ordinary all ride on hue alone; ~5% of users cannot read the core
-  slice/diff task, and a deuteranope could read an honest statistical/truncated
-  distinction as normal — honesty that collapses onto colour is not honest (T2).
+  slice/diff task, and a deuteranope could read a genuine statistical/truncated
+  distinction as normal — fidelity that collapses onto colour is not faithful (T2).
 - **F3 — a dense coined lexicon with no in-app glossary, tooltips, or legends.**
   Loom, fabric, patch-bay, hollow, born-untraced, patient-zero, hot-edges surface
   raw; the Sphinx glossary exists but is reachable from no pane and does not even
-  define the coined GUI terms. **Chrome the user cannot decode is not honest** (T3).
+  define the coined GUI terms. **Chrome the user cannot decode is not faithful** (T3).
 - **F16 — filter, sort, and time-position controls differ across every view.**
   Three unrelated filter idioms, no sort where ImGui table sort is free, and five
   different "move through time" controls, so the muscle action for the most common
@@ -38,8 +38,8 @@
   overview drop the learner straight into a dense fabric/terrain with no primer
   and no legend, the "blank multi-panel IDE" the plan promised to avoid (T5).
 
-Per the review's standing note and F5, honesty (D7) is load-bearing: every task
-here **restructures** honesty chrome into one designed system — none removes or
+Per the review's standing note and F5, fidelity (D7) is load-bearing: every task
+here **restructures** fidelity chrome into one designed system — none removes or
 softens a truth. The graded-severity work is doc 23's; this doc owns the colour,
 the words, and the controls that carry those truths.
 
@@ -111,7 +111,7 @@ the words, and the controls that carry those truths.
   the scrubber/abixray shared slider; prev/next **discrete paging** in
   [`observer_draw.cpp`](../../../desktop/src/views/observer_draw.cpp):412–428 —
   Invocations, with the comment (:418–420) "Discrete paging, never a scrub … a
-  slider would draw that gap as elapsed captured time" (a *deliberate* honesty
+  slider would draw that gap as elapsed captured time" (a *deliberate* fidelity
   choice, undistinguished visually); and `InputInt` in disasm
   ([`observer_draw.cpp`](../../../desktop/src/views/observer_draw.cpp):482, "as of
   logical time (0 = latest)").
@@ -157,7 +157,7 @@ the words, and the controls that carry those truths.
 **Goal.** Make `theme.h` the ONE place the good/bad/maybe/changed/cone/selected/
 statistical axis lives, as named accessors, and delete every inline literal at the
 five drift sites (plus the Loom refusal placard). This is the substrate doc 23 T4.1
-(graded honesty chrome) and T2 (CVD) both build on — **land it first.**
+(graded fidelity chrome) and T2 (CVD) both build on — **land it first.**
 
 **Steps.**
 1. In [`theme.h`](../../../desktop/src/ui/theme.h) add named accessors for the full
@@ -169,7 +169,7 @@ five drift sites (plus the Loom refusal placard). This is the substrate doc 23 T
    register delta — the `1.0,0.85,0.3` yellow), `dt_cone_back_col`,
    `dt_cone_fwd_col`, `dt_cone_both_col`, `dt_cone_dim_col` (the four cone hues),
    `dt_selected_col`, `dt_statistical_col` (alias `dt_warn_col` if it must equal the
-   amber, but *named* so a later graded-honesty change (23 T4.1) can move statistical
+   amber, but *named* so a later graded-fidelity change (23 T4.1) can move statistical
    off the caution amber without touching call sites). Keep each accessor's doc
    comment stating its ONE meaning (the F14 discipline).
 2. **Delete the literals, route through the accessors:**
@@ -219,7 +219,7 @@ viewer with zero engine deps.
 > protan/deuter/tritan (Machado 2009 severity-1) and computes WCAG contrast, no
 > ImGui context and no engine. The T1 accessors keep their hues (they are already
 > a separated categorical set; changing byte-exact cone values would cascade
-> through the golden/byte tests for no honesty gain), and the F15 fix is carried
+> through the golden/byte tests for no fidelity gain), and the F15 fix is carried
 > by the SECOND CHANNEL per the brief's own test (c): a shape glyph beside every
 > cone node (`slice_view_draw.cpp`), the Loom take axis read by fill pattern with
 > a named inline legend `dt_loom_take_legend` (`fabric_imgui.cpp` — `kHot` now
@@ -283,7 +283,7 @@ the views; assert **every** categorical entry has a non-empty second-channel tok
 and that `dt_warn` carries the large-text-only marker;
 (c) run `dt_cvd_simulate` for the three CVD kinds over the categorical hues and
 assert each pair that must be distinguished either stays separable OR is covered by
-a second channel (so the test passes *because* of the redundant channel, honestly,
+a second channel (so the test passes *because* of the redundant channel, genuinely,
 not by pretending the hues alone suffice).
 
 **Docs.** CHANGELOG `Changed`: "desktop: CVD-safe categorical palette + a second
@@ -320,7 +320,7 @@ has a tested second channel; text ≥4.5:1 / fills ≥3:1 at the smallest font;
 subtitle), and surface the ONE Sphinx glossary in-app as a hoverable term registry,
 per-view "?", inline legends, and a searchable Terms pane — one source, so
 legend / tooltip / teaching cannot drift (the `dt_nav_bindings()`→help pattern,
-applied to words). **Chrome the user cannot decode is not honest** (F3).
+applied to words). **Chrome the user cannot decode is not faithful** (F3).
 
 **Steps.**
 1. **Complete the one source (F3 gap).** Add the coined GUI terms to
@@ -349,7 +349,7 @@ applied to words). **Chrome the user cannot decode is not honest** (F3).
    view. Degrades silently if the term is absent (never a broken tooltip).
 5. **Per-view "?" button.** Add a small "?" affordance to each view header that
    opens a popover stating **what the view shows and what its metric means** —
-   verbatim the honest caveat, e.g. "hot-edges are edge counts, not a call stack",
+   verbatim the accurate caveat, e.g. "hot-edges are edge counts, not a call stack",
    "Loom lineage is def-use, not control flow". Store the text next to the view, not
    in prose. (This "?" is also T5's primer re-open handle.)
 6. **Inline legend in every encoded view** (reuse T1's shared legend) + a
@@ -379,7 +379,7 @@ generated from that one file (no second copy); coined terms resolve to definitio
 on hover; every view has a "?" caveat and a domain-first heading; the Terms pane
 filters via the ImSearch idiom.
 
-### T4 — one filter affordance + one time-position widget (two honest variants)  (M, depends on: 16)
+### T4 — one filter affordance + one time-position widget (two faithful variants)  (M, depends on: 16)
 
 > **Landed 2026-07-27 — green.** `desktop/src/ui/filter.h` is the one affordance:
 > a pure case-insensitive `dt_filter_match` / `dt_filter_count` ("showing N of M")
@@ -401,8 +401,8 @@ filters via the ImSearch idiom.
 
 **Goal.** One filter idiom on every list/table (type-to-narrow "showing N of M") plus
 free ImGui column-sort on the tabular views, and ONE shared time-position widget with
-two honest variants — continuous where a total exists, discrete where it does not —
-the discrete case marked as an intentional honesty choice, not an oversight.
+two faithful variants — continuous where a total exists, discrete where it does not —
+the discrete case marked as an intentional fidelity choice, not an oversight.
 
 **Steps.**
 1. **One filter affordance.** Wrap the Learn ImSearch idiom into a reusable
@@ -412,7 +412,7 @@ the discrete case marked as an intentional honesty choice, not an oversight.
    narrowing — Canvas, Timeline, Observer tables, the hot-edge table — replacing the
    ad-hoc idioms where they are *client-side* filters. **Leave Tree's engine-side
    filter (`tree.cpp`:47,62) as-is** — it changes what the engine *captures* and is
-   a different, honest thing; the client-side narrowing sits *on top* (doc 16's
+   a different, faithful thing; the client-side narrowing sits *on top* (doc 16's
    framing). Backends' combo (`completeness.cpp`:39–57) is a selector, not a filter —
    leave it.
 2. **Free column-sort** on the tabular views: add `ImGuiTableFlags_Sortable` +
@@ -420,7 +420,7 @@ the discrete case marked as an intentional honesty choice, not an oversight.
    gives it for free once the flag is set and the model exposes a sort key). Sorting
    reorders the *view*, never the model (D4/D7 — the underlying order stays the
    recorded order).
-3. **One time-position widget, two honest variants.** A shared
+3. **One time-position widget, two faithful variants.** A shared
    `desktop/src/ui/timepos.{h,cpp}`:
    - `dt_timepos_scrub(label, &t, total)` — a continuous `SliderInt` for surfaces
      where a real total exists (scrubber, abixray, loom, 3D-HUD — replacing the four
@@ -431,10 +431,10 @@ the discrete case marked as an intentional honesty choice, not an oversight.
      always-visible marker (a Codicon + hover) stating *why* it is discrete —
      verbatim the existing comment's reason ("between two invocations the target ran
      unobserved; a slider would draw that gap as elapsed captured time"). The
-     discreteness is thus **visibly intentional**, an honesty choice, not a missing
+     discreteness is thus **visibly intentional**, a fidelity choice, not a missing
      scrubber (F16). Disasm's "as of logical time" InputInt (`observer_draw.cpp`:482)
      is a discrete logical-time step too — route it through the step variant.
-   Both variants live in one widget so the muscle action (and the honesty marker)
+   Both variants live in one widget so the muscle action (and the fidelity marker)
    is consistent everywhere.
 
 **Tests.** `desktop/test/test_filter.cpp` + extend `test_obs_draw`/`test_timeline`,
@@ -455,7 +455,7 @@ conventions.
 
 **Done when.** every list/table filters with the one "N of M" idiom; tabular views
 sort; the time control is one widget with two variants; the discrete variant shows
-its intentional-honesty reason.
+its intentional-fidelity reason.
 
 ### T5 — Loom & 3D overview first-open primer + legend  (M, depends on: T1, T3)
 
@@ -521,7 +521,7 @@ it; the lean default holds until acknowledged.
 ## Task order & parallelism
 
 **T1 first, and it must land before [23-graded-truth-layer.md](23-graded-truth-layer.md)
-T4.1** — the graded honesty chrome (23 T4.1) re-tiers colours through the same
+T4.1** — the graded fidelity chrome (23 T4.1) re-tiers colours through the same
 accessors T1 introduces; doing them in the other order forces a rework. T2 depends on
 T1 (it fills in the accessors' CVD-safe values and the second-channel tokens) and on
 doc 15 (the heatmap colormap). T3 depends on doc 16 (ImSearch) and is otherwise
@@ -532,8 +532,8 @@ T2, T3, T4 concurrently once T1 lands.
 
 ## Constraints & gates
 
-- **Honesty (D7) is restructured, never removed.** Every task moves an existing
-  honest signal into one designed system: T1/T2 keep the statistical amber, the torn
+- **Fidelity (D7) is restructured, never removed.** Every task moves an existing
+  fidelity signal into one designed system: T1/T2 keep the statistical amber, the torn
   banner, the "never drawn as agreement" dashes — they only make them consistent and
   colour-blind-safe; T3's per-view "?" carries the verbatim metric caveat; T4's
   discrete time variant makes the *deliberate* discreteness visible rather than
@@ -554,7 +554,7 @@ T2, T3, T4 concurrently once T1 lands.
 
 ## Out of scope
 
-- The **graded severity / tier field** for honesty chrome (banner-vs-chip-vs-glyph
+- The **graded severity / tier field** for fidelity chrome (banner-vs-chip-vs-glyph
   loudness) — that is F5, owned by [23-graded-truth-layer.md](23-graded-truth-layer.md)
   T4.1, which builds *on* T1's palette.
 - **Data-gated outer tabs** and the lean-default IA at large (F4's tab-overload) —

@@ -35,7 +35,7 @@ Every doc conforms to these; they are stated once here.
   **Amended 2026-07-26 (addon-admission rule, from [11-imgui-addons.md](11-imgui-addons.md)).**
   D2 no longer means "no dep beyond imgui + nlohmann/json"; it means every new
   third-party UI dep clears this bar, so the tree stays permissively licensed,
-  reproducible, and honest — no ad-hoc exceptions:
+  reproducible, and faithful — no ad-hoc exceptions:
   1. **License.** MIT/zlib/BSD-class only, captured under `licenses/` the way
      Capstone/DearImGui/DynamoRIO already are. The one standing carve-out is
      `imgui_test_engine` (its own Test-Engine-License): fetch-at-build,
@@ -48,12 +48,12 @@ Every doc conforms to these; they are stated once here.
      rebuilt on every imgui repin before it lands — wired into the fetch path.
   4. **View-model purity preserved.** Addons are draw-half chassis only; the
      pure models and their golden-text surfaces stay the source of truth (D7).
-  5. **Honesty is a selection filter.** Nothing that renders survey data as
+  5. **Fidelity is a selection filter.** Nothing that renders survey data as
      stacks, imposes force-directed layout, or hides refusals is admissible.
 
   Implementation briefs for the addons themselves are cut from doc 11's tracks
   under this rule; the in-tree quick wins that add no dependency (the shared
-  honesty-chrome palette `desktop/src/ui/theme.h`, the diff "go" routing fix)
+  fidelity-chrome palette `desktop/src/ui/theme.h`, the diff "go" routing fix)
   need only D7/D4, not a new dep, and have already landed.
 - **D3 — Makefile.** A new `mk/desktop.mk`, included from the top-level
   Makefile right after `mk/cli.mk`, owns `desktop`, `desktop-render`,
@@ -69,7 +69,7 @@ Every doc conforms to these; they are stated once here.
 - **D6 — golden corpus.** `tests/golden-asmtrace/`, regenerated
   deterministically by `make asmtrace-golden` from the conformance corpus,
   committed, byte-stable.
-- **D7 — honesty is tested.** The corpus includes dishonesty fixtures
+- **D7 — fidelity is tested.** The corpus includes low-fidelity fixtures
   (truncated/dropped/redacted); renderer tests assert banners, provenance
   chrome, and redaction defaults.
 - **D8 — style.** The repo `.clang-format` (Language: Cpp) covers desktop/
@@ -182,12 +182,12 @@ map to the plan and review.
 
 | Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|---|
-| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 | — |
+| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap fidelity-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 | — |
 | [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 | — |
 | [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ✅ 5/5 | — |
 | [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ✅ 3/3 | — |
 | [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
-| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
+| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier fidelity chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
 | [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) | — |
 | [25-live-model-wiring.md](25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber was replay-only until doc 26 landed the live `regstate` producer | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ✅ 7/7 (T6 completed 2026-07-28: the live single-step 3D overlay — `build_trajectories` weaves the `df_step` offset stream as a region-relative, per-tid path when no `trace` is present) | — |
 | [26-live-regstate-producer.md](26-live-regstate-producer.md) | 4 | live `regstate` producer on the serve/`--dataflow` single-step engine (it already `PTRACE_GETREGS` every step) → the Scrubber goes live; the last live-vs-replay gap. Consumer already done (doc 25); producer + serve opt-in + emulator parity | 5 | 25 (consumer wiring); 07 (serve); the `--dataflow` ptrace engine | ✅ 5/5 (T1–T5 landed 2026-07-28; `--dataflow --steps` + serve `steps:true` arm the `user_regs@x86_64/sysv` ring; emulator-parity green) | — |
@@ -200,14 +200,14 @@ panes and unblocks the rest; land doc 18's real-Reset alongside so a bad `.ini`
 cannot strand the user. **Wave 2 (docs 21, 22)** exposes and operates the
 `dt_nav_go` spine on the real panes. **Wave 3 (docs 23, 24)** does the systematic
 truth-layer + visual-language depth; **doc 24 T5.1 (semantic palette) lands
-before doc 23 T1 (honesty tiers)**, and doc 23 T1's `severity` field is a schema
+before doc 23 T1 (fidelity tiers)**, and doc 23 T1's `severity` field is a schema
 change that must coordinate with doc 01's Phase-3 freeze (D5). Nothing here
-removes a truth — the honesty chrome is *restructured* (F5), never removed.
+removes a truth — the fidelity chrome is *restructured* (F5), never removed.
 
 ### Extension family (docs 27–33) — unblocking the deferred views
 
 The ~30 DEFERRED / BLOCKED / REFUSED markers across docs 01–26 and the plan's
-Honest-limits / Killed-in-grounding lists collapse onto **six root
+Acknowledged-limits / Killed-in-grounding lists collapse onto **six root
 prerequisites** — one engine or schema change apiece, each fanning out to
 several stuck views. [27-extension-roadmap.md](27-extension-roadmap.md) is the
 family overview (mapping + dependency graph + sequencing, like doc 11 for its
@@ -221,18 +221,18 @@ shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
 | [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ✅ 3/3 (T1 `5803086` + T2 `47c3280` + T3 `878de40`) | — |
 | [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ✅ 3/3 (T1 writer+schema+unit, T2 emulator projection + golden `mem-df-chain`(+torn), T3 live `--dataflow --mem`/serve `mem:true` + `test_mem_parity`) | — |
 | [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ✅ 4/4 (T1+T2 `emu_t`-hosted producer byte-identical via R5's `df_guest` seed/capture seam, `6d16cac`; T3 Reweave — `loom_take_run_from_step` fork-from-K stitched worldline, `cc4ad3b`; T4 `dt_scrubber_replayable` retires the "not a day-one feature" refusal with a synthesized+bannered register history, `8f38b81`) | — |
-| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ✅ 3/3 (T1 XMM+MXCSR deck both producers + `movq` parity; T2 `fpenv` decode + honest degradation; T3 `run_fp` SSE args + XMM `df_step` values + `fp-scale-add` golden; 128-bit only, YMM deferred) | — |
-| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ✅ 3/3 (T1 `df_guest` vtable, byte-identical x86-64; T2 arm64 value fabric + golden `arm64-df-chain`, PLUS its `regstate`/Scrubber sub-item — `emu_arm64_t` gains its own per-step register ring mirroring `emu_x86_regs_t`'s, `2f9f071`, zero change to `emu_t`/Reweave; T3 Author-mode arm64 run — the door dispatches arm64 through the value-fabric producer with an honest, distinct result shape + a materialised `trace`/`df_step`/`df_edge` recording + the accurate gate-flip label, `2873973`; see brief status) | — |
-| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ✅ 2/2 (T1 `blame` cone + born-untraced honesty, T2 `statediff` delta + two-recording merge gated on R1 identity; recorder-only producers, asmspy leg deferred) | — |
+| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ✅ 3/3 (T1 XMM+MXCSR deck both producers + `movq` parity; T2 `fpenv` decode + graceful degradation; T3 `run_fp` SSE args + XMM `df_step` values + `fp-scale-add` golden; 128-bit only, YMM deferred) | — |
+| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ✅ 3/3 (T1 `df_guest` vtable, byte-identical x86-64; T2 arm64 value fabric + golden `arm64-df-chain`, PLUS its `regstate`/Scrubber sub-item — `emu_arm64_t` gains its own per-step register ring mirroring `emu_x86_regs_t`'s, `2f9f071`, zero change to `emu_t`/Reweave; T3 Author-mode arm64 run — the door dispatches arm64 through the value-fabric producer with a faithful, distinct result shape + a materialised `trace`/`df_step`/`df_edge` recording + the accurate gate-flip label, `2873973`; see brief status) | — |
+| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ✅ 2/2 (T1 `blame` cone + born-untraced fidelity, T2 `statediff` delta + two-recording merge gated on R1 identity; recorder-only producers, asmspy leg deferred) | — |
 
 18 tasks across docs 28–33. Suggested order (per the roadmap): **R1 first**
-(cheapest, no new engine, prerequisite for R4/R6, closes 04/05 honesty gaps —
+(cheapest, no new engine, prerequisite for R4/R6, closes 04/05 fidelity gaps —
 land it through the Phase-3 freeze), then **R2 and R6 in parallel** (new
 producers over an existing recording; R6's `statediff` waits on R1 T1), then
 **R4** (reuses R1's `wide[]` format — **✅ landed 2026-07-28**: the XMM/MXCSR deck +
 `fpenv` on both producers, 128-bit only with YMM deferred), then **R3** (the
 headline — it is what "not a day-one feature" gates — largest, lower urgency), with
-**R5** an independent demand-gated arch axis. The plan's permanent Honest-limits (exact-only fabric, no
+**R5** an independent demand-gated arch axis. The plan's permanent Acknowledged limits (exact-only fabric, no
 cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
 are out of scope by design — a brief there would fight the design.
 
@@ -242,7 +242,7 @@ seams in the *"pick a process → watch the 3D graph change over time"* flow: pu
 register Scrubber on the shared **execution-step** brush (T1), give the 3D overview a
 `5` keyroute + a "View in 3D" handoff from the Live-capture pane (T2), add a
 **play/pause transport** to each playhead (T3), and name each axis so the two
-playheads read as different axes, not a faked global clock (T4/honesty). A pure
+playheads read as different axes, not a faked global clock (T4/fidelity). A pure
 `ShellState`/`HudState` desktop brief — no producer/engine/schema change, driven by
 the null backend (D4). Authored 2026-07-28 against HEAD `326afde`; **implemented
 2026-07-28 (`e962fb5`)** — all five tasks (execution-step brush, `5`/handoff reach,
@@ -301,13 +301,13 @@ stated reason. Adds a labelled `df_step` residency height rung (never block
 coverage), the placement counters + HUD chips, and a `scene-df-loop` golden in the
 live shape no existing fixture carries. T5 then narrows `converge.cpp`'s exclusion
 the same way — an *anchored* rel path takes part in convergence detection while an
-unanchored one and any individually-unplaced vertex still cannot (with the honest
+unanchored one and any individually-unplaced vertex still cannot (with the faithful
 limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
 and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
 change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
 ✅ 5/5 (T1 `resolve_anchor` `38d05d6`; T2 the rel PC path ANCHORED onto the plane
 `1622aaa`; T3 the labelled `df_step` height rung + anchored trace rung `ff650c3`;
-T4 the honesty chrome — pure testable `placement_chips`, the dropped rel chip
+T4 the fidelity chrome — pure testable `placement_chips`, the dropped rel chip
 fixed, an unplaced-plane pane placard, the `scene-df-loop` golden (byte-stable
 under docker-cli) + `test_shell`/`test_scene_fbo` end-to-end incl. the GL
 "anchored tube puts pixels on screen", and doc/schema reconciliation `a3b2247`;
@@ -412,7 +412,7 @@ retired — `7de837c`; T3 empty-window retry + `--window`/wire `ms` + capture-pa
 input `bc46d49`; T4 continuous through a quiet region + 0-step `df_invocation`
 marker + `quiet_hot_victim` smoke `9710a79`; T5 self-end announced from the tracer
 tail + `inspect_reconcile_self_end` frees the jack + stop-reap ack + `last_err`
-clear `2427a64`; T6 idle-window pick rendered honestly + doc 38/CHANGELOG
+clear `2427a64`; T6 idle-window pick rendered faithfully + doc 38/CHANGELOG
 reconciled). **Corrected stale premises:** the swap/queue param-drop (T5.5) was
 **already repaired** and `InspectState::active` has **7** mutation sites, not 5;
 the pre-existing `test_shell` `attach/no-host reveals panes` bar was made
@@ -462,14 +462,14 @@ T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 doc 09 — register ring (T1), regstate recorder (T2), scrubber (T3), ABI x-ray
 (T4), blame socket (T5) — and all of doc 10 — Hilbert projection (T1), terrain
 builder (T2), trajectory builder (T3), GL scene (T4), live-observer overlay
-(T5), drill-in + honesty invariants (T6), golden scenes + gated GL lane + docs
+(T5), drill-in + fidelity invariants (T6), golden scenes + gated GL lane + docs
 (T7). **Integration surfacing pass, 2026-07-26:** the two doc-09 teaching views
 are now **hosted in visible shell panes** — the register scrubber as a
 per-recording `Scrubber` tab (its `regstate` seek index built at open, its
 playhead persisted per recording), and the ABI x-ray as an `ABI x-ray` tab that
 locks the active recording (the SysV leg) against the attached B (the Win64 leg,
 the `d` binding), reusing the Diff tab's A/B mechanism; both degrade to their own
-honesty placards (absent producer, unaligned pair, torn ring) exactly as their
+fidelity placards (absent producer, unaligned pair, torn ring) exactly as their
 standalone draws do, and `test_shell` pins the wiring end to end. **Integration
 surfacing pass 2, 2026-07-26:** the doc-10 3D overview is now **hosted in a
 visible shell pane** too — a per-recording `3D overview` tab. Because `draw_shell`
@@ -482,7 +482,7 @@ and the pane weaves its pure `space/` models, draws the HUD, and shows a placard
 where the viewport would be. The pane blits the scene with `ImGui::Image`, orbits
 / dollies the camera on drag / wheel, re-slices the terrain on a playhead move,
 and routes every click OUT through 04's deep-link router (3D to find, 2D to read).
-A codeimage-less recording takes an honest "no address-space regions" placard
+A codeimage-less recording takes a truthful "no address-space regions" placard
 rather than an empty plane; `test_shell` drives the pane under the null backend
 (models woven, HUD drawn, placard shown, vectors parallel across a close) and the
 GL scene itself stays pinned by `test_scene_fbo` and `test_drillin`. **All ten

@@ -126,7 +126,7 @@ BreadcrumbModel breadcrumb_model(const ShellState &s) {
                                     : l.rec_b);
     }
     // The live coordinate: a link carries a process (pid), not a thread, in v1 —
-    // so the session/scope segment is the process it drilled into, honestly named
+    // so the session/scope segment is the process it drilled into, faithfully named
     // rather than a fabricated thread id.
     if (l.pid) {
         char buf[32];

@@ -222,7 +222,7 @@ jitdump resolution) — the managed-runtime path. Full reference in
 **Scoped tracing** — the try-with-resources scope (`HwTrace.AsmTrace`). It auto-names
 the region from the call site (`StackWalker`), and `close()` renders the executed
 assembly into `path()` (and to stdout unless `emit=false`); `truncated()` is the
-thread-scope honesty bit.
+thread-scope fidelity bit.
 
 ```java
 HwTrace.init(HwTrace.SINGLESTEP);

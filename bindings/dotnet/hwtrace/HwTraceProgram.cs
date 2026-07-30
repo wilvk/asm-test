@@ -253,7 +253,7 @@ static class HwTraceProgram
             }
             else
             {
-                // Honest self-skip (§Z5): no faithful whole-window backend on this host.
+                // Genuine self-skip (§Z5): no faithful whole-window backend on this host.
                 Check(ww.SkipReason.Length > 0, $"AsmTrace(): self-skip records a reason ({ww.SkipReason})");
             }
 
@@ -825,12 +825,12 @@ static class HwTraceProgram
                     Check(r == 42, $"auto: auto-selected backend traces a live call (got {r})");
                     // Mirror the C reference (examples/test_hwtrace.c test_auto_select): the pick is
                     // single-step on a PT-/AMD-LBR-less host (block 0 covered), but AMD LBR on a Zen
-                    // 3+/4/5 host with perf HONESTLY TRUNCATES this tiny single-shot fixture (too
-                    // short to be sampled in-region — see amd_backend.c). So the honest invariant is
+                    // 3+/4/5 host with perf FAITHFULLY TRUNCATES this tiny single-shot fixture (too
+                    // short to be sampled in-region — see amd_backend.c). So the accurate invariant is
                     // "covered OR truncated", not "covered". The byte-exact stream is asserted only
                     // for the single-step pick below.
                     Check(tr.Covered(0) || tr.Truncated(),
-                          "auto: auto-selected backend covers block offset 0 (or honestly truncates)");
+                          "auto: auto-selected backend covers block offset 0 (or faithfully truncates)");
                     if (ab == HwNative.SINGLESTEP)
                     {
                         var insns = tr.InsnOffsets();
@@ -1080,7 +1080,7 @@ static class HwTraceProgram
         }
 
         // Armed: the exact pass ran. Whether hot-restricted or degraded-to-full, it is a valid
-        // exact capture — the block's result and captured stream are honest.
+        // exact capture — the block's result and captured stream are faithful.
         Check(ww.Addresses.Length > 0, $"WindowHybrid: exact pass captured instructions (got {ww.Addresses.Length})");
         Check(!ww.IsStatistical, "WindowHybrid: the returned (pass-2) scope is EXACT, not statistical");
 
@@ -1181,7 +1181,7 @@ static class HwTraceProgram
 
     // §E3 fixture — JIT'd for the FIRST time INSIDE the out-of-process window (nothing else
     // may call it), so its code lands OUTSIDE the pre-window coarse ranges: without the live
-    // sibling publish the stepper elides it (the pre-E3 honest-partial gap); with E3 it must
+    // sibling publish the stepper elides it (the pre-E3 faithful-partial gap); with E3 it must
     // be published mid-window and resolve by name. The loop is long enough in STEPPED time
     // (~6 insns x 30000 iterations, each a ptrace round-trip) that the EventPipe -> sibling
     // -> channel publish lands while the method is still executing — the plan's
@@ -1214,12 +1214,12 @@ static class HwTraceProgram
         Check(ww.LiveJitPublished >= 1,
               $"E3 Window: sibling live-published >= 1 mid-window JIT record (got {ww.LiveJitPublished})");
         // ... and the stepper recorded it + close-time attribution named it. The 64Ki
-        // instruction budget can honestly truncate around a late-published loop (the AMD-LBR
+        // instruction budget can faithfully truncate around a late-published loop (the AMD-LBR
         // "covered OR truncated" lesson, generalized) — but a full miss on an untruncated
         // capture is a real E3 regression and must fail.
         long inLoop = ww.InstructionsIn("MidWindowJitLoop");
         Check(inLoop > 0 || ww.Truncated,
-              $"E3 Window: mid-window JIT resolves in the trace, or capture honestly truncated "
+              $"E3 Window: mid-window JIT resolves in the trace, or capture faithfully truncated "
               + $"(got {inLoop} insns, truncated={ww.Truncated}, methods={ww.Methods.Count})");
         if (inLoop > 0)
             Console.WriteLine($"# E3: MidWindowJitLoop captured with {inLoop} attributed instructions "
@@ -1285,7 +1285,7 @@ static class HwTraceProgram
         Check(ww.MethodsObserved >= 1,
               $"unwarmed compose: >=1 method JIT'd inside the window (got {ww.MethodsObserved})");
         // Covered-or-truncated (the AMD-LBR lesson generalized): the 1<<20 window ring can
-        // honestly truncate under the mid-window JIT noise, but a FULL miss on an UNtruncated
+        // faithfully truncate under the mid-window JIT noise, but a FULL miss on an UNtruncated
         // capture is a real regression and must fail.
         long inHot = ww.InstructionsIn("UnwarmedHotPath");
         Check(inHot > 0 || ww.Truncated,
@@ -1511,7 +1511,7 @@ static class HwTraceProgram
         Check(routeParam != "inproc",
               $"safe-managed: a managed window is NEVER routed to in-process TF (route '{routeParam}')");
         Check(routeParam == "pt" || routeParam == "oop" || routeParam == "none",
-              $"safe-managed: routes to PT / the §D3 OOP stepper / an honest skip (route '{routeParam}')");
+              $"safe-managed: routes to PT / the §D3 OOP stepper / a genuine skip (route '{routeParam}')");
         // On this host (no Intel PT, ptrace permitted under Docker) the route is the §D3 OOP stepper.
         if (Ptrace.Available() && !HwTrace.Available(HwBackend.IntelPt))
             Check(routeParam == "oop",
@@ -1570,7 +1570,7 @@ static class HwTraceProgram
             if (map.EventCount == 0)
             {
                 // The runtime delivered no GCBulkMovedObjectRanges to an in-proc listener
-                // (server GC / a config that gates the survival-and-movement keyword). Honest
+                // (server GC / a config that gates the survival-and-movement keyword). Genuine
                 // self-skip — the pure canonicalizer suite is the gate; this exercises the LIVE
                 // feed only where the runtime surfaces it. NOT a vacuous pass.
                 Console.WriteLine("# SKIP GC-move feed: runtime delivered no GCBulkMovedObjectRanges to the in-proc listener");
@@ -1638,7 +1638,7 @@ static class HwTraceProgram
         if (map.Count == 0 || !map.TryFindByName("IlTinyProbe", out ulong start, out ulong size))
         {
             // No MethodLoadVerbose for the probe at all: the in-proc JIT-keyword feed is off
-            // (DOTNET_EnableDiagnostics=0). Honest self-skip — no hardware/credential gate.
+            // (DOTNET_EnableDiagnostics=0). Genuine self-skip — no hardware/credential gate.
             Console.WriteLine("# SKIP IlToNativeMap: no MethodLoadVerbose observed for IlTinyProbe (JIT keyword feed off)");
             map.Dispose();
             return;
@@ -1674,7 +1674,7 @@ static class HwTraceProgram
 
         // Where the runtime DID surface the offset arrays, at least one entry must decode to a
         // real IL offset (>= 0). On .NET 8 the arrays are truncated in-proc (PointsDecoded 0),
-        // so this is exercised only where a build delivers them — reported honestly either way.
+        // so this is exercised only where a build delivers them — reported faithfully either way.
         if (map.PointsDecoded > 0)
         {
             bool anyReal = false;

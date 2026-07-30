@@ -61,7 +61,7 @@ the argument and return registers.
   in the application's own address space, *is* the target's map.)
 - **Captured buffers are sensitive.** A pointed-to buffer may contain secrets
   (keys, tokens, PII); treat a probe capture as a sensitive artifact.
-- **Honest refusals.** A routine Pin cannot probe — too short to hold the
+- **Genuine refusals.** A routine Pin cannot probe — too short to hold the
   up-to-14-byte probe, or non-relocatable — is reported as an explicit per-target
   **skip with a reason** (`too short` / `not relocatable` / `not found`), never a
   silent miss. Pin publishes no machine-readable refusal reason, so the tool

@@ -22,7 +22,7 @@ std::string hexs(uint64_t v) {
 
 // A region deep-link for a resolved address (04's router). Absolute addresses
 // are the region view's basis (it deals in the process's own address space), so
-// a call target or branch endpoint lands there honestly.
+// a call target or branch endpoint lands there faithfully.
 dt_link region_link(const std::string &rec_id, uint64_t addr) {
     dt_link l;
     l.rec = rec_id;

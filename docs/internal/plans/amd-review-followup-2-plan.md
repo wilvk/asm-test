@@ -3,7 +3,7 @@
 > **Context (2026-07-20).** This plan actions a fresh review of the AMD tracing
 > surface performed after the [2026-07-17 adversarial review](../analysis/2026-07-17-amd-hardware-review.md)
 > and its [follow-up plan](../archive/plans/amd-review-followup-plan.md) had largely landed
-> (`amd-ibs-backend-honesty` + `amd-branchsnap-lbr-docs` series, 2026-07-18..20).
+> (`amd-ibs-backend-fidelity` + `amd-branchsnap-lbr-docs` series, 2026-07-18..20).
 > The round-1 findings P1–P8 are shipped; this round covers what a re-audit of
 > the *current* HEAD surfaced — two genuinely new code defects the earlier passes
 > missed, plus the doc drift that the fast landing wave left behind.
@@ -24,8 +24,8 @@
 > **The organising fact (unchanged from round 1, and reinforced).** The AMD
 > *code* is in good shape and getting better; the drift now lives in the *docs
 > and plans*, which the 2026-07-18..20 landing wave outran. The single new
-> runtime defect (T1) is an honesty-contract violation of exactly the class the
-> `amd-ibs-backend-honesty` series set out to close — it slipped through because
+> runtime defect (T1) is a fidelity-contract violation of exactly the class the
+> `amd-ibs-backend-fidelity` series set out to close — it slipped through because
 > it sits on the OOM path, which no test exercises. The largest real cluster is
 > T2 (doc drift), because a stale plan/checklist is what let the round-1
 > `call_auto` bug hide in the first place.
@@ -64,9 +64,9 @@ on OOM the caller receives `ASMTEST_IBS_OK` with `edges == NULL`, `n == 0`, yet
 `branch_samples > 0` — every aggregated edge dropped, presented as a genuinely
 empty survey with **no** `lost`/`throttled`/error tell. `n == 0` is also the
 legitimate no-branch outcome, so nothing distinguishes lost-to-OOM from
-honestly-empty. The IBS-precover consumer in
+truthfully-empty. The IBS-precover consumer in
 [src/trace_auto.c:250](../../../src/trace_auto.c) (`nrc != OK || blk.n == 0`)
-reads it as "IBS honestly covered no blocks."
+reads it as "IBS truthfully covered no blocks."
 
 **It is an oversight, not a design choice** — the sibling software-clock lane
 does it right: [:1367](../../../src/ibs_backend.c) captures
@@ -76,7 +76,7 @@ does it right: [:1367](../../../src/ibs_backend.c) captures
 **Reachability is low** (the export array is `h->n` entries — strictly smaller
 than the `h->cap`-slot hash that already allocated), so this is a
 correctness-of-contract fix, not a hot-path one. But the whole lane's advertised
-value is honest gaps, and this is a silent one.
+value is candid gaps, and this is a silent one.
 
 **Acceptance.**
 - All four lanes capture the export return and, on failure, free their scratch
@@ -180,7 +180,7 @@ superseded nowhere.
 `examples/ibs_probe.c` "still prints AVAILABLE … without attempting an open" —
 but it now attempts a real `asmtest_ibs_survey_pid` open and prints
 `asmtest_ibs_unavail_reason()` first ([examples/ibs_probe.c:71-86](../../../examples/ibs_probe.c)).
-- *Acceptance:* mark that clause closed (the substrate-vs-open honesty fix
+- *Acceptance:* mark that clause closed (the substrate-vs-open fidelity fix
   landed for `ibs_probe` and `report_fetch`).
 
 ## T3 — Minor code + comment cleanups *(landed 2026-07-23 — errno reset on every capture entry + test; both live drains got the short-SAMPLE floor; comment rewritten)*

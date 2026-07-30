@@ -109,7 +109,7 @@ void draw_learn_door(LearnState &s,
                             c.provenance.c_str(),
                             c.truncated ? " · TRUNCATED" : "");
     };
-    // Client-side narrowing of the walkthrough catalog by title — honesty-safe
+    // Client-side narrowing of the walkthrough catalog by title — fidelity-safe
     // (a flat catalog, unlike the call tree whose depths a filter would break).
     // Guarded on the ImSearch context so the null test backend shows the plain
     // list; only the app filters.

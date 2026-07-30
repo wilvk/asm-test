@@ -10,7 +10,7 @@
 // live at this address as of logical time N", which a branch-trace decoder needs when a JIT
 // frees an address and reuses it for a different method. This self-patches ONE executable blob
 // (v0: return 1 -> v1: return 2) and shows both bodies survive in the timeline AND both really
-// run. Honest caveat: a real CoreCLR tier0->tier1 relocates to a NEW address, so a fixed-region
+// run. Candid caveat: a real CoreCLR tier0->tier1 relocates to a NEW address, so a fixed-region
 // code image does not capture managed tiering — this shows the mechanism on a controlled blob.
 // Self-skips (exit 0) where the recorder or RWX patching is unavailable.
 
@@ -53,7 +53,7 @@ internal static class Program
             ulong whenV0 = img.Now();
 
             // Re-arm the page writable to self-patch it, then restore R+X. A hardened W^X kernel
-            // may refuse PROT_WRITE|PROT_EXEC together — self-skip honestly if the toggle fails.
+            // may refuse PROT_WRITE|PROT_EXEC together — self-skip transparently if the toggle fails.
             var pageBase = PageAlign(code.Base, out UIntPtr span, code.Length);
             if (mprotect(pageBase, span, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
             {

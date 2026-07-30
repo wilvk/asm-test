@@ -917,7 +917,7 @@ pub const Scope = struct {
 
 /// The outcome of `HwTrace.callScoped`: the traced call's return value (`result`,
 /// null on a self-skip), the executed body's disassembly (`path()`, empty when no
-/// decoder is present), the thread-scope honesty bit (`truncated`), and the raw
+/// decoder is present), the thread-scope fidelity bit (`truncated`), and the raw
 /// `ASMTEST_HW_*` status (`rc`, 0 == OK). Mirrors the Python/Ruby `CallScopedResult`.
 pub const ScopedCall = struct {
     result: ?c_long = null,
@@ -933,7 +933,7 @@ pub const ScopedCall = struct {
 };
 
 /// The outcome of `HwTrace.window`: the executed body's disassembly (`path()`, empty
-/// when no decoder is present), the `truncated` honesty bit, and `armed` (false when
+/// when no decoder is present), the `truncated` fidelity bit, and `armed` (false when
 /// the region-free window SELF-SKIPPED — a non-single-step backend or an older lib
 /// lacking the whole-window trio; the body still ran). Mirrors dotnet's empty-ctor
 /// `new AsmTrace()` whole-window scope / the C++/Python `WindowResult`.
@@ -953,7 +953,7 @@ pub const WindowResult = struct {
 /// (`result`, null on a self-skip), the filled `trace` (a queryable `HwTrace` — the
 /// CALLER frees it via `trace.free()`; null on a self-skip), the `Choice` that
 /// produced the final trace (`used` — inspect `used.backend` to see whether
-/// escalation fired; null on a self-skip), the `truncated` honesty bit, and the raw
+/// escalation fired; null on a self-skip), the `truncated` fidelity bit, and the raw
 /// `ASMTEST_HW_*` status (`rc`, 0 == OK). Mirrors the Python `TraceCallAutoResult`.
 pub const TraceCallAutoResult = struct {
     result: ?c_long = null,
@@ -1093,7 +1093,7 @@ pub const HwTrace = struct {
     /// `using (new AsmTrace())`, mirroring this binding's `region(args, body)` idiom.
     /// Arms a REGION-FREE single-step capture on THIS thread (no `NativeCode`, no
     /// `[base,len)`), runs `body(args…)`, disarms, and renders the executed body from
-    /// live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end,
+    /// live self-memory. FAITHFUL-BUT-NOISY: it records EVERYTHING between begin and end,
     /// so a traced leaf's ABSOLUTE addresses appear as a SUBSET of `path()`. Keep `body`
     /// a TIGHT native leaf — EFLAGS.TF single-step is armed across it (never step
     /// arbitrary managed code). Returns a `WindowResult`; SELF-SKIPS (`armed` false,

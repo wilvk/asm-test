@@ -3,7 +3,7 @@
 Closes the gaps where the C core exposes an emulator/assembler capability that **no
 language binding can reach**, because [`src/ffi.c`](../../../../src/ffi.c) never grew an
 opaque-handle wrapper for it — and anchors every tier in the shared conformance
-corpus so the bindings stay honest.
+corpus so the bindings stay faithful.
 
 > Status legend: **done** / **planned**. Update as tracks land.
 >

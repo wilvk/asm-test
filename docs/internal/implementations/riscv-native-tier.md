@@ -127,7 +127,7 @@ Every claim below was checked against the working tree on 2026-07-17.
 
 **Goal.** `include/asmtest.h`, `src/asmtest.c`, `src/ffi.c`, and
 `scripts/gen-manifest.c` compile for `riscv64-linux-gnu` with a complete LP64D
-integer callee-saved model, an honest no-flags policy, and a working cycle
+integer callee-saved model, a candid no-flags policy, and a working cycle
 counter — before any trampoline exists.
 
 **Steps.**
@@ -159,7 +159,7 @@ counter — before any trampoline exists.
 3. Define 12 sentinels `ASMTEST_SENTINEL_S0 0x1111111111111111UL` …
    `ASMTEST_SENTINEL_S11 0xCCCCCCCCCCCCCCCCUL` (extend the AArch64
    1..B nibble series to C).
-4. **Flags policy (the review's honesty point): define NO flag-mask macros on
+4. **Flags policy (the review's fidelity point): define NO flag-mask macros on
    rv64.** RISC-V has no condition-flags register; `r.flags` stays in the
    struct (always written 0 by the trampolines — src/ffi.c and shared runner
    code read it) but `ASMTEST_CF/ZF/SF/OF/...` are deliberately absent, so
@@ -574,7 +574,7 @@ binfmt lane.
 - Total leg wall time recorded in the PR description (baseline for future
   timeout tuning).
 
-### T7 — User-facing docs, changelog, and the honesty notes  (S, depends on: T4–T6)
+### T7 — User-facing docs, changelog, and the fidelity notes  (S, depends on: T4–T6)
 
 **Goal.** A user reading the docs knows rv64 is a first-class native host,
 what the two documented divergences are (no flags; `_fp_n` >8-double
@@ -651,7 +651,7 @@ T4 + T5 ──→ T6 (CI leg) ──→ T7 (docs)
   [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md)
   §2), so a future rv64 tracing port would need real hardware or system-mode
   emulation — record that then, not now.
-- **Honesty gates in-tier**: no flag macros on rv64 (compile error beats
+- **Fidelity gates in-tier**: no flag macros on rv64 (compile error beats
   silent always-false); `ASM_VCALL*` skip with a printed ISA reason; the
   `_fp_n` >8-doubles placement limitation is documented where users will read
   it (T2/T7). A green rv64 lane whose skip count differs from the documented

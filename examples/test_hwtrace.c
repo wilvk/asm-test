@@ -306,7 +306,7 @@ int pthread_mutex_lock(pthread_mutex_t *m) {
  * perf access), so it runs even where the AMD LBR CAPTURE self-skips. Asserts the probe
  * returns a definite, stable answer and prints this host's actual support — a plain
  * substrate capability report; no runtime gate consumes it. On non-AMD / non-x86 it
- * is honestly 0. */
+ * is genuinely 0. */
 /* Phase 4 — env-gated debug logging (src/debug.{c,h}). Forked children so the
  * getenv-once cache starts pristine (this runs FIRST in main, before any tier call caches
  * it in the parent): a child with ASMTEST_HWTRACE_DEBUG=1 must emit a "[asmtest hwtrace] "
@@ -687,7 +687,7 @@ static void test_amd_decode_hw_ceiling(void) {
  * it (F1/F4, the load-bearing equivalence — the only way this could silently corrupt is a
  * misclassification that appends the dead post-jmp bytes or drops/doubles the target
  * block); a dropped back-edge cycle terminates via the step bound instead of hanging
- * (F2); a dropped jmp leaving the region honestly truncates (F3); and a chain of dropped
+ * (F2); a dropped jmp leaving the region faithfully truncates (F3); and a chain of dropped
  * jmps follows through (F5). */
 static void test_amd_reduced_filter(void) {
 #if defined(__linux__) && defined(__x86_64__)
@@ -780,7 +780,7 @@ static void test_amd_reduced_filter(void) {
           "no hang)");
     asmtest_trace_free(tc);
 
-    /* F3 — a dropped jmp leaving the region honestly truncates: the in-region source
+    /* F3 — a dropped jmp leaving the region faithfully truncates: the in-region source
      * it was decoding toward becomes unreachable. xor ; jmp 0x24 (out of [b,b+4)). */
     static const unsigned char EXIT4[] = {0x31, 0xc0, 0xeb, 0x20};
     const uint64_t be = (uint64_t)(uintptr_t)EXIT4;
@@ -934,7 +934,7 @@ static uint64_t amd_capture_loop_period(void *p, long trips, int period,
  *
  * AMD has no continuous trace ring; perf delivers the 16-deep branch stack only AT
  * a PMU sample. So capture works for branch-heavy routines (a sample fires inside
- * the region and snapshots its branches) and honestly TRUNCATES for a tiny
+ * the region and snapshots its branches) and faithfully TRUNCATES for a tiny
  * single-shot routine (too fast to be sampled in-region) — the fallback signal,
  * never an empty trace claimed complete. Verified on a Zen 5 host (Ryzen 9 9950X,
  * amd_lbr_v2). */
@@ -972,7 +972,7 @@ static void test_amd_live(void) {
         CHECK(r == 42, "AMD LBR live single-shot call returns 20+22");
         CHECK(asmtest_emu_trace_truncated(tr) ||
                   asmtest_emu_trace_insns_total(tr) > 0,
-              "AMD LBR live single-shot: honest result (never "
+              "AMD LBR live single-shot: faithful result (never "
               "empty-yet-complete)");
         asmtest_hwtrace_shutdown();
         asmtest_trace_free(tr);
@@ -981,7 +981,7 @@ static void test_amd_live(void) {
          * substrate is present (docker-hwtrace-codeimage) begin/end route to the
          * exit-breakpoint snapshot (test_branchsnap asserts the complete capture);
          * on THIS lane (typically built without libbpf) the arm fails and the
-         * markers must fall back to the sampled path with the same honest result —
+         * markers must fall back to the sampled path with the same faithful result —
          * never an error, never empty-yet-complete. */
         INIT_OPTS(opts, ASMTEST_HWTRACE_AMD_LBR);
         opts.snapshot = 1;
@@ -997,7 +997,7 @@ static void test_amd_live(void) {
         CHECK(r2 == 42, "AMD LBR live snapshot-opt-in call returns 20+22");
         CHECK(asmtest_emu_trace_truncated(st) ||
                   asmtest_emu_trace_insns_total(st) > 0,
-              "AMD LBR live snapshot opt-in: honest result (deterministic "
+              "AMD LBR live snapshot opt-in: faithful result (deterministic "
               "capture, or clean fallback to sampling)");
         asmtest_hwtrace_shutdown();
         asmtest_trace_free(st);
@@ -1039,7 +1039,7 @@ static void test_amd_live(void) {
         CHECK(best > 50, "AMD LBR live loop: Tier-B stitched BEYOND a single "
                          "16-deep window");
         CHECK(best == 0 || best_trunc,
-              "AMD LBR live loop: the over-ring run stays honestly truncated");
+              "AMD LBR live loop: the over-ring run stays transparently truncated");
         munmap(q, sizeof AMD_LOOP);
     }
 }
@@ -1090,7 +1090,7 @@ static uint64_t amd_capture_add2(void *p, int *trunc) {
  * reports COMPLETE (truncated=0) reconstructs the FULL retired set — closing the old
  * undercount-yet-complete gap (docs/internal/analysis/2026-07-12-zen5-privileged-lbr-
  * findings.md). HARD invariant asserted here: EVERY complete AMD_LBR capture of add2 equals
- * the single-step baseline; honest truncation (the cascade escalates) is the accepted
+ * the single-step baseline; faithful truncation (the cascade escalates) is the accepted
  * alternative, so a run that never samples in-region is not a failure. Sampling is
  * statistical, so retry and check the invariant on each attempt. Self-skips off AMD LBR. */
 static void test_amd_live_smallroutine(void) {
@@ -1132,12 +1132,12 @@ static void test_amd_live_smallroutine(void) {
     CHECK(!bad,
           "AMD LBR small-routine: every COMPLETE AMD_LBR capture reproduces "
           "the FULL retired set (no undercount-yet-complete; the tail-fill "
-          "closes the gap, else honest truncation escalates)");
+          "closes the gap, else faithful truncation escalates)");
     munmap(p, sizeof ROUTINE);
 }
 
 /* #2A live reach DIAGNOSTIC — period-spaced Tier-B on real hardware. Measures the
- * stitched reach of AMD_LOOP at lbr_period=1 (exact) vs lbr_period=4 (spaced). HONEST
+ * stitched reach of AMD_LOOP at lbr_period=1 (exact) vs lbr_period=4 (spaced). FAITHFUL
  * finding, not a "gain": a loop is edge-SELF-SIMILAR (its branch offsets — hence from/to
  * edges — repeat every iteration), so the smallest-overlap stitch cannot tell 1 iteration
  * from P and period=4 UNDERCOUNTS it (each window contributes one edge, as
@@ -1258,7 +1258,7 @@ static void test_call_auto(void) {
 
             /* Anti-vacuity: a 25-back-edge loop CANNOT fit one 16-deep LbrExtV2
              * window, so a result reported COMPLETE must be a real full
-             * reconstruction, never a dropped-branch fragment. Establish the honest
+             * reconstruction, never a dropped-branch fragment. Establish the faithful
              * retired-instruction baseline via a CEILING_FREE call (which EXCLUDES the
              * fixed-window AMD_LBR tier, so it runs on the ceiling-free block-step /
              * single-step floor and is always complete), then require the fast (BEST)
@@ -1283,10 +1283,10 @@ static void test_call_auto(void) {
                     baseline == 77,
                     "call_auto: ceiling-free baseline is the full 25-trip loop "
                     "(77 retired insns)");
-                int honest = (lused.backend != ASMTEST_HWTRACE_AMD_LBR) ||
-                             (asmtest_emu_trace_insns_total(lt) == baseline);
+                int complete = (lused.backend != ASMTEST_HWTRACE_AMD_LBR) ||
+                               (asmtest_emu_trace_insns_total(lt) == baseline);
                 CHECK(
-                    honest,
+                    complete,
                     "call_auto: a COMPLETE result reconstructs the FULL "
                     "retired "
                     "path (escalated off AMD_LBR, or a real Tier-B stitch — a "
@@ -1473,8 +1473,8 @@ static void test_call_auto_ibs_precover(void) {
  * ASMTEST_TRACE_CEILING_FREE whenever AMD_LBR itself is unavailable (e.g. this Zen 2
  * host predates LbrExtV2 — see docs/internal/implementations/_positions.md's Zen-4
  * floor), so the block-step rung the pre-cover bit primes is unreachable through the
- * public cascade here — test_call_auto_ibs_precover's own gate already gives that an
- * honest no-op assertion rather than a false pass. To still LIVE-verify the actual
+ * public cascade here — test_call_auto_ibs_precover's own gate already gives that a
+ * genuine no-op assertion rather than a false pass. To still LIVE-verify the actual
  * mechanism build_ibs_precover (src/trace_auto.c) runs, this test performs the exact
  * same recipe directly against asmtest_ptrace_trace_call_blockstep: fork a warm-up
  * child that re-runs AMD_LOOP for ~30ms, survey it with a REAL IBS-Op capture (not
@@ -1833,11 +1833,11 @@ static void test_amd_msr(void) {
     CHECK(g_msr_result == 4, "AMD MSR-direct: the region ran (fn(1,4)=4)");
     CHECK(asmtest_emu_trace_insns_total(t) > 0 ||
               asmtest_emu_trace_truncated(t),
-          "AMD MSR-direct: honest (in-region instructions reconstructed, or "
+          "AMD MSR-direct: faithful (in-region instructions reconstructed, or "
           "truncated)");
     CHECK(asmtest_trace_covered(t, 0x7) || asmtest_emu_trace_truncated(t),
           "AMD MSR-direct: loop-body block 0x7 captured from the real LBR MSRs "
-          "(or honest truncation)");
+          "(or faithful truncation)");
     asmtest_trace_free(t);
     munmap(q, sizeof AMD_LOOP);
 #else
@@ -1891,7 +1891,7 @@ static void test_ss_btf_live(void) {
     CHECK(g_btf_result == 42, "in-process BTF: the region ran (fn(20,22)=42)");
     CHECK(asmtest_emu_trace_insns_total(t) > 0 ||
               asmtest_emu_trace_truncated(t),
-          "in-process BTF: honest (in-region instructions reconstructed, or "
+          "in-process BTF: faithful (in-region instructions reconstructed, or "
           "truncated)");
     if (!asmtest_emu_trace_truncated(t)) {
         static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
@@ -1938,7 +1938,7 @@ static void test_ss_btf_loop(void) {
           "in-process BTF loop: 20-trip call returns the trip sum");
     CHECK(asmtest_emu_trace_insns_total(t) == 62 ||
               asmtest_emu_trace_truncated(t),
-          "in-process BTF loop: honest (all 62 insns past the LBR window, or "
+          "in-process BTF loop: faithful (all 62 insns past the LBR window, or "
           "truncated)");
     if (!asmtest_emu_trace_truncated(t))
         CHECK(asmtest_emu_trace_insns_total(t) == 62,
@@ -2217,7 +2217,7 @@ static void test_amd_tailcall_exit(void) {
  * branch-stack sample per taken branch, consecutive windows overlapping by 15 edges.
  * Synthesize those overlapping windows for an 18-iteration loop, stitch them back into
  * the gapless 18-edge sequence, and prove the decode is COMPLETE — where a single
- * Tier-A 16-window honestly truncates. Plus gap detection when overlap is lost. */
+ * Tier-A 16-window faithfully truncates. Plus gap detection when overlap is lost. */
 static void test_amd_stitch(void) {
 #if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_amd_decoder_present()) {
@@ -2254,7 +2254,7 @@ static void test_amd_stitch(void) {
     CHECK(n == K && gap == 0,
           "AMD stitch recovers all 18 branches past the 16-deep window");
 
-    /* Tier-A on the richest single (full, depth-16) window honestly truncates. */
+    /* Tier-A on the richest single (full, depth-16) window faithfully truncates. */
     asmtest_trace_t *ta = asmtest_trace_new(64, 64);
     asmtest_amd_decode(samples[K - 1], nrs[K - 1], AMD_LOOP, sizeof AMD_LOOP,
                        ta);
@@ -2306,7 +2306,7 @@ static void test_amd_stitch(void) {
  * on from+to equality alone, so a dropped/throttled sample can make it splice two
  * edges that aren't connected by real straight-line code. The guard requires the
  * tail's newest branch target to Capstone-decode forward to the next branch source;
- * an indecodable splice is rejected (larger shift / honest gap) rather than silently
+ * an indecodable splice is rejected (larger shift / faithful gap) rather than silently
  * stitched wrong. A legitimate contiguous splice is unaffected. Host-independent. */
 static void test_amd_stitch_decodable(void) {
 #if defined(__linux__) && defined(__x86_64__)
@@ -2339,7 +2339,7 @@ static void test_amd_stitch_decodable(void) {
     /* (2) Corrupt splice: the second window's newest edge B has from=0x3, so the
      * splice A.to(0x7) -> B.from(0x3) is BACKWARDS — not real code. The from+to
      * overlap on A still matches (the old heuristic would append B); the guard
-     * rejects it and reports an honest gap instead of a silently-wrong stitch. */
+     * rejects it and reports a faithful gap instead of a silently-wrong stitch. */
     {
         struct perf_branch_entry B;
         memset(&B, 0, sizeof B);
@@ -2355,7 +2355,7 @@ static void test_amd_stitch_decodable(void) {
         size_t n = asmtest_amd_stitch(ss, nn, 2, AMD_LOOP, b, sizeof AMD_LOOP,
                                       out, 8, &gap);
         CHECK(gap == 1,
-              "AMD stitch guard: an indecodable splice yields an honest gap");
+              "AMD stitch guard: an indecodable splice yields a disclosed gap");
         CHECK(
             n == 1,
             "AMD stitch guard: the rejected corrupt window is not spliced in");
@@ -2598,7 +2598,7 @@ static void test_amd_ring_parse(void) {
      * while its body holds none: nr * sizeof(perf_branch_entry) WRAPS to 0, so without
      * the nr<=64 clamp the size check passes and the e[i] scan runs 2^63 times off the
      * end of the buffer. The clamp rejects the record; the parser returns with an empty,
-     * honestly-truncated trace and no out-of-bounds read (proven under ASan). */
+     * faithfully-truncated trace and no out-of-bounds read (proven under ASan). */
     {
         uint8_t buf[64];
         size_t off = 0;
@@ -2636,7 +2636,7 @@ static void test_amd_ring_parse(void) {
     }
 
     /* (4) Tier-A overflow prefix. A single depth-deep window of identical AMD_LOOP
-     * back-edges (best_nr >= depth, n_samples == 1 so no Tier-B stitch) is honestly
+     * back-edges (best_nr >= depth, n_samples == 1 so no Tier-B stitch) is faithfully
      * truncated — the window overflowed and there is no second window to stitch. */
     {
         const uint64_t lb = (uint64_t)(uintptr_t)AMD_LOOP;
@@ -4836,9 +4836,9 @@ static void test_auto_resolve(void) {
 
     /* End to end: trace the shared fixture through whatever auto picked. The pick is
      * single-step on a PT-/AMD-LBR-less host (byte-exact parity), AMD LBR on a Zen
-     * 3+/4/5 host with perf (which honestly truncates on this tiny single-shot
+     * 3+/4/5 host with perf (which faithfully truncates on this tiny single-shot
      * fixture — too short to be sampled in-region), or Intel PT on bare-metal Intel.
-     * So assert the call ran and the trace is honest (covered OR truncated), with the
+     * So assert the call ran and the trace is faithful (covered OR truncated), with the
      * byte-exact stream only for the single-step pick. */
     if (ab >= 0) {
         void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
@@ -4860,7 +4860,7 @@ static void test_auto_resolve(void) {
                       "auto-selected backend traces a live call (returns 42)");
                 CHECK(asmtest_trace_covered(tr, 0) ||
                           asmtest_emu_trace_truncated(tr),
-                      "auto-selected backend covers block 0 (or honestly "
+                      "auto-selected backend covers block 0 (or transparently "
                       "truncates)");
                 if (ab == ASMTEST_HWTRACE_SINGLESTEP) {
                     static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
@@ -9483,7 +9483,7 @@ static void test_descent_stale_alarm_flag(void) {
 #endif
 }
 
-/* Phase 8 (call-descent): cascade invariants + the honest limitation. Frame-0's body is
+/* Phase 8 (call-descent): cascade invariants + the genuine limitation. Frame-0's body is
  * byte-identical across all levels (higher levels only ADD directly-reachable frames), and
  * a known region reachable only THROUGH a stepped-over intermediary is invisible to
  * descent — the documented `recorded(L2) is not a superset of recorded(L3)` caveat. */
@@ -9660,7 +9660,7 @@ static void test_descent_attach(void) {
  * begin_window arms with NO registered region and NO [base,len); the handler records
  * the ABSOLUTE address of every instruction the thread runs in the window, so the
  * routine's executed addresses appear as a SUBSET of the captured stream (which also
- * holds the surrounding harness instructions — whole-window is honest-but-noisy).
+ * holds the surrounding harness instructions — whole-window is faithful-but-noisy).
  * render_window decodes those absolute addresses from live self memory. Any x86-64
  * Linux; no PMU/perf/privilege. */
 
@@ -9790,7 +9790,7 @@ static void test_wholewindow_singlestep(void) {
                                          : "render unavailable");
     }
 
-    /* §Z4 thread-scope honesty: a close whose handle does NOT resolve on the calling
+    /* §Z4 thread-scope fidelity: a close whose handle does NOT resolve on the calling
      * thread (the cross-thread-hop case, simulated with a never-armed handle) flags
      * the trace truncated rather than presenting a thread window as complete. */
     asmtest_trace_t *tr2 = asmtest_trace_new(16, 0);
@@ -10196,7 +10196,7 @@ static void test_wholewindow_ss_descend(void) {
      * [base,len), so render_scope cannot render it — only render_versioned against
      * a code-image can. Snapshot both leaves into a self (pid==0) image and render
      * the REAL captured window through it: the two leaves decode to text, the
-     * untracked harness noise honestly reads "(no bytes @version)". */
+     * untracked harness noise faithfully reads "(no bytes @version)". */
     if (!asmtest_codeimage_available() || !asmtest_disas_available()) {
         printf("# SKIP whole-window descend versioned render: %s\n",
                asmtest_disas_available() ? "codeimage unavailable"
@@ -10490,7 +10490,7 @@ static void *asynchop_close_on_thread(void *arg) {
 }
 #endif
 
-/* §Z4 — the async-hop honesty DEFAULT for the region-free (empty-ctor) window: the
+/* §Z4 — the async-hop fidelity DEFAULT for the region-free (empty-ctor) window: the
  * scope is a THREAD window, so a `using (new AsmTrace())` whose work hops threads is
  * Disposed somewhere else, and end_window must flag `truncated` rather than present
  * a thread window as a complete logical-operation trace. The region-keyed §0.2
@@ -10566,7 +10566,7 @@ static void test_asynchop_flag(void) {
     CHECK(g_ahf_tid != 0 && g_ahf_tid != (int)syscall(SYS_gettid),
           "async-hop flag: the close really ran on a SECOND OS thread");
     CHECK(g_ahf_rc == ASMTEST_HW_OK,
-          "async-hop flag: the hopped close returns OK (honest degradation, "
+          "async-hop flag: the hopped close returns OK (graceful degradation, "
           "not an error)");
     /* THE §Z4 default: a region-free window closed off its arming thread is
      * flagged, never silently dropped and never presented as complete. */
@@ -10674,7 +10674,7 @@ static void *hc_thread_b(void *arg) {
 
 /* §Z4 — the COLLIDING-HANDLE false-complete. The neighbour test_asynchop_flag covers
  * the case where the closing thread holds NO window: its TLS frame table is empty, so
- * the lookup misses and end_window honestly truncates. This covers the case it cannot:
+ * the lookup misses and end_window faithfully truncates. This covers the case it cannot:
  * the closer holds its OWN window at the SAME {idx,gen}, because a handle carrying only
  * {idx,gen} is NOT unique across threads — tls_gen_ctr is __thread, so every thread's
  * first window is {0,1}. asmtest_ss_frame_lookup then indexes the CLOSER's TLS table
@@ -10766,7 +10766,7 @@ static void test_crossthread_handle_collision(void) {
     CHECK(g_hc_ra == 42 && g_hc_rb1 == 42 && g_hc_rb2 == 42,
           "handle collision: every routine really ran");
     CHECK(g_hc_rc_foreign == ASMTEST_HW_OK,
-          "handle collision: the foreign close returns OK (honest degradation, "
+          "handle collision: the foreign close returns OK (graceful degradation, "
           "not an error)");
 
     /* THE BUG (1/2): a close of ANOTHER thread's window must be a conservative MISS.
@@ -11061,12 +11061,12 @@ static void test_wholewindow_banner(void) {
     CHECK(
         tr->insns_len == 8 && tr->insns_total > tr->insns_len &&
             asmtest_emu_trace_truncated(tr),
-        "banner: the tiny cap yields an honest truncated prefix (8 kept, more "
+        "banner: the tiny cap yields a faithful truncated prefix (8 kept, more "
         "ran)");
 
     int need = asmtest_hwtrace_render_window(scope, NULL, 0);
     if (need == ASMTEST_HW_ENOSYS) {
-        /* No Capstone: the render half self-skips; the truncation-honesty half
+        /* No Capstone: the render half self-skips; the truncation-fidelity half
          * above already ran. */
         printf("# SKIP whole-window banner render: built without Capstone\n");
         asmtest_hwtrace_shutdown();
@@ -11295,7 +11295,7 @@ int main(void) {
     /* Phase 3-4 call-descent: the attached-path descending loop (foreign process). */
     test_descent_attach();
 
-    /* Phase 8 call-descent: cascade invariants + the honest step-over-intermediary limit. */
+    /* Phase 8 call-descent: cascade invariants + the genuine step-over-intermediary limit. */
     test_descent_cascade();
 
     /* Regression: a stale L3 watchdog flag must not abort a later L1/L2 descent on EINTR. */
@@ -11356,7 +11356,7 @@ int main(void) {
     test_render_versioned();
 
     /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
-     * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
+     * tier + the §Z4 cross-thread fidelity flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
     test_pt_window_slot_mutex();
     test_wholewindow_render_unmapped();
@@ -11374,7 +11374,7 @@ int main(void) {
      * and the caller's SIGALRM/ITIMER_REAL are restored byte-identical. */
     test_wholewindow_watchdog();
 
-    /* §Z4: the async-hop honesty DEFAULT — a REGION-FREE window closed from a
+    /* §Z4: the async-hop fidelity DEFAULT — a REGION-FREE window closed from a
      * second thread flags truncated (the region-keyed backstop cannot fire), and
      * the arming thread's TLS frame survives the foreign close. */
     test_asynchop_flag();
@@ -11468,7 +11468,7 @@ int main(void) {
         printf("# SKIP hwtrace PT capture (Intel PT): %s\n", why);
         /* This early-return block is PT-specific (the AMD capture is exercised by the
          * AMD-only tests that already ran — test_amd_live, the Tier-B live loop, the
-         * ring-parse seam). Report AMD's status HONESTLY: only "# SKIP … : <reason>"
+         * ring-parse seam). Report AMD's status FAITHFULLY: only "# SKIP … : <reason>"
          * when it is genuinely unavailable; naming its skip reason unconditionally
          * printed "# SKIP hwtrace AMD capture (AMD LBR): available" on a Zen 5 host
          * (CAP_PERFMON present, only PT missing) — a SKIP line whose reason says the

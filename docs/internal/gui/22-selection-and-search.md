@@ -59,11 +59,11 @@
   reversal path, and the takes gutter accumulates forks with no remove/clear.
   Exploration is unsafe, pushing users toward timidity.
 
-Standing rule from the plan (§Framing) and F5: honesty (D7) is *restructured,
+Standing rule from the plan (§Framing) and F5: fidelity (D7) is *restructured,
 never removed*. None of these tasks hides a truth — the selection model
 cross-highlights only where an entity actually appears, find *measures* rather
 than filters-away, the call **tree** stays engine-filtered so surviving depths
-never lie, and undo restores honest state rather than a faked one.
+never lie, and undo restores faithful state rather than a faked one.
 
 ## What already exists (verified 2026-07-27)
 
@@ -121,7 +121,7 @@ never lie, and undo restores honest state rather than a faked one.
   on hovered mouse events (slice_view_draw.cpp:106-120). The cone content is a pure
   function of `selected_step` (shell.cpp:408-423), so once a key sets the
   selection the DAG re-lights with no mouse.
-- **Client-side narrowing already exists, in two honesty-aware shapes.** ImSearch
+- **Client-side narrowing already exists, in two fidelity-aware shapes.** ImSearch
   filters the Learn catalog — `BeginSearch`/`SearchBar`/`SearchableItem`/`Submit`,
   guarded on `ImSearch::GetCurrentContext()` so the null backend shows the plain
   list ([learn_door.cpp](../../../desktop/src/ui/learn_door.cpp):116-128;
@@ -193,7 +193,7 @@ coexist.
    `selected_steps` (fabric_imgui.cpp:214) is derived from it, and the 3D pane's
    drill maps a picked scene id → the same `Selection`. A pane that cannot show the
    entity (no such offset in its stream) shows *nothing selected* — never a
-   fabricated row (the honesty floor, mirroring how `n/p` refuses rather than
+   fabricated row (the fidelity floor, mirroring how `n/p` refuses rather than
    moving to an unjustifiable position, shell.cpp:666-696).
 4. **Cross-highlight, don't cross-navigate.** A pick brushes the entity everywhere
    it appears but only the active pane scrolls to it; the others highlight in place
@@ -225,7 +225,7 @@ so; `test_selection` + the ui-test section are green.
 
 **Goal.** Make the 3D overview and slice DAG operable without a mouse (F18):
 keyboard camera on the 3D HUD (arrows orbit, `+`/`-` dolly, keys for reset and the
-honest top-down fallback), Tab focus into every pane and the `SceneHost` viewport,
+faithful top-down fallback), Tab focus into every pane and the `SceneHost` viewport,
 and — already landed for cones (shell.cpp:636-638) — confirm `b`/`f`/`Enter` light
 the slice DAG from selection so it is operable keyboard-only.
 
@@ -237,7 +237,7 @@ the slice DAG from selection so it is operable keyboard-only.
    `t` (setting `playhead_moved`). Route them through the *same* `HudState` intents
    the buttons already set (hud.h:28-32) and the same `Camera` methods the mouse
    drag uses (camera.h:51-68), so keyboard and mouse are one code path — the
-   top-down fallback stays the honest "3D to find, 2D to read" collapse (camera.h:64,
+   top-down fallback stays the faithful "3D to find, 2D to read" collapse (camera.h:64,
    hud.cpp:100-103). Guard on `io.WantTextInput` exactly as `handle_keymap` does
    (shell.cpp:588).
 2. **Tab-reach the panes and the viewport.** Give the 3D pane's `ImGui::Image`
@@ -305,11 +305,11 @@ hot-edges; keep the call **tree** engine-filtered so surviving depths never lie
    the place hits are painted — as ticks on the minimap, with "N matches ·
    \<aggregate cost\>" in the find bar. Enter / Shift+Enter advance/retreat
    `active_index` and drive `dt_nav_go` to that entity (so cycling reuses the one
-   spine). This is the honesty distinction from a filter: nothing is hidden, so
+   spine). This is the fidelity distinction from a filter: nothing is hidden, so
    "showing N of M" is unnecessary — every row stays, hits are merely lit.
 4. **Extend the narrowing filter (not the tree).** Add the doc-16 client-side
    "showing N of M" type-to-narrow filter (the syscalls idiom, syscalls.h:92-107) to
-   the disasm and hot-edges lists where narrowing the *display* is honesty-safe.
+   the disasm and hot-edges lists where narrowing the *display* is fidelity-safe.
    **Do not** add a client-side filter to the call tree: it stays engine-filtered
    (tree.h:1-13) because a client filter over an unfiltered stream would leave
    surviving depths claiming a parentage the engine never emitted (D7). State this
@@ -388,7 +388,7 @@ dependency.
 
 **Done when.** `Ctrl+Z`/`Ctrl+Y` reverse and replay a filter/cone/selection/take
 change without touching the Author buffer's own undo; the Loom takes gutter accumulates
-takes with working per-take remove and clear-forks, both reversible and honesty-
+takes with working per-take remove and clear-forks, both reversible and fidelity-
 preserving; `test_undo` + the Loom gutter test + the ui-test section are green.
 
 ## Task order & parallelism
@@ -407,7 +407,7 @@ rule).
 
 ## Constraints & gates
 
-- **Honesty is restructured, never removed (D7 / F5).** T1's selection shows
+- **Fidelity is restructured, never removed (D7 / F5).** T1's selection shows
   "nothing selected" where an entity is absent rather than a fabricated row; T3's
   find *marks* hits and never hides rows, and the call tree stays engine-filtered so
   surviving depths never lie (tree.h:1-13); T4's clear-forks removes a whole take
@@ -444,5 +444,5 @@ rule).
   (doc 11 skip); the keys here are fixed accelerators.
 - **Convention-alignment of the keymap** (`F` fit, `,`/`.` sibling, WASD) — that is
   T1.1's tail in doc 18; this brief only adds the 3D-camera and find/undo keys.
-- **The graded honesty-chrome severity field** (T4.1) and **the semantic/CVD
+- **The graded fidelity-chrome severity field** (T4.1) and **the semantic/CVD
   palette** (T5.x) — Wave 3, docs 23/24.

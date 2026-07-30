@@ -28,7 +28,7 @@
 >
 > **Status (2026-07-29) — ✅ 5/5. COMPLETE.** T1 `resolve_anchor` (`38d05d6`);
 > T2 the anchored rel PC path + placement count (`1622aaa`); T3 the labelled
-> `df_step` height rung + anchored trace rung (`ff650c3`); T4 the honesty chrome,
+> `df_step` height rung + anchored trace rung (`ff650c3`); T4 the fidelity chrome,
 > `scene-df-loop` golden, and end-to-end tests (`a3b2247`); T5 convergence admits
 > an anchored rel path (this commit). Both docker lanes green; the golden is
 > byte-stable under `docker-cli`.
@@ -43,9 +43,9 @@ it, and says nothing about that.
 Three independent defects stack to produce it, and only the third is a design
 question.
 
-**1. The promised honesty chip never fires (a D7 breach against a landed claim).**
-[25](25-live-model-wiring.md) T6 states that a live single-step capture *"shows an
-honest routine-relative execution path … and the HUD shows the existing "rel:
+**1. The promised fidelity chip never fires (a D7 breach against a landed claim).**
+[25](25-live-model-wiring.md) T6 states that a live single-step capture *"shows a
+faithful routine-relative execution path … and the HUD shows the existing "rel:
 routine-relative (not a true path)" chip."* It does not. That chip is keyed on
 `terr.basis` ([hud.cpp:49-53](../../../desktop/src/scene3d/hud.cpp#L49)), which is
 the **canvas** basis — assigned from `trace` events at
@@ -211,7 +211,7 @@ can draw.
    ([:176-184](../../../desktop/src/space/trajectory.cpp#L176)): for each PC vertex,
    `pc_points++` and `pc_placed += proj.project(...)`. If `pc_placed < pc_points` and
    no note is set, state the shortfall **and name the 4096-byte codeimage clamp** as
-   its cause — otherwise an honest partial placement reads as a regression.
+   its cause — otherwise a faithful partial placement reads as a regression.
 4. Do **not** touch the `mem` spur loop
    ([:153-172](../../../desktop/src/space/trajectory.cpp#L153)) or the survey loop
    ([:193-219](../../../desktop/src/space/trajectory.cpp#L193)) — both are absolute by
@@ -229,7 +229,7 @@ can draw.
 exactly as the existing abs case does: a df_step path anchors to the single span
 (`addr == base + off`, both flags set, `basis` still `"rel"`); **every anchored
 vertex projects onto the plane** — the assertion whose absence hid this bug;
-placement is counted; a rel *`trace`* anchors too; two code spans refuse honestly
+placement is counted; a rel *`trace`* anchors too; two code spans refuse transparently
 (`pc_placed == 0`, note set, no `TRAJ_ANCHORED`, `refused()` still false, addrs
 unchanged); an offset past the span is *counted, not placed*; no code span leaves
 the path unanchored and says so. Then a **regression bar applied at the end of
@@ -248,7 +248,7 @@ cells.
 **Steps.**
 1. [`terrain.h`](../../../desktop/src/space/terrain.h): add `height_source`
    (`"trace"` | `"df_step"` | `""`), `height_note`, and `anchor_error` to
-   `TerrainModel`. Extend the header's honesty-rules block with a third rule: **a df
+   `TerrainModel`. Extend the header's fidelity-rules block with a third rule: **a df
    height is not block coverage.**
 2. In `build_terrain` ([:109](../../../desktop/src/space/terrain.cpp#L109)), after the
    `basis_error` refusal ([:137-144](../../../desktop/src/space/terrain.cpp#L137)),
@@ -290,7 +290,7 @@ labelled height source.
 **Done when.** Existing fixtures unchanged in behaviour; G/H/I pass; removing
 `height_note` or `anchor_error` fails a named check.
 
-### T4 — the honesty chrome, the end-to-end bars, and a live-shaped golden  (L, depends on: T2, T3)
+### T4 — the fidelity chrome, the end-to-end bars, and a live-shaped golden  (L, depends on: T2, T3)
 
 **Goal.** Nothing about placement is silent, and one generated golden proves the
 real Auto/Dataflow shape renders end to end.
@@ -319,7 +319,7 @@ real Auto/Dataflow shape renders end to end.
    applies: never present an empty plane unlabelled.
 4. **No GL change.** Stipple is already the statistical channel; reusing it for
    "anchored" would conflate a derived placement with a sampled one. An anchored path
-   is exact execution, honestly placed — its caveat rides in the HUD, where every
+   is exact execution, faithfully placed — its caveat rides in the HUD, where every
    other provenance fact rides. This keeps all four tasks off the GL-gated lane.
 5. **New golden** `tests/golden-asmtrace/scene-df-loop.asmtrace` — the live shape no
    existing golden carries (absolute `codeimage` + region-relative `df_step`, **no**
@@ -402,7 +402,7 @@ establish that both `addr` values are legal inputs to that one projection:
    means the shared cell may name bytes never at that offset in that version. The hint
    grade itself is unchanged — admitting anchored paths does not upgrade it.
 
-**Honest limit, state it plainly.** `df_step` carries **no `tid`** on the wire
+**Acknowledged limit, state it plainly.** `df_step` carries **no `tid`** on the wire
 ([asmtrace_ndjson.c:269-290](../../../cli/asmtrace_ndjson.c#L269)), so a live
 single-step dataflow capture reads `tid = -1` and is **one** trajectory — it yields
 zero marks whatever the flags say. T5 produces marks only for a rel **`trace`**
@@ -445,7 +445,7 @@ before T2: `TRAJ_ANCHORED` does not exist in the tree today.
 - **The 4096-byte clamp is the common case, not an edge case.** Any routine larger
   than `SERVE_CI_MAX_BYTES` ([asmspy.c:3189-3196](../../../cli/asmspy.c#L3189))
   yields genuinely out-of-span offsets, so the "K of N off-plane" chip will fire on
-  real captures. That is honest — but the note must name the clamp, or it reads as a
+  real captures. That is faithful — but the note must name the clamp, or it reads as a
   regression.
 - **Widest-`len` aliasing.** `regions_from_codeimage` keeps the widest `len` across
   versions of a base ([terrain.cpp:97-99](../../../desktop/src/space/terrain.cpp#L97)),
@@ -462,11 +462,11 @@ before T2: `TRAJ_ANCHORED` does not exist in the tree today.
 - **Mid-session anchor flip.** A capture that re-arms on a second candidate span
   ([asmspy.c:3733-3761](../../../cli/asmspy.c#L3733)) flips from anchored to refused
   on the next live re-weave: the plane goes from drawn to labelled-empty in front of
-  the user. Honest, but the note should say the session re-armed on a second span.
+  the user. Faithful, but the note should say the session re-armed on a second span.
 - **D4 / D9 unchanged.** Everything is pure `space/` + HUD; no engine, no GL, no wire
   change, no regeneration of any existing golden.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Not a schema change.** `df_step` gains no `basis` and no region tag here; the
   producers keep emitting `"rel"`. Tagging `df_step` with its region is the real fix
@@ -510,11 +510,11 @@ rel chip that never fired). Consumes the live substrate of
 [07](07-serve-live-host.md)/[08](08-observer-views.md) and the `codeimage` kind
 defined there. Sits directly downstream of [35](35-continuous-live-dataflow.md) —
 a continuous capture is exactly the session whose 3D pane stays empty longest — and
-beside [34](34-playhead-and-scene-reach.md), whose two-axis honesty note governs the
+beside [34](34-playhead-and-scene-reach.md), whose two-axis fidelity note governs the
 terrain-time axis this brief now derives from `df_step`. Its producer-side sequel is
 [37](37-region-tag-on-df-step.md), which states the region on the wire so the
 multi-span case resolves instead of refusing; land **36 in full, then 37**. Schema/D5
 [01](01-asmtrace-format.md) + [asmtrace-schema.md](asmtrace-schema.md) (doc-only
-clarification). Honesty chrome D7 / [23](23-graded-truth-layer.md); palette and
+clarification). Fidelity chrome D7 / [23](23-graded-truth-layer.md); palette and
 wording D7 / [24](24-one-visual-language.md). Engine-free closure D4; capture host
 D9.

@@ -13,7 +13,7 @@
 #include <string>
 
 #include "nav.h"
-#include "ui/fidelity.h" // FidelityTier — the ONE graded honesty vocabulary (23 T1)
+#include "ui/fidelity.h" // FidelityTier — the ONE graded fidelity vocabulary (23 T1)
 #include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/canvas.h"
 #include "views/diff_view.h"
@@ -24,8 +24,8 @@
 
 namespace asmdesk {
 
-// --- the ONE graded honesty-chrome vocabulary (23-graded-truth-layer.md T1) --
-// F5's fix: honesty chrome is now ONE banner form + ONE inline chip + ONE glyph
+// --- the ONE graded fidelity-chrome vocabulary (23-graded-truth-layer.md T1) --
+// F5's fix: fidelity chrome is now ONE banner form + ONE inline chip + ONE glyph
 // set, graded into three tiers, with MANDATED placement enforced by the API — a
 // banner is a pane-top full-width placard, a chip is an inline stream-header
 // mark. Colours come from doc 24 T5.1's semantic accessors (ui/theme.h); each
@@ -40,7 +40,7 @@ namespace asmdesk {
 void draw_fidelity_banner(const char *text, FidelityTier tier,
                          bool *collapsed = nullptr);
 
-// The quiet inline chip (stream-header contract): a neutral honesty mark that
+// The quiet inline chip (stream-header contract): a neutral fidelity mark that
 // sits on a header row without a banner's weight. A T1 signal (skip, statistical,
 // redacted, coarse, bounded) renders as this, never as an amber banner.
 void draw_fidelity_chip(const char *text, FidelityTier tier);
@@ -92,7 +92,7 @@ void draw_timeline_overview(const dt_timeline &t, uint32_t nsteps, double *lo,
 // deck offers a "synthesize register history" button that RE-DERIVES the history
 // under the emulator ring (regsynth.h, full app only) and REPLACES `idx` in place
 // (hence non-const) with the synthesised, clearly-labelled index; where it is not
-// replayable, the honest refusal + its reason stand.
+// replayable, the genuine refusal + its reason stand.
 uint64_t draw_scrubber(StepIndex &idx, uint64_t playhead,
                        const Recording *rec = nullptr);
 

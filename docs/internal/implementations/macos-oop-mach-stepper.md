@@ -221,7 +221,7 @@ in-process Darwin stepper — byte-for-byte `[0x0, 0x3, 0x6, 0xc, 0x11]` for the
    and recording resumes; only a genuine return/tail-jump ends the trace. Clear `__rflags` TF and
    restore the task's original exception ports (saved from `task_get_exception_ports` before T2's
    `task_set_exception_ports`) on exit.
-6. Honest truncation: if `asmtest_disas` cannot decode at a recorded `RIP`, or the capture buffer
+6. Faithful truncation: if `asmtest_disas` cannot decode at a recorded `RIP`, or the capture buffer
    overflows, set `trace->truncated = true` and stop — the same loss bit the other backends use.
    Never emit a partial trace as complete.
 **Code.** Quote-mirror `ss_backend.c`'s in-region gate and block derivation, but with the state
@@ -304,7 +304,7 @@ validate DR0/DR7 deterministically.
 
 ### T6 — Codesigning harness, host make target, and self-skip  (M, depends on: T1)
 **Goal.** A repeatable way to build, self-sign, and run the Mach stepper's live test on a macOS
-x86-64 host — with an honest self-skip when the entitlement/root gate is not satisfied — so the lane
+x86-64 host — with a candid self-skip when the entitlement/root gate is not satisfied — so the lane
 gates cleanly locally and on the `macos-15-intel` CI leg.
 **Steps.**
 1. Add `scripts/codesign-debugger.sh` (new): write an ad-hoc entitlements plist containing

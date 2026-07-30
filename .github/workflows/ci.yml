@@ -1034,7 +1034,7 @@ jobs:
           #   the callout-fixture hang was fixed): the stealth-window thread pair ("needs
           #   x86-64 Linux threads"), the in-process single-step live capture ("single-step
           #   backend is x86-64 Linux/macOS only"), and the options-ABI guard's non-x86 arm
-          #   ("single-step tier not on this arch/OS") — all honestly x86-only tiers.
+          #   ("single-step tier not on this arch/OS") — all genuinely x86-only tiers.
           allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|NT_ARM_HW_BREAK|MSR|msr|needs x86-64 Linux threads|single-step backend is x86-64|single-step tier not on this arch/OS'
           unexpected=$(grep '# SKIP' "$log" | grep -vE "$allow" || true)
           if [ -n "$unexpected" ]; then
@@ -1187,7 +1187,7 @@ jobs:
     #   - --trace --tid= and --watch need debug registers this runner will not grant:
     #     NT_ARM_HW_BREAK reports 6 slots and NT_ARM_HW_WATCH 4 (debug_arch=8), yet
     #     PTRACE_SETREGSET on either returns ENOSPC. asmspy now names that measured
-    #     reason and self-skips; the smoke asserts the honest outcome (an unarmable
+    #     reason and self-skips; the smoke asserts the truthful outcome (an unarmable
     #     entry is an attach failure, never a false "never executed") instead of
     #     demanding a sample the host cannot produce.
     #

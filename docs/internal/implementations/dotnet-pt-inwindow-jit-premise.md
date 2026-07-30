@@ -3,7 +3,7 @@
 > **Source.** Later addition (2026-07-23): found by
 > [dotnet-managed-pt-concurrency-plan.md](../archive/plans/dotnet-managed-pt-concurrency-plan.md)
 > T4's validation on the bare-metal Intel PT box (Core i7-8559U) — the plan's
-> own honest note records that `MethodsObserved == 0` there **consistently**,
+> own candid note records that `MethodsObserved == 0` there **consistently**,
 > so the `unwarmed/PT compose: >=1 method JIT'd inside the window` premise
 > self-skips on **every** run of the only host class that can arm it. The
 > plan's sanctioned alternative — "or force a guaranteed in-window JIT" — is
@@ -20,7 +20,7 @@ assert the JIT map saw a method compiled in-window. On the one host class where
 the PT tier arms at all, the premise check never runs — the map's close-time
 snapshot is always empty, so the check takes its sanctioned timing self-skip
 **every time**. A check that can only ever self-skip on its target hardware is
-not covering its premise (the repo's self-skip honesty rule, CLAUDE.md shape).
+not covering its premise (the repo's self-skip fidelity rule, CLAUDE.md shape).
 
 The cause is delivery, not compilation. `UnwarmedPtPath` is JIT'd at first call
 **inside the window** — compilation completes before the body executes, and the
@@ -34,7 +34,7 @@ reads 0. The in-process TF sibling never sees this because single-stepping a
 20 000-iteration loop holds its window open for wall-clock seconds — delivery
 lands in-window for free. The fix gives the PT window the same property
 deliberately: **hold the window open (bounded) until the delivery lands**, then
-close. On timeout the honest self-skip remains (the never-flake rule).
+close. On timeout the genuine self-skip remains (the never-flake rule).
 
 ## Tasks
 
@@ -81,7 +81,7 @@ print `ok … unwarmed/PT compose: >=1 method JIT'd inside the window` (not the
 SKIP) stably across ≥3 consecutive runs, plus one
 `make docker-hwtrace-dotnet-ambient-stress` pass for the concurrency lane.
 
-**Docs.** `CHANGELOG.md` `### Fixed`. The plan's T4 honest note gets a dated
+**Docs.** `CHANGELOG.md` `### Fixed`. The plan's T4 candid note gets a dated
 "closed by" line pointing here.
 
 **Done when.** The premise line is `ok` (never SKIP, never `not ok`) on ≥3

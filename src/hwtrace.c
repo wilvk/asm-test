@@ -60,7 +60,7 @@
 
 /* The EFLAGS.TF single-step tier (ss_backend.c) runs on x86-64 Linux AND macOS; the
  * Intel PT / AMD LBR / CoreSight / perf machinery is Linux-only. Two gates keep the
- * split honest without duplicating the facade:
+ * split accurate without duplicating the facade:
  *   HWTRACE_HAVE_SINGLESTEP — x86-64 Linux OR macOS: the stepper + its handle path.
  *   HWTRACE_LIFECYCLE       — the shared facade (region table + mutex, init/register,
  *                             begin/end/scope single-step dispatch, arm-tid backstop).
@@ -781,7 +781,7 @@ static __thread int g_amd_snap = 0;
  * true LAST exit — even when it did not fit `out` — or (size_t)-1 when no exit is found
  * before the walk ends or a byte fails to decode (tails past undecodable padding simply
  * fall back to the sampled path; a breakpoint on a wrong exit is harmless — the boundary
- * is never hit and end() reports an honest truncated).
+ * is never hit and end() reports a faithful truncated).
  *
  * Both tail-call guards are load-bearing: asmtest_disas_is_uncond_jump also matches an
  * INDIRECT `jmp r/m` (an unprovable jump-table tail call, which must stay on the sampled
@@ -841,7 +841,7 @@ static int hwtrace_begin_amd(hw_region_t *r) {
     /* Deterministic boundary snapshot (AMD plan Phase 3, widened by follow-up P5): read
      * the frozen 16-entry stack at a region-exit breakpoint instead of flooding
      * sample_period=1 PMIs and guessing the richest window — the tiny single-shot routine
-     * the sampled path honestly truncates reconstructs completely here, with no post-glue
+     * the sampled path faithfully truncates reconstructs completely here, with no post-glue
      * window contamination. Taken when explicitly requested (opts.snapshot) OR, on the
      * Zen 4/5 substrate that supports it (amd_lbr_v2 + perfmon_v2 + Linux >= 6.10, via
      * asmtest_amd_snapshot_available), by DEFAULT for a region with 1..4 exits. An exit
@@ -849,7 +849,7 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * plants one HW breakpoint PER exit (one x86 debug register each, HBP_NUM == 4 ==
      * ASMTEST_AMD_MAX_EXITS), so WHICHEVER exit the run leaves through hits a boundary —
      * the P5 fix for the old single-exit gate, under which a multi-exit routine leaving
-     * via an earlier ret/tail-jmp missed the lone breakpoint and honestly truncated. A
+     * via an earlier ret/tail-jmp missed the lone breakpoint and faithfully truncated. A
      * region with MORE than 4 exits stays on the sampled path by default (not enough
      * debug registers to cover every boundary); an explicit opts.snapshot is the caller's
      * choice and keeps the legacy LAST-exit best-effort there. Any arm failure — no BPF
@@ -895,7 +895,7 @@ static int hwtrace_begin_amd(hw_region_t *r) {
      * leaves the consecutive 16-deep windows overlapping by (depth - P), so the
      * Tier-B stitcher still splices them gaplessly at ~P-times fewer interrupts.
      * Clamp to [1, depth-1] so an overlap always remains — a bad value degrades to a
-     * stitch gap (honest truncation), never a silent mis-stitch. */
+     * stitch gap (faithful truncation), never a silent mis-stitch. */
     unsigned period = 1;
     if (g_opts.lbr_period > 1) {
         int depth = asmtest_amd_lbr_depth();
@@ -930,7 +930,7 @@ static int hwtrace_begin_amd(hw_region_t *r) {
         pg = 4096;
     /* The AMD data ring holds the sample_period=1 branch-stack windows the Tier-B
      * stitch splices; its size bounds how long a run reconstructs before the kernel
-     * drops the newest samples (a PERF_RECORD_LOST -> honest truncation). 256KB (vs
+     * drops the newest samples (a PERF_RECORD_LOST -> faithful truncation). 256KB (vs
      * Intel PT's 8KB base ring) buys more gapless stitch reach; raise data_size, and
      * kernel.perf_event_max_sample_rate / kernel.perf_cpu_time_max_percent=0 on the
      * runner, to extend it further (see docs/internal/plans/amd-tracing-plan.md Phase 5). */
@@ -1072,7 +1072,7 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
      * record even though it dropped the newest samples (the run's tail, where
      * sample_period=1 windows would otherwise stitch gaplessly). Treat a (near-)full
      * ring as loss: if less than one maximum-size branch-stack sample of headroom
-     * remains, the tail was almost certainly dropped and the trace must be honestly
+     * remains, the tail was almost certainly dropped and the trace must be faithfully
      * truncated rather than claimed complete. */
     const int amd_depth = asmtest_amd_lbr_depth();
     {
@@ -1095,7 +1095,7 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
      * Tier-B: stitch the overlapping sample_period=1 windows (collected above, time
      * order) into one gapless sequence and decode THAT past the ceiling. A stitch gap
      * or a dropped-sample record (`lost`) means the ring could not hold the whole run,
-     * so the result is honestly truncated; otherwise Tier-B reconstructs the full
+     * so the result is faithfully truncated; otherwise Tier-B reconstructs the full
      * >16-branch trace where a single window cannot. */
     int done = 0;
     if (best != NULL && best_nr > 0 && best_inregion > 0) {
@@ -1183,7 +1183,7 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
         trace->truncated = true;
     }
 
-    /* Honesty invariant (matches the other backends): an in-region branch window that
+    /* Fidelity invariant (matches the other backends): an in-region branch window that
      * reconstructs to ZERO instructions — a boundary branch, or endpoints that do not
      * bound a decodable run — is not a complete empty trace. Flag it truncated so the
      * AMD path never reports empty-yet-complete (the intermittent case on a tiny
@@ -1200,7 +1200,7 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
 static void hwtrace_end_amd(void) {
     if (g_amd_snap) {
         /* Boundary-snapshot mode: drain + decode the frozen exit window. The same
-         * honesty invariant as the sampled path: an empty reconstruction is never
+         * fidelity invariant as the sampled path: an empty reconstruction is never
          * a complete empty trace. */
         hw_region_t *sr = g_active;
         if (sr != NULL && sr->trace != NULL) {
@@ -1263,7 +1263,7 @@ static void hwtrace_end_amd(void) {
 /* §D3 statistical AMD-LBR whole-window survey (region-FREE)           */
 /* ------------------------------------------------------------------ */
 /* Exact whole-window is a hardware dead end on AMD (16-deep stack + non-overwrite ring +
- * throttle truncate a period=1 capture at ~10^2 branches). This is the HONEST AMD whole-
+ * throttle truncate a period=1 capture at ~10^2 branches). This is the FAITHFUL AMD whole-
  * window shape: a STATISTICAL branch-stack SURVEY. Arm PERF_SAMPLE_BRANCH_STACK at
  * sample_period=`period` (>1 — the OPPOSITE of the exact region path's default 1, so the
  * event stays under kernel.perf_event_max_sample_rate / perf_cpu_time_max_percent), run
@@ -1514,7 +1514,7 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
              * by an unrelated producer's loss — the assert silently stops testing the
              * island. *tile_truncated means ONLY: this merge lost island endpoints
              * (ringbuf drop / ips[] full). That is the term an island-content assert may
-             * honestly be disjoined with. */
+             * legitimately be disjoined with. */
             if (tile_truncated != NULL)
                 *tile_truncated = ttrunc;
             if (ttrunc)
@@ -1525,7 +1525,7 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
      * end, so a ring that FILLED during run_fn drops the NEWEST samples (the window's tail)
      * and emits NO PERF_RECORD_LOST (the kernel never gets the next reservation). Treat less
      * than one max-size sample of headroom as loss, so a long window that overran the ring is
-     * honestly a prefix, not reported complete (mirrors hwtrace_end_amd). */
+     * genuinely a prefix, not reported complete (mirrors hwtrace_end_amd). */
     {
         int depth = asmtest_amd_lbr_depth();
         size_t max_sample = sizeof(struct perf_event_header) +
@@ -1599,7 +1599,7 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
     close((int)fd);
     if (nips != NULL)
         *nips = n;
-    /* Honest: loss (ring/throttle/near-full/buffer-full) OR an empty survey (nothing
+    /* Fidelity: loss (ring/throttle/near-full/buffer-full) OR an empty survey (nothing
      * sampled — too short a window, or the whole run dropped) is a prefix, not complete. */
     if (truncated != NULL)
         *truncated = (lost || n == 0) ? 1 : 0;
@@ -1623,7 +1623,7 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
  * branch targets, EXACTLY. Between hits, whatever the sampler happened to catch at
  * `period`. WHAT IT IS NOT: an exact whole-window trace — that is a hardware dead end on
  * AMD and is DECLINED. The union of exact islands and sampled endpoints is SAMPLED /
- * PARTIAL COVERAGE, honest for a HOT-ADDRESS histogram (WindowHot) and never admissible
+ * PARTIAL COVERAGE, faithful for a HOT-ADDRESS histogram (WindowHot) and never admissible
  * to the exact insns[]/blocks[] parity cascade.
  *
  * ips[0..*ntiled) is the island-sourced prefix (tiles drain first, so they cannot be
@@ -2098,7 +2098,7 @@ static int pt_aux_open(pid_t pid, size_t data_size, size_t aux_size,
 }
 
 /* DISABLE the event, then report the linear ring's valid extent [0, *head_out) and
- * the honest truncation signal: PERF_AUX_FLAG_TRUNCATED seen in the data ring, OR the
+ * the faithful truncation signal: PERF_AUX_FLAG_TRUNCATED seen in the data ring, OR the
  * head>=aux_sz tiny-buffer clamp. Leaves the mmaps intact for the drain — the caller
  * decodes [0, head) then pt_aux_close()s. */
 static int pt_aux_stop(pt_aux_t *a, uint64_t *head_out, int *overflow_out) {
@@ -2901,7 +2901,7 @@ int asmtest_hwtrace_pt_hop_close(void *ctx, asmtest_codeimage_t *img,
     }
     /* Live per-tid capture: DISABLE (the sanctioned read point for a linear AUX
      * ring), then drain [0, head) and decode-at-version. pt_aux_stop reports the
-     * honest overflow signal; a decode failure OR overflow flags the trace
+     * faithful overflow signal; a decode failure OR overflow flags the trace
      * truncated (the same policy as pt_attach_end). */
     uint64_t head = 0;
     int overflow = 0;
@@ -3383,7 +3383,7 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 /* quiet sampled complement use the explicit sample_begin_amd path).       */
 /* end_window closes the handle's frame and, on a cross-thread close (the  */
 /* handle does not resolve on the closing thread), flags `truncated` — the */
-/* §Z4 thread-scope honesty default. render_window decodes recorded        */
+/* §Z4 thread-scope fidelity default. render_window decodes recorded       */
 /* ABSOLUTE addresses from LIVE self memory (valid for non-moving native   */
 /* code); moving/managed bytes use asmtest_hwtrace_render_versioned (§Z3). */
 /* ------------------------------------------------------------------ */

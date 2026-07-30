@@ -73,7 +73,7 @@ Three properties are deliberate:
   ([`include/asmtest_rec.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_rec.h))
   and that is what writes the file. A suite with **no** producer glue accepts
   `--record-dir`, writes nothing, and emits **no** `recording:` key — the
-  honest degrade, not a `recording: (none)` line nobody can open.
+  candid degrade, not a `recording: (none)` line nobody can open.
 - **A directory that cannot be created is a hard failure** (exit 2). A run that
   was asked to record and silently recorded nothing is the exact outcome this
   flag exists to prevent.

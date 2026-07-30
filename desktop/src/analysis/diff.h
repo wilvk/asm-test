@@ -5,7 +5,7 @@
 // prefix. This alignment seam is also the Loom's patient-zero mechanism
 // (05-loom-day-one.md consumes dt_divergence) — the logic lives here once.
 //
-// Three honesty rules are structural, not cosmetic:
+// Three fidelity rules are structural, not cosmetic:
 //
 //  1. A refused pair yields an EMPTY diff and a reason, never a plausible one.
 //     Recordings in different address bases, or of different architectures,
@@ -20,7 +20,7 @@
 // landed with 28 R1 T1, so the precondition check now REFUSES a pair whose code
 // hashes differ (as it refuses a basis or arch mismatch), and `identity_note`
 // records a matching pair as a finding. When either side omits `code` the note
-// keeps the honest "the caller is asserting the two recordings are of the same
+// keeps the faithful "the caller is asserting the two recordings are of the same
 // routine" caveat — silently pretending to have checked would be exactly the
 // false confidence this tree exists to avoid.
 #ifndef ASMDESK_ANALYSIS_DIFF_H

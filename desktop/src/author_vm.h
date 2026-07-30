@@ -15,7 +15,7 @@
 //     that tells the user what to do.
 //  2. **A fault is a CARD, not an error.** The emulator turned a crash into
 //     data; the door renders kind + address + registers rather than a toast.
-//  3. **v1 runs the x86-64 AND arm64 guests, each honestly, and says so
+//  3. **v1 runs the x86-64 AND arm64 guests, each faithfully, and says so
 //     per-arch.** The remaining two arches assemble and show bytes with a
 //     labelled limit — never a greyed button with no explanation, and never a
 //     silent wrong run. The two runnable guests do not share a result SHAPE:
@@ -46,7 +46,7 @@ extern "C" {
 
 namespace asmdesk {
 
-// One row of the arch-gating table. `can_run` is v1's honest limit, not a
+// One row of the arch-gating table. `can_run` is v1's real limit, not a
 // capability probe: it names whether THIS build's v1 runs the arch at all, via
 // whichever of the two run paths above applies — never the same thing for
 // every runnable row.
@@ -96,7 +96,7 @@ struct author_result_t {
     bool vf_ok = false; // the guest reached the return sentinel cleanly
     size_t vf_steps = 0;
     size_t vf_edges = 0;
-    std::string vf_note; // the honest capability/degrade note; always set
+    std::string vf_note; // the faithful capability/degrade note; always set
 };
 
 // Map an assemble result into the view-model. `bytes`/`len` are the assembled
@@ -128,7 +128,7 @@ struct author_valuefabric_t {
 
 // Fold a value-fabric run's outcome into an already-assembled result (the
 // arm64 counterpart of author_apply_run, which stays the x86-64 path
-// unchanged). Honest by construction (D7): it never fabricates a fault
+// unchanged). Faithful by construction (D7): it never fabricates a fault
 // kind/address the producer did not report, and it says so plainly when the
 // guest did not reach a clean stop or a buffer truncated the fabric.
 void author_apply_run_vf(author_result_t &out, const author_valuefabric_t &vf);

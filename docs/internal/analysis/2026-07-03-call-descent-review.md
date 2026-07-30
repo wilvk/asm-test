@@ -28,7 +28,7 @@ documented as known limitations.** Fixes were applied in the same working tree a
 re-validated (C suite 133/133, ASan-clean; conformance 20/20; bindings-parity in sync;
 representative bindings green; AArch64 compile clean). Two findings (D1, D2) are real but
 reachable only on the live/attached managed-runtime path — already documented
-best-effort/expected-to-perturb — and are recorded as honest limitations in the plan's
+best-effort/expected-to-perturb — and are recorded as disclosed limitations in the plan's
 [Correctness core](../archive/plans/call-descent-plan.md) section rather than papered over. A new
 regression test (`test_descent_stale_alarm_flag`) was added for the highest-severity fix
 and confirmed to fail on the pre-fix code.
@@ -41,7 +41,7 @@ and confirmed to fail on the pre-fix code.
 | 4 | L2 descent could not be bounded by a caller's own `alarm()`: the `EINTR`-retry loop swallowed every non-watchdog signal, so a blocked descended syscall could hang past a caller watchdog | Medium | **Fixed** — wait also breaks when the real-time deadline is reached under any interrupt |
 | 5 | `depth_capped` set at every call-out past the budget, even for callees that would never descend — "guard tripped" reported spuriously | Medium | **Fixed** — decide independently of budget; flag only a suppressed-would-be-descent |
 | 6 | Level-2 resolver's returned `(base,len)` accepted without checking it contains the callee → `pc - base` underflow to a ~2⁶⁴ frame offset | Low | **Fixed** — containment enforced (matches allow-set / proc-maps paths) |
-| 7 | Tail-`jmp` out of a descended frame could mis-parent / corrupt the frame tree (stale parent `last_was_call`) | Medium | **Mitigated** — parent pending-call cleared on push → honest truncation, not corruption (full keep-open deferred, see D2) |
+| 7 | Tail-`jmp` out of a descended frame could mis-parent / corrupt the frame tree (stale parent `last_was_call`) | Medium | **Mitigated** — parent pending-call cleared on push → faithful truncation, not corruption (full keep-open deferred, see D2) |
 | 8 | `descend_probe` did 3× Capstone `cs_open`+decode+`cs_close` per single-stepped instruction (is_call + is_ret + length) on a hot path | Medium (perf) | **Fixed** — new `asmtest_disas_probe` returns all three in one decode |
 | 9 | Doc/contract inaccuracies: `asmtest_descent_free` "double-free is a no-op" (false for a raw C pointer); Ruby binding `0 = unbounded`/`disables` budget/watchdog docs; watchdog "caller alarm undisturbed" overstatement; misleading `call_target` test comment; undocumented self-recursion-splits-at-L1 divergence from the level-0 fold | Low | **Fixed** — contracts corrected across header, `descent.c`, Ruby binding, test |
 | D1 | **Live path only:** signal-frame SP-pop suspension not implemented — an async safepoint signal (`SIGSEGV`/`SIGPROF`/`SIGURG`) inside a descended frame makes the branch-D catch-all pop prematurely and mis-read a root return | Medium (live only) | **Documented** — known limitation; live L3 is already best-effort/expected-to-perturb |

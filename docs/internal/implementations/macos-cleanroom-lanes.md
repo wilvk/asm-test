@@ -192,7 +192,7 @@ copy, in-guest clean-room test, VM delete — exiting 0 with a truthful summary.
    ([scripts/clean-room-test.sh](../../../scripts/clean-room-test.sh) lines
    62–77). Java is expected to SKIP via the macOS JRE-less-stub check (line
    147). If **every** lane skips, the run still exits 0 — record that outcome
-   honestly in the plan rather than inventing a pass (and consider whether the
+   transparently in the plan rather than inventing a pass (and consider whether the
    guest image ships ruby at all; if not, that is a finding for the plan, not a
    reason to install toolchains in the guest).
 3. Triage the likely first-run breakages, in the order the script hits them:
@@ -452,7 +452,7 @@ then headless runs against that disk.**
    re-assessment (lines 238–276): `macos-15-intel` CI legs now give real
    Intel-Apple clean-room coverage, so the lane's remaining unique value is a
    *vanilla* (non-CI-image) Intel-macOS userland.
-4. Note the mount-point caveat honestly in both the script header and the doc:
+4. Note the mount-point caveat candidly in both the script header and the doc:
    `-v <disk>:/image -e IMAGE_PATH=/image` is the long-standing Docker-OSX
    reuse convention (formerly the `:naked` flow), but the current `:latest`
    `Launch.sh`'s handling of an overridden `IMAGE_PATH` is **shakedown-verified
@@ -551,7 +551,7 @@ Track D is then flipped.
    banner lines 12–15; [mk/docker.mk](../../../mk/docker.mk) comment lines
    675–676; [Makefile](../../../Makefile) line 174;
    [docs/clean-room-testing.md](../../clean-room-testing.md) Tracks C/D
-   section; one CHANGELOG `[Unreleased]` line. Keep the plan's honest framing:
+   section; one CHANGELOG `[Unreleased]` line. Keep the plan's candid framing:
    this is a **backstop** lane (its re-assessment stands — `macos-15-intel` CI
    covers Intel-Apple; this uniquely covers a *vanilla* Intel userland).
 

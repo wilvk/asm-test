@@ -77,7 +77,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 
 - A shared L0 value-trace sink (`asmtest_valtrace_t`) with the same caller-owned-buffer,
   append/dedup/truncate discipline as `asmtest_trace_t`, so any tier can fill it and a
-  value trace overflows honestly (`truncated`).
+  value trace overflows faithfully (`truncated`).
 - Tier-neutral L1 (last-writer def-use) and L2 (forward/backward slice, taint) passes built
   **once**, over L0.
 - L0 producers for three tiers: **emulator** (CI proving ground + oracle), **scoped ptrace

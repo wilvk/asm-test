@@ -83,7 +83,7 @@ internal static class Program
         {
             Console.WriteLine($"   # self-skip: {ww.SkipReason}");
             Console.WriteLine($"   (the block still ran uninstrumented; total={total}.)");
-            return 0; // honest degrade — no ptrace (Yama) / no privilege
+            return 0; // graceful degrade — no ptrace (Yama) / no privilege
         }
 
         long hot = ww.WeightIn("HotKernel");

@@ -265,7 +265,7 @@ a peer bool.
   `using (new AsmTrace(outOfProcess:true)) { SpawnThreadInWindow(); }` beside the factory in
   [crashproof-showdown](../../../../examples/dotnet/crashproof-showdown/Program.cs) — assert it
   survives (parity with the factory's SAFE leg) and captures ≥ the leaf, and assert the disclosed
-  pollution honestly (the recorded stream is a superset of the block). Self-skips off ptrace.
+  pollution faithfully (the recorded stream is a superset of the block). Self-skips off ptrace.
 - **CI:** runs on any ptrace-capable Linux (a `--cap-add=SYS_PTRACE` docker lane, no PT
   hardware), x86-64 and AArch64. qemu-user cannot `PTRACE_SINGLESTEP`, so the arm64-under-qemu
   lane self-skips (see the arm64-docker-ptrace memory / decision matrix). Extend the existing

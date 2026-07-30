@@ -62,7 +62,7 @@ int main() {
     vt::eq("link is byte-stable", dt_nav_format(back), text);
 
     // --- the node-editor graph layout (15 T3) ------------------------------
-    // The honesty guardrail: node-editor is fed the app's own positions every
+    // The fidelity guardrail: node-editor is fed the app's own positions every
     // frame and its settings file is DISABLED, so it can neither persist a
     // dragged position nor invent one on load — the layout stays the app's, and
     // force-directed layout stays banned (docs 04/08).

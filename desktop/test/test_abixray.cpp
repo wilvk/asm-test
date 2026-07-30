@@ -7,7 +7,7 @@
 // It covers the brief's "Done when": the paired recording opens as a LOCKED
 // two-pane x-ray (one playhead seeks both), every stop lands on its step, and
 // the walkthrough narrates SysV-vs-Win64 differences that the CROSS-PANE
-// register deltas visibly show — plus the two honesty refusals (unaligned panes,
+// register deltas visibly show — plus the two fidelity refusals (unaligned panes,
 // an absent producer).
 #include "view_test.h"
 
@@ -181,7 +181,7 @@ int main() {
         vt::golden("abixray-sum3.txt", walk_dump(sysv, win64, walk));
     }
 
-    // --- honesty: two DIFFERENT runs cannot share a playhead -----------------
+    // --- fidelity: two DIFFERENT runs cannot share a playhead -----------------
     {
         Recording mp = load_rec("abixray-make_pair-sysv.asmtrace");
         Recording s3 = load_rec("abixray-sum3-win64.asmtrace");
@@ -198,7 +198,7 @@ int main() {
                   "banner: " + x.banner);
     }
 
-    // --- honesty: a pane with no producer refuses, and points at --steps -----
+    // --- fidelity: a pane with no producer refuses, and points at --steps -----
     {
         Recording noreg = load_rec("sum_via_rbx.asmtrace"); // predates the ring
         Recording wr = load_rec("abixray-make_pair-win64.asmtrace");

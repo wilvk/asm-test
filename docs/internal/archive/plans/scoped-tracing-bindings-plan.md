@@ -355,4 +355,4 @@ managed clean path respectively, and the shims inherit them for free once landed
 Per-binding feasibility matrix, the four ergonomic pieces, and the tiering:
 [the scoped `using` analysis — cross-language section](../../analysis/scoped-inprocess-tracing.md#beyond-net--extending-the-scoped-model-to-the-other-nine-bindings).
 The Go migration hazard and its resolved fix:
-[go-full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-honestly).
+[go-full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-candidly).

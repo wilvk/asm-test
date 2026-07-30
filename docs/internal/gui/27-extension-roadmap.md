@@ -5,12 +5,12 @@
 > capability in the desktop GUI onto a small set of **root prerequisites** — one
 > engine or `.asmtrace`-schema change apiece — and each root gets a full
 > implementation brief ([28](28-schema-freeze-completion.md)–[33](33-backward-attribution-producers.md)).
-> The point of the mapping: the ~30 "not day-one / honest-limit / Wave N / future
+> The point of the mapping: the ~30 "not day-one / acknowledged-limit / Wave N / future
 > work" markers scattered across docs 01–26 and
 > [desktop-gui-plan.md](../plans/desktop-gui-plan.md) are **not** 30 independent
 > problems. They collapse onto six roots. Unblock a root, and several stuck views
 > light up at once — most of them with **zero desktop change**, because the
-> consumers already degrade honestly and flip live when the producer appears (the
+> consumers already degrade gracefully and flip live when the producer appears (the
 > doc-25/26 pattern).
 >
 > **Authored 2026-07-28**, verified against HEAD `da566c9`; every cited file:line
@@ -19,7 +19,7 @@
 
 ## Why this work exists
 
-The GUI was built honest: where a producer does not carry a fact, the view says
+The GUI was built faithful: where a producer does not carry a fact, the view says
 so instead of faking it (D7). That discipline generated a large, precise
 inventory of gaps — each `absent` placard, each `TORN` banner, each "not a
 day-one feature" is a pointer at a missing producer or schema field. This
@@ -32,7 +32,7 @@ duplicate landed work:
   2026-07-28): the Scrubber goes live under `--dataflow --steps` / serve
   `steps:true`. The offline register ring + Scrubber ([09](09-teaching-producers.md))
   landed 2026-07-26.
-- **Graded-honesty `severity` schema field** ([23](23-graded-truth-layer.md) T1,
+- **Graded-fidelity `severity` schema field** ([23](23-graded-truth-layer.md) T1,
   landed 2026-07-27) — the one Phase-3-freeze schema item already **closed** with
   01-owner sign-off ([asmtrace-schema.md](asmtrace-schema.md) owner sign-off note).
 - **Live model wiring** ([25](25-live-model-wiring.md), ✅ 7/7) — Loom / Slice /
@@ -58,7 +58,7 @@ duplicate landed work:
 R1 (freeze: identity + totals + wide-operand)
  ├─ prerequisite for → R6 (statediff needs routine identity to pair two recordings)
  ├─ shares wide[] plumbing + descriptor mechanism with → R4
- └─ closes 04-diff / 05-banner honesty gaps directly
+ └─ closes 04-diff / 05-banner fidelity gaps directly
 
 R2 (mem[] producer) ── shared prerequisite for THREE views (10 rich rung, 05 CT multiverse, misaligned)
 
@@ -92,7 +92,7 @@ Two structural facts make this cheaper than it looks:
 ## Suggested sequence
 
 1. **R1 first.** Cheapest (S–M), no new engine, and it is a prerequisite for R4
-   and R6 and closes standing 04/05 honesty gaps. It is literally "action the
+   and R6 and closes standing 04/05 fidelity gaps. It is literally "action the
    [freeze checklist](asmtrace-schema.md#known-v1-gaps--the-freeze-checklist)."
    Must coordinate with the **Phase-3 schema freeze** (D5) — 01 owns the schema.
 2. **R2 and R6 in parallel** — both are new producers over an existing recording,
@@ -100,7 +100,7 @@ Two structural facts make this cheaper than it looks:
 3. **R4** — builds on R1's `wide[]` serialization; the descriptor on-ramp
    (`vec512_t` in the manifest, `fpenv` reserved) is already laid.
 4. **R3** — the largest and the headline (it is what "not a day-one feature"
-   gates), but lower urgency than the cheap honesty wins. Phase-4+, demand-gated.
+   gates), but lower urgency than the cheap fidelity wins. Phase-4+, demand-gated.
 5. **R5** — independent arch axis; demand-gated on a non-x86-64 persona.
 
 ## The tail — smaller independents (no full brief; expand on demand)
@@ -120,7 +120,7 @@ the roots above and become small follow-ups once it lands.
 
 ## Out of scope by design — a plan here would fight the design
 
-The plan's **Honest limits** and **Killed in grounding** lists
+The plan's **Acknowledged limits** and **Killed in grounding** lists
 ([desktop-gui-plan.md:476-492](../plans/desktop-gui-plan.md#L476)) are not a
 backlog — they are load-bearing refusals. Do not write briefs to "unblock" these:
 exact-only fabric; trace-relative lifetimes; no cross-thread value hops; forks
@@ -137,9 +137,9 @@ engineering one, so it stays out of this roadmap until that decision is made.
   is append-only until the Phase-3 freeze and **owned by 01**; land R1's freeze
   items through the freeze checkpoint, and land R4/R6 kinds as new registry-row
   definitions under the ignore-unknown-kinds rule (never a new envelope major).
-- **D6/D7 (golden + honesty).** Every new producer ships a golden fixture **and**
-  a dishonesty fixture (torn / dropped / absent), and the renderer test asserts
-  the honest-degradation placard — the same contract docs 05/09/10 already meet.
+- **D6/D7 (golden + fidelity).** Every new producer ships a golden fixture **and**
+  a low-fidelity fixture (torn / dropped / absent), and the renderer test asserts
+  the graceful-degradation placard — the same contract docs 05/09/10 already meet.
 - **D9 (capture host).** Producer work splits by host exactly as today: the
   emulator L0 / valtrace tiers are linked by Author mode (R3, R5, the emulator
   legs of R1/R4); the ptrace `--dataflow` / `--serve` engine is `asmspy`-only (the

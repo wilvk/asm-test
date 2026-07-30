@@ -162,7 +162,7 @@ findings from that first real-hardware run:
   routine exceeds 16 taken branches — Tier A as specified; Tier-B stitching has since
   lifted that >16 truncation, leaving the data ring as the ceiling).
 - perf gives the 16-deep stack **only at a sample**, so a **tiny single-shot routine
-  is too fast to be sampled in-region** and the capture honestly sets `truncated`
+  is too fast to be sampled in-region** and the capture faithfully sets `truncated`
   (the dynamic-fallback signal) rather than emitting an empty trace. This corrected a
   capture bug: `hwtrace_end_amd` kept the *last* perf sample (all post-routine glue
   branches for a small routine, decoding to nothing yet reported complete); it now

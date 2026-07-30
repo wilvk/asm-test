@@ -414,14 +414,14 @@ fallback/oracle during the swap.
   instrumentation instead of the `on_step` clean call
   ([:173-177](../../../../src/dataflow_dr_client.c#L173)).
 - Route captured records through a **`drx_buf`** per-thread buffer with periodic flush, replacing
-  the direct append into `at_drval_t`. Preserve the honest-overflow/`truncated` discipline of the
+  the direct append into `at_drval_t`. Preserve the faithful-overflow/`truncated` discipline of the
   ABI ([dataflow_dr.h:95](../../../../src/dataflow_dr.h#L95)).
 - **Re-express marker/arg resolution without `drwrap`:** keep resolving `AT_DRVAL_MARKER_SYM` by
   PC ([:188](../../../../src/dataflow_dr_client.c#L188)) and reading `rdi/rsi/rdx` at the marker PC,
   now as a `drmgr` insertion-phase equivalent of the current SysV-arg clean call
   ([:156](../../../../src/dataflow_dr_client.c#L156)) — do **not** silently pull `drwrap_get_arg`
   back in.
-- Keep the existing operand exclusions honest and unchanged for now (far/segmented `fs:`/`gs:`,
+- Keep the existing operand exclusions faithful and unchanged for now (far/segmented `fs:`/`gs:`,
   VSIB gather EA, store post-values, [:104-107](../../../../src/dataflow_dr_client.c#L104)); this
   increment is a performance/architecture swap only. Keep the `DR_SIGNAL_DELIVER` handler
   ([:213-217](../../../../src/dataflow_dr_client.c#L213)) unchanged.

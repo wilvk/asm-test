@@ -7,7 +7,7 @@
 // cli/asmspy_logview.h / cli/test_view.c pattern, so every rule below is a
 // headless assertion.
 //
-// TWO HONESTY RULES, both structural:
+// TWO FIDELITY RULES, both structural:
 //
 //  1. A stop anchored past the recorded window is REFUSED, never clamped. A
 //     truncated recording's last stop may point at a step nobody recorded;

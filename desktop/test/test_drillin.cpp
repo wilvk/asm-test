@@ -1,4 +1,4 @@
-// test_drillin.cpp — the 3D-overview drill-in router + the two honesty invariants
+// test_drillin.cpp — the 3D-overview drill-in router + the two fidelity invariants
 // (docs/internal/gui/10-spacetime-3d-overview.md T6). Null harness, no display:
 // this binary drives the pick-id RESOLUTION path (scene3d/pick.h) with no GL at
 // all — the same closure argument test_projection makes for the plane — so "every
@@ -8,7 +8,7 @@
 // and NOTHING else (D4).
 //
 // "3D to find, 2D to read": every pickable kind routes through 04's router to the
-// flat view that reads it. The two honesty invariants ride along:
+// flat view that reads it. The two fidelity invariants ride along:
 //   1. TRUNCATION SURVIVES THE DRILL-IN — a TORN cell's 2D target carries 04/08's
 //      truncation banner (the 3D tear is never the only signal).
 //   2. STATISTICAL IS NEVER EXACT — a survey-only recording yields no exact tube,
@@ -293,7 +293,7 @@ int main() {
               "an out-of-range vertex produced a link");
     }
 
-    // === HONESTY INVARIANT 1: truncation survives the drill-in ================
+    // === FIDELITY INVARIANT 1: truncation survives the drill-in ================
     // truncated.asmtrace is a rel-basis, torn recording with no codeimage — the
     // caller supplies the code region a window/maps snapshot would. Its TORN cell
     // drills to the trace canvas, and that 2D view carries the truncation banner:
@@ -335,7 +335,7 @@ int main() {
         }
     }
 
-    // === HONESTY INVARIANT 2: statistical is never exact ======================
+    // === FIDELITY INVARIANT 2: statistical is never exact ======================
     // A survey-only recording (ibs-op / sw-clock) is exact:false BY CONSTRUCTION.
     // It produces NO exact trajectory tube, the statistical provenance is set, and
     // every statistical pick (a TF_STAT cell, a TRAJ_STATISTICAL vertex) opens the

@@ -71,7 +71,7 @@ Register def-use is a straight offline pass; memory def-use is gated on runtime 
 - A value-trace record — call it `asmtest_valtrace_t`: per step, an instruction offset
   (already have) plus a small array of `{location, size, value, is_write}`, where
   `location` is a register id or a memory address. Same append/dedup/truncate discipline
-  and caller-owned buffers as `asmtest_trace_t`, so a value trace can overflow honestly
+  and caller-owned buffers as `asmtest_trace_t`, so a value trace can overflow transparently
   (`truncated`) exactly like a control trace.
   - **Address-space normalization contract (added 2026-07-12).** The existing sink is
     *not* address-uniform: [`emu.c`](../../../src/emu.c#L113) appends `(address - base)`

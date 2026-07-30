@@ -63,7 +63,7 @@ bool layout_exists(ImGuiID dockspace_id);
 // node is absent or a bare leaf (a fresh dockspace — DockSpaceOverViewport
 // creates exactly such an empty leaf, so `layout_exists` alone is NOT enough to
 // decide "already laid out"), false once it carries a real split (a persisted
-// `.ini` layout, which must be kept). The one honest first-run signal — again
+// `.ini` layout, which must be kept). The one accurate first-run signal — again
 // wrapping the imgui_internal.h `ImGuiDockNode` so the shell stays free of it.
 bool layout_needs_default(ImGuiID dockspace_id);
 

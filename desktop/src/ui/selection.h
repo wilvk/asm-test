@@ -29,7 +29,7 @@ namespace asmdesk {
 // bumps on every change, so a pane can cheaply notice "the selection moved since I
 // last drew" without deep-comparing. A pane that cannot show the entity (no such
 // offset/step in its stream) shows NOTHING selected — never a fabricated row (the
-// honesty floor, D7).
+// fidelity floor, D7).
 struct Selection {
     std::string rec;              // recording id (basename) the entity lives in
     std::optional<uint32_t> step; // dataflow step index

@@ -33,7 +33,7 @@
  * count). And `main` had NO entry edge at all, because it was entered before we
  * attached. An entry edge is evidence of re-entry BY CONSTRUCTION, which is what
  * makes "hottest entry" and "the breakpoint fires promptly" nearly the same
- * predicate. Nearly: see the honest note on non-stationarity below.
+ * predicate. Nearly: see the candid note on non-stationarity below.
  *
  * ---------------------------------------------------------------------------
  * THE VACUITY TRAP, and why `size > 0` is a correctness rule and not hygiene.
@@ -47,7 +47,7 @@
  * resolve_region already refuses an unsized symbol for the same reason).
  *
  * ---------------------------------------------------------------------------
- * HONEST SCOPE. This makes a hang IMPROBABLE, it does not BOUND it: the evidence
+ * CANDID SCOPE. This makes a hang IMPROBABLE, it does not BOUND it: the evidence
  * window ends milliseconds before the attach, so a target that changes phase in
  * that gap still would not arrive. What BOUNDS it is the producer's entry-wait
  * deadline (DFP_ENTRY_WAIT_MS), which turns that residual case from "hangs" into
@@ -210,7 +210,7 @@ asmspy_autoregion_rank(const asmspy_sample_edge_t *edges, size_t n,
  * evidence in this input BY CONSTRUCTION; no fold over it can recover the
  * entry rule.
  *
- * So this ranking is honest about being the WEAKER rule: its top candidate can
+ * So this ranking is candid about being the WEAKER rule: its top candidate can
  * be a region whose entry breakpoint never fires. A caller MUST pair it with
  * the producer's bounded entry wait (which turns that case from "hangs" into
  * "not seen entering") and SHOULD walk the ranked candidates on that refusal —
@@ -344,7 +344,7 @@ typedef enum {
  *                       the IBS gap.
  *
  * Returns ADVANCE (walk to attempt+1), EXHAUSTED (nothing entered and none left
- * — a distinct, honestly worded end, not a bare "never ran"), or STOP (any other
+ * — a distinct, accurately worded end, not a bare "never ran"), or STOP (any other
  * outcome — the capture stands). Pure: no state, no side effects, no I/O. */
 static inline asmspy_walk_action_t
 asmspy_autoregion_walk(int not_seen_entering, int attempt, int ncand) {

@@ -193,7 +193,7 @@ set -e
 printf '%s\n' "$dfout" | head -14
 if printf '%s\n' "$dfout" | grep -q '^# SKIP --dataflow'; then
     # Remember the producer's absence: every later case that asserts a CAPTURE
-    # (steps/ret=57/def-use) gates on DF_AVAIL — the honest skip is the correct
+    # (steps/ret=57/def-use) gates on DF_AVAIL — the legitimate skip is the correct
     # outcome wherever the value producer is x86-64-only (e.g. AArch64).
     DF_AVAIL=0
     echo "(data-flow producer unavailable here — subcommand self-skipped, OK)"
@@ -373,7 +373,7 @@ assert isinstance(d["defuse"], list)' \
     [ "$rc" -eq 0 ] || fail "--dataflow --blame --statediff exited $rc"
     [ -s "$dfbs" ] || fail "--dataflow --blame --statediff: no recording written"
     # T1: at least one blame event, each with an ascending cone INCLUDING the sink
-    # and an honest born_untraced verdict (never an empty cone).
+    # and a truthful born_untraced verdict (never an empty cone).
     nblame=$(grep -c '"k":"blame"' "$dfbs" || true)
     [ "$nblame" -ge 1 ] || fail "--dataflow --blame: no blame event emitted"
     blaml=$(grep -m1 '"k":"blame"' "$dfbs")
@@ -562,7 +562,7 @@ fi
 # --dataflow arms an int3 at the region ENTRY and waits for a thread to arrive.
 # That wait was UNBOUNDED: naming a function that is not currently running did not
 # error, it HUNG. Measured before the fix, on one victim/function/thread:
-#   --trace    rc=1   4s   "alpha_work never executed on thread N"   <- honest
+#   --trace    rc=1   4s   "alpha_work never executed on thread N"   <- truthful
 #   --dataflow rc=124 25s  (header only, killed by timeout)          <- hung
 # The producer's DFP_STEP_BACKSTOP did NOT cover this: it counts single-steps, and a
 # region that never arrives burns zero steps, so the counter never advanced.
@@ -583,12 +583,12 @@ set -e
 if printf '%s\n' "$nvout" | grep -q '^# SKIP --dataflow'; then
     # The producer gate fires BEFORE the entry wait is armed (e.g. AArch64: the
     # data-flow value producer is x86-64-only), so the bounded-wait shape cannot
-    # engage — the honest self-skip is the correct outcome, as in the hotfn case.
+    # engage — the legitimate self-skip is the correct outcome, as in the hotfn case.
     echo "(data-flow producer unavailable here — entry-wait case self-skipped, OK)"
 else
     [ "$nvrc" -eq 1 ] || fail "--dataflow main: expected rc=1 (not-seen-entering), got $nvrc"
     printf '%s\n' "$nvout" | grep -q 'not seen entering' \
-        || fail "--dataflow main: no honest not-seen-entering report: $nvout"
+        || fail "--dataflow main: no genuine not-seen-entering report: $nvout"
     # The name must be the SYMBOL, not freed memory: dc.func borrows into the symtab,
     # which is released before this message is formatted. A use-after-free here printed
     # plausible-looking garbage rather than crashing.
@@ -736,16 +736,16 @@ else
     echo "  --auto picked + traced entered_often (grind_forever correctly rejected)"
 
     # --module= scopes the pick. A module that matches nothing must REFUSE
-    # honestly rather than fall back to a wrong region.
+    # transparently rather than fall back to a wrong region.
     set +e
     amout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto --module=no_such_module 2>&1); amrc=$?
     set -e
     [ "$amrc" -eq 124 ] && fail "--auto --module hung"
     printf '%s\n' "$amout" | grep -q 'no function was observed being ENTERED' \
-        || fail "--auto --module=no_such_module should refuse honestly, got: $amout"
+        || fail "--auto --module=no_such_module should refuse transparently, got: $amout"
     printf '%s\n' "$amout" | grep -q 'entered_often' \
         && fail "--auto --module=no_such_module still picked entered_often (the filter does not filter)"
-    echo "  --auto --module= filters the pick (and refuses honestly when empty)"
+    echo "  --auto --module= filters the pick (and refuses transparently when empty)"
 fi
 # The victim must survive being sampled + traced.
 sleep 1
@@ -773,7 +773,7 @@ set -e
 [ "$swrc" -eq 124 ] && fail "--auto --sampler=sw hung (the entry wait or the candidate walk is unbounded)"
 if printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow:'; then
     # The sw SAMPLER may work here while the value PRODUCER is x86-64-only
-    # (AArch64): the pick half runs, then the capture self-skips honestly.
+    # (AArch64): the pick half runs, then the capture self-skips transparently.
     echo "  (sw sampler ran but the value producer is unavailable — capture half self-skipped, OK)"
 elif printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow --auto'; then
     printf '%s\n' "$swout" | grep -qE '^# SKIP --dataflow --auto: .*perf' \
@@ -792,7 +792,7 @@ else
     printf '%s\n' "$swout" | grep -qE '#0 .*endbr64|#0 .*\+0x' \
         || fail "--sampler=sw: no value trace from the walked-to region"
     # If grind_forever topped residency (the expected shape), its attempt must
-    # end in the honest refusal — captured-grind would mean the entry wait let
+    # end in the genuine refusal — captured-grind would mean the entry wait let
     # a never-re-entered region through, which cannot happen.
     if printf '%s\n' "$swout" | grep -q 'data-flow capture of grind_forever'; then
         printf '%s\n' "$swout" | grep -q 'not seen ENTERING' \
@@ -1109,7 +1109,7 @@ assert all(k in d["edges"][0] for k in ("caller","callee","count"))' \
     # address it already has, and renders a plausible graph with the call counts
     # silently split across the duplicates. Uniqueness is the property the index
     # must preserve, so it is what gets asserted — not the speed, which is what
-    # the index is FOR but which no assertion here could pin down honestly.
+    # the index is FOR but which no assertion here could pin down accurately.
     printf '%s' "$jout" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 addrs = [f["addr"] for f in d["functions"]]
@@ -1543,7 +1543,7 @@ EXPID=""
 # needs a FRESH victim: the run above already let the first one exec, and
 # attaching to an ALREADY-exec'd process would load stage2's symbols at attach
 # and resolve postexec_fn with no reload at all — a vacuously green test. The
-# preexec_fn assertion below is what holds that honest.
+# preexec_fn assertion below is what keeps that accurate.
 echo "--- asmspy --stream across an execve (fresh pre-exec victim) ---"
 "$BUILD/exec_victim" "$BUILD/exec_stage2" 2>/dev/null &
 EXPID=$!
@@ -1737,7 +1737,7 @@ rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true
 # and would look like a clean OOM release. MEASURED: that exact mutation does
 # make the OOM check pass on its own.
 #
-# HONEST SCOPE. The bug this guards is that an untabled task escapes the
+# CANDID SCOPE. The bug this guards is that an untabled task escapes the
 # two-phase detach and is left step-armed, which kills the target LATER by
 # SIGTRAP. That consequence is NOT what is asserted here, because it does not
 # reproduce on a simple victim — MEASURED: this victim survives with AND without
@@ -2043,7 +2043,7 @@ echo "  breadth: readv contents, dup2, ftruncate, getppid, clock_nanosleep pinne
 #      (docs/internal/gui/asmtrace-schema.md, the `syscall` kind).
 # The same victim, the same calls — but now asserted through the recording, so
 # the redaction split is measured against KNOWN payload strings rather than
-# inspected by eye. This is the honesty gate of the format: `line` must keep
+# inspected by eye. This is the fidelity gate of the format: `line` must keep
 # every structural field and carry NONE of the content; `payload` carries the
 # content, separately, where a reader can default-redact it.
 echo "--- asmspy --log --json (.asmtrace recording + payload-free lines) ---"
@@ -2269,7 +2269,7 @@ else
         || fail "--sample: no header"
     printf '%s\n' "$out" | grep -q 'hot_spin' \
         || fail "--sample: hot function hot_spin not named in the survey"
-    # JSON export: machine-readable edges + honest provenance (pipe to jq)
+    # JSON export: machine-readable edges + faithful provenance (pipe to jq)
     echo "--- asmspy --sample $MVPID 300 --json ---"
     jout=$(timeout 20 "$ASM" --sample "$MVPID" 300 --json 2>/dev/null) \
         || fail "--sample --json"
@@ -2307,7 +2307,7 @@ echo "  watched field @ $WADDR, writer worker tid=$WTID"
 set +e
 wout=$(timeout 30 "$ASM" --watch "$HWPID" "$WADDR" 5 2>&1); rc=$?
 set -e
-# T7 — settle whether the watchpoint actually FIRES, and gate honestly on the
+# T7 — settle whether the watchpoint actually FIRES, and gate accurately on the
 # answer. A timeout with the sentinel ALREADY seen is a real hang after a hit (a
 # detach deadlock) and fails on either arch. A timeout with NO hit is arch-split:
 # x86-64 hardware watchpoints fire reliably, so a silent timeout is a hang/deadlock
@@ -2820,7 +2820,7 @@ set -e
 # yet refuse to reserve one. MEASURED on the hosted ubuntu-24.04-arm runner
 # (Neoverse-N2, 2026-07-22): NT_ARM_HW_BREAK says 6 slots / NT_ARM_HW_WATCH says 4,
 # debug_arch=8 — and PTRACE_SETREGSET on either returns **ENOSPC**, so nothing can
-# ever arm. asmspy already reports that honestly (EUNARMABLE -> ETRACE "attach
+# ever arm. asmspy already reports that faithfully (EUNARMABLE -> ETRACE "attach
 # failed", NOT "never executed" — the distinction the block above tests), so the
 # only wrong thing left would be this smoke DEMANDING a sample the host cannot
 # produce. Name it and skip; keep x86-64 strict, where the slots really do work.
@@ -2843,7 +2843,7 @@ if [ -z "$TRACE_TID_UNARMABLE" ]; then
     printf '%s\n' "$nout" | grep -qE '^sample #' \
         && fail "--trace --tid=$BTID: sampled alpha_work on a thread that never runs it"
     printf '%s\n' "$nout" | grep -q 'never executed' \
-        || fail "--trace --tid=$BTID: no honest never-executed report"
+        || fail "--trace --tid=$BTID: no genuine never-executed report"
     echo "  --tid pins the sample (runner sampled; non-runner reports never-executed)"
 else
     # The one thing still assertable here: an unarmable entry must NOT be reported
@@ -2878,7 +2878,7 @@ rm -f "$TLOG"
 # SUCCESS — this block is the one place that asserts the target is STILL ALIVE
 # after a single-step trace + detach, across two engines (stream + tree).
 #
-# Scope (honest): the historical fatal SIGTRAP (commit 6aaad45) reproduced
+# Scope (candid): the historical fatal SIGTRAP (commit 6aaad45) reproduced
 # RELIABLY only on a real JIT — V8/Node's own cross-thread self-check int3s —
 # which can't be scripted safely here; a plain compute victim exits cleanly even
 # against the pre-fix one-at-a-time detach. So this is a happy-path survival

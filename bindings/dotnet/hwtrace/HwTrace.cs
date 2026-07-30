@@ -793,7 +793,7 @@ namespace Asmtest
     /// <see cref="HwTrace"/> the CALLER frees via <see cref="HwTrace.Free"/>), the
     /// <see cref="TierChoice"/> that produced the final trace (<see cref="Used"/> —
     /// inspect its <see cref="TierChoice.Backend"/> to see whether escalation fired),
-    /// the <see cref="Truncated"/> honesty bit, and the raw <see cref="Rc"/>. On a
+    /// the <see cref="Truncated"/> fidelity bit, and the raw <see cref="Rc"/>. On a
     /// self-skip (no call-owning native tier) <see cref="Trace"/> is null,
     /// <see cref="Used"/> is null, and <see cref="Rc"/> is negative.
     /// </summary>
@@ -1035,7 +1035,7 @@ namespace Asmtest
         /// first (Intel PT → AMD LBR → single-step → CoreSight), naming each
         /// unavailable tier WITH its reason, ending at the first available one ("using
         /// SingleStep") or, when none arms, at whether the out-of-process ptrace
-        /// stepper can still serve as the fallback. One honest sentence a scope's
+        /// stepper can still serve as the fallback. One accurate sentence a scope's
         /// self-skip (and a user's bug report) can carry.
         /// </summary>
         public static string DegradationNote()
@@ -1069,7 +1069,7 @@ namespace Asmtest
                 parts.Add(Ptrace.Available()
                     ? "out-of-process ptrace stepper available as the fallback"
                     : $"no ptrace fallback ({Ptrace.SkipReason()})");
-            // D (honesty) — managed-singlestep-lazy-arm-plan. The single-step tier's
+            // D (fidelity) — managed-singlestep-lazy-arm-plan. The single-step tier's
             // in-process EFLAGS.TF window is FATAL, not degraded, on a managed thread that
             // spawns a thread in-window (glibc pthread_create blocks SIGTRAP → the kernel
             // force-kills the process). AsmTrace.Method() is safe — it lazy-arms only the
@@ -1387,7 +1387,7 @@ namespace Asmtest
 
     /// <summary>
     /// AMD-P0 — the DETERMINISTIC boundary LBR snapshot (src/branchsnap.c). Where
-    /// <see cref="AsmTrace.WindowHot"/> statistically SAMPLES the branch stack (and honestly
+    /// <see cref="AsmTrace.WindowHot"/> statistically SAMPLES the branch stack (and faithfully
     /// truncates a routine too small/fast to be caught in-region), this captures the frozen
     /// 16-entry branch stack EXACTLY at a region boundary: enable the LBR, plant a hardware
     /// execution breakpoint at <c>base+exitOff</c>, run the region once, and read the stack
@@ -1407,7 +1407,7 @@ namespace Asmtest
         public static bool Available() =>
             HwNative.LibAvailable && HwNative.asmtest_amd_snapshot_available() != 0;
 
-        /// <summary>One honest sentence for a self-skip: why <see cref="Available"/> is false.</summary>
+        /// <summary>One accurate sentence for a self-skip: why <see cref="Available"/> is false.</summary>
         public static string SkipReason()
         {
             if (!HwNative.LibAvailable) return "libasmtest_hwtrace not loaded";
@@ -2012,14 +2012,14 @@ namespace Asmtest
         public bool Armed { get; private set; }
         /// <summary>True if the close hopped OS threads / the capture overflowed (§0.2/§1/§Z4).</summary>
         public bool Truncated { get; private set; }
-        /// <summary>§Z5: when the scope did NOT arm, the honest human-readable reason
+        /// <summary>§Z5: when the scope did NOT arm, the accurate human-readable reason
         /// (no faithful backend, tier not up, not Linux). Empty when armed.</summary>
         public string SkipReason { get; private set; } = "";
         /// <summary>managed-wholewindow-compose T7 (§Z1.1 safe-managed routing): which arm the
         /// empty-ctor whole-window chose — <c>"inproc"</c> (the convention-mitigated in-process
         /// single-step default), <c>"pt"</c> (Intel PT where the silicon exists), <c>"oop"</c>
         /// (the §D3 out-of-process stepper), or <c>"none"</c> (safe-managed policy active but
-        /// neither PT nor ptrace available — an honest skip). Under the safe-managed policy this
+        /// neither PT nor ptrace available — a genuine skip). Under the safe-managed policy this
         /// is NEVER <c>"inproc"</c>. Empty for non-whole-window scopes.</summary>
         public string Route { get; private set; } = "";
         /// <summary>§Z1: the raw ABSOLUTE addresses captured by a whole-window scope, in
@@ -2088,7 +2088,7 @@ namespace Asmtest
         /// branch targets, EXACTLY. WHAT THEY DO NOT: anything about the code BETWEEN hits. The
         /// merged surface is therefore SAMPLED / PARTIAL COVERAGE — exact islands in an
         /// unobserved sea — and NOT an exact whole-window trace, which remains a hardware dead
-        /// end on AMD and is a documented non-goal. That is honest for this surface precisely
+        /// end on AMD and is a documented non-goal. That is truthful for this surface precisely
         /// because <see cref="WindowHot"/> is a HOT-ADDRESS histogram and makes no completeness
         /// claim; tiled endpoints must never be read as one. <see cref="IsStatistical"/> stays
         /// TRUE for a tiled scope for exactly this reason: adding exact islands to a sampled
@@ -2151,7 +2151,7 @@ namespace Asmtest
         /// <paramref name="nameSubstring"/>; 0 unless this is a <c>byMethod</c> scope. On a
         /// STATISTICAL scope (<see cref="IsStatistical"/>) there is no instruction stream, so
         /// this returns the sample WEIGHT of the matching methods (== <see cref="WeightIn"/>) —
-        /// reach for <see cref="WeightIn"/> there so the caller's intent reads honestly.</summary>
+        /// reach for <see cref="WeightIn"/> there so the caller's intent reads transparently.</summary>
         public long InstructionsIn(string nameSubstring)
         {
             long n = 0;
@@ -2161,7 +2161,7 @@ namespace Asmtest
         }
 
         /// <summary>§E2: the summed <see cref="AsmMethod.Weight"/> of the methods whose name
-        /// contains <paramref name="nameSubstring"/> — the honest accessor on a STATISTICAL
+        /// contains <paramref name="nameSubstring"/> — the accurate accessor on a STATISTICAL
         /// scope (<see cref="IsStatistical"/>), where the value is a sampled hot weight and
         /// "instruction count" would be a category error. Numerically identical to
         /// <see cref="InstructionsIn"/> (weight == count); the two differ only in what they
@@ -2185,7 +2185,7 @@ namespace Asmtest
         /// delivery lands — the property a slow single-step window gets for free. Returns
         /// true once observed; false on an unarmed or mapless scope, or when
         /// <paramref name="timeoutMs"/> expires (a genuine delivery stall — callers keep
-        /// their honest self-skip for that arm). Deliberately NOT wired into Dispose:
+        /// their genuine self-skip for that arm). Deliberately NOT wired into Dispose:
         /// closes must never block, and "wait for ≥1 method" is wrong for a window that
         /// JITs nothing.</summary>
         public bool WaitMethodObserved(string nameSubstring, int timeoutMs = 2000)
@@ -2204,7 +2204,7 @@ namespace Asmtest
         /// §Z0/§Z1 — the aspirational EMPTY-ctor form: <c>using (new AsmTrace()) { HotPath(data); }</c>.
         /// No <see cref="NativeCode"/>, no <c>[base,len)</c>; arms a region-free WHOLE-WINDOW
         /// capture on the calling thread and renders whatever executed on <see cref="Dispose"/>.
-        /// Honest envelope (see the zero-config plan): the single-step WEAK tier runs on any
+        /// Faithful envelope (see the zero-config plan): the single-step WEAK tier runs on any
         /// x86-64 Linux for a NATIVE leaf; the STRONG whole-window PT / AMD LBR tiers are
         /// forward-look and this ctor <b>self-skips</b> (records <see cref="SkipReason"/>,
         /// leaves <see cref="Armed"/> false) where no faithful backend is available — never
@@ -2287,7 +2287,7 @@ namespace Asmtest
                     ArmOopWindow(byMethod, withRundown);
                     return;
                 case "none":
-                    // else an honest self-skip naming both misses. Nothing armed → no teardown;
+                    // else a genuine self-skip naming both misses. Nothing armed → no teardown;
                     // _kind is a Dispose no-op discriminator (WholeWindow with Armed=false,
                     // _handle Zero, _scope the invalid sentinel so end_window can't resolve it).
                     _kind = Kind.WholeWindow;
@@ -2314,7 +2314,7 @@ namespace Asmtest
         //              (the shipping default, byte-identical to pre-T7 behavior).
         //   "pt"     — safe-managed active + managed present + the Intel PT window tier arms.
         //   "oop"    — else the §D3 out-of-process stepper is available (ptrace permitted).
-        //   "none"   — safe-managed active + managed present but NEITHER PT nor ptrace: an honest
+        //   "none"   — safe-managed active + managed present but NEITHER PT nor ptrace: a genuine
         //              skip. In-process TF is NEVER selected once the policy is active on a managed
         //              process. Opt-in: the `safeManaged` parameter wins, else the env var.
         internal static string ResolveWholeWindowRoute(bool? safeManaged)
@@ -2408,7 +2408,7 @@ namespace Asmtest
         internal static int AutoInitSingleStep() =>
             AutoInitWindowBackend(HwBackend.SingleStep);
 
-        // §Z5: map a begin_window / auto-init failure to an actionable, honest message. The
+        // §Z5: map a begin_window / auto-init failure to an actionable, accurate message. The
         // ctor auto-inits the single-step tier, so a failure means the host cannot run it.
         // The EUNAVAIL case appends the §Z5.2 composed LADDER (which tiers were probed and
         // why each self-skipped), so the message names the missing capability, not just "no".
@@ -2960,7 +2960,7 @@ namespace Asmtest
         /// exact trace — <see cref="IsStatistical"/> is true, <see cref="Methods"/>.Count is a
         /// sample-weighted hot weight (endpoint hits, not instructions), and
         /// <see cref="Addresses"/> are sampled branch-target PCs (not an ordered stream). Exact
-        /// whole-window is a hardware dead end on AMD, so this is the honest AMD whole-window
+        /// whole-window is a hardware dead end on AMD, so this is the faithful AMD whole-window
         /// shape (the AutoFDO/BOLT model). Self-skips (runs <paramref name="body"/>
         /// uninstrumented, records <see cref="SkipReason"/>) off Zen 3+/LBR or without
         /// <c>CAP_PERFMON</c> / lowered <c>perf_event_paranoid</c>. Returns an already-closed
@@ -3052,12 +3052,12 @@ namespace Asmtest
         /// Needs the diagnostics rundown (it enables the perf-map/jitdump briefly and waits
         /// <paramref name="settleMs"/> for it to quiesce). Methods that cannot be prepared or
         /// resolved (abstract, open generics, or a runtime with diagnostics off) are SKIPPED,
-        /// not thrown — so a caller gets a best-effort set and an honestly shorter array. Check
+        /// not thrown — so a caller gets a best-effort set and a genuinely shorter array. Check
         /// <see cref="TiledIslands"/> afterwards to see whether a checkpoint actually landed.
         ///
         /// NB (tiered compilation): a method re-JIT'd at a higher tier MOVES to a new body and
         /// the checkpoint stays on the old one — it simply stops firing, which shows up
-        /// honestly as fewer <see cref="TiledIslands"/>, never as wrong addresses. Pin
+        /// faithfully as fewer <see cref="TiledIslands"/>, never as wrong addresses. Pin
         /// <c>TieredCompilation=false</c> (as the amd-tile example does), or resolve after the
         /// methods have reached their final tier, when a checkpoint must hold for a long window.
         /// </summary>
@@ -3077,7 +3077,7 @@ namespace Asmtest
             try
             {
                 rundown = DiagnosticsIpc.EnablePerfMap();
-                if (!rundown) return System.Array.Empty<ulong>(); // diagnostics off: honest empty
+                if (!rundown) return System.Array.Empty<ulong>(); // diagnostics off: faithful empty
                 string dump = DiagnosticsIpc.JitDumpPath();
                 if (settleMs > 0) DiagnosticsIpc.WaitJitDumpSettled(dump, settleMs);
                 map.LoadJitDump(dump);
@@ -3151,7 +3151,7 @@ namespace Asmtest
             string sigKey = type + "::" + m.Name + "(" + string.Join(",", spelled) + ")";
             // "Type::Method(" — the paren-anchored fallback for when our spelling misses the
             // runtime's (an exotic type). Still collision-proof; not overload-proof, so the
-            // uniqueness check below is what keeps it honest.
+            // uniqueness check below is what keeps it accurate.
             string anchored = type + "::" + m.Name + "(";
 
             List<string> names = map.MatchingNames(sigKey);
@@ -3162,7 +3162,7 @@ namespace Asmtest
             // Distinct METHODS matching, ignoring the trailing "[tier]": the SAME method
             // re-JIT'd at a higher tier is not an ambiguity — it is one method with two
             // bodies, and the newest is the one that runs. Two DIFFERENT methods is an
-            // ambiguity, and there is no honest way to pick.
+            // ambiguity, and there is no genuine way to pick.
             var distinct = new HashSet<string>();
             foreach (string n in names) distinct.Add(StripTier(n));
             if (distinct.Count > 1)
@@ -3254,7 +3254,7 @@ namespace Asmtest
                 // BETWEEN adjacent sampled branches. Islands are disjoint 16-branch windows,
                 // so the "block" between an island's last entry and the next sample's first is
                 // not a real straight-line run — weighting it would invent frequency the
-                // hardware never reported. Refusing that combination is the honest choice.
+                // hardware never reported. Refusing that combination is the faithful choice.
                 rc = tiling
                     ? HwNative.asmtest_hwtrace_tile_window_amd(
                         fn, IntPtr.Zero, period, tileCheckpoints, tileCheckpoints.Length,
@@ -3282,7 +3282,7 @@ namespace Asmtest
             Array.Copy(ips, addrs, (long)n);
             Addresses = addrs;                 // sampled branch-target PCs (not ordered)
             // §E6: the island-sourced prefix. Recorded even when 0 (tiling asked for but not
-            // armed / checkpoint never reached) — that IS the honest answer, and the caller
+            // armed / checkpoint never reached) — that IS the accurate answer, and the caller
             // reads TiledIslands to tell "tiling added nothing" from "tiling never ran".
             TiledIslands = islands;
             TiledAddresses = (int)(ulong)ntiled;
@@ -3364,7 +3364,7 @@ namespace Asmtest
             // channel: a method JIT'd fresh MID-WINDOW (a first-call generic instantiation,
             // a local function) is published while the window runs, the stepper drains it
             // live and records it — closing the deep-BCL gap that made this scope
-            // honest-partial. The publish must NOT happen inline in the EventPipe callback
+            // faithful-partial. The publish must NOT happen inline in the EventPipe callback
             // (it can fire on the single-stepped thread, where re-entering the runtime under
             // step SIGABRTs — observed), hence the sibling thread, started HERE, before the
             // window arms, and joined in the finally below before the channel is freed.
@@ -3815,7 +3815,7 @@ namespace Asmtest
                     // The block just ran inline, captured out of band via the perf AUX intel_pt
                     // ring — DRAIN + decode the native pair against the JIT map's code-image
                     // (falls back to the ctx's own self image when there is no map), read the
-                    // ABSOLUTE addresses + honest truncation, attribute, release. IsStatistical
+                    // ABSOLUTE addresses + faithful truncation, attribute, release. IsStatistical
                     // stays false (exact). A self-skipped (unarmed) scope has no ctx — just tear
                     // down the map + rundown + any allocated trace.
                     if (_ptWinCtx != null)
@@ -4001,7 +4001,7 @@ namespace Asmtest
             // on a different MANAGED thread than the ctor — never present a hopped scope as a
             // complete single-thread window. An out-of-process (§D3) scope is exempt: its
             // body ran in the helper, not on this thread, so a Dispose hop is not a capture
-            // hop. Honest-conservative: this only ever SETS Truncated, never clears it.
+            // hop. Conservatively faithful: this only ever SETS Truncated, never clears it.
             if (!_oop && _armTid != 0 && Environment.CurrentManagedThreadId != _armTid)
                 Truncated = true;
             if (_emit && !string.IsNullOrEmpty(Path)) Console.Write(Path);
@@ -4084,7 +4084,7 @@ namespace Asmtest
         /// the docs. For a STATISTICAL scope (<see cref="AsmTrace.IsStatistical"/>) this is the
         /// endpoint-hit sample weight; for an EXACT scope it is the captured-instruction count.
         /// <c>Weight == Count</c> in both cases — <see cref="Count"/> is retained for source
-        /// compatibility, and <see cref="Weight"/> is the honest name to reach for on a
+        /// compatibility, and <see cref="Weight"/> is the accurate name to reach for on a
         /// statistical survey (where "instruction count" would be a category error). See
         /// <see cref="AsmTrace.WeightIn"/> for a name-substring sum.</summary>
         public long Weight => Count;
@@ -4310,7 +4310,7 @@ namespace Asmtest
             catch
             {
                 // The publisher must never take the process down; a dead publisher only
-                // reopens the (documented, honest-partial) mid-window gap for this scope.
+                // reopens the (documented, faithful-partial) mid-window gap for this scope.
             }
         }
 
@@ -4351,7 +4351,7 @@ namespace Asmtest
         /// <paramref name="nameSubstring"/> — ≥ 2 means a tier-up / OSR re-JIT moved the method
         /// to a fresh address. Unlike <see cref="CountFor"/> (which counts events), this counts
         /// unique start PCs, so a repeated <c>MethodLoadVerbose</c> for the same body is not
-        /// double-counted — the honest "how many versions did the runtime produce" signal.</summary>
+        /// double-counted — the faithful "how many versions did the runtime produce" signal.</summary>
         public int ObservedVersions(string nameSubstring)
         {
             if (string.IsNullOrEmpty(nameSubstring)) return 0;
@@ -5613,7 +5613,7 @@ namespace Asmtest
         public static long CurrentScopeId => _current.Value;
         /// <summary>This operation's scope id.</summary>
         public long ScopeId => _scopeId;
-        /// <summary>Honest self-skip reason for any hop that could not be captured in-process ("" when all captured).</summary>
+        /// <summary>Truthful self-skip reason for any hop that could not be captured in-process ("" when all captured).</summary>
         public string SkipReason { get; private set; } = "";
         /// <summary>Merged per-hop disassembly in seq order (empty until <see cref="Complete"/> / when nothing captured).</summary>
         public string Path { get; private set; } = "";
@@ -5840,7 +5840,7 @@ namespace Asmtest
         int _inFlight;
         int _opening;   // attaches past the _completed check but not yet parked in _openHops
 
-        /// <summary>Honest self-skip reason when the ambient producer could not run ("" when it ran).</summary>
+        /// <summary>Truthful self-skip reason when the ambient producer could not run ("" when it ran).</summary>
         public string SkipReason { get; private set; } = "";
         /// <summary>Merged per-slice disassembly in seq order (empty until <see cref="Complete"/>).</summary>
         public string Path { get; private set; } = "";

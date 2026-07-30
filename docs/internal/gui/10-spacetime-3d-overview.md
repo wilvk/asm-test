@@ -64,7 +64,7 @@ reading* (which value, same-thread-or-not, exact step), which is every core
 interaction's real task. Therefore this view is **strictly an orientation
 surface**: every pick (a region, a trajectory vertex, a terrain cell) routes
 through [04](04-replay-views.md)'s deep-link router into the flat 2D views that
-do the reading. Two honesty invariants ride along and are **tested** (T6):
+do the reading. Two fidelity invariants ride along and are **tested** (T6):
 
 1. **Truncation survives the drill-in.** A terrain tear or a clipped trajectory
    can be occluded in 3D, so the loud-truncation signal must also appear in the
@@ -271,7 +271,7 @@ marks), tagged exact/statistical and by tid.
 1. PC vertices from `trace` events in step order; `basis:"abs"` → the address
    projects directly; `basis:"rel"` → offset from the recording's region base,
    with a `RELATIVE_BASIS` flag so the HUD labels "routine-relative — not a true
-   address-space path" (honesty: a rel trace is not a real memory trajectory).
+   address-space path" (fidelity: a rel trace is not a real memory trajectory).
    **Refuse to mix bases** in one trajectory (mirrors 04's canvas rule).
 2. Access marks from `mem` events (rich rung) attached to the PC vertex of their
    `step` — a short spur from the code trajectory to the data cell.
@@ -309,7 +309,7 @@ both binaries.
 > `scripts/fetch-linmath.sh`). Tested by `test_camera` (pure, no display) and
 > `test_scene_fbo` (gated GL smoke via surfaceless EGL on software Mesa). Picking
 > resolves to 04's router (`pick.h::resolve_pick` → `dt_nav_go`). Ships engine-free
-> in `asmtest-viewer` (D4). T5–T7 remain: live overlay, drill-in honesty tests,
+> in `asmtest-viewer` (D4). T5–T7 remain: live overlay, drill-in fidelity tests,
 > golden scenes + shell wiring of a visible view.
 
 > Intermediate difficulty (GL/shaders) — the one non-junior task; the pure
@@ -371,7 +371,7 @@ void main(){
 4. **Orbit camera + HUD.** `mat4x4_perspective(proj, fovy=0.8, aspect, 0.05,
    50)`; `_look_at` from spherical `(yaw, pitch, radius)` about the plane centre;
    mouse-drag orbits, wheel dollies, a "reset view" and a "top-down (2D-ish)"
-   preset (top-down collapses to the classic memory-map heatmap — the honest
+   preset (top-down collapses to the classic memory-map heatmap — the faithful
    fallback when depth confuses). ImGui HUD: playhead (drives `t` → T2/T3
    rebuild), layer toggles (terrain / exact / statistical / access marks),
    provenance chips (coarse-vs-rich, exact-vs-statistical, truncation), the
@@ -417,11 +417,11 @@ the terrain + trajectory and a click opens the 2D view at that step.
 > the overlay consumes the session the app already owns and opens no second ptrace
 > (D6/D9). The scene (`scene3d/scene.{h,cpp}`) gained `set_convergences` +
 > `SceneLayers.convergence`, drawing each mark as a bright magenta arc over the
-> per-tid paths. Tested by `test_converge` (detector one-mark/no-mark/window/honesty
+> per-tid paths. Tested by `test_converge` (detector one-mark/no-mark/window/fidelity
 > + the fake-serve growth case, `fixtures/fake_serve_threads.sh`) and an arc case in
 > `test_scene_fbo`. **Out of scope, recorded in Constraints:** affinity/core-NUMA
 > placement — threads are coloured, not core-placed (no scheduling feed in-repo).
-> T6 (drill-in honesty) and T7 (golden scenes, docs) remain.
+> T6 (drill-in fidelity) and T7 (golden scenes, docs) remain.
 
 **Goal.** Stream a [07](07-serve-live-host.md) `LiveSession` into the scene as
 per-tid trajectories over the shared terrain, growing in real time, with
@@ -455,14 +455,14 @@ against a two-thread victim (`threads_victim`, [cli/](../../../cli/)) shows two
 trajectories and a convergence arc; detach leaves the target untouched (07's
 guarantee).
 
-### T6 — Drill-in + honesty guarantees  (S, depends on: T4, T5; 04)  ✅ DONE
+### T6 — Drill-in + fidelity guarantees  (S, depends on: T4, T5; 04)  ✅ DONE
 
 > Landed. `scene3d/pick.{h,cpp}`'s `resolve_pick` (pure/GL-free) now routes every
 > pickable kind through 04's router: an exact **code cell** → the trace `canvas` at
 > the offset, or the codeimage-versioned `disasm` pane (08-T7) when its region
 > **churned**; a **data cell** (rich `mem` rung) → the `slice` explorer at the step
 > whose access last hit it; an exact **PC vertex** → the operand `timeline` at that
-> step. The two honesty invariants are pinned by `desktop/test/test_drillin.cpp`
+> step. The two fidelity invariants are pinned by `desktop/test/test_drillin.cpp`
 > (headless, no GL): **truncation survives** — a `TF_TORN` cell's 2D target still
 > carries 04/08's truncation banner (asserted via `truncated.asmtrace` → the
 > drilled-in canvas is `truncated` with a banner); **statistical is never exact** —
@@ -472,7 +472,7 @@ guarantee).
 > moved slice→`timeline` per this task (the FBO smoke's pure check updated to match).
 > T7 (golden scenes + shell wiring of a visible view) remains.
 
-**Goal.** Enforce "3D to find, 2D to read" and the two honesty invariants as
+**Goal.** Enforce "3D to find, 2D to read" and the two fidelity invariants as
 tested behaviour.
 
 **Steps.**
@@ -502,7 +502,7 @@ GL): each pickable kind resolves to the expected router call; the TORN and
 > GENERATED by `make asmtrace-golden` from one byte literal (`scene_hot_loop`,
 > listing beside the bytes in [tools/asmtrace_record.c](../../../tools/asmtrace_record.c)),
 > via a new `record_scene_abs` that writes the two kinds the scene consumes —
-> `codeimage` + **absolute**-basis `trace`, honest because the L0 producer really
+> `codeimage` + **absolute**-basis `trace`, faithful because the L0 producer really
 > maps the window at `0x100000`: `scene-abs-loop.asmtrace` (coarse terrain, heat
 > 3 on the loop body vs 1 on the prologue, one exact trajectory) and
 > `scene-abs-loop-truncated.asmtrace` (the same bytes with the trace buffer
@@ -538,7 +538,7 @@ GL): each pickable kind resolves to the expected router call; the TORN and
 > playhead move (T2's `slice(t)`), and, when a host is present, blits the scene
 > with `ImGui::Image`, orbits/dollies the camera on drag/wheel, and routes every
 > click through `resolve_pick` → 04's router (T6, 3D to find 2D to read). A
-> codeimage-less recording takes an honest "no address-space regions" placard
+> codeimage-less recording takes a truthful "no address-space regions" placard
 > rather than an empty plane. `test_shell` pins the null-backend path (models
 > woven, HUD drawn, placard shown, the `SceneView` vector parallel across a
 > close); the GL scene stays pinned by `test_scene_fbo` + `test_drillin`.
@@ -587,13 +587,13 @@ and blocks nothing in Phase 1–4.
 - **Zero engines.** Projection/terrain/trajectory/scene link no Unicorn/Keystone
   → the view ships in the permissive `desktop-render` binary (D4). Live data
   comes via 07's `asmspy --serve` subprocess (D9), not a linked engine.
-- **Feed staging is honest, never faked.** Coarse rung (region terrain + heat +
+- **Feed staging is faithful, never faked.** Coarse rung (region terrain + heat +
   absolute-basis PC path + per-thread activity) is the shippable target; the
   rich rung (per-access `mem` height, per-access spurs) is **gated on the Wave-1
   `mem` stream** and must render a provenance chip, never a silent flat plane,
   until it lands. The affinity/core-placement layer is gated on a scheduling
   feed the repo does not have — threads are coloured, not core-placed.
-- **Honesty invariants are tested** (T6): truncation survives the drill-in;
+- **Fidelity invariants are tested** (T6): truncation survives the drill-in;
   statistical is never rendered or picked as exact.
 - **Headless CI** uses software Mesa + FBO readback; a machine with no GL at all
   self-skips the GL smoke with a printed reason (the pure-layer tests still run).

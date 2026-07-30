@@ -6,7 +6,7 @@
 //
 // The camera orbits a fixed target (the plane centre) on a sphere parameterised
 // by (yaw, pitch, radius). Mouse-drag orbits, the wheel dollies, and two presets
-// exist: reset() (the default three-quarter view) and top_down() — the honest
+// exist: reset() (the default three-quarter view) and top_down() — the plain
 // "2D-ish" fallback that collapses the scene to the classic memory-map heatmap
 // when depth confuses (the brief's rule: 3D to find, 2D to read).
 //
@@ -109,7 +109,7 @@ struct Camera {
 // substitute — yet the 3D HUD had no keyboard camera even designed. These are the
 // intents a focused 3D pane maps its keys onto; `camera_key` applies each through
 // the SAME orbit/dolly/reset/top_down the mouse drag uses, so keyboard and mouse
-// are one code path and the top-down fallback stays the honest "3D to find, 2D to
+// are one code path and the top-down fallback stays the plain "3D to find, 2D to
 // read" collapse. Pure — no ImGui — so test_camera drives it and the HUD only
 // maps ImGuiKey -> CamKey.
 enum class CamKey {

@@ -8,7 +8,7 @@
 >
 > **Progress (2026-07-26).** Track G is done — D2 now carries the
 > addon-admission rule ([README.md](README.md), "D2 — pinned deps"). The two
-> no-dependency Track Q quick wins landed with it: the shared honesty-chrome
+> no-dependency Track Q quick wins landed with it: the shared fidelity-chrome
 > palette (`desktop/src/ui/theme.h`, #6) and the diff "go" routing fix (#7).
 > The remaining tracks (foundations F1–F4, the fetch-based addons) now have
 > implementation briefs (docs 12–17); no addon code is written yet.
@@ -74,7 +74,7 @@ demand side of this doc; each recommendation cites the ones it closes.
 > done; the addon tracks below are now cut into implementation briefs
 > ([12-addon-supply-chain.md](12-addon-supply-chain.md) through
 > [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md)).
-> The two in-tree quick wins that add no dependency (the shared honesty-chrome
+> The two in-tree quick wins that add no dependency (the shared fidelity-chrome
 > palette and the diff "go" routing fix) landed with the amendment.
 
 D2 (doc 03 / README: "no third-party dep beyond pinned ImGui +
@@ -94,7 +94,7 @@ rule** rather than ad-hoc exceptions:
    rebuild them before landing. Cheap to add to the fetch scripts.
 4. **View-model purity preserved**: addons are draw-half chassis only. The
    pure models and golden-text test surfaces stay the source of truth.
-5. Honesty ethos is a selection filter, not an afterthought: nothing below
+5. Fidelity ethos is a selection filter, not an afterthought: nothing below
    renders statistical data as stacks, imposes force-directed layout (banned
    in 04-replay-views.md:357 and 08-observer-views.md:253), or hides
    refusals.
@@ -216,7 +216,7 @@ around existing pure view-models via `GetPlotDrawList` + `PlotToPixels`:
 
 - `views/hotedges.cpp`: ranked `PlotBars` + src-block × dst-block
   `PlotHeatmap` with `ColormapScale` — stays "edges not stacks",
-  honesty-compliant.
+  fidelity-compliant.
 - `data/perf_history`: finally rendered (`PlotLines`), closing the
   parsed-but-never-shown gap.
 - `views/timeline.cpp` + scrubber: `DragLineX` as the playhead (hover/held
@@ -315,7 +315,7 @@ external deps, no regex. Replaces the Author door's
 (`desktop/src/ui/author_door.cpp:129`, `doors.h:85` — silent truncation
 risk) with a real editor: undo/redo, find/replace, and **error markers
 anchored to the assembler's loud-drop line** — verbatim machine reasons
-anchored where they happened, exactly the honesty ethos. Read-only mode +
+anchored where they happened, exactly the fidelity ethos. Read-only mode +
 line decorators give `views/disasm.cpp` an address/bytes gutter and
 current-PC highlight; `TextDiff::SetSideBySideMode` upgrades
 `views/diff_view.cpp`. A custom x86/ARM asm language def via its
@@ -371,7 +371,7 @@ silent: attach succeeded/refused, target exited, bounded-session EOF,
 SIGALRM teardown, `.asmtrace` save/torn warnings, long PT-replay decode
 completion. ImGuiNotify (MIT, canonical successor to the archived patrickcjk
 original) adds toasts with callback buttons ("Open recording") that compose
-with the cross-door `open_request` mechanism already in `shell.cpp`. Honesty
+with the cross-door `open_request` mechanism already in `shell.cpp`. Fidelity
 note: toasts *supplement* the non-collapsible banners — refusals stay
 first-class in-pane. Constraints: **must** set
 `NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=false` on vanilla (no multi-viewports);
@@ -397,7 +397,7 @@ pin time.
 3. **imgui_memory_editor** (#4) — `ReadFn` drops onto `obs_disasm_bytes_at`.
 4. **Built-in `ImGui::ProgressBar` indeterminate mode** — already in 1.91.9,
    zero fetch: determinate for file loads with an end footer, indeterminate
-   for live/torn sessions where no total honestly exists. Optionally one
+   for live/torn sessions where no total genuinely exists. Optionally one
    subtle imspinner style for "attached-but-no-events stall vs dead UI".
 5. **ImGuiFileDialog** (#5) — one TU, replaces both bare path fields.
 6. ✅ **Shared theme/palette header** (in-tree, no addon) — **landed
@@ -414,7 +414,7 @@ pin time.
 
 ## Deliberate skips (all verified negative results — do not re-litigate)
 
-- **imgui-flame-graph** — technically fine and MIT, but honesty rule R4 bans
+- **imgui-flame-graph** — technically fine and MIT, but fidelity rule R4 bans
   stacks for survey data, and doc 02 deliberately ships speedscope/Perfetto
   exporters "instead of rebuilding those views". Adopting it re-litigates a
   settled product decision.
@@ -450,7 +450,7 @@ pin time.
 - **sequentity** — conceptually the closest sequencer to an event timeline,
   but **no license file** (legally unvendorable) plus an EnTT dependency.
 - **ImCoolBar / imgui_toggle** — motion/mobile aesthetics; eye candy, not
-  legibility. Contrary to the honesty-chrome design language (toggle is
+  legibility. Contrary to the fidelity-chrome design language (toggle is
   harmless but belongs to a deliberate polish pass, if ever).
 - **Tracy's timeline** — not extractable (coupled to its Worker model and a
   patched imgui), but BSD-3: read `TracyTimelineController` and its

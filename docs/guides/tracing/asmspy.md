@@ -164,7 +164,7 @@ Run `asmspy` with no arguments. It walks four screens:
      edges**, sampled out of band by AMD IBS-Op (see the `--sample` subcommand
      below): per edge a sample
      count, both endpoints resolved to `function [module]` (ELF symbols *and*
-     JIT perf-map methods), and `[misp N%]`/`[ret]` tags, with honest provenance
+     JIT perf-map methods), and `[misp N%]`/`[ret]` tags, with accurate provenance
      in the header (`branch/total samples`, `THROTTLED`, window size). **`Tab`**
      toggles the sort (sample count / mispredicts). **`space`** freezes the
      window; **arrows** select an edge; **`Enter`** drills into a *data-flow
@@ -383,7 +383,7 @@ user-only filter) but **no elevated privilege** — user-only sampling opens at
 the default `perf_event_paranoid=2`, unlike most of perf; on any other host
 `--sample` prints `# SKIP` and exits 0. In the TUI it is mode `7`. The
 underlying library API is `asmtest_ibs_survey_process()` — see
-[Hardware tracing](hardware-tracing.md) for the C surface and its honesty
+[Hardware tracing](hardware-tracing.md) for the C surface and its fidelity
 contract.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
@@ -420,7 +420,7 @@ close(fd=3) = 0
 ```
 
 (`close`'s fd shows no path: by the time asmspy formats the exit, the descriptor
-is already gone — the honest thing to show.)
+is already gone — the truthful thing to show.)
 
 **Assembly & functions** — one sample is the disassembled instructions that
 executed (distinct offsets, in address order), the return value, and the
@@ -463,7 +463,7 @@ instruction that defined it. The region argument is the same
 `--tid=<t>` pins the capture to one thread, and `--max=<n>` bounds the steps
 captured — a cap smaller than the invocation returns the truncated prefix and
 says so (`"truncated":true` in JSON); it is a bound, not an error. A function
-that is not being called right now is reported honestly rather than waited on
+that is not being called right now is reported candidly rather than waited on
 forever: the entry wait is bounded (default 10 s; `ASMTEST_DF_ENTRY_WAIT_MS`
 overrides, `0` waits without bound) and answers
 `hotfn not seen entering in pid 1234 (waited 10000 ms)`.
@@ -485,7 +485,7 @@ the capture waits for, while the hottest *address* is usually a loop body
 inside a function entered once, before you attached (`main`, every event
 loop) — a breakpoint there never fires. A JIT'd/managed method can win too:
 the pick resolves through the ELF symtab *and* the JIT perf-map/jitdump. An
-idle target — most targets, most of the time — gets an honest refusal
+idle target — most targets, most of the time — gets a genuine refusal
 (`no function was observed being ENTERED`), not a guess. `--module=<m>` scopes
 the pick (without it a hot libc routine often wins); `--auto` cannot combine
 with `--tid` — the sampler carries no thread id, so pinning could only arm a
@@ -494,11 +494,11 @@ breakpoint on a thread that may never arrive.
 Off AMD-IBS hosts (Intel, VMs, containers with perf allowed), `--auto` falls
 back to a **portable software-clock sampler** (`PERF_COUNT_SW_TASK_CLOCK` +
 `PERF_SAMPLE_IP`: no PMU at all; `--sampler=ibs|sw` forces either side). The
-portable rule is honestly **weaker**: an IP histogram measures *residency* —
+portable rule is admittedly **weaker**: an IP histogram measures *residency* —
 where time is spent — and residency's winner is often exactly the
 entered-once-never-returns shape the entry rule rejects. So the sw path ranks
 up to three candidates and **walks** them: a winner that is never seen
-entering is refused at the bounded entry wait (an honest statement about that
+entering is refused at the bounded entry wait (an accurate statement about that
 candidate, reported as such), and the next-ranked candidate — usually the hot
 callee — is tried:
 

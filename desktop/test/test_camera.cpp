@@ -175,7 +175,7 @@ int main() {
               "keyboard dolly must honour the radius clamp");
     }
     {
-        // R resets to the default pose; T is the honest top-down 2D-ish fallback.
+        // R resets to the default pose; T is the plain top-down 2D-ish fallback.
         Camera c;
         c.orbit(1.0f, 0.3f);
         c.dolly(1.7f);

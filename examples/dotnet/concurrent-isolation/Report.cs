@@ -8,7 +8,7 @@ using Asmtest;
 
 internal static class Report
 {
-    // Returns true when the run is a clean success (a live proof, or an honest self-skip).
+    // Returns true when the run is a clean success (a live proof, or a legitimate self-skip).
     public static bool Print(Program.Slice a, Program.Slice b)
     {
         // Single-step is up, but a JIT body must still resolve on each thread. If either

@@ -115,7 +115,7 @@ repo without asking anyone anything.
      self-hosted job carries `environment: hw-runners` (required-reviewer
      approval gate) and a `vars.HW_RUNNER_*` guard; workflows get
      `permissions: contents: read` and no secrets; the runner OS user is a
-     dedicated non-sudo `runner` account. Record honestly that on the Linux
+     dedicated non-sudo `runner` account. Record candidly that on the Linux
      boxes that account must be in the `docker` group, and docker-group
      membership is root-equivalent on that host — the box must therefore be
      dedicated to CI, hold no credentials, and be rebuildable from notes.
@@ -346,7 +346,7 @@ page, correct its stale "`macos-13`/`rosetta`" phrasing to `macos-15-intel`
   pickup timeout; the runbook records "power down ⇒ set `HW_RUNNER_AMD_ZEN=0`"
   as the operator rule.
 
-### T4 — Shrink the manual AMD checklist to what the runner cannot cover  (S, depends on: T3; coordinate with [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md#T2))
+### T4 — Shrink the manual AMD checklist to what the runner cannot cover  (S, depends on: T3; coordinate with [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md#T2))
 
 **Goal.** [amd-hardware-validation.md](../amd-hardware-validation.md) stops
 being "the one validation step that cannot run in CI" and becomes a short
@@ -355,7 +355,7 @@ reason and its owning doc.
 
 **Steps.**
 
-1. Coordination: [amd-ibs-backend-honesty.md#T2](amd-ibs-backend-honesty.md)
+1. Coordination: [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)
    owns *repairing* that checklist (retiring the stale "not yet fixed" §"OPEN
    finding", inverting the `truncated=0` guidance, un-vacuous-ing the
    `ibs_probe` gate). Land after it, or in the same PR series — do **not**
@@ -405,7 +405,7 @@ live IBS moved to the self-hosted CI lane."
 - Each residue item names: the command, the hardware/privilege gate, and (for
   Zen 3 BRS) the owning sibling doc.
 - No text in the rewrite contradicts
-  [amd-ibs-backend-honesty.md#T2](amd-ibs-backend-honesty.md)'s repaired
+  [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)'s repaired
   wording (read its landed diff first).
 
 ### T5 — Extend `hw.yml` with the bare-metal Intel PT lane and the CoreSight placeholder  (M, depends on: T2; **gated: bare-metal Intel PT x86-64 box; the CoreSight arm lands only as a dark, variable-guarded placeholder, its live activation deferred to [coresight-live-decode.md#T4](coresight-live-decode.md)**)
@@ -434,7 +434,7 @@ with the CoreSight variant specified and guarded off until its decoder lands.
 2. Non-vacuity for PT: do **not** grep ad-hoc skip strings — the PT skip text
    has a known cosmetic misreport
    ([2026-07-12-zen5-privileged-lbr-findings.md §3](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)).
-   The honest mechanism is the require-mode target
+   The genuine mechanism is the require-mode target
    [intel-pt-whole-window-substrate.md#T5](intel-pt-whole-window-substrate.md)
    builds (`hwtrace-pt-live`, `ASMTEST_REQUIRE_PT=1` — skip becomes hard
    failure). Until that lands, this job is a build-and-run gate on PT
@@ -484,7 +484,7 @@ sentence to name all three hardware lanes as allowed-to-be-absent.
 >   GenuineIntel x86-64 host` — i.e. the fail-not-skip contract works end to end
 >   minus the silicon. A grep-based assert was deliberately NOT written: the PT
 >   skip text has a known cosmetic misreport, so the require-mode target is the
->   only honest gate.
+>   only faithful gate.
 > - **Step 1's shakedown question is already answered** ("confirm
 >   `/sys/bus/event_source/devices/intel_pt/type` is visible inside the
 >   container"). The 2026-07-21 bare-metal run did exactly that:
@@ -587,7 +587,7 @@ open — without ever touching the hosted pool.
    hardware-gated on a bare-metal `/dev/kvm` box; the plan's old "launchable
    today" note referred to a host this environment does not have). Note the
    EULA-gray status of macOS-on-non-Apple in the job comment, mirroring the
-   plan's honesty.
+   plan's fidelity.
 4. Optional PR-label path (the plan's "and/or a `clean-room` PR-label"): if
    wanted, add a `pull_request: types: [labeled]` trigger to `hw.yml` with a
    job-level guard that ALL THREE hold —
@@ -629,7 +629,7 @@ wired" to done-with-date. One `CHANGELOG.md` `### Added` bullet.
 T1 (runbook + settings)
  └─→ T2 (hw.yml scaffold)  ── lands with zero hardware
        ├─→ T3 (Zen runner live)      [gate: Zen 4/5 box]
-       │     └─→ T4 (checklist shrink; coordinate w/ amd-ibs-backend-honesty#T2)
+       │     └─→ T4 (checklist shrink; coordinate w/ amd-ibs-backend-fidelity#T2)
        ├─→ T5 (Intel PT lane; CS placeholder)  [gate: PT box; CS activation deferred → coresight-live-decode#T4]
        └─→ T6 (tart + KVM lanes)  [gates: Apple Silicon + KVM box; after macos-cleanroom-lanes#T2/#T6]
 ```
@@ -638,7 +638,7 @@ T1→T2 is the ungated critical path and one person can do both in a day.
 T3, T5, and T6 are mutually independent — three people with three different
 machines can run them concurrently; each is blocked only by its own hardware.
 T4 additionally coordinates with an out-of-doc task
-([amd-ibs-backend-honesty.md#T2](amd-ibs-backend-honesty.md)) — landing after it
+([amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)) — landing after it
 or in the same PR series — on top of its in-doc dependency on T3.
 
 ## Constraints & gates
@@ -745,7 +745,7 @@ or in the same PR series — on top of its in-doc dependency on T3.
   Docker-OSX); T6 here only wires the CI jobs after those are green.
 - **Repairing the AMD validation checklist's stale claims** (the "not yet
   fixed" finding, the vacuous `ibs_probe` gate) —
-  [amd-ibs-backend-honesty.md#T2](amd-ibs-backend-honesty.md); T4 here only
+  [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md); T4 here only
   shrinks the repaired checklist's scope.
 - **Zen 3 BRS capture arm and the Zen 4 floor sweep** —
   [amd-branchsnap-lbr-docs.md#T5/#T6/#T8](amd-branchsnap-lbr-docs.md).

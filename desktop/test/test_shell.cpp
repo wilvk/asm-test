@@ -1,4 +1,4 @@
-// test_shell.cpp — the shell's honesty behaviour + a headless render smoke
+// test_shell.cpp — the shell's fidelity behaviour + a headless render smoke
 // (03-desktop-shell.md T6). shell_banner is D7 as behaviour: non-null for a
 // truncated / dropped / torn recording, null for a clean one. Then draw_shell is
 // driven for 3 null-backend frames over a Workspace of the fixtures to prove no
@@ -11,7 +11,7 @@
 
 #include "doc/recording.h"
 #include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
-#include "scene3d/hud.h"         // 36 T4: placement_chips (honesty chrome)
+#include "scene3d/hud.h"         // 36 T4: placement_chips (fidelity chrome)
 #include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
 #include "ui/view_presence.h" // 20 T1: the data-driven view set
@@ -70,7 +70,7 @@ static void banner_case(const char *what, const char *file, bool want_banner) {
 }
 
 int main() {
-    // D7 as behaviour: the dishonest fixtures banner, the clean one does not.
+    // D7 as behaviour: the low-fidelity fixtures banner, the clean one does not.
     banner_case("banner/truncated", "truncated.asmtrace", true);
     banner_case("banner/dropped", "dropped.asmtrace", true);
     banner_case("banner/torn-tail", "torn-tail.asmtrace", true);
@@ -195,11 +195,11 @@ int main() {
         }
     }
 
-    // --- 33 R6 T1: the PRODUCED blame goldens carry an honest cone -----------
+    // --- 33 R6 T1: the PRODUCED blame goldens carry a faithful cone -----------
     // blame-df-chain: a fully-traced value chain (born_untraced false, the cone
     // is the whole backward slice). blame-untraced: identity(a)=a, whose value
     // came from an ARGUMENT — no traced producer, so the cone is the sink ALONE
-    // and born_untraced fires. The honesty distinction the socket renders.
+    // and born_untraced fires. The fidelity distinction the socket renders.
     {
         std::string err;
         auto chain = load_recording_file(gd("blame-df-chain.asmtrace"), err);
@@ -335,7 +335,7 @@ int main() {
     // terrain + trajectory) and draws the HUD under the null backend with NO GL
     // host attached — the exact path a headless run and the render-only viewer
     // take. A golden scene recording (codeimage + abs trace) builds real regions;
-    // a codeimage-less recording takes the honest "no regions" placard.
+    // a codeimage-less recording takes the faithful "no regions" placard.
     {
         ImGui::CreateContext();
         ImGuiIO &io3 = ImGui::GetIO();
@@ -444,7 +444,7 @@ int main() {
                    std::to_string(sv.traj.pc_points))
                       .c_str());
 
-            // The honesty chrome: the df capture raises the residency chip and —
+            // The fidelity chrome: the df capture raises the residency chip and —
             // now that 37 T1 tags scene-df-loop's df_step with rbase — the WIRE
             // placement chip (not the derived-placement one), and NEITHER "NOT
             // PLACED" refusal. Deleting a chip branch fails one of these checks.
@@ -524,7 +524,7 @@ int main() {
             ImGui::Render();
             const SceneView &sv = s3.scenes[static_cast<size_t>(imt)];
             check(
-                "scene/no-regions is honest", sv.built && !sv.has_regions,
+                "scene/no-regions is faithful", sv.built && !sv.has_regions,
                 "a codeimage-less recording must take the no-regions placard");
         }
 
@@ -538,7 +538,7 @@ int main() {
         ImGui::DestroyContext();
     }
 
-    // 36 T4: placement_chips is PURE, so each honesty-chrome branch is asserted
+    // 36 T4: placement_chips is PURE, so each fidelity-chrome branch is asserted
     // directly (no ImGui frame needed) — deleting any one branch fails a named
     // check here, which the golden-driven cases above cannot fully cover (no
     // committed golden refuses placement; that is 37 T6's two-span golden).
@@ -800,7 +800,7 @@ int main() {
                   dockid(kPaneScrubber) != dockid(kPaneObserver),
               "the three panes must occupy distinct dock nodes");
 
-        // T1 honesty — the placards survive the move into the panes (D7). Switch
+        // T1 fidelity — the placards survive the move into the panes (D7). Switch
         // the active recording to the producer-absent min-trace and drive frames;
         // the scrubber pane is active (so it drew) while its regstate producer is
         // absent — it drew the placard, not a register file of zeros.
@@ -1179,7 +1179,7 @@ int main() {
     // tab. A fed `dataflow` session (exact provenance + df_step, no `end` ->
     // growing) must be promoted into ws.recordings with its full parallel model,
     // so view_presence offers the SAME Loom / Slice a replayed file would —
-    // while the Scrubber stays honestly absent (no live regstate producer) and
+    // while the Scrubber stays faithfully absent (no live regstate producer) and
     // the ephemeral live tab is never persisted. Pure model: no ImGui context.
     {
         static const char *kExactHeader =
@@ -1270,7 +1270,7 @@ int main() {
             check("34/handoff consumes the intent", !ls.inspect.want_scene,
                   "the one-frame intent must be cleared once honoured");
         }
-        // The no-live-tab branch is honest, never a silent no-op (D7): status set,
+        // The no-live-tab branch is faithful, never a silent no-op (D7): status set,
         // no tab jump. A fresh state (no session) is the "attach first" case.
         {
             ShellState empty;
@@ -1338,7 +1338,7 @@ int main() {
         const StepIndex &si = ls.stepidx[i];
         check("26/Scrubber present live", si.present(),
               "a live regstate ring must make the Scrubber present");
-        check("26/regstate descriptor honest",
+        check("26/regstate descriptor faithful",
               si.desc == "user_regs@x86_64/sysv",
               "the live Scrubber must carry the ptrace-source descriptor id");
         check("26/two held steps", si.count() == 2,

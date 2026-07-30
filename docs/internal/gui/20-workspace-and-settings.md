@@ -62,7 +62,7 @@ review found missing behind a single-window nested-tab model.
   (`observer_draw.cpp:76-81`) is the OR of every deck's non-emptiness; the inner
   tab bar emits each tab only when its data is present
   (`observer_draw.cpp:570-599`, e.g. `!s.syscalls.rows.empty() && BeginTabItem(...)`);
-  and when *nothing* is present it draws one honest placard that **names the kinds
+  and when *nothing* is present it draws one truthful placard that **names the kinds
   it looked for** (`observer_draw.cpp:562-567`). This is the exact "reveal-when-present,
   otherwise name the absence" shape T1 lifts to the outer level.
 - **The entry point today.** `draw_doors` (`shell.cpp:182-214`) prints
@@ -101,9 +101,9 @@ review found missing behind a single-window nested-tab model.
   `IniFilename = "build/desktop-imgui.ini"`; `main.cpp:99-101` calls `load_fonts`
   then `StyleColorsDark`. `load_fonts` (`fonts.cpp:23-54`) bakes JetBrains Mono +
   merged Codicons/FontAwesome at a hardcoded **15.0f** (`fonts.cpp:30,41,49`) and
-  finalises with `io.Fonts->Build()` (`fonts.cpp:52`); it degrades honestly to the
+  finalises with `io.Fonts->Build()` (`fonts.cpp:52`); it degrades gracefully to the
   bitmap font when the TTF is absent (`fonts.cpp:26-28`). `theme.h` holds only
-  `dt_warn_col` / `dt_refuse_col` (the honesty-chrome amber + red) — no light
+  `dt_warn_col` / `dt_refuse_col` (the fidelity-chrome amber + red) — no light
   variant, no theme switch.
 - **The headless test harness.** `test_shell.cpp` drives `draw_shell` for null-backend
   frames over the fixture workspace (`test_shell.cpp:57-85`), asserting model state
@@ -114,7 +114,7 @@ review found missing behind a single-window nested-tab model.
 
 ## Tasks
 
-### T1 — data-driven outer view presence + honest "unavailable views" affordance  (M, depends on: 19)
+### T1 — data-driven outer view presence + candid "unavailable views" affordance  (M, depends on: 19)
 
 > **LANDED.** `desktop/src/ui/view_presence.{h,cpp}` is the pure predicate; the
 > non-docked `draw_recording_tab` and the docked `kPaneRecording` tab bar both
@@ -128,7 +128,7 @@ review found missing behind a single-window nested-tab model.
 and the active mode, by lifting `observer_draw.cpp`'s own empties-gating up a
 level: a lean default (Summary / Canvas / Timeline) always; Loom / 3D / PT-slice /
 Scrubber / ABI-x-ray / hot-edge heatmaps revealed only when their backing events
-or capture are present; the rest collapsed into **one** honest "unavailable views
+or capture are present; the rest collapsed into **one** candid "unavailable views
 (N)" affordance that still names each hidden view and its machine reason. Retire
 the dead `door_tabs`.
 
@@ -161,7 +161,7 @@ the dead `door_tabs`.
    view's label + `reason`. This is D7 restructured, not removed: the truth "this
    recording cannot fill view X" stays on screen and named; it is merely graded
    below the present set instead of shown as N empty peer tabs (F4 + the review's
-   standing honesty note — never hide, name the absence).
+   standing fidelity note — never hide, name the absence).
 5. Delete the `door_tabs` field (`shell.h:60`) and its render loop
    (`shell.cpp:897-904`); drop the `test_shell.cpp:85` push. It is dead legacy
    surface the F13 lexicon ("door/tab") also wants gone.
@@ -325,7 +325,7 @@ a vanished recording is kept-with-error, never silently dropped.
 > `SaveIniSettingsToMemory` snapshot), applied by `perspective_apply`; the three
 > built-in presets seed the map and a user "Save perspective" adds a snapshot
 > (View menu). `FilterPreset{name,query}` + `filter_preset_apply` write a query
-> into a view's filter buffer (the "showing N of M" honesty untouched); both live
+> into a view's filter buffer (the "showing N of M" fidelity untouched); both live
 > in the T3 store. Tested by `test_perspectives` + `test_workspace_state`.
 
 **Goal.** Once panes are real, let the user name and recall dock *perspectives*
@@ -356,7 +356,7 @@ first-class, recallable state.
    Tree filter (`observer_draw.cpp:361-373`). Applying a preset writes its `query`
    into the active view's filter buffer; the view is unchanged otherwise, so
    presets are draw-half chassis over the existing pure filter models (D2 amendment
-   point 4). "Showing N of M" honesty stays exactly as `observer_draw.cpp:116-119`
+   point 4). "Showing N of M" fidelity stays exactly as `observer_draw.cpp:116-119`
    renders it — a preset never reads as "the trace only did these".
 3. Both live in the T3 workspace JSON so they persist and diff, and both reuse the
    round-trip already tested there.
@@ -373,7 +373,7 @@ presets, persisted with the workspace." `desktop/README.md`: how to save/recall 
 perspective; note it depends on real panes ([19](19-dockable-panes-keystone.md)).
 
 **Done when.** a user can name, save and recall a dock perspective and a filter
-preset; both persist in the workspace store; the "showing N of M" honesty is
+preset; both persist in the workspace store; the "showing N of M" fidelity is
 untouched; `test_perspectives` is green.
 
 ### T5 — DPI-aware atlas + user text-scale + persisted window size + light theme, in a Settings pane  (L, depends on: 13/F3 fonts)
@@ -385,7 +385,7 @@ untouched; `test_perspectives` is green.
 > DPI-aware, re-bakes on a content-scale change, opens at the remembered size, and
 > writes the size back on resize. `theme.h` gains a light-theme flag so the
 > warn/refuse chrome keeps contrast in both themes (default dark preserves every
-> 24-family value). A Settings pane hosts the slider/theme toggle + the honest
+> 24-family value). A Settings pane hosts the slider/theme toggle + the candid
 > a11y-scope note (no OS screen-reader tree). Tested by `test_settings` +
 > `test_fonts`.
 
@@ -397,7 +397,7 @@ light theme — all in a small Settings pane.
 > **Scope note.** Review F6 / doc 13 F4 scheduled only the *dynamic-DPI decision*.
 > User text-scale, the Settings pane, persisted window size and the light theme
 > were unplanned anywhere — they are new here. ImGui exposes no OS screen-reader
-> tree ([11](11-imgui-addons.md):461, recorded honestly), so this text-scale lever
+> tree ([11](11-imgui-addons.md):461, recorded faithfully), so this text-scale lever
 > is the accessibility surface the platform actually permits; the pane must say so
 > rather than imply broader a11y coverage.
 
@@ -412,7 +412,7 @@ light theme — all in a small Settings pane.
    and rebuild the atlas (`io.Fonts->Clear()` → add → `Build()`, plus the backend's
    `*_CreateFontsTexture`) when the GLFW content scale changes
    (`glfwGetWindowContentScale` / the content-scale callback, `main.cpp`). Keep the
-   honest bitmap-font degrade (`fonts.cpp:26-28`).
+   graceful bitmap-font degrade (`fonts.cpp:26-28`).
 3. **User text-scale.** A slider ~0.8×–2.0× in Settings. Prefer `io.FontGlobalScale`
    for the cheap live path; re-bake the atlas at the scaled px only when the user
    asks for a crisp rebuild (a note in the pane explains the trade). Persist
@@ -422,12 +422,12 @@ light theme — all in a small Settings pane.
    size callback) into the store, so the app reopens at the size the user left.
 5. **Light theme.** Add a `light`/`dark` toggle that calls `StyleColorsLight` /
    `StyleColorsDark` (`main.cpp:101`) and — critically — swaps `theme.h`'s
-   `dt_warn_col`/`dt_refuse_col` for light-legible variants so the honesty chrome
+   `dt_warn_col`/`dt_refuse_col` for light-legible variants so the fidelity chrome
    (banners, refusals) keeps contrast in both themes (D7 — the warn/refuse signal
    must not wash out on a light background). Add the two variants to `theme.h`
    selected by the active theme.
 6. **Settings pane.** A small pane (dock into `kPaneInspector` or a modal from the
-   rail) with: text-scale slider, theme toggle, and a one-line honest statement
+   rail) with: text-scale slider, theme toggle, and a one-line candid statement
    that this is the extent of in-app a11y (no screen-reader tree). Wire a seam so
    the pure `Settings` struct is what the tests assert.
 
@@ -442,14 +442,14 @@ at `glfwCreateWindow` is the one manual-smoke seam (needs a real window); the
 
 **Docs.** CHANGELOG `Added`: "Settings pane: user text-scale (0.8×–2.0×), DPI-aware
 font atlas, remembered window size, and a light theme." `desktop/README.md`: the
-Settings pane + the honest note that text-scale is the in-app a11y lever (no OS
+Settings pane + the candid note that text-scale is the in-app a11y lever (no OS
 screen-reader tree). Strike review F6. Note doc 13 F4's dynamic-DPI decision is now
 implemented here.
 
 **Done when.** the atlas rebuilds on content-scale change; a persisted text-scale
 drives `FontGlobalScale`/re-bake; the window reopens at its last size (1280×720
-literal retired); a light theme exists and keeps honesty-chrome contrast; all in a
-Settings pane that states its a11y scope honestly; `test_settings` is green.
+literal retired); a light theme exists and keeps fidelity-chrome contrast; all in a
+Settings pane that states its a11y scope faithfully; `test_settings` is green.
 
 ## Task order & parallelism
 
@@ -470,12 +470,12 @@ Order: `19` → (T2 `Mode`, then T1 ∥ T2 ∥ T5-core) → T3 store → (T4, T5
 
 ## Constraints & gates
 
-- **Honesty (D7) is restructured, never removed.** T1's "unavailable views (N)"
+- **Fidelity (D7) is restructured, never removed.** T1's "unavailable views (N)"
   affordance still names every absent view and its verbatim machine reason — it
   grades the absence below the present set, it does not hide it (the review's
   standing note; F4/F5). T4's presets keep `observer_draw.cpp:116-119`'s "showing N
   of M". T5's light theme must keep `theme.h`'s warn/refuse contrast in both themes,
-  and the Settings pane states its a11y scope honestly (no screen-reader tree,
+  and the Settings pane states its a11y scope faithfully (no screen-reader tree,
   [11](11-imgui-addons.md):461).
 - **Every task is headlessly testable** on the null backend (`make desktop-test`) —
   the pure models (`view_presence`, `WorkspaceState`, `Recents`, `Settings`,
@@ -506,7 +506,7 @@ Order: `19` → (T2 `Mode`, then T1 ∥ T2 ∥ T5-core) → T3 store → (T4, T5
 - **A colour-blind-safe palette / one semantic palette / the unified filter+time
   widget** — Wave 3, [24-one-visual-language.md](24-one-visual-language.md) (F14/
   F15/F16's widget half; T4 here adds only *named* presets over existing filters).
-- **Graded honesty-chrome tiers (schema `severity`)** — Wave 3,
+- **Graded fidelity-chrome tiers (schema `severity`)** — Wave 3,
   [23-graded-truth-layer.md](23-graded-truth-layer.md) (F5); T1 here reorganises
   the *view set*, not the per-banner grading.
 - **A rebindable-keys / hotkey editor** — ImHotKey is verified broken on the pin

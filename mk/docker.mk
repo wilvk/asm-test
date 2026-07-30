@@ -118,7 +118,7 @@ docker-fuzz: docker-bindings-base
 # sve-default-vector-length=-1 -> 256B (the architectural max). On a NATIVE
 # arm64 host there is no qemu to steer: QEMU_CPU is ignored and the test itself
 # self-skips without SVE silicon (Apple silicon has none) — that skip line is
-# this lane's honest output there, not a failure. TCG timings are meaningless;
+# this lane's truthful output there, not a failure. TCG timings are meaningless;
 # never point bench targets at this lane. No new pinned dependency: the host's
 # binfmt qemu is unpinnable from inside the repo (no QEMU version is pinned
 # anywhere in the tree). The simd suite links no optional engine, so the image

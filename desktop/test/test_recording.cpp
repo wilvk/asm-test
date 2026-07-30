@@ -1,6 +1,6 @@
-// test_recording.cpp — the .asmtrace loader's reject rules + honesty accounting,
+// test_recording.cpp — the .asmtrace loader's reject rules + fidelity accounting,
 // one case per rule (03-desktop-shell.md T3). The D7 laws are executable here,
-// not prose: each dishonesty fixture produces its asserted outcome (a hard error,
+// not prose: each low-fidelity fixture produces its asserted outcome (a hard error,
 // or a flag surfaced into the model). Runs on any host (no GL, no engines).
 #include <cstdio>
 #include <sstream>
@@ -285,7 +285,7 @@ int main() {
         }
     }
     // truncation survives the round-trip: the `end` footer's truncated flag is
-    // re-emitted, so a dishonest-but-honest-about-it recording stays that way.
+    // re-emitted, so a low-fidelity-but-transparent recording stays that way.
     {
         Recording r = must_load("roundtrip-trunc/load", "truncated.asmtrace");
         std::string text = recording_to_asmtrace(r);

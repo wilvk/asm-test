@@ -101,7 +101,7 @@ int main() {
               "the absent placard must draw");
     }
 
-    // A TORN pane: the register-ring dishonesty fixture paired with itself is
+    // A TORN pane: the register-ring low-fidelity fixture paired with itself is
     // aligned, carries no stops, and is torn at step 0 — so the no-stops rail,
     // the torn banner and the per-pane UNKNOWN all draw.
     {

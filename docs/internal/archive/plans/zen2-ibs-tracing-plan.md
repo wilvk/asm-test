@@ -150,7 +150,7 @@ bindings — the F27/F36 ABI-churn hazard — for no benefit). New surface:
 typedef struct { uint64_t from, to; uint64_t count;
                  unsigned taken, mispred, is_return; } asmtest_ibs_edge_t;
 typedef struct { asmtest_ibs_edge_t *edges; size_t n;   /* aggregated, sorted by count */
-                 uint64_t samples, branch_samples, lost; /* provenance for honesty */
+                 uint64_t samples, branch_samples, lost; /* provenance for fidelity */
                  int throttled; } asmtest_ibs_survey_t;
 
 int  asmtest_ibs_available(void);            /* 0 + skip reason off IBS/AMD/Linux   */
@@ -241,7 +241,7 @@ pre-existing worker; the race and the system-wide remedy are documented, not hid
 > **out of band** (no ptrace, no single-step) and resolves both endpoints of each hot edge
 > through `asmspy_resolve` (ELF symtab → JIT perf-map), so managed frames are named. Headless
 > `asmspy --sample <pid> [ms] [--json]` ([cli/asmspy.c](../../../../cli/asmspy.c) `cmd_sample`)
-> prints the edge histogram — `count  from -> to` with `[misp N%]`/`[ret]` tags and honest
+> prints the edge histogram — `count  from -> to` with `[misp N%]`/`[ret]` tags and faithful
 > `branch/total samples`, `throttled` provenance — or a machine-readable JSON export; it
 > **self-skips** (`# SKIP`, exit 0) off IBS. The **TUI mode 7** (menu item "7) Hot edges
 > (sample)") runs the same engine on a tracer thread, showing a live hot-edge table that is
@@ -277,7 +277,7 @@ without single-stepping it; run against a Node/.NET process it survives and (wit
 runtime's perf-map enabled) names managed frames — the exact case the single-step views
 risk crashing.
 
-### Phase 4 — Survey fallback (fixes F6) + honest tiering *(landed)*
+### Phase 4 — Survey fallback (fixes F6) + faithful tiering *(landed)*
 
 > **Landed 2026-07-12.** `asmtest_hwtrace_sample_window_amd` (and the begin/end split
 > `sample_begin_amd`/`sample_end_amd`) now fall back to a statistical IBS-Op survey when the
@@ -351,7 +351,7 @@ engine shape as Phase 1; lower priority than the edge lane.
   needs `--cap-add=PERFMON`. Per [CLAUDE.md](../../../../CLAUDE.md), prefer this lane over host
   installs.
 
-## Honest limitations (carry into the code + user docs)
+## Disclosed limitations (carry into the code + user docs)
 
 Statistical, not exact — never proves non-execution, never feeds parity. Per-tid capture
 races thread creation (until the privileged system-wide variant). Throttle-bounded density

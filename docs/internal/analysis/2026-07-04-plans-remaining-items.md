@@ -76,7 +76,7 @@ batches landed in `59adb74`/`817cc72`). Highest-leverage:
 - **Call-descent — one real gap:** Phase 5 promised a *built-in default denylist*
   (GC/JIT/PLT/libc); only the caller-supplied mechanism shipped. Safety currently
   rests on budget+watchdog+default-off. (Two other limitations — signal-frame
-  SP-pop suspension, tail-call keep-open — are honestly documented as deferred.)
+  SP-pop suspension, tail-call keep-open — are transparently documented as deferred.)
 - **AMD tracing Part III** (all software, runs on ordinary CI): P3-2 BTF block-step
   (`PTRACE_SINGLEBLOCK`) is the highest impact-to-effort; P3-0 CPUID `0x80000022`
   depth reader (currently hardcoded `16` in `src/hwtrace.c` and `src/amd_backend.c`);

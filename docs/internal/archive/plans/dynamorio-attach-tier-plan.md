@@ -542,7 +542,7 @@ last + optional; the capture tiers above stand without a UI.
 >
 > **Recommendation for whoever picks this up.** Do **not** build `--attach-dataflow` as a
 > def-use/value view; that framing is what makes it look cheap. Either (a) leave it closed — the
-> honest default, since the tier's headline capability is landed + CI-gated and the ptrace
+> faithful default, since the tier's headline capability is landed + CI-gated and the ptrace
 > `--dataflow` (mode 9) already gives asmspy a data-flow view on native **and** managed targets at
 > higher per-step cost; or (b) re-spec it for what the attach channel actually produces — a
 > **taint-set view** (sink hits: kind/offset/tag, + the tainted step offsets), which would share

@@ -7,7 +7,7 @@
 //
 // AMD LBR (Zen 3+/LbrExtV2) SAMPLES the branch stack out of band while the block runs at
 // NATIVE speed, and the sampled branch-target endpoints are bucketed by managed method into
-// a HOT-METHOD histogram. This is the honest AMD whole-window shape: exact whole-window is a
+// a HOT-METHOD histogram. This is the faithful AMD whole-window shape: exact whole-window is a
 // hardware dead end on AMD (16-deep stack + throttle), so — like AutoFDO/BOLT — the answer is
 // a statistical survey, not an exact trace. Its wins over the other whole-window forms:
 //   - vs in-process single-step (localscope): crash-proof — no EFLAGS.TF, no SIGTRAP, so it
@@ -54,7 +54,7 @@ internal static class Program
         if (!ww.Armed)
         {
             Console.WriteLine($"# self-skip: {ww.SkipReason}");
-            return 0; // honest degrade (no Zen LBR / no CAP_PERFMON) — the block still ran
+            return 0; // graceful degrade (no Zen LBR / no CAP_PERFMON) — the block still ran
         }
 
         Console.WriteLine($"statistical={ww.IsStatistical}; {ww.Addresses.Length} sampled branch-target "

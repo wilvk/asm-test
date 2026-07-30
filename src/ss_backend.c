@@ -111,7 +111,7 @@ static inline int ss_darwin_tid(void) {
  * executed in-region instruction offset here (async-signal-safe array write); the
  * post-pass replays it to fill the trace and derive blocks. Sized for the
  * small-routine envelope; a routine that executes more in-region instructions than
- * this overflows and is honestly flagged truncated (never emit partial as complete). */
+ * this overflows and is faithfully flagged truncated (never emit partial as complete). */
 #ifndef SS_STREAM_CAP
 #define SS_STREAM_CAP                                                          \
     (1u << 16) /* 65536 offsets = 512 KiB (region frames: malloc'd) */
@@ -145,7 +145,7 @@ static inline int ss_darwin_tid(void) {
  * filter — "trace whatever ran"), and the post-pass appends those absolute addresses
  * to the trace as-is (a whole-window trace's insns[] hold absolute addresses, which
  * asmtest_hwtrace_render_window / _render_versioned decode; contrast the region form's
- * base-relative offsets). It overflows the same bounded ring and is honestly flagged
+ * base-relative offsets). It overflows the same bounded ring and is faithfully flagged
  * `truncated` — a DESCEND_ALL window emits far more RIPs than any leaf. */
 typedef struct {
     const uint8_t *base;
@@ -300,7 +300,7 @@ static inline int ss_rip_denied(uint64_t rip) {
  * (src/ptrace_backend.c) exactly — the difference is only in the semantics of the stop
  * (in-process "stop the capture" vs out-of-process "the loop terminates the tracee").
  *
- * Two honest limitations (same as the descent tier): (a) ITIMER_REAL's SIGALRM is
+ * Two genuine limitations (same as the descent tier): (a) ITIMER_REAL's SIGALRM is
  * delivered PROCESS-WIDE — in a multi-threaded process the kernel may deliver it to a
  * thread other than the blocked stepping one; the flag + the repeating interval make
  * expiry eventually observed at the next trap, but breaking a *blocked* syscall is only

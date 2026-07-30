@@ -898,7 +898,7 @@ module Asmtest
       end
 
       # Result of a #scope: the auto-generated name, the rendered assembly listing,
-      # whether the scope armed, and the thread-scope honesty bit (truncated on a
+      # whether the scope armed, and the thread-scope fidelity bit (truncated on a
       # cross-thread close / overflow, Core §0.2/§1).
       ScopeResult = Struct.new(:name, :path, :armed, :truncated)
 
@@ -949,19 +949,19 @@ module Asmtest
 
       # The outcome of .call_scoped: the traced call's return value (+result+, nil on a
       # self-skip), the executed body's disassembly (+path+, "" without a decoder), and the
-      # thread-scope honesty bit (+truncated+). Mirrors hwtrace.py's CallScopedResult.
+      # thread-scope fidelity bit (+truncated+). Mirrors hwtrace.py's CallScopedResult.
       CallScopedResult = Struct.new(:result, :path, :truncated)
 
       # The outcome of .trace_call_auto: the call's return value (+result+, nil on a
       # self-skip), the filled +trace+ (a queryable HwTrace the CALLER frees via #free; nil
       # on a self-skip), the TierChoice that produced the final trace (+used+ — inspect
       # +used.backend+ to see whether escalation fired; nil on a self-skip), the +truncated+
-      # honesty bit, and the raw +rc+. On a self-skip (no call-owning native tier) +result+/
+      # fidelity bit, and the raw +rc+. On a self-skip (no call-owning native tier) +result+/
       # +trace+/+used+ are nil and +rc+ is negative. Mirrors hwtrace.py's TraceCallAutoResult.
       TraceCallAutoResult = Struct.new(:result, :trace, :used, :truncated, :rc)
 
       # The outcome of .window: the executed body's disassembly (+path+, "" without a
-      # decoder), the +truncated+ honesty bit, and +armed+ (false when the region-free
+      # decoder), the +truncated+ fidelity bit, and +armed+ (false when the region-free
       # window SELF-SKIPPED — a non-single-step backend or an older lib lacking the
       # whole-window trio; the block still ran). Mirrors dotnet's empty-ctor
       # new AsmTrace() whole-window scope / hwtrace.py's WindowResult.
@@ -1012,7 +1012,7 @@ module Asmtest
       # §Z1 region-free whole-window scope — the block form of dotnet's empty-ctor
       # `using (new AsmTrace())`. Arms a REGION-FREE single-step capture on THIS thread (no
       # code, no [base,len)), runs the block, disarms, and renders the executed body from
-      # live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end (it
+      # live self-memory. FAITHFUL-BUT-NOISY: it records EVERYTHING between begin and end (it
       # steps the Ruby VM too), so a traced leaf's ABSOLUTE addresses appear as a SUBSET of
       # +path+. Keep the block a TIGHT native leaf — EFLAGS.TF single-step is armed across it
       # (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT). Arms the

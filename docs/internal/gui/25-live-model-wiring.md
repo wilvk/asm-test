@@ -17,7 +17,7 @@
 > overlay — the last tail, tracked with [10](10-spacetime-3d-overview.md) T5 —
 > now lands too: `build_trajectories` weaves the `df_step` offset stream as a
 > region-relative, per-tid path when a recording carries no `trace` (the live
-> serve `dataflow`/`auto` case), so the 3D overview shows an honest
+> serve `dataflow`/`auto` case), so the 3D overview shows a faithful
 > routine-relative execution path during a single-step capture instead of empty
 > terrain. The Scrubber's `regstate` ring, once out of scope here, went live
 > under [26](26-live-regstate-producer.md).
@@ -51,7 +51,7 @@ dataflow" Loom rung** for the (perturbing) live case.
   `dataflow`/`auto` arm and emit `codeimage` (host-gated, Linux ≥ 6.7 soft-dirty).
   So live captures can carry the streams Slice / Loom / 3D need. **No `regstate`
   producer exists in serve** — the register ring is an emulator `--steps` product
-  ([09](09-teaching-producers.md)), so the **Scrubber stays honestly absent live**
+  ([09](09-teaching-producers.md)), so the **Scrubber stays faithfully absent live**
   and this brief does not change that.
 - **The builders are Recording-pure.** `decode_streams` / `observer_build` /
   `build_step_index` and the scene weave all take a `const Recording &` — they do
@@ -132,7 +132,7 @@ and at most one ephemeral live tab, never two live-looking tabs of the same run.
 serialize/restore with the live tab silently dropped (not a failed reopen), and
 closing any tab leaves `live_tab` pointing at the right recording or `-1`.
 
-### T5 — honesty chrome for the live weave  (S, depends on: T2)
+### T5 — fidelity chrome for the live weave  (S, depends on: T2)
 
 While the active tab is the live tab and it is still growing, the Loom / Slice /
 center panes carry a banner: **"live weave — the target is being single-stepped
@@ -164,7 +164,7 @@ region-relative → labelled). Deferrable without blocking T1–T5.
 > woven **region-relative** (`TRAJ_RELATIVE_BASIS`, `basis:"rel"`) and grouped
 > per tid, exactly as a `trace basis:"rel"` path is. Those region-relative
 > offsets do not project onto the absolute plane, so the renderer never fakes a
-> true address-space path (doc 10 T5's honesty rule) and the HUD shows the
+> true address-space path (doc 10 T5's fidelity rule) and the HUD shows the
 > existing *"rel: routine-relative (not a true path)"* chip. `trace`, when
 > present (an emulator `--dataflow` file carries both), stays authoritative — the
 > fallback is inert, so nothing regresses. Pinned by three `test_trajectory`
@@ -204,7 +204,7 @@ Order: `T1` → (`T2` ∥ `T4`) → (`T3`, `T5`, `T7`) → `T6`.
 
 ## Constraints & gates
 
-- **Honesty (D7 / [23](23-graded-truth-layer.md)) is graded, never faked.** The
+- **Fidelity (D7 / [23](23-graded-truth-layer.md)) is graded, never faked.** The
   Scrubber stays absent live (no `regstate` producer); T5's live weave is labelled
   perturbing + torn. A live `log`/`trace`/`watch` session carries no `df_step`, so
   Loom/Slice correctly stay absent for it — `view_presence` already decides this.
@@ -221,7 +221,7 @@ Order: `T1` → (`T2` ∥ `T4`) → (`T3`, `T5`, `T7`) → `T6`.
   equivalent; building a live per-step register capture is its own brief —
   [26-live-regstate-producer.md](26-live-regstate-producer.md) (the serve
   `--dataflow` engine already `PTRACE_GETREGS` every step, so it is a capture-and-
-  serialize job, not new machinery). This brief leaves the Scrubber honestly
+  serialize job, not new machinery). This brief leaves the Scrubber faithfully
   replay/emulator-only until 26 lands.
 - **Incremental (non-O(n)) builders.** The rebuild-on-growth matches the Observer
   deck's existing profile; streaming/incremental `decode_streams` /

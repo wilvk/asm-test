@@ -191,7 +191,7 @@ localized cleanups.
   linked in. *Fix:* fall back to `dlopen(NULL)` on the already-linked image.
 - **B2 — Java `HwTrace.resolve/resolveTiers/status/…` throw when the hwtrace lib
   fails to load, contradicting the class's own self-skip contract. [verified]
-  [FIXED 2026-07-21]** *(query family degrades to honest unavailable values; new
+  [FIXED 2026-07-21]** *(query family degrades to truthful unavailable values; new
   `--not-loaded-contract` second-JVM leg in `hwtrace-java-test` with an
   anti-vacuity loaded-anyway guard.)*
   `available(int)` self-skips cleanly
@@ -238,7 +238,7 @@ localized cleanups.
   `unsigned long`/`uint64_t` to JS `Number` (`asmtest.js:87`), losing precision
   above 2⁵³ for fault addresses / register values. Inherent to those FFIs; a
   BigInt/unsigned pass would fix it. LuaJIT is fine (boxed 64-bit cdata).
-- **B-note — CoreSight is `not wired` in both .NET and Java** (honest self-skip,
+- **B-note — CoreSight is `not wired` in both .NET and Java** (transparent self-skip,
   no implementation behind it) — consistent with the C-side CoreSight-live gate
   (S-adjacent), not a defect.
 
@@ -302,7 +302,7 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
 
 ## 5. Documentation
 
-Complete against the feature matrix and honest about hardware gating; the
+Complete against the feature matrix and accurate about hardware gating; the
 weakness is synchronization lag (see §0 for the tracked sweep). Two concrete,
 separately-fixable instances:
 

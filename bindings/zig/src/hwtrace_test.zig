@@ -483,7 +483,7 @@ pub fn main() !void {
         tr.region("auto", .{ &code, @as(c_long, 20), @as(c_long, 22) }, callBody);
         try check(g_result == 42, "auto-selected backend traces a live call (returns 42)");
         try check(tr.covered(0) or tr.truncated(),
-            "auto-selected backend covers block offset 0 (or honestly truncates)");
+            "auto-selected backend covers block offset 0 (or faithfully truncates)");
 
         if (ab == SINGLESTEP_ENUM) { // the pick off PT/AMD hosts: byte-exact parity
             const insns = try tr.insnOffsets(alloc);
@@ -699,7 +699,7 @@ pub fn main() !void {
     // ---- window: §Z1 region-free whole-window scope (the empty-ctor form) ---- //
     // Mirrors test_hwtrace.py::test_window_region_free_whole_window + the C++ reference.
     // Arms a REGION-FREE single-step capture, runs a TIGHT native leaf, disarms, renders.
-    // HONEST-BUT-NOISY: it records EVERYTHING between arm and disarm (the leaf's absolute
+    // FAITHFUL-BUT-NOISY: it records EVERYTHING between arm and disarm (the leaf's absolute
     // addresses are a SUBSET), so assert the body ran + armed + the leaf's ret appears.
     {
         var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
@@ -710,7 +710,7 @@ pub fn main() !void {
         std.debug.print("# window: armed={} truncated={}\n", .{ w.armed, w.truncated });
         try check(g_result == 42, "window: body ran and add2(20,22) == 42");
         // Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
-        // honestly self-skips (armed false), matching the C test_wholewindow_singlestep
+        // faithfully self-skips (armed false), matching the C test_wholewindow_singlestep
         // and node's window test. Assert the arming-dependent bits only when it armed.
         if (w.armed) {
             try check(!w.truncated, "window: 1M-insn cap not overflowed by the tiny native leaf");

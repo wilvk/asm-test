@@ -459,7 +459,7 @@ size_t asmtrace_blame_body(char *dst, size_t cap, unsigned step, uint64_t off,
                cone_steps[i], (unsigned long long)cone_offs[i]);
     }
     o = bp(dst, cap, o, "]");
-    /* The honesty verdict: 1 when the value is born of untraced state (its
+    /* The fidelity verdict: 1 when the value is born of untraced state (its
      * ancestry ends at instrumentation — no producer inside the window). The
      * consumer renders the lineage wording; the wire carries the machine-readable
      * fact so the cone-of-one is never mistaken for "nothing happened". */
@@ -532,7 +532,7 @@ int asmtrace_close(asmtrace_writer_t *w, unsigned long long lost, int throttled,
             throttled ? "true" : "false");
     /* The total step count (28 R1 T2), when the producer supplied it: additive,
      * so a reader that predates it ignores it. It rides after drops, in the
-     * honesty cluster, because it is what turns "truncated" into "N of M". */
+     * fidelity cluster, because it is what turns "truncated" into "N of M". */
     if (w->have_steps_total)
         fprintf(w->f, ",\"steps_total\":%llu", w->steps_total);
     if (skip_update && skip_update->skip_code) {

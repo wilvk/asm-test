@@ -180,7 +180,7 @@ const std::vector<LayoutPreset> &layout_presets();  // Learn/Author/Inspect/…
 
 4. Rehome the nested-tab views as panes in `desktop/src/ui/shell.cpp`: the
    Scrubber, ABI x-ray, and 3D overview tabs become `ImGui::Begin`-in-dockspace
-   panes. **Keep every honesty placard and every A/B mechanism** exactly as the
+   panes. **Keep every fidelity placard and every A/B mechanism** exactly as the
    integration passes wired them (README notes: the ABI x-ray locks active-vs-B,
    the 3D overview reaches GL only via `ui/scene_host.h`). Docking changes
    *where* a view lives, never *what* it decides — the builders are untouched.
@@ -209,7 +209,7 @@ reset-layout.
 tearable panes that can be shown at once (the survey's "timeline + scrubber +
 disasm cannot be shown together" gap is closed); presets switch the layout;
 reset restores the shipped default; the app persists layout while tests stay
-file-free; every prior honesty placard still fires.
+file-free; every prior fidelity placard still fires.
 
 ### T3 — 32-bit draw indices via `IMGUI_USER_CONFIG`  (S, depends on: T1)
 
@@ -255,7 +255,7 @@ documented as the null-backend tier.
 > freetype — `desktop/src/ui/fonts.cpp` (`load_fonts`) loads JetBrains Mono as the
 > default face and merges the Codicons `[ICON_MIN_CI, ICON_MAX_CI]` range, called
 > from `main.cpp` with compiled-in paths (`ASMTEST_*_TTF`). **Graceful**: a
-> missing TTF returns false and keeps the built-in bitmap (honest degrade, tested).
+> missing TTF returns false and keeps the built-in bitmap (graceful degrade, tested).
 > `test_fonts` verifies the atlas builds + a Codicons glyph is present + the
 > degrade — all **on the host** (no freetype). The `PushFont(nullptr)` placeholder
 > (`learn_door.cpp`) is gone — the default is now the real face. **Freetype** (the
@@ -395,7 +395,7 @@ text-heavy views).
   app-binary-only; the null backend keeps `IniFilename = nullptr`.
 - **The pinned tarball is never edited** — F2's `ImDrawIdx` and F3's freetype
   enable go through `DESKTOP_CXXFLAGS`/user-config/`-D`, never a source patch.
-- Every view's honesty placards and A/B mechanisms survive the tab→pane move
+- Every view's fidelity placards and A/B mechanisms survive the tab→pane move
   (T2) unchanged.
 
 ## Out of scope

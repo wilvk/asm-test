@@ -37,7 +37,7 @@ vanished stays in recents **with its load error**, never silently dropped. Named
 A **Settings** pane (rail or the top menu) offers a user **text-scale** (0.8×–2.0×,
 via `FontGlobalScale` with a DPI-aware atlas re-bake on a content-scale change), a
 remembered **window size** (`build/desktop-settings.json`; the old 1280×720 literal
-is retired), and a **light theme** that keeps the honesty-chrome (warn/refuse)
+is retired), and a **light theme** that keeps the fidelity-chrome (warn/refuse)
 contrast. Text-scale is the **only** in-app accessibility lever — Dear ImGui
 exposes no OS screen-reader tree, and the pane says so.
 
@@ -216,7 +216,7 @@ desktop/
                         desktop reuses the TUI's tested inline logic (plan D5)
     doc/
       recording.{h,cpp} .asmtrace NDJSON -> Recording (events by kind + mandatory
-                        provenance + the honesty facts a reader must surface)
+                        provenance + the fidelity facts a reader must surface)
       workspace.{h,cpp} the SET of open recordings (plan D3)
       streams.{h,cpp}   Recording -> typed view streams (trace / dataflow /
                         survey), decoded once at open
@@ -256,7 +256,7 @@ desktop/
       feed.{h,cpp}      the replay feeder (a decoded Recording -> the C structs
                         the builder consumes) + the live/fork passthrough
       fabric_plan.*     the pure draw plan: zoom collapse, byte rows, and every
-                        honesty prim (torn edge, fade-out, born-untraced, badge)
+                        fidelity prim (torn edge, fade-out, born-untraced, badge)
       lineage.*         selection = lineage: generation walk, biography, and the
                         window-bounded zeroization audit
       annex.*           the lane inspector's cross-feed join — corroboration,
@@ -277,7 +277,7 @@ desktop/
       diff_view.*       the A/B summary panel, every row a deep link
       completeness*     the tier x backend capability table
       observer.*        what every LIVE view shows first: provenance chrome,
-                        the honesty banner, and the session skip (verbatim)
+                        the fidelity banner, and the session skip (verbatim)
       syscalls.*        the syscall stream — payloads redacted BY DEFAULT
       watch.*           the watchpoint timeline (3-valued direction, a value
                         that was never read back, the refused-arm reason)
@@ -302,7 +302,7 @@ desktop/
                         token + its meaning), drawn from theme.h so it can't drift
   test/
     test_null_render.cpp   ImGui builds + renders headlessly (example_null)
-    test_recording.cpp     the loader's reject rules + honesty accounting (D7)
+    test_recording.cpp     the loader's reject rules + fidelity accounting (D7)
     test_shell.cpp         shell banner behaviour + a 3-frame null render smoke
     test_golden.cpp        opens every committed golden recording (schema gate)
     test_slice.cpp         the closure rule, engine-free
@@ -330,7 +330,7 @@ desktop/
     gen_walkthroughs.c     the walkthrough generator (C; make asmtrace-walkthroughs)
     test_loom_fabric.cpp   the fabric model (links fabric.o and NOTHING else)
     test_loom_plan.cpp     zoom semantics: ribbon collapse, byte rows, chips
-    test_loom_chrome.cpp   every honesty string, asserted VERBATIM (D7)
+    test_loom_chrome.cpp   every fidelity string, asserted VERBATIM (D7)
     test_loom_lineage.cpp  selection, generations, biography, zeroization audit
     test_loom_parity.cpp   the generation walk's closure vs the real C slicer
                            (links dataflow.o — the second D4 test-half exception)
@@ -368,7 +368,7 @@ It is the single source for the whole encoding axis — `dt_good_col` /
 `dt_bad_col` / `dt_maybe_col` (verdicts), `dt_changed_col` (a per-step register
 delta), `dt_cone_{back,fwd,both,dim}_col` (the dependency cones), `dt_selected_col`
 (a selection / pairing highlight), `dt_statistical_col` (sampled provenance), and
-the two honesty-chrome colours `dt_warn_col` (caution amber) / `dt_refuse_col`
+the two fidelity-chrome colours `dt_warn_col` (caution amber) / `dt_refuse_col`
 (refuse red) — each with a paired `_u32` for draw-list views. Every accessor
 documents its ONE meaning, and **no draw file inlines a colour**: a view that
 needs "the changed colour" calls `dt_changed_col()`, so a colour can never drift
@@ -383,7 +383,7 @@ draw with, the legend and the encoding cannot disagree. Both files are
 header-simple and engine-free, so they link into the full app, the render-only
 viewer, and the null-backend tests identically; `test_theme` pins the accessor
 values, asserts the drift files carry no inline colour literal, and smokes the
-legend headlessly. This palette is the substrate the graded honesty-chrome work
+legend headlessly. This palette is the substrate the graded fidelity-chrome work
 (docs/internal/gui/23) builds on.
 
 **Accessibility (CVD-safe + second channel).** No categorical distinction rides
@@ -399,16 +399,16 @@ background at the smallest font, and the caution amber (`dt_warn`) is
 **large-text-only** (`dt_warn_large_text_only()`), confined to headers and
 banners. `test_cvd` asserts all of this on the model, never on pixels.
 
-## Graded honesty chrome — one vocabulary, three tiers
+## Graded fidelity chrome — one vocabulary, three tiers
 
-Honesty chrome used to proliferate: a redaction placard, a statistical chip, a
+Fidelity chrome used to proliferate: a redaction placard, a statistical chip, a
 coarse-provenance chip, a bounded-window note and a torn banner all rendered
 equally loud and non-collapsible, so the one signal that means *"do not trust the
 tail of this data"* drowned among four that mean *"this is normal"* (F5). It is
 now **one banner, one inline chip, one glyph set**, graded into three tiers whose
 loudness follows the schema's own severity gradient (23 T1). The pure grader is
 [`ui/fidelity.h`](src/ui/fidelity.h) (`fidelity_severity`), pinned against the
-committed dishonesty fixtures; the tier's colours come from the semantic palette
+committed low-fidelity fixtures; the tier's colours come from the semantic palette
 above (no new literals), and each tier also carries a **Codicon glyph + a text
 token**, so the tier never rides on colour alone.
 
@@ -421,7 +421,7 @@ token**, so the tier never rides on colour alone.
 **Placement is enforced by the API**, not by discipline: `draw_fidelity_banner`
 is the pane-top placard a pane calls at the top, `draw_fidelity_chip` is the inline
 mark a header calls — so a T3 integrity signal cannot be placed as a quiet chip.
-The grading **restructures, it removes no truth** (D7): every honesty field still
+The grading **restructures, it removes no truth** (D7): every fidelity field still
 renders, a statistical survey that dropped still surfaces its `lost`/`throttled`
 drop record, and the integrity tier is exactly as non-dismissable as the refusal
 path always was. The derivable `severity` schema field records the tier on the
@@ -431,11 +431,11 @@ wire when a producer grades at capture time (see the schema's `severity` section
 
 Any operation that can exceed a frame budget — a PT decode, a symbol/codeimage
 load, a terrain/trajectory rebuild, the growing live stream — shows the same
-honest busy signal (23 T4): a spinner or (only with an honest total) a real
+faithful busy signal (23 T4): a spinner or (only with a genuine total) a real
 fraction, **elapsed time**, and a **Cancel**, so an expert never has to guess
 whether the tool is working or hung. The decision half is pure
-([`ui/progress.h`](src/ui/progress.h), `LongOp`); the honesty rule is unchanged —
-an op with no honest total gets the indeterminate spinner, never a fabricated
+([`ui/progress.h`](src/ui/progress.h), `LongOp`); the fidelity rule is unchanged —
+an op with no genuine total gets the indeterminate spinner, never a fabricated
 percentage. The **3D scrub degrades to the labelled coarse terrain plane** (a pure
 `should_degrade` decision + `TerrainModel::coarse_slice`) while a full re-slice
 would exceed the frame budget, then swaps to the full slice — the coarse plane is
@@ -460,7 +460,7 @@ same glossary the build parses and asserts every headword resolves — one sourc
 `src/ui/filter.h` is the ONE type-to-narrow filter ("showing N of M") plus a pure
 column-sort that reorders the *view*, never the recorded model order; the
 hot-edge table sorts for free. `src/ui/timepos.h` is the ONE time-position
-widget with two honest variants: a **continuous scrub** where a real total exists
+widget with two faithful variants: a **continuous scrub** where a real total exists
 (the Loom / 3D playheads) and a **discrete step** where it does not (Invocations,
 the disassembly logical-time control), the discrete case visibly marked with its
 verbatim reason from one registry. `test_filter` asserts the counts, the sort
@@ -496,7 +496,7 @@ absent, the row shows its bare offset and says so, dimmed.
 `"abs"` (absolute addresses), it is mandatory, and a reader may never default
 it. A recording carrying both draws **no rows at all** — just a placard naming
 the two bases. The offsets are not comparable, so every row of a merged canvas
-would be mis-attributed; refusing is the only honest output.
+would be mis-attributed; refusing is the only correct output.
 
 **The truncation banner.** Whenever a recording is truncated, torn, or dropped
 samples, a non-collapsible banner names the numbers: *heat computed over N of M
@@ -526,7 +526,7 @@ scrubber renders that region as a **torn edge** — seeking into it shows
 diff baseline because its true predecessor was evicted (D7). A recording with
 **no** `regstate` events states the producer is absent and deep-links the docs;
 the "re-run with a larger `max_insns`" fallback is deliberately **not** offered
-(the plan's honest-limits stance). `[` / `]` walk one step (04's bindings), the
+(the plan's stated-limits stance). `[` / `]` walk one step (04's bindings), the
 torn region included. `test_scrubber.cpp` pins seek, diff-highlight, the tear
 and the absent message; `test_scrubber_draw.cpp` draws every one under the null
 backend. In the shell it is the per-recording **Scrubber** tab: its seek index is
@@ -545,7 +545,7 @@ per-step register deltas do the animation — no bespoke graphics. What the x-ra
 adds over two loose scrubbers is the **cross-pane contrast**: at each step it
 marks the registers whose SysV and Win64 values disagree, so *a0 → rdi (SysV) vs
 rcx (Win64)*, the callee-saved rsi/rdi role reversal, and struct-return eightbyte
-classification become the register diff, made mechanical. Honest (D7): a pane
+classification become the register diff, made mechanical. Faithful (D7): a pane
 with no `regstate` producer refuses and names `--steps`; two runs of different
 lengths are **not aligned** and the banner says they cannot share a playhead; a
 dropped step renders *UNKNOWN* per pane; a stop past the recorded window is
@@ -642,7 +642,7 @@ fabricated row. Cross-highlighting brushes in place; only the active pane scroll
 
 **The 3D camera and slice cones from the keyboard.** The 3D overview is operable
 without a mouse: with the 3D HUD or its Tab-reachable viewport focused, the arrows
-orbit, `+`/`-`/`=` dolly, `R` resets and `T` collapses to the honest top-down
+orbit, `+`/`-`/`=` dolly, `R` resets and `T` collapses to the faithful top-down
 2D-ish view — all through the same `Camera` methods the mouse drag uses. The slice
 cones (`b`/`f`, `Enter` to open) light the DAG from the selection with no mouse.
 
@@ -743,7 +743,7 @@ the same place — watch hits and taint hits by bytes, source-map rows and IBS
 survey edges by code range. Its verdict enum has exactly **two** enumerators,
 `corroborates` and `unconfirmed`, and a test with a `default`-less switch keeps
 it that way: a statistical feed's silence proves nothing, and two exact
-producers with different windows will honestly disagree without either being
+producers with different windows will legitimately disagree without either being
 wrong. Nothing the annex prints ever says "contradicts".
 
 **Forks** are the counterfactual: change exactly one fact — an entry argument or
@@ -792,7 +792,7 @@ The ladder is the one the docs already define:
 | `square.asmtrace` | the quickstart routine, and the §5 "now break it" failure (expected 5, got 4) |
 | `demo-fail.asmtrace` | why is rax wrong — `imax_wrong`'s inverted `cmovg`, framed expected `rax=4` / got `rax=3` |
 | `ct_eq.asmtrace` | the capstone: three secret-differing inputs, a coverage union that does not grow, and the leaky control that does |
-| `square-truncated.asmtrace` | the D7 dishonesty fixture — the same run recorded with the window cut short |
+| `square-truncated.asmtrace` | the D7 low-fidelity fixture — the same run recorded with the window cut short |
 
 Regenerate with `make asmtrace-walkthroughs` **inside `make docker-desktop`**
 (the pinned Keystone is what makes assembly reproducible). The target writes the
@@ -880,7 +880,7 @@ header, its ordinary `.asmtrace` events, and an `end` footer — so a live captu
 is a `Recording` like any other and every view already reads it. `LiveSession`
 holds a growing one and hands back completed ones.
 
-Three honesty rules ride in `session.cpp` rather than in the UI:
+Three fidelity rules ride in `session.cpp` rather than in the UI:
 
 - **A host that dies mid-session leaves a TORN recording.** Not an error dialog,
   not a discarded buffer: what arrived is kept, and the recording says it is
@@ -937,7 +937,7 @@ The facts are ordered by which one dominates:
 | `ptrace_scope=3` | No | one-way: it cannot be lowered without a reboot, so offering any other remedy would be a lie |
 | `ptrace_scope=2` | No | capability-only |
 | different uid | No | remedy: that user, or the capability |
-| `ptrace_scope=1` | **Unknown** | it permits a descendant or a `PR_SET_PTRACER` opt-in, and whether the target opted in is *not readable from outside* — an honest Unknown beats a confident Yes that fails at attach |
+| `ptrace_scope=1` | **Unknown** | it permits a descendant or a `PR_SET_PTRACER` opt-in, and whether the target opted in is *not readable from outside* — a truthful Unknown beats a confident Yes that fails at attach |
 | same uid, scope 0 or Yama absent | Yes | |
 
 ### Toasts are a notification, never the record
@@ -1191,13 +1191,13 @@ survive the drill-in, as tested invariants.
 | **Orbit** | drag → `orbit(dyaw, dpitch)` | pitch is clamped just shy of the poles (±≈89°), where `look_at` degenerates |
 | **Dolly** | wheel → `dolly(factor)` | multiplicative, clamped to radius `[0.3, 12.0]` |
 | **Reset view** | `reset()` | the default three-quarter view: `yaw 0.7`, `pitch 0.6`, `radius 2.2` |
-| **Top-down (2D-ish)** | `top_down()` | the honest fallback: look straight down, so the scene collapses to the classic memory-map heatmap when depth confuses |
+| **Top-down (2D-ish)** | `top_down()` | the plain fallback: look straight down, so the scene collapses to the classic memory-map heatmap when depth confuses |
 
 The top-down preset is not a gimmick — it *is* the rule above, expressed as a
 control: when the 3D reading gets hard, flatten it rather than squint. (It is
 also what the golden-scene GL smoke renders through, for exactly that reason.)
 
-**Feed staging is honest, never faked.** The view has two rungs and only ships
+**Feed staging is faithful, never faked.** The view has two rungs and only ships
 one:
 
 - The **coarse rung** — region terrain from `codeimage`, per-offset heat reused
@@ -1326,7 +1326,7 @@ the Wave-1 `mem` stream: with the proposed shape `{"k":"mem","step","ea","size",
 stay flat and `mem_note` says `coarse: no per-access memory stream`, never a
 silent zero.
 
-Two honesty rules ride along and are tested. **Statistical is kept separate:** a
+Two fidelity rules ride along and are tested. **Statistical is kept separate:** a
 `survey`'s sampled residency is written to a *distinct* `Terrain` (`stat`) with
 every populated cell flagged `STAT`, and the exact `slice()` never merges it — a
 sampled density must not render as an exact one. **Truncation floors, never
@@ -1361,12 +1361,12 @@ so a hot cell reads brighter than a cold one), and coloured by a `usampler2D`
 layer, `CHURN` tints JIT churn. **Trajectory tubes.** Each `Trajectory` is a line
 strip at world `(u, t·scale, v)`; an **exact** path is an opaque line, a
 **statistical** residency is translucent and stippled and is *never* joined into
-an exact tube (the honesty invariant, enforced structurally), and access-mark
+an exact tube (the fidelity invariant, enforced structurally), and access-mark
 spurs are short lines from a PC vertex to its data cell — per-tid colour throughout.
 
 **Orbit camera + HUD.** `camera.h` builds `mat4x4_perspective`/`_look_at` from
 spherical `(yaw, pitch, radius)` about the plane centre; a drag orbits, the wheel
-dollies, and two presets exist — "reset view" and the honest **"top-down (2D-ish)"**
+dollies, and two presets exist — "reset view" and the faithful **"top-down (2D-ish)"**
 that collapses the scene to the classic memory-map heatmap when depth confuses.
 The HUD carries the playhead (scrubs `t` → re-slice the terrain / rebuild the
 trajectory), the layer toggles, the region legend, and the provenance chips
@@ -1382,7 +1382,7 @@ reads it (T6): an exact **code cell** → the trace **canvas** at that code offs
 or the **disasm** pane (08-T7) if that region **churned** (its bytes differ by
 trace time — only the codeimage-versioned pane resolves *which version*); a **data
 cell** (rich `mem` rung) → the **slice** explorer at the step whose access last hit
-it; an exact **PC vertex** → the operand **timeline** at that step. Two honesty
+it; an exact **PC vertex** → the operand **timeline** at that step. Two fidelity
 invariants ride the drill-in and are pinned by `test_drillin` (no GL): **truncation
 survives** — a `TORN` cell's 2D target still carries 04/08's truncation banner, so
 the 3D tear is never the only signal; and **statistical is never exact** — a survey
@@ -1442,7 +1442,7 @@ a `TRAJ_STATISTICAL` residency layer is skipped unconditionally, and a
 *anchored* rel path (`TRAJ_ANCHORED`, `base+off`) is two paths on one plane and is
 admitted, while an unanchored one, and any individually `!placed` vertex, still
 cannot (deleting the rel bit outright would readmit raw offsets, a false
-address-space claim). Honest limit: a live dataflow `df_step` carries no `tid`, so
+address-space claim). Real limit: a live dataflow `df_step` carries no `tid`, so
 it is one trajectory and yields no marks regardless. The scene draws each mark as a
 bright **magenta arc**
 bowing above the plane between the two vertices — distinct from every per-tid colour

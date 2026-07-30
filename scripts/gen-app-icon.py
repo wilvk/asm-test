@@ -46,7 +46,7 @@ PNG_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 MASTER = 512
 
-# --- palette (the app's dark honesty-chrome, cool accent + one amber highlight) -
+# --- palette (the app's dark fidelity-chrome, cool accent + one amber highlight) -
 BG_TOP = (23, 33, 47)     # #17212f
 BG_BOT = (12, 18, 27)     # #0c121b
 BORDER = (51, 68, 93)     # #33445d

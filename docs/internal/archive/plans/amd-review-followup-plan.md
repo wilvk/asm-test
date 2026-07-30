@@ -148,7 +148,7 @@ bytes (the tree never sets `sample_max_stack`; the kernel defaults to 127 —
 the space check does `goto fail`; `fail:` only bumps counters — the LOST record
 needs space in a *later successful* output). A ring that stays full until drain
 yields `lost == 0` **and** `throttled == 0`: **silent loss**, in a lane whose
-entire contract is honest gaps, exactly as the file's own comment at
+entire contract is faithful gaps, exactly as the file's own comment at
 [:593-595](../../../../src/ibs_backend.c) predicts.
 
 The **window lane** is the exposed one:

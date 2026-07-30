@@ -28,7 +28,7 @@ That is structurally the same gap F6's barrier exists to close. F6 established (
 last-writer builder hands a post-gap read to the **stale in-region writer**. A caller-saved register
 clobbered by a stepped-over helper is exactly that shape.
 
-**Why it is dangerous out of proportion to its size:** the VALUE stays honest — it is read from
+**Why it is dangerous out of proportion to its size:** the VALUE stays faithful — it is read from
 silicon — and only the EDGE lies. So **no value oracle and no byte-identical comparison can catch
 it**, which is precisely what F1's and F2's oracles are. The tier's strongest existing checks are
 blind to this class by construction.

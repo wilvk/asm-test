@@ -34,7 +34,7 @@
   data (`dt_nav_bindings`, [nav.cpp](../../../desktop/src/nav.cpp):282–298). This
   brief turns that built-but-hidden router into the app's visible orientation
   model. No new engine, no schema change.
-- **Honesty (D7) is restructured, never removed.** The overview/minimap draws the
+- **Fidelity (D7) is restructured, never removed.** The overview/minimap draws the
   app's own deterministic layout and must not fabricate structure to fill space
   (docs 04/08 layout ban); the wayfinding chrome surfaces provenance/scope, it
   does not hide it.
@@ -270,7 +270,7 @@ same-basename recordings disambiguated.
 3. **Filter / scope / thread.** Append the active client-side filter (from the
    view's ImSearch/tree state) and, for a live/observer recording, the thread/pid
    scope, so the band answers "what am I looking at *and* through what filter".
-   Where a filter hides rows, mirror the honesty rule — the band states scope, it
+   Where a filter hides rows, mirror the fidelity rule — the band states scope, it
    does not imply the hidden rows are absent (D7; the "showing N of M" ethos).
 4. **Disambiguate same-basename tabs.** Two `add.asmtrace` are indistinguishable
    today ([shell.cpp](../../../desktop/src/ui/shell.cpp):871–886). Add a pure
@@ -390,10 +390,10 @@ interaction test. T3 needs docs 15 T1 and 14 T5 (both landed). Suggested order:
 - **The overview never fabricates structure (D7).** Docs 04/08 ban deterministic
   layout that invents relationships; the minimap is a compressed projection of the
   recording's *own* `dt_timeline`/fabric rows — a sparse trace yields a sparse
-  strip, not a padded one. A test pins this. This is the load-bearing honesty
+  strip, not a padded one. A test pins this. This is the load-bearing fidelity
   constraint of this brief: a map that fills gaps to look complete would lie about
   coverage exactly where PT-scale users most need the truth.
-- **Honesty chrome is restructured, never removed (D7 / review F5).** The
+- **Fidelity chrome is restructured, never removed (D7 / review F5).** The
   wayfinding band surfaces scope/filter/provenance; where a filter hides rows the
   band states the scope (the "showing N of M" ethos), it does not imply the hidden
   rows are gone.

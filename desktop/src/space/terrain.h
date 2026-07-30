@@ -12,7 +12,7 @@
 // scrubbing the playhead stays far under the 16 ms budget for a golden-sized
 // recording (T2 step 3).
 //
-// Two honesty rules ride here and are tested (test_terrain.cpp, D7):
+// Two fidelity rules ride here and are tested (test_terrain.cpp, D7):
 //
 //   - THE STATISTICAL LAYER IS SEPARATE. `survey`-derived residency is written
 //     into a DISTINCT Terrain (`stat`) with every populated cell flagged STAT;

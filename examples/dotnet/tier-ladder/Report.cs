@@ -69,7 +69,7 @@ internal static class Report
     }
 
     // Diff a restricted cascade against Best and name the rungs it dropped. A rung absent
-    // from THIS host's Best cascade to begin with cannot be dropped — say so honestly.
+    // from THIS host's Best cascade to begin with cannot be dropped — say so faithfully.
     public static void PolicyDrop(string policy, TierChoice[] best, TierChoice[] restricted, string expected)
     {
         Console.WriteLine($"policy {policy} ({restricted.Length} rungs vs Best's {best.Length}) — expected to drop {expected}:");

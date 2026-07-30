@@ -217,7 +217,7 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
                 kv.second.flags |= TRAJ_ANCHORED;
                 for (TrajPoint &p : kv.second.points) {
                     if (p.is_access)
-                        continue; // no access marks yet, but stay honest
+                        continue; // no access marks yet, but stay faithful
                     uint64_t abs = 0;
                     if (anchor.place(p.addr, &abs)) {
                         p.addr = abs;
@@ -274,7 +274,7 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     // Count placement as we go (36 T2 step 3): every PC vertex is offered to the
     // plane and pc_placed counts how many the renderer's own test — proj.project
     // — actually accepts. For an anchored path this equals the count of placed
-    // vertices; for an abs path it is the honest projected count. This is the
+    // vertices; for an abs path it is the true projected count. This is the
     // assertion whose ABSENCE let a total placement failure look like success.
     for (auto &kv : by_tid) {
         std::stable_sort(kv.second.points.begin(), kv.second.points.end(),
@@ -294,14 +294,14 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
         set.trajectories.push_back(std::move(kv.second));
     }
 
-    // Honest partial placement: name the SERVE_CI_MAX_BYTES=4096 codeimage clamp
-    // as the cause, or an honest partial reads as a regression. Only for an
+    // Faithful partial placement: name the SERVE_CI_MAX_BYTES=4096 codeimage clamp
+    // as the cause, or an accurate partial reads as a regression. Only for an
     // anchored path — an abs path that fails to project is a different situation
     // (no code region covers it), not the clamp, and an unanchored rel path
     // already carries resolve_anchor's reason in placement_note.
     if (set.anchored && set.pc_placed < set.pc_points &&
         set.placement_note.empty()) {
-        // Honest about the CAUSE by source (37): a wire-stated base may name a
+        // Faithful about the CAUSE by source (37): a wire-stated base may name a
         // span with no codeimage (reader rule 4 — sound placement, no bytes), a
         // single-span derivation can only be the 4096-byte clamp.
         const char *cause =

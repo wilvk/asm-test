@@ -15,7 +15,7 @@ const char *const kAuthorRenderOnly =
     "Author mode requires the full (GPL-2.0) build";
 
 const std::vector<author_arch_row> &author_arch_table() {
-    // v1's honest limit: the value/replay tier runs two guests, x86-64 and
+    // v1's real limit: the value/replay tier runs two guests, x86-64 and
     // arm64 (32-per-guest-value-producer.md R5 T3) — NOT the same result
     // shape (see author_vm.h's RULE 3). The remaining two assemble (Keystone
     // handles them) and stop there, with the reason on the row rather than in
@@ -260,7 +260,7 @@ Recording author_recording(const author_result_t &r, int arch,
     rec.arch = arch_wire_name(arch);
     rec.producer.name = "asmtest-author";
     // The emulator is an exact, isolated guest: the authored run observed every
-    // step. The provenance is honest about the backend a --record author run
+    // step. The provenance is accurate about the backend a --record author run
     // would have written.
     rec.provenance.backend = "author-emulator";
     rec.provenance.exact = true;
@@ -292,7 +292,7 @@ Recording author_recording(const author_result_t &r, int arch,
     // Timeline through the existing reader with NO desktop change. No
     // `regstate` (the per-step register RING is x86-64-only, src/emu.c); no
     // `mem` / `blame` (opt-in derived streams the Author door does not arm).
-    // Honest and partial when the guest did not reach the sentinel (vf->ok ==
+    // Faithful and partial when the guest did not reach the sentinel (vf->ok ==
     // false) or a buffer truncated the capture: whatever WAS captured still
     // rides, verbatim, rather than being withheld until a "clean" run.
     if (vf != nullptr && vf->ran) {

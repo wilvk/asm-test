@@ -12,7 +12,7 @@
 > Authored 2026-07-28, verified against HEAD `da566c9`.
 >
 > **LANDED 2026-07-28 (T1–T3), both docker lanes green.** What shipped, with the
-> honest deviations recorded:
+> faithful deviations recorded:
 > - **T1** — `asmtest_regfile_t` carries `xmm[16]` + `mxcsr` + `has_vec`; both
 >   producers emit them behind one opt-in (`asmtrace_record --fpregs`, `asmspy
 >   --dataflow --fpregs`, serve `fpregs:true`), off by default so the golden corpus
@@ -123,7 +123,7 @@ emulator and live vector decks agree.
    small follow-up once the fields land).
 
 **Done when.** An FP routine's recording shows rounding mode + sticky flags per
-step; a dishonesty fixture (armed but FP-env unread) degrades honestly.
+step; a low-fidelity fixture (armed but FP-env unread) degrades gracefully.
 
 ### T3 — SSE-class argument marshalling in the corpus  (M)
 
@@ -153,14 +153,14 @@ deck; `make asmtrace-golden` covers it byte-stably.
   T3** — land R1 T3's format first; this root reuses it for register lanes, "for
   both [producers] at once."
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - The vector deck is captured only when **armed**; unarmed recordings stay
-  GPR-only, honestly (the descriptor tells the reader which lanes are present).
+  GPR-only, faithfully (the descriptor tells the reader which lanes are present).
 - No AVX-512 mask/zmm capture beyond what `vec512_t` describes; wider ISA state is
   a further descriptor row, not this root.
 - FP-env is architectural state (MXCSR/x87), not microarchitectural timing — the
-  usual native→virtual honesty line holds.
+  usual native→virtual fidelity line holds.
 
 ## Cross-references
 
@@ -170,4 +170,4 @@ Depends on [R1](28-schema-freeze-completion.md) T3 (`wide[]` serialization),
 [asmtrace_record.c](../../../tools/asmtrace_record.c) (emulator) +
 [cli/asmtrace_ndjson.c](../../../cli/asmtrace_ndjson.c) (live);
 consumers [09](09-teaching-producers.md) (ring/scrubber), [04](04-replay-views.md)
-(diff). Golden/honesty D6/D7.
+(diff). Golden/fidelity D6/D7.

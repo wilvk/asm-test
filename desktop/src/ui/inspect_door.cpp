@@ -18,7 +18,7 @@
 #include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
 #include "ui/doors.h"
 #include "ui/filter.h"   // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
-#include "ui/fidelity.h"  // the graded honesty vocabulary (23 T1)
+#include "ui/fidelity.h"  // the graded fidelity vocabulary (23 T1)
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -124,7 +124,7 @@ bool inspect_request_start(InspectState &s) {
 // func name or base+len, parse_region_spec), empty for every whole-process mode
 // and for `auto` (which finds its own region). Sending the region here — rather
 // than making the door build the JSON inline — keeps the one place a start is
-// fired honest about what it sends.
+// fired truthful about what it sends.
 nlohmann::json inspect_start_params(const InspectState &s) {
     nlohmann::json params = nlohmann::json::object();
     // The register ring (--steps, doc 26): the dataflow single-step engines
@@ -173,7 +173,7 @@ void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st) {
     // and a Swap's swapped-OUT session can itself skip — a dataflow/auto blocker
     // that saw 0 passes returns NEVER_RAN, which serve reports as `skip` — so
     // clearing the guard on skip_code would free the swap's newly-armed session in
-    // the same Idle split-frame the guard exists to protect. The honest cost: a
+    // the same Idle split-frame the guard exists to protect. The real cost: a
     // fresh start that is itself SKIPPED at the door (an i386 tracee, a sampler
     // self-skip) leaves the guard set until the next resolving event, so its jack
     // reads held until a Stop/Disconnect — the pre-39 behaviour for a skip, never
@@ -359,7 +359,7 @@ void draw_status(InspectState &s) {
         ImGui::Text("capturing: %llu event(s) so far",
                     (unsigned long long)g->event_count());
         // The uniform busy signal (23 T4): a growing live recording is unbounded
-        // — no `end` footer, no honest total — so the LongOp gets the
+        // — no `end` footer, no real total — so the LongOp gets the
         // INDETERMINATE bar (a percentage would be a fabricated total, 14 T3),
         // plus elapsed + a Cancel that stops the capture (leaving the last good
         // recording, never a half-built model). `now`/`started_at` are injected
@@ -627,7 +627,7 @@ void draw_patch_bay(InspectState &s) {
         // "Start anyway" FIRES the start, so it obeys the same config gate as Start
         // itself — a filter edited to illegal while this confirm is up must not
         // slip through (inspect_request_start backstops it too, but a greyed button
-        // is the honest signal).
+        // is the faithful signal).
         ImGui::BeginDisabled(!can);
         if (ImGui::Button("Start anyway (accept the risk)"))
             inspect_confirm_perturb(s);
@@ -741,7 +741,7 @@ void draw_live_views(InspectState &s) {
     }
     // 34 T2: the handoff from the picked process's growing capture to its 3D
     // spacetime overview. Raises a flag draw_shell consumes (the door cannot reach
-    // ShellState). The 3D pane is honest if the capture has no codeimage regions
+    // ShellState). The 3D pane is faithful if the capture has no codeimage regions
     // yet, so this is safe to always offer.
     if (ImGui::Button("View in the 3D overview"))
         s.want_scene = true;
@@ -1050,7 +1050,7 @@ void draw_processes_pane(InspectState &s) {
         for (size_t k = 0; k < order.size(); ++k)
             order[k] = static_cast<int>(k);
         // Default false so no-sort (unreachable given pid's DefaultSort, but
-        // honest) leaves the instant path; set true only while activity sorts.
+        // accurate) leaves the instant path; set true only while activity sorts.
         s.want_cpu_sort = false;
         if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs();
             ss && ss->SpecsCount > 0) {
@@ -1141,7 +1141,7 @@ void draw_processes_pane(InspectState &s) {
             // Activity is a MEASURED quantity: show "—" when this list was not
             // sampled (the instant pid/comm/attach path), never "0%", which would
             // claim a zero the code never took. A genuinely idle process in a
-            // sampled list does read 0%, and that is honest — it was measured.
+            // sampled list does read 0%, and that is accurate — it was measured.
             if (!s.sample_cpu) {
                 ImGui::TextDisabled("—");
             } else {

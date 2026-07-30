@@ -31,7 +31,7 @@ compared across architectures (or across the `cyc`/`ticks` unit line).
 The raw instruction count treats every instruction as equal work, which
 understates ISAs that fold a memory access or a multiply/divide into one
 instruction. `BM_MODEL_COST` is a second cross-ISA metric that weights each
-executed instruction by a coarse class before summing — an honest cost *proxy*,
+executed instruction by a coarse class before summing — a faithful cost *proxy*,
 **comparable across ISAs by construction, not a measurement of silicon cycles**.
 
 `emu-bench` classifies each executed instruction with Capstone

@@ -45,7 +45,7 @@ extern "C" int asmtest_dataflow_emu_run_arch(asmtest_arch_t arch,
 namespace {
 
 // Buffer caps for one Author-mode value-fabric run. Generous for a hand-typed
-// routine, and honest when it is not enough: the producer flips `truncated`
+// routine, and truthful when it is not enough: the producer flips `truncated`
 // and the door says so (author_apply_run_vf) rather than quietly showing a
 // short fabric. Mirrors loom/forks.cpp's kTakeSteps/kTakeRecs/kTakeWide.
 constexpr size_t kAuthorVfSteps = 1u << 16;

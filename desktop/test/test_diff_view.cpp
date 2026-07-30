@@ -27,7 +27,7 @@ int main() {
                 continue;
             linked++;
             // A link a view emits must be a link the router can consume. This
-            // is the round trip that keeps the deep-link spine honest.
+            // is the round trip that keeps the deep-link spine faithful.
             dt_link parsed;
             std::string err;
             vt::check("row link parses: " + r.link,

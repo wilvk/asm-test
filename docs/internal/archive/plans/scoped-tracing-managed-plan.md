@@ -246,7 +246,7 @@ on a new thread" signal the raw perf machinery lacks (note the handler does **no
 when the value is unchanged across the hop, so the `ScopeId` must actually differ or be
 (re)set at the boundary). The handler disables capture when the flow leaves a thread and
 re-arms a fresh per-thread PT event on the resuming one; §D4 owns the merge. Default
-stays the honest thread-scope-with-mismatch-flag; the stitched mode is an explicit
+stays the faithful thread-scope-with-mismatch-flag; the stitched mode is an explicit
 opt-in.
 
 **§D0 tests.** Extend [examples/dotnet/jit_dotnet/Program.cs](../../../../examples/dotnet/jit_dotnet/Program.cs)
@@ -365,7 +365,7 @@ continuations genuinely hop OS threads *and* the value flows with them). Net: on
 async machinery mostly *orders same-thread async*; genuine cross-thread (Worker /
 libuv-pool) work **escapes** and is a **disclosed gap**, flagged via the §0.2 tid assert,
 not stitched. Live JS needs PT/LBR or the ptrace stepper (single-step is unsafe against
-the V8 runtime). Explicit opt-in; default stays the honest thread-scope with a mismatch
+the V8 runtime). Explicit opt-in; default stays the faithful thread-scope with a mismatch
 flag.
 
 **§D1 tests.** **The `using`-scope case is BUILT (2026-07-16); the async-hop case is
@@ -400,7 +400,7 @@ run in `test_hwtrace.js`, so this line needed its own audit rather than a status
 > `if (op.path)` that an empty render (the exact failure signature) would skip. `ok 71` checks
 > each hop returns its real result, so execution is proven intact rather than merely uncrashed.
 >
-> **Scope of the claim, stated honestly:** this covers hops across `await` continuations
+> **Scope of the claim, stated accurately:** this covers hops across `await` continuations
 > (macrotask + microtask) on ONE thread — the case `AsyncLocalStorage` can carry — and `ok 77`
 > asserts exactly that single-tid shape rather than papering over it. Genuine **cross-thread**
 > hops (Worker / libuv-pool) remain the disclosed §D1 gap below; they escape `AsyncLocalStorage`
@@ -757,7 +757,7 @@ host-testable unit test, not the ptrace lane.
   reconstruction-half posture. Lives in [examples/test_hwtrace.c](../../../../examples/test_hwtrace.c).
 - Per-runtime opt-in async case (.NET/Node/JVM) that drives a real `await`/continuation
   hop and asserts slices stitch by `ScopeId` — **self-skips** off a PT/ptrace host
-  (the honest known validation gap: the live hook has no CI coverage; the merge core
+  (the disclosed known validation gap: the live hook has no CI coverage; the merge core
   does).
 
 **§D4 effort.** The merge helper + host-testable unit test ~2–3 days; the per-runtime
@@ -767,7 +767,7 @@ forward-look on PT hardware.
 **§D4 risk.** This is the real engineering of the whole plan set — a model change,
 gated behind an explicit opt-in, and it must **never** emit a partial (un-stitched)
 trace as complete; the Core §0.2 arming-thread assert is the backstop that flags any
-unhandled hop as `truncated`. **Coverage honesty (updated 2026-07-16):** the hook-side
+unhandled hop as `truncated`. **Coverage fidelity (updated 2026-07-16):** the hook-side
 `ScopeId`/`seq`/`version` *tagging* was originally exercised by **neither** CI-protective
 test — `test_stitch_slices` builds correct tags itself, and §D3 is single-thread — so the
 live capture→tag→merge chain shipped with no CI coverage. **The fake-hook harness this
@@ -783,7 +783,7 @@ fresh `perf_event_open` + AUX-ring `mmap` on the resuming thread **on every hop*
 inside the `AsyncLocal` value-changed handler, which on .NET fires on **every** EC restore
 where the `ScopeId` differs. A workload that awaits in a tight loop would pay that per
 continuation. This is why the stitched mode is **explicit opt-in**, not the default, and
-why the default stays the honest thread-scope-with-mismatch-flag; the docs must set the
+why the default stays the faithful thread-scope-with-mismatch-flag; the docs must set the
 "stitching extends the *window*, not the bandwidth economics" expectation (same posture as
 the Core §3 drain caveat). Mitigations to evaluate: reuse a per-thread event across hops on
 the same thread rather than re-opening, and batch-decode at close where the AUX ring is

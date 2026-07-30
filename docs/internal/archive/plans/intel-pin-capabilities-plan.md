@@ -173,7 +173,7 @@ The [capture-args-returns.md](../../analysis/capture-args-returns.md) "middle ti
 Pin **probe mode** trampolines at function entry/exit while the app runs its
 **original code natively** between probes — stronger than LD_PRELOAD (dynamic
 symbols only) and far cheaper than full DBI, with no code cache. DR has no
-supported equivalent. Honest scope: probe-style trampolining is *approximable*
+supported equivalent. Truthful scope: probe-style trampolining is *approximable*
 without Pin, so this is a robustness/ergonomics win, ranked below PIN-1/2.
 
 **Increments**
@@ -193,7 +193,7 @@ without Pin, so this is a robustness/ergonomics win, ranked below PIN-1/2.
 
 **Self-skip:** non-x86 hosts. Probe mode also refuses non-relocatable /
 too-short functions — surface that as a per-target skip with a reason, never a
-silent miss (the repo's honesty rule).
+silent miss (the repo's fidelity rule).
 
 **Exit criteria:** entry args and exit return/flags for a chosen native function
 are captured under Pin probe mode and **agree with the ptrace path** on the same

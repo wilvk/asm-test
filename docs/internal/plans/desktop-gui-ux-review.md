@@ -24,17 +24,17 @@
 > structural claim it was re-verified by hand against the code (noted inline).
 > Generated 2026-07-27.
 >
-> **Honesty culture is respected throughout.** The project's rule — that
+> **Fidelity culture is respected throughout.** The project's rule — that
 > truncation/drop/redaction are schema fields renderers must surface, and that
-> dishonest renderings are forbidden — is treated as a load-bearing product
-> value. No finding recommends hiding truth; where the honesty layer is
+> misleading renderings are forbidden — is treated as a load-bearing product
+> value. No finding recommends hiding truth; where the fidelity layer is
 > criticised (F5) the fix is to *structure* it, never to remove it.
 
 ## Scoreboard
 
 | Severity | Count | Findings |
 |---|---|---|
-| **3 — major** | 7 | F1 keymap · F2 docking/workspace · F3 lexicon/legends · F4 tab proliferation · F5 honesty chrome ungraded · F6 font/DPI · F7 shared selection |
+| **3 — major** | 7 | F1 keymap · F2 docking/workspace · F3 lexicon/legends · F4 tab proliferation · F5 fidelity chrome ungraded · F6 font/DPI · F7 shared selection |
 | **2 — minor** | 15 | F8–F22 (command palette, wayfinding, recents, nav history, undo, first-run, color drift, CVD palette, control inconsistency, global find, keyboard reach, capability framing, session-end diagnosis, busy signal, perturbing-mode confirm) |
 | **1 — cosmetic** | 2 | F23 "paused" overload · F24 ephemeral Author output |
 
@@ -51,13 +51,13 @@ restructuring, not a rewrite.
 The evaluation surfaced 35 genuine strengths. The load-bearing ones, because the
 restructuring must preserve them:
 
-- **Honesty-as-schema-field is excellent and rare.** Dishonesty
+- **Fidelity-as-schema-field is excellent and rare.** A fidelity loss
   (truncated/dropped/redacted/torn) is a recording field, not renderer
   discipline ([01](../gui/01-asmtrace-format.md), plan D7), so it is *testable*
-  against committed deliberate-dishonesty fixtures. Refusals are first-class and
+  against committed deliberate low-fidelity fixtures. Refusals are first-class and
   non-collapsible (shared `draw_banner`: refusal ⇒ red full-pane, nothing else
   drawn), and toasts are specified to **supplement, never replace** banners
-  ([16](../gui/16-live-feedback-and-filtering.md):25-27). Status honesty is
+  ([16](../gui/16-live-feedback-and-filtering.md):25-27). Status fidelity is
   nuanced, not binary — a `skip` renders as a *successful* session with nothing
   to report ([schema](../gui/asmtrace-schema.md):543-544), and `--auto` residency
   picks are labelled weaker-evidence than entry picks.
@@ -69,7 +69,7 @@ restructuring must preserve them:
 - **The Learn door is strong onboarding substrate** — dependency-free
   "walkthroughs are themselves recordings" ([06](../gui/06-doors-and-learning.md):48),
   need no root/hardware/attach, work in the render-only viewer, and double as the
-  honesty-chrome test corpus.
+  fidelity-chrome test corpus.
 - **Progressive disclosure already works in the Observer deck** — its inner tabs
   appear only when the data supports them. The good pattern to copy for the outer
   tab strip is already in the tree.
@@ -85,7 +85,7 @@ restructuring must preserve them:
   strictly an orientation surface routing every pick through the 2D deep-link
   router, a one-key top-down/2D fallback, height (not depth/length) encoding, a
   fixed-size 2D HUD. It avoids occlusion-of-quantity and unreadable in-scene text.
-- **Convention-honest time model**: the axis is an ordinal "step" everywhere,
+- **Convention-faithful time model**: the axis is an ordinal "step" everywhere,
   never faked as wall-clock, because producers record no timestamps
   ([15](../gui/15-plotting-and-graph-nav.md):107).
 
@@ -95,7 +95,7 @@ restructuring must preserve them:
 
 ### F1 · The keyboard navigation spine is fiction {#f1}
 **Heuristics:** visibility of status · consistency & standards · recognition ·
-flexibility (accelerators) · help · honesty culture (D7) · match with real world.
+flexibility (accelerators) · help · fidelity culture (D7) · match with real world.
 **Where:** [nav.cpp](../../../desktop/src/nav.cpp):282-296 · shell.cpp:200,705 ·
 [04-replay-views.md](../gui/04-replay-views.md):214-220 ·
 [11-imgui-addons.md](../gui/11-imgui-addons.md):54-56 ·
@@ -109,7 +109,7 @@ returns **only** `LeftBracket`/`RightBracket` (in `scrubber_draw.cpp:13-15`,
 `abixray_draw.cpp:128-130`, `loom/fabric_imgui.cpp:240-242`). An expert presses
 `1` to switch view or `b` to light a backward cone and nothing happens — an
 actively false affordance, and the app's *most navigational surface* is the one
-that lies, which cuts against its own honesty culture. Even once wired, the
+that lies, which cuts against its own fidelity culture. Even once wired, the
 vim-flavoured app-invented scheme diverges from gdb/lldb/IDE and Perfetto/Tracy
 muscle memory and omits the two most-used profiler gestures (fit-to-selection,
 step-to-adjacent-sibling) plus WASD zoom/pan entirely.
@@ -152,7 +152,7 @@ tube, cone blue/orange, torn gash, basis rel/abs), and surfaces every term raw
 with no in-UI definition. Learners land in the flagship Loom unable to decode
 "hollow span / born-untraced / patient zero"; experts already have the words
 (def-use lineage, first-divergence, tracer contention) and must translate twice.
-**Honesty chrome the user cannot interpret is not honest.** A project glossary
+**Fidelity chrome the user cannot interpret is not faithful.** A project glossary
 already exists in the Sphinx build but is reachable from no pane — and does not
 even define the coined GUI terms.
 **Status:** not addressed; the glossary exists but is out-of-app and incomplete.
@@ -176,14 +176,14 @@ deck gates its inner tabs on data present.
 **Status:** doc 11 condemns the 3-deep nesting; data-driven *outer* tab gating is
 planned nowhere.
 
-### F5 · Honesty chrome is not a designed system — ungraded and proliferating {#f5}
+### F5 · Fidelity chrome is not a designed system — ungraded and proliferating {#f5}
 **Heuristics:** aesthetic/minimalist · consistency · status visibility ·
-honesty-chrome-as-system.
+fidelity-chrome-as-system.
 **Where:** [04](../gui/04-replay-views.md):28,548 · [08](../gui/08-observer-views.md):156 ·
 [schema](../gui/asmtrace-schema.md):543-544 · plan D7:263-264 ·
 [10](../gui/10-spacetime-3d-overview.md):70.
 
-Honesty is load-bearing and must stay — but the honesty layer is not a designed
+Fidelity is load-bearing and must stay — but the fidelity layer is not a designed
 system on two axes at once. **Loudness is ungraded:** a single recording routinely
 stacks a redaction placard, a statistical chip, a coarse-provenance chip, a
 bounded-window note, an `identity_note` row *and* sometimes a torn banner, all
@@ -193,7 +193,7 @@ benign; while torn, mixed-basis refusal and dropped-prefix→UNKNOWN are genuine
 integrity failures). And the **form proliferates without spec**: banner vs chip vs
 inline row vs glyph vs gash, placed differently per view. Both failures bury the
 one signal that means "do not trust the tail of this data" among four that mean
-"this is normal", so honesty degrades into noise the user learns to ignore
+"this is normal", so fidelity degrades into noise the user learns to ignore
 (banner blindness).
 **Status:** `theme.h` consolidated only the two banner *colours*; the schema
 grades severity in *data* but no doc proposes a severity/tier field for the
@@ -211,7 +211,7 @@ surfaces (register file, hex memory editor, disassembly, hot-edge table) render 
 tiny illegible rows; on low-DPI they are oversized. Low-vision users have no zoom
 path. This is the **one accessibility lever fully within ImGui's control** (ImGui
 exposes no OS screen-reader tree — a real platform constraint the team recorded
-honestly at 11:461), and it is unspent. Persistent every-session cost on the
+candidly at 11:461), and it is unspent. Persistent every-session cost on the
 highest-density views.
 **Status:** doc 13 F4 schedules the *dynamic-DPI decision*; user text-scale, a
 Settings pane, persisted window size, and a light theme are unplanned anywhere.
@@ -320,8 +320,8 @@ encode the same "bad/refused". **Status:** not addressed.
 forward-cone, dim from hot, or a refused row's red from an ordinary one, because
 those distinctions ride on colour alone. For a teaching tool this silently
 excludes learners; for the expert it corrupts the core slice/diff reading task;
-and it undercuts honesty — a deuteranope could read a statistical/truncated
-distinction that collapsed onto colour as honest. **Status:** the good pattern
+and it undercuts fidelity — a deuteranope could read a statistical/truncated
+distinction that collapsed onto colour as exact. **Status:** the good pattern
 already exists (statistical-vs-exact = solid tube vs translucent stipple, a real
 second channel) — generalise it.
 
@@ -334,7 +334,7 @@ have no filter or sort at all despite ImGui table sort being free; and the
 "move through time" control varies (SliderInt in scrubber/abixray/loom/3D-HUD,
 prev/next in Invocations, InputInt in Disassembly), so the muscle action for the
 single most common trace operation changes per view. The Invocations prev/next is
-a *deliberate* honesty choice (discrete snapshots) but is not visually
+a *deliberate* fidelity choice (discrete snapshots) but is not visually
 distinguished as such. **Status:** unified widget scheduled nowhere.
 
 ### F17 · No global find / search-as-measurement {#f17}
@@ -360,7 +360,7 @@ mouse-reachable). **Status:** ties to F1; unwired.
 ### F19 · Capability/refusal surface leads with negatives and renders verbatim errno {#f19}
 **Heuristics:** status visibility · minimalist · diagnose & recover · help.
 **Where:** [06](../gui/06-doors-and-learning.md):53,397-409 · [07](../gui/07-serve-live-host.md):341-345.
-The honesty is correct but the refusal surface fails twice. **Framing:** on a
+The fidelity is correct but the refusal surface fails twice. **Framing:** on a
 common host (`perf_event_paranoid=4`, no PT/IBS silicon) the capability panel is
 mostly red greyed rows of low-level errno text, leading with what is broken — a
 learner reads catastrophe and concludes the tool does not work on their machine,
@@ -390,7 +390,7 @@ yet built.
 [10](../gui/10-spacetime-3d-overview.md) · [14](../gui/14-quick-wins.md):162-164.
 A stuck PT decode or terrain rebuild that exceeds a frame budget freezes the UI
 thread with no consistent "working" indicator: an expert cannot tell the tool
-apart from a hang and may kill it. **Status:** doc 14 T3 shipped a shared honest
+apart from a hang and may kill it. **Status:** doc 14 T3 shipped a shared faithful
 `progress.h` helper for file loads + live sessions — generalise it to *every*
 long op (PT decode, symbol/codeimage load, terrain rebuild).
 
@@ -438,7 +438,7 @@ already exists for live capture — reuse it.
   The premise — that `torn` is only an occludable in-scene red gash with no
   fixed-screen guarantee before drill-in — is factually wrong: the built HUD
   already carries a persistent screen-fixed torn indicator
-  ([10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md)). The honesty
+  ([10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md)). The fidelity
   invariant holds in 3D.
 
 ---

@@ -293,7 +293,7 @@ static void run_purity_case(const char *name, const uint8_t *code, size_t len,
  * PTRACE_SINGLESTEP tracee surfaces TF in its GETREGS eflags where a SINGLEBLOCK
  * boundary need not, and a #DB can set RF. The byte-identical comparison is about
  * PROGRAM values, so both paths mask these out of every captured eflags via the one
- * shared gp_value below. See the findings doc for why this normalization is honest. */
+ * shared gp_value below. See the findings doc for why this normalization is faithful. */
 #define EFLAGS_STEP_BITS                                                       \
     0x00010100ULL /* TF (bit 8) | RF (bit 16)                */
 #define EFLAGS_ARITH_MASK                                                      \

@@ -96,7 +96,7 @@ sde-avx512-test: $(BUILD)/test_simd
 # --- APX (r16-r31 / REX2 / NDD) fixture suite -------------------------------
 # The APX routines in examples/apx_basic.s #UD on all shipping silicon, so they
 # run ONLY under SDE. test_apx_basic is in SUITE_EXCLUDES so `make test` never has
-# to assemble it; a host-side sde-test degrades honestly when the host assembler
+# to assemble it; a host-side sde-test degrades gracefully when the host assembler
 # predates APX (older binutils) — probe the compiler's assembler for an EGPR move
 # + NDD add first. The pinned Dockerfile.sde carries binutils 2.46.1, so the probe
 # always passes in-container.

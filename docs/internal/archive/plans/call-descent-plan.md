@@ -23,8 +23,8 @@ those edges, descend into `get_Out`, or descend the whole tree.
 
 > Status legend: **planned** unless noted. This plan was pressure-tested by an
 > adversarial design review; the correctness mitigations in
-> [§Correctness core](#correctness-core-the-shadow-stack) and the honesty constraints in
-> [§Level 3 safety](#level-3-safety-and-honesty) are **load-bearing**, not optional
+> [§Correctness core](#correctness-core-the-shadow-stack) and the fidelity constraints in
+> [§Level 3 safety](#level-3-safety-and-fidelity) are **load-bearing**, not optional
 > polish. Update this file as phases land, the way
 > [inline-asm-keystone-plan.md](inline-asm-keystone-plan.md) tracks its own.
 >
@@ -234,7 +234,7 @@ mitigations are requirements, not nice-to-haves.
 > - **Tail-call keep-open is NOT implemented.** A descended method ending in a tail `jmp`
 >   pops early instead of following to the tail-callee's return. The first cut adds a
 >   *defensive* mitigation only — clearing the parent's pending-call state on every frame
->   push — so a tail-jump degrades to **honest truncation** rather than a mis-parented /
+>   push — so a tail-jump degrades to **faithful truncation** rather than a mis-parented /
 >   corrupted frame tree. Full keep-open (record an edge + `run_until` the real return) is
 >   future work.
 
@@ -375,16 +375,16 @@ into the known sibling as a nested frame while an unknown libc call is still ste
 
 ### Phase 5 — Level 3 `DESCEND_ALL` + guards *(default off)*
 
-**Goal.** Descend into everything, safely bounded and honestly documented. **Deliverables:**
+**Goal.** Descend into everything, safely bounded and faithfully documented. **Deliverables:**
 denylist; **conservative default insn budget (~4096, not `PTRACE_STREAM_CAP`=65536)**; the
 backend-owned real-time watchdog (blocked-syscall escape); a **default denylist** covering
 GC-entry / JIT-compile / PLT-`ld.so`-resolver / known-blocking libc; an explicit opt-in
 gate **beyond** the level number; per-step sanity check that PC/`ret_addr` still lie in a
 known executable mapping (self-truncate, not crash, when GC/re-JIT moves code); clean
-detach-not-`run_until` unwind on live targets. Ships **with** the honesty docs (§below) or
+detach-not-`run_until` unwind on live targets. Ships **with** the fidelity docs (§below) or
 not at all. **Acceptance:** fork-path fixture descends a libc `memcpy` call; a **guarded L3
 live lane** (`jit_trace *-descend-all`, per decision) runs against a real runtime with the
-default denylist + conservative budget + watchdog and self-skips honestly when it trips a
+default denylist + conservative budget + watchdog and self-skips transparently when it trips a
 guard — asserting the guards fire, not that L3 is transparent; with the Phase-1 AArch64
 hardware-breakpoint path, AArch64 W^X L3 now descends rather than self-skipping to
 edges-only (self-skip remains only where the host reports no debug-register slots).
@@ -478,7 +478,7 @@ bindings and its lifetime tests).
 `examples/test_hwtrace.c` gained the fork-path descent fixtures (L0-L3, `max_depth`, budget,
 recursion, watchdog self-termination), the attached-path descent test, and the **cascade
 invariants** (`test_descent_cascade`: frame-0 body byte-identical across L1/L2/L3; higher
-levels add only directly-reachable frames) plus the **honest limitation** test (a known region
+levels add only directly-reachable frames) plus the **faithful limitation** test (a known region
 behind a stepped-over intermediary is NOT recorded). `jit_trace` gained `<mode>-descend` (L2)
 / `<mode>-descend-all` (L3, guarded, asserts the guards fire) for the dotnet / dotnet-bcl /
 java lanes, wired to `mk/native-trace.mk` `hwtrace-jit-*-descend[-all]` + `mk/docker.mk`
@@ -502,8 +502,8 @@ the aarch64 `calls_leaf` fixture is carried in the conformance corpus + compiles
   guarded **`*-descend-all` L3 lane** from Phase 5 that runs with the default denylist +
   budget + watchdog and asserts the guards fire; `mk/native-trace.mk` `hwtrace-jit-*-descend`
   / `hwtrace-jit-*-descend-all` + `mk/docker.mk` `docker-hwtrace-jit-*-descend[-all]` targets,
-  all watchdog-bounded and self-skipping honestly like the existing lanes.
-- Cascade property checks with **P1 weakened** to the honest form: *frame-0 body is
+  all watchdog-bounded and self-skipping transparently like the existing lanes.
+- Cascade property checks with **P1 weakened** to the faithful form: *frame-0 body is
   byte-identical across all levels; higher levels add only **directly-reachable** frames/edges*.
   The strong `recorded(L2) ⊆ recorded(L3)` claim is **false** — a known region reachable
   only through a stepped-over intermediary is invisible to descent — so a dedicated test
@@ -516,7 +516,7 @@ self-skips. **Effort:** 3 days.
 ### Phase 9 — Docs — ✅ **DONE (2026-07-03)**
 
 Landed: [native-tracing.md](../../../guides/tracing/native-tracing.md) "Call descent levels" subsection (4-level
-table + edge/frame model + the honesty limits + the `dotnet-bcl-descend` worked-output
+table + edge/frame model + the fidelity limits + the `dotnet-bcl-descend` worked-output
 pointer); the L3-hazard treatment in [hardware-tracing.md](../../../guides/tracing/hardware-tracing.md) and
 [analysis/jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md); the ~27 new symbols in
 [api-reference.md](../../../reference/api-reference.md); five [glossary.md](../../../project/glossary.md) terms (call
@@ -528,7 +528,7 @@ the [CHANGELOG.md](../../../../CHANGELOG.md) entry; and the version bump via
 
 ### Phase 9 — Docs (detail)
 
-**Goal.** Every doc reflects descent, honestly. **Deliverables** (one section each):
+**Goal.** Every doc reflects descent, faithfully. **Deliverables** (one section each):
 - [docs/native-tracing.md](../../../guides/tracing/native-tracing.md) §558-604 — extend the step-over passage
   into a **"Call descent levels"** subsection with the 4-level table, the edge/frame model,
   and a **worked `dotnet-bcl-descend` output** captured from the Phase 8 make target (so it
@@ -549,7 +549,7 @@ the [CHANGELOG.md](../../../../CHANGELOG.md) entry; and the version bump via
 
 ---
 
-## Level 3 safety and honesty
+## Level 3 safety and fidelity
 
 The review was blunt: **L3 on a live managed runtime is not "expensive/noisy" — it can
 perturb or deadlock the target**, and the plan must default to that truth.
@@ -642,7 +642,7 @@ once Phase 2's symbols are frozen.
 **Top risks.** (1) Shadow-stack correctness on non-local control flow — mitigated by the
 SP-sweep pop + exact triple predicate + the deterministic fork fixtures; (2) **L3 live-runtime
 safety — the decision to permit L3 on live runtimes makes this the sharpest risk**: default-off
-+ conservative caps + default denylist + watchdog + honesty docs bound it, but cross-thread
++ conservative caps + default denylist + watchdog + fidelity docs bound it, but cross-thread
 lock inversion is **not** eliminated, so the guarded live lane must self-skip cleanly rather
 than hang; (3) the atomic 10-way symbol landing tripping the parity gate — mitigated by
 landing header + all bindings + allow-list in one change; (4) Lua/Node 64-bit address

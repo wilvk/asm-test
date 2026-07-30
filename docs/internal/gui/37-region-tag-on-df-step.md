@@ -27,7 +27,7 @@
 > **Status (2026-07-29) — ☑ 5/6. LANDED.** T1 the `rbase` writer + all 4 producers +
 > schema + corpus regen (`6612ef8`); T2 the desktop reader resolves the span from
 > the wire (`ad32299`); T3 the churn walk region-as-of-step resolver (`06f2991`, + a
-> review-surfaced honesty fix `07fa0d1`); T5 the `anchor_source` HUD grade + 36
+> review-surfaced fidelity fix `07fa0d1`); T5 the `anchor_source` HUD grade + 36
 > reconciliation (`7f5b048`); T6 the `scene-df-two-span` end-to-end golden
 > (`2516d06`). **T4 (`when`) DEFERRED as the severable extension this brief marks it**
 > — a serve-path disasm-version refinement, no view breaks without it (reader-rule 2
@@ -40,7 +40,7 @@ A live `auto` session may walk several candidate regions before one runs
 ([asmspy.c:3733-3761](../../../cli/asmspy.c#L3733)), emitting a `codeimage` per
 candidate. The resulting recording carries several code spans and a stream of
 offsets that belong to different ones — with nothing on the wire saying which. 36
-must refuse that recording: it draws no path and states why. That refusal is honest
+must refuse that recording: it draws no path and states why. That refusal is genuine
 and it is also unnecessary, because the information was in the producer's hand and
 was dropped on the way out.
 
@@ -208,7 +208,7 @@ goes through 36's derivation; the two are distinguishable at every surface.
    precedence over the recording-wide anchor.
 4. `desktop/src/space/trajectory.h`: add `anchor_source` with values `"wire"`,
    `"single-span"`, `"mixed"`, `""`. `TRAJ_ANCHORED` and `TRAJ_RELATIVE_BASIS` both
-   stay set — the wire basis is still rel. **This is a real honesty grade, not
+   stay set — the wire basis is still rel. **This is a real fidelity grade, not
    cosmetics:** a wire-stated placement and a derived one are different claims and
    must not share a label.
 5. `desktop/src/live/ptslice.cpp` builds a `DataflowStream` **directly from an
@@ -275,7 +275,7 @@ across a candidate walk, so a reader keys `(rbase, when)` and **never `when` alo
 force at that step; a step whose bytes are genuinely unknown says so instead of
 showing the newest version; no golden churns.
 
-### T5 — the honesty chrome and the doc-36 reconciliation  (S, depends on: T2, T3, 36 T4)
+### T5 — the fidelity chrome and the doc-36 reconciliation  (S, depends on: T2, T3, 36 T4)
 
 [`hud.cpp`](../../../desktop/src/scene3d/hud.cpp) gains the grade distinction 36 T4
 could not make: `anchor_source == "wire"` ⇒ *"rel: span stated on the wire (rbase)"*;
@@ -325,7 +325,7 @@ complete and useful without it.
 - **D4/D9 unchanged.** The desktop stays engine-free; the capture host is still
   `asmspy`.
 
-## Non-goals / honest limits
+## Non-goals / acknowledged limits
 
 - **Not a tag on `trace`.** A `basis:"rel"` `trace` recording has the identical
   ambiguity, but `trace` already carries `basis` (so a reader knows it is rel), its
@@ -342,7 +342,7 @@ complete and useful without it.
   the segmentation work in [35](35-continuous-live-dataflow.md).
 - **Does not give the Auto/Dataflow pane convergence marks.** `df_step` still carries
   no `tid`, so such a capture stays a single trajectory — see
-  [36](36-anchor-the-3d-plane.md) T5's honest limit. Tagging `tid` is neither
+  [36](36-anchor-the-3d-plane.md) T5's acknowledged limit. Tagging `tid` is neither
   proposed nor blocked here.
 
 ## Cross-references
@@ -354,5 +354,5 @@ Consumers: [10](10-spacetime-3d-overview.md) (terrain/trajectory),
 [04](04-replay-views.md) (dataflow views), [08](08-observer-views.md) (the
 `codeimage` kind and the disasm-at-`when` resolver). The live capture path is
 [07](07-serve-live-host.md); the continuous session whose step indices alias is
-[35](35-continuous-live-dataflow.md). Honesty chrome D7 /
+[35](35-continuous-live-dataflow.md). Fidelity chrome D7 /
 [23](23-graded-truth-layer.md); wording D7 / [24](24-one-visual-language.md).

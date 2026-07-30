@@ -230,7 +230,7 @@ int main() {
             }
             ok(result == 42, "auto: auto-selected backend traces a live call (== 42)");
             ok(tr.covered(0) || tr.truncated(),
-               "auto: auto-selected backend covers block offset 0 (or honestly truncates)");
+               "auto: auto-selected backend covers block offset 0 (or faithfully truncates)");
             if (ab == SINGLESTEP) {
                 const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
                 ok(tr.insn_offsets() == expect,
@@ -752,7 +752,7 @@ int main() {
         // fn ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
         ok(result == 42, "window: fn ran and code.call(20, 22) == 42");
         // Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step
-        // it honestly self-skips (armed == false) — the C suite's
+        // it faithfully self-skips (armed == false) — the C suite's
         // test_wholewindow_singlestep takes the same skip, and node's window test
         // guards its deep checks the same way. Assert the arming-dependent bits only
         // when the window actually armed.

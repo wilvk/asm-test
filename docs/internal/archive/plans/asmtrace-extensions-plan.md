@@ -73,11 +73,11 @@ Today a `WindowHot` scope overloads `AsmMethod.Count` as a sample weight (docume
 not just the docs: for a statistical scope `Weight` = endpoint-hit weight and `Count` is
 documented `== Weight`; for an exact scope `Weight == Count`. `Disassembly` is already empty on
 `IsStatistical` scopes (verified — `AttributeAddresses` gates it on `!IsStatistical`); a scope
-`WeightIn(nameSubstring)` companion is the honest statistical analog of `InstructionsIn`
+`WeightIn(nameSubstring)` companion is the faithful statistical analog of `InstructionsIn`
 (numerically identical, but named for the sampled-weight meaning so a caller's intent reads
 right on a survey). NB: `InstructionsIn` is intentionally NOT made throw/empty on statistical
 scopes — the shipped `amdhot`/`crashproof-survey` examples rely on it returning the weight; the
-honesty is delivered by `Weight`/`WeightIn` + tightened docs instead. The native `render_window`
+fidelity is delivered by `Weight`/`WeightIn` + tightened docs instead. The native `render_window`
 refuse-a-statistical-trace item is not needed at the managed layer (statistical scopes never
 render a `Path`).
 
@@ -168,7 +168,7 @@ this entry specified.
 - .NET: `AsmTrace.WindowHot(…, tileCheckpoints:)` + `TiledIslands` / `TiledAddresses`, and
   `AsmTrace.Checkpoints(methods)` to resolve managed methods to entry PCs. Demo:
   [examples/dotnet/amd-tile](../../../../examples/dotnet/amd-tile/).
-- **Honest boundary.** Tiled coverage is **SAMPLED / PARTIAL** — at each checkpoint HIT the ~16
+- **Truthful boundary.** Tiled coverage is **SAMPLED / PARTIAL** — at each checkpoint HIT the ~16
   most recently retired branch targets, EXACTLY; between hits, nothing but what the sampler
   caught. It is **not** an exact whole-window trace; that stays a hardware dead end on AMD and a
   documented non-goal. Legitimate for `WindowHot` precisely because that surface is a
@@ -229,7 +229,7 @@ this entry specified.
   signature-qualified key (`Type::Method(int32)`), anchors on `(` so a prefix cannot collide,
   and **REFUSES** — reporting via `LastCheckpointSkips` — when more than one distinct method
   still matches. Tier bodies of the *same* method are not an ambiguity (newest runs); two
-  different methods are, and there is no honest way to pick. This is why the managed claim
+  different methods are, and there is no faithful way to pick. This is why the managed claim
   needed its own live lane rather than inheriting the native test's result.
 
 Gated on Zen 4/5 + `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build + Linux >= 6.10 (it
@@ -252,7 +252,7 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 
 1. ~~**E1 `WindowHybrid`**~~ — **LANDED** (the exact-on-hot-slice composition; all reuse).
 2. ~~**E2 `AsmMethod.Weight`**~~ — **LANDED** (alongside E1).
-3. ~~**E3 sibling-thread publish**~~ — **LANDED** (closes the `Window` deep-BCL gap, the one honest-partial in the family).
+3. ~~**E3 sibling-thread publish**~~ — **LANDED** (closes the `Window` deep-BCL gap, the one faithful-partial in the family).
 4. ~~**E7 AMD region example**~~ — **LANDED**.
 5. ~~**E5**~~ — **LANDED**. ~~**E6**~~ — **LANDED**, both producers: the IBS survey fallback
    (Zen 2) and the branchsnap tiled at managed checkpoints into `WindowHot.Addresses`.

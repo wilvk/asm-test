@@ -27,7 +27,7 @@ SyscallView obs_syscalls_build(const Recording &r, const ObsLifecycle *lc) {
         }
     }
     // A session's `started` params echo says what the capture was actually
-    // running with, which is the only honest source for the follow flag: what
+    // running with, which is the only faithful source for the follow flag: what
     // the client asked for and what it got are not the same field.
     const nlohmann::json *p = obs_started_params(life, "log");
     if (p != nullptr && p->contains("follow") && (*p)["follow"].is_boolean())

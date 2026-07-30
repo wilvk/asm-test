@@ -5,7 +5,7 @@
 //     // rc==OK -> tr.InsnsTotal() / tr.Covered(0): the EXACT in-region stream, entry block and all
 //
 // The sampled AMD survey (amdhot / amdlbr) runs the window at native speed and SAMPLES the
-// branch stack — so a tiny single-shot routine that fires once and returns is honestly
+// branch stack — so a tiny single-shot routine that fires once and returns is faithfully
 // TRUNCATED: it never accumulates enough sample weight to be caught, and its entry block is
 // lost. This example captures that SAME routine EXACTLY. It enables the LBR, plants a hardware
 // execution breakpoint at base+exitOff (the region's final `ret`), runs the region once, and

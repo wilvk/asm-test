@@ -148,7 +148,7 @@ truncation in. The sampled sibling gates on the **raw** hardware count
 ([hwtrace.c:1017](../../../src/hwtrace.c)) with no synthetic append —
 branchsnap is the only caller that inflates `nbr`.
 
-**The direction is safe** (a false positive on an honesty flag, never
+**The direction is safe** (a false positive on a fidelity flag, never
 partial-as-complete) **but not free:** a spurious `truncated` fails
 [trace_auto.c:225](../../../src/trace_auto.c) and escalates to a second real
 in-process execution — whose own comment warns non-idempotent side effects run
@@ -171,7 +171,7 @@ iteration loop. Report the mechanism, not the "tiny routine" framing.
 
 ### 2.3 `IBS_MAX_RECORD` is a stale constant → silent ring loss
 
-**Severity: honesty (the lane's core contract), unknown to the author.**
+**Severity: fidelity (the lane's core contract), unknown to the author.**
 
 [src/ibs_backend.c:282-283](../../../src/ibs_backend.c) sizes the largest parsed
 record at 112 bytes, and its comment still reads *"header + IP + TID + RAW(size +
@@ -186,7 +186,7 @@ This matters because **`PERF_RECORD_LOST` does not cover the gap** — verified
 against `ring_buffer.c:203-206,262-264`: the non-overwrite space check does
 `goto fail`, and `fail:` only bumps counters; the LOST record needs its own space
 in a *later successful* `__perf_output_begin`. A ring that stays full until drain
-yields `lost == 0` **and** `throttled == 0` — silent loss with no honesty signal,
+yields `lost == 0` **and** `throttled == 0` — silent loss with no fidelity signal,
 exactly as the file's own comment at [:593-595](../../../src/ibs_backend.c)
 predicts.
 

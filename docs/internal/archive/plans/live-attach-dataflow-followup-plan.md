@@ -66,7 +66,7 @@ x86-64 first, AArch64 where the primitive exists).
 ## F1 — Block-step + emulator-replay value optimization *(**increments 1+2 LANDED** — increment 2 closes the vector-breadth carryover 2026-07-17; **HOST-gated, not CI-gatable**; F2 increment 1 has since LANDED on top)*
 
 > **UPDATE 2026-07-17 — INCREMENT 2 LANDED: vector breadth (the YMM/ZMM carryover) is CLOSED,
-> and the honest boundary is narrower than the carryover assumed.** `make docker-dataflow-attach`
+> and the true boundary is narrower than the carryover assumed.** `make docker-dataflow-attach`
 > / `make dataflow-blockstep-test` — **65/65** (47 at first landing; +18 after the adversarial
 > review round recorded below), deterministic. The carryover read "YMM/ZMM boundary seeding";
 > what is actually achievable was **measured, not assumed**, and it splits three ways:
@@ -161,7 +161,7 @@ x86-64 first, AArch64 where the primitive exists).
 > | # | defect | now |
 > |---|---|---|
 > | **HIGH 1** | a decoder DESYNC left both verdicts optimistic — a constant-pool island (routine in the JIT method-maps this tier targets) makes a `movabs` swallow a following VEX prefix; measured `replayable=1 touches_vec=0, remaining=5/17`, so a VEX-128 reached Unicorn ungated AND unwitnessed | `remaining != 0` ⇒ `replayable=0 ("decode")`, `touches_vec=1`. **LANDED 2026-07-18** (`dataflow-producer-correctness.md` T7): a caller-vouched real-instruction-extent list (`asmtest_blockstep_extent_t`) lets `region_scan` skip an island's bytes entirely rather than merely fail closed on them — `island_sse` (the same island shape, with a replayable legacy-SSE instruction on the far side) recovers to `replayable=1` and a byte-identical replay when given extents that hop it, while staying the same fail-closed `"decode"` verdict without them |
-> | **HIGH 2** | **MXCSR was never seeded**, so the replay used Unicorn's default rounding. Measured on the legacy-SSE path — the one the whole perturbation win rests on: `divsd` under RC=toward-zero gave oracle `0x3fc9999999999999` vs replay `0x3fc999999999999a` at `rc=OK, truncated=0, pure=1`. Non-default rounding is not exotic (`-ffast-math`'s crtfastmath.o; JIT/managed runtimes) | MXCSR seeded + read-back-verified, and its **control** bits added to the canary. Legitimate only because Unicorn was verified to **honour** it (matches silicon under RN and RZ); had it merely stored the value, the honest move was to gate FP regions |
+> | **HIGH 2** | **MXCSR was never seeded**, so the replay used Unicorn's default rounding. Measured on the legacy-SSE path — the one the whole perturbation win rests on: `divsd` under RC=toward-zero gave oracle `0x3fc9999999999999` vs replay `0x3fc999999999999a` at `rc=OK, truncated=0, pure=1`. Non-default rounding is not exotic (`-ffast-math`'s crtfastmath.o; JIT/managed runtimes) | MXCSR seeded + read-back-verified, and its **control** bits added to the canary. Legitimate only because Unicorn was verified to **honour** it (matches silicon under RN and RZ); had it merely stored the value, the faithful move was to gate FP regions |
 > | **HIGH 3** | the impurity early-`break` truncated the sweep, so vector instructions AFTER a `cpuid` were unseen ⇒ `touches_vec=0` ⇒ **no `xstate_read` on the single-step fallback** ⇒ every vector record `value_valid=0` at `rc=OK`. That is the headline "values in the trace" deliverable failing on the exact path ALL AVX code is routed to | only the *purity* answer is settled early; the sweep runs on |
 > | **MED 4** | the PUBLIC `is_replayable()` answered **1, reason=NULL** for `cpuid; vpaddq xmm0,xmm1,xmm2; ret` — telling a caller "Unicorn can faithfully replay this" about the instruction this tier calls a silent liar. `run()` masked it; the API was still wrong | purity and replayability are now independent verdicts with independent reasons |
 > | **MED 5** | **the central design claim was unfalsifiable by its own suite.** Swapping the encoding gate for the Capstone AVX-group gate the commit explicitly rejects **passed all 47 checks** — every scanned region happened to contain a metadata-visible instruction, and the one that proves the gap (`vpbroadcastq zmm0,xmm0`) sat in the entry *glue*, which `region_scan` never scans | two regions gated ONLY by the encoding rule: `vex_bmi` (`andn`, no hardware gate, pins the rule on every x86-64 box) and `evex_invis` (every region instruction metadata-invisible). The metadata swap now **fails 4 checks** |
@@ -338,7 +338,7 @@ silently wrong.
 > Those are necessarily **tautological** at the syscall boundary — compared against the snapshot
 > they were copied from — and that is stated rather than glossed. Every *other* register, rsp and
 > the arithmetic flags remain genuinely checked, so the canary still validates the block's whole
-> pure prefix. **r11 cannot be computed honestly**: measured, it returns as the pre-syscall
+> pure prefix. **r11 cannot be computed faithfully**: measured, it returns as the pre-syscall
 > rflags OR'd with **TF (0x100)** — the ptrace stepping bit — so "computing" it would mean
 > modelling the debug mechanism's own perturbation of the value it reports.
 >
@@ -604,7 +604,7 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > captured trace before `asmtest_defuse_build`. The realistic new risk is not the feed but
 > **attaching a profiler to a process asmspy did not launch**: `CORECLR_ENABLE_PROFILING` is
 > read at startup, so a live-attach target either needs the .NET attach-profiler path or the
-> capture is limited to launched targets — that, not EventPipe, is the honest open question
+> capture is limited to launched targets — that, not EventPipe, is the genuine open question
 > to spike first.
 
 The base plan leaves managed **memory** def-use GC-uncanonicalized: a store before a
@@ -681,7 +681,7 @@ tiering.
 > (L2) **equal** the oracle's — F5 is a drop-in L0 producer. It opens **no** perf event
 > (position 9): it consumes a captured AUX blob + a code-image, driven in CI by the
 > **synthetic** `asmtest_pt_encode_fixture` (libipt's own encoder). It inherits F1/F2's
-> purity/replayability verdicts and **truncates honestly** on an impure / VEX-EVEX /
+> purity/replayability verdicts and **truncates faithfully** on an impure / VEX-EVEX /
 > nondeterministic region (no single-step fallback), a per-step path cross-check catching
 > a divergence. Lanes: `make dataflow-pt-test` (native, Unicorn) + `make docker-dataflow-pt`
 > (the libipt+Unicorn image; `libipt-dev` added to `Dockerfile.dataflow-attach`).
@@ -745,7 +745,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > def-use graph starts **FABRICATING EDGES**: an in-region step writes a location, the elided
 > glue overwrites it, a later in-region step reads it — and the shared last-writer builder,
 > having no record of the glue, hands the edge to the **stale in-region writer**. Note what
-> this defeats: **the VALUE at the read is honest** (it is read from silicon), so no
+> this defeats: **the VALUE at the read is genuine** (it is read from silicon), so no
 > value-level oracle, and no byte-identical cross-producer comparison, can catch it. It is
 > only the *edge* that lies. Mutation-proven: with the barrier's register half disabled the
 > fabricated edge appears **while the value assertion still passes**.
@@ -848,7 +848,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > still links on every host, and Capstone/libbpf were already this lib's dependencies.
 >
 > **The shared victim** ([bindings/dataflow_victim.c](../../../../bindings/dataflow_victim.c)) is what
-> keeps ten lanes honest with one fixture: same `df_chain` bytes as the native suite, publishes
+> keeps ten lanes faithful with one fixture: same `df_chain` bytes as the native suite, publishes
 > `base=/len=/pid=` on stdout, loops calling the region, bumps a counter file so a caller can
 > prove it SURVIVED the detach. Its `a`/`b` come from **argv**, which is the anti-vacuity hinge —
 > the expected result is a property of the run, so a second victim with different args (17+25=42)

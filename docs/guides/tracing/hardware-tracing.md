@@ -43,7 +43,7 @@ The PT and CoreSight backends observe *out of band* and are the recommended
 backends for JIT/GC-heavy managed runtimes (JVM, .NET, Node), where in-process
 [DynamoRIO](native-tracing.md#dynamorio-tier) collides with the runtime's signal
 and code-cache machinery. AMD LBR delivers its branch stack only at a PMU sample,
-so it captures branch-heavy routines well and honestly marks a too-fast single-shot
+so it captures branch-heavy routines well and faithfully marks a too-fast single-shot
 routine `truncated`. The **single-step backend is the universal floor** — it
 produces the same exact, complete offsets on every x86-64 Linux host (Intel, AMD
 of any generation, VMs, CI, plain unprivileged containers); see
@@ -342,14 +342,14 @@ out-of-process descent tier has, which it now carries.
 
 | Tier | Backend | Fidelity | Needs | State |
 |---|---|---|---|---|
-| **WEAK** | in-process single-step (`EFLAGS.TF`) | exact, descends into every call; honestly noisy | any x86-64 Linux, unprivileged | **ships today** |
+| **WEAK** | in-process single-step (`EFLAGS.TF`) | exact, descends into every call; admittedly noisy | any x86-64 Linux, unprivileged | **ships today** |
 | **STRONG** | whole-window Intel PT (`asmtest_pt_decode_window`) | exact, low-perturbation | bare-metal Intel PT + `perf_event_paranoid < 0` or `CAP_PERFMON` | decode **synthetic-validated**; live capture forward-look |
 | **CEILING** | AMD LBR sampled survey (`IsStatistical`) | a hot-method histogram, **never** an exact whole window | Zen 4+ bare metal + `CAP_PERFMON` | ships as a statistical survey |
 
 - **WEAK** — the single-step tier records the absolute RIP of every instruction the
   thread runs. It is CI-runnable on any x86-64 Linux for a **native leaf** (pointing
   single-step at live managed code is forbidden — it fights the runtime's SIGTRAP/JIT).
-  It is honestly noisy (the runtime's own machinery is stepped too) and **bounded**:
+  It is admittedly noisy (the runtime's own machinery is stepped too) and **bounded**:
   a capture ring caps memory, a per-frame **instruction budget** (default 4× the ring)
   and a wall-clock **watchdog** (default 10 s) cap runaway/blocking windows, and an
   opt-in **deny-region** set ends the capture at a blocking libc entry. Overflow or any
@@ -518,7 +518,7 @@ the scope's promise degrades differently by shape:
 - **Whole-window** (`new AsmTrace()` in the .NET binding) — "trace whatever runs
   here." Clean under PT; under single-step it is best-effort and **expected to
   self-truncate** on a live runtime (the ~1M runtime instructions around a managed
-  leaf overflow the window). Honest by design: the raw `Addresses` are exposed, and
+  leaf overflow the window). Transparent by design: the raw `Addresses` are exposed, and
   `byMethod`/`withRundown` labelling attributes them to managed methods.
 - **One JIT'd method** (`AsmTrace.Method(HotPath)`) — "trace this method's body."
   A region + **lazy-arm** call: reliable, exact offsets, and **managed-safe by
@@ -554,7 +554,7 @@ tier*), and the .NET empty ctor routes the window instead of arming TF:
 |---|---|---|---|
 | 1 | **Intel PT** whole-window | bare-metal Intel PT + `perf_event_paranoid < 0` / `CAP_PERFMON` | `pt` |
 | 2 | **§D3 out-of-process stepper** (`outOfProcess: true`) | otherwise, where ptrace is permitted | `oop` |
-| 3 | **Honest self-skip** | neither available — `SkipReason` names both misses | *(unarmed)* |
+| 3 | **Candid self-skip** | neither available — `SkipReason` names both misses | *(unarmed)* |
 
 In-process TF is **never** selected on this path (`ww.Route` is `pt` / `oop`, never
 `inproc`). With the policy inactive (the default), the ctor behaves exactly as
@@ -593,7 +593,7 @@ event (the single-thread §D3 stepper follows one thread and cannot exercise a h
 so it needs bare-metal Intel PT with `perf_event_paranoid < 0` or `CAP_PERFMON`. Off
 Intel PT the scope sets `SkipReason` and runs the body **uninstrumented** — never a
 hard failure, never in-process single-step. The **default whole-window capture is
-unchanged**: it stays the honest per-thread window that flags the trace `truncated`
+unchanged**: it stays the faithful per-thread window that flags the trace `truncated`
 when work hopped OS threads (see above) — ambient stitching is an explicit opt-in,
 never automatic. Use the everywhere-runnable `AsmStitchedTrace.Step` when Intel PT
 is not available.
@@ -622,7 +622,7 @@ Three properties make it worth having as its own lane:
   default `perf_event_paranoid=2`). The target runs at full speed, completely
   unperturbed — exactly the safe observation mode for the managed/JIT targets
   the section above declares hostile to in-process stepping.
-- **It is honest about being statistical.** It fills its own shape
+- **It is candid about being statistical.** It fills its own shape
   (`asmtest_ibs_survey_t`: aggregated edges plus `samples` / `branch_samples` /
   `lost` / `throttled` provenance), **never** an `asmtest_trace_t`, and is not
   a member of the exact-backend cascade — a sampled edge proves that edge *was*

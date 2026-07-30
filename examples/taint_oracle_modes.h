@@ -10,7 +10,7 @@
  * The GP/integer modes are ASSERTED (DR must equal libdft, byte-for-byte). The XMM/SSE
  * modes are INFORMATIONAL (informational=1, gap_token "libdft-partial-sse-avx"): libdft's
  * SSE rules are "basic" + unverified upstream, so the diff reports the delta and never
- * fails on it (T6 — the honest boundary).
+ * fails on it (T6 — the faithful boundary).
  *
  * <stdint.h>/<string.h>-only.
  */

@@ -10,7 +10,7 @@ surface reduced to the **package import plus the scope**.
 This plan implements the conclusions of
 [Analysis: non-intrusive in-process managed-runtime tracing — the scoped `using`
 model](../../analysis/scoped-inprocess-tracing.md). Read that first for *why* it
-works, the five-axis definition of "non-intrusive," the honest host
+works, the five-axis definition of "non-intrusive," the genuine host
 preconditions, and the per-binding feasibility matrix; this document is the *how*
 and *in what order*.
 
@@ -165,7 +165,7 @@ slice, dependency-ordered:
 | **Core** | [scoped-tracing-core-plan.md](scoped-tracing-core-plan.md) | The two cheap C-layer fixes, per-thread hwtrace state, the shared render-on-close path, the arming-thread assert, the libipt decode-against-self-code-image glue, and whole-window completeness (Q2 noise attribution + Q3 snapshot drain) | 3, 4, 5, 6 |
 | **Bindings** | [scoped-tracing-bindings-plan.md](../../archive/plans/scoped-tracing-bindings-plan.md) | The scope construct + auto-name + arm hook + thread-id assert across the **native / interpreter / Go** tiers (C++, Rust, Zig, Python, Ruby, Lua, Go), with **.NET as the reference shim shape** | 1, 2 |
 | **Managed** | [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) | The **managed JIT tier** — Node → JVM → .NET — on the PT/ptrace clean path: `MethodLoadVerbose` address resolution, the shared `AsyncLocal`/`AsyncLocalStorage`/JVMTI piece-D async-hop stitching model, and the concealed ptrace stepper scope | 7 |
-| **Zero-config** (capstone) | [scoped-tracing-zeroconfig-plan.md](scoped-tracing-zeroconfig-plan.md) | The **aspirational empty-ctor form** — `using (new AsmTrace())` with no region argument. Adds **no** new primitive; repackages the three slices into a region-free arm surface + whole-window capture mode + honest self-skip UX, honestly qualified to the narrow host envelope where it is reachable | (consumes 1–7) |
+| **Zero-config** (capstone) | [scoped-tracing-zeroconfig-plan.md](scoped-tracing-zeroconfig-plan.md) | The **aspirational empty-ctor form** — `using (new AsmTrace())` with no region argument. Adds **no** new primitive; repackages the three slices into a region-free arm surface + whole-window capture mode + transparent self-skip UX, accurately qualified to the narrow host envelope where it is reachable | (consumes 1–7) |
 
 Each slice plan carries its own **code-change references, Tests, and Docs**
 sections (the deliverable this work was scoped to produce); this umbrella is the
@@ -183,7 +183,7 @@ interleaves them so the cheap de-risking fixes land first:
 2. **Bindings slice (analysis phases A + B)** — prove the shim shape on the
    **zero-hazard** tier first (**Python + C++**, then **Zig** near-free), then the
    **migration mitigation on Go** (`LockOSThread` already wired,
-   [go full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-honestly)).
+   [go full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-candidly)).
    Ruby/Lua/Rust slot in alongside. .NET is written here as the *reference* shim.
 3. **Core §1–§2 (analysis phase C)** — per-thread hwtrace state and the libipt
    decode-against-self-code-image glue land **before, not during, the managed
@@ -224,7 +224,7 @@ local specifics.
   Core §0's *record-arming-thread-id* fix enables once, for all ten shims.
 - **You get everything that ran — including the runtime.** An unwarmed body traces
   the JIT compiling it, GC, BCL plumbing. The empty-scope *whole-window* mode is
-  honest but noisy; the *region-scoped* mode (used by the shipped decoders, which
+  faithful but noisy; the *region-scoped* mode (used by the shipped decoders, which
   already drop out-of-region instructions —
   [src/pt_backend.c:108](../../../../src/pt_backend.c#L108),
   [src/ss_backend.c:99](../../../../src/ss_backend.c#L99)) is clean. Docs must set this
@@ -279,7 +279,7 @@ local specifics.
 - **The async-hop redesign (piece D) is a model change, not a knob** — "thread
   window" becomes "stitched trace of a logical operation." It is the real
   engineering in the Managed slice and is gated behind an explicit opt-in; the
-  default stays the honest thread-scope-with-mismatch-flag.
+  default stays the faithful thread-scope-with-mismatch-flag.
 - **Managed single-step is a footgun.** The Managed slice must forbid pointing
   single-step at live managed code (Bindings slice already restricts single-step to
   native leaves); the escape hatch there is PT/LBR or out-of-process ptrace.

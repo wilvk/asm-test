@@ -15,7 +15,7 @@
 
 The live-attach data-flow tier can currently *lie in three narrow ways and
 forfeit its win in two more*: a helper stepped over by the scoped producer can
-silently fabricate a def-use edge (the value is honest, only the edge lies, so
+silently fabricate a def-use edge (the value is accurate, only the edge lies, so
 no existing oracle can see it); the block-step replay compares and records
 architecturally-**undefined** EFLAGS bits as if silicon defined them; and a
 sub-register write (`r8d`, `ah`) is invisible to the last-writer map. Separately,
@@ -197,7 +197,7 @@ plan's M3 mutant), so precision is load-bearing.
 
 **Tests.** In
 [examples/test_dataflow_ptrace.c](../../../examples/test_dataflow_ptrace.c):
-- `test_callout` (:1544) changes honestly and MUST be updated: the helper's
+- `test_callout` (:1544) changes visibly and MUST be updated: the helper's
   `ret` pops the return address, so `rsp` (recorded by the `call`'s own write)
   differs between gap entry and exit → one GAP step is now appended at the
   helper's entry pc. Assert the new stream: 5 steps, the GAP step's `insn_off`
@@ -393,7 +393,7 @@ decoder change.
    nhwrec; int hwrec_overflow;` filled by `region_scan`'s sweep. More than 4
    **distinct** sites → `hwrec_overflow=1` → the region keeps today's
    whole-region single-step fallback (4 is the architectural DR slot count —
-   an honest, documented cap).
+   a disclosed, documented cap).
 3. Add local DR plumbing to
    [src/dataflow_blockstep.c](../../../src/dataflow_blockstep.c):
    `DFB_DR_OFFSET(n)` + `dfb_arm_hw_bp(pid, slot, addr)` /
@@ -417,7 +417,7 @@ decoder change.
 5. Disarm all slots on every exit path (region return, fault, truncation)
    before `reap` — `PTRACE_DETACH` never clears DRs (measured in the F3 work,
    [cli/asmspy_engine.c](../../../cli/asmspy_engine.c):2443 note), and
-   hygiene here keeps the pattern honest even though the child is reaped.
+   hygiene here keeps the pattern faithful even though the child is reaped.
 6. Supply the architectural write set producer-locally where Capstone
    under-reports these instructions, exactly as F2-inc1 did for `syscall`
    (:96–101 comment): verify with a quick probe what `cs_regs_access` reports
@@ -666,7 +666,7 @@ pointer to this task.
   fixtures) runs on VM lanes and must not hide behind that skip. The scoped
   single-step paths (T1–T3) run fully on VMs.
 - **DR slots**: 4 hardware breakpoints exist; T5/T6's >4-distinct-sites cap
-  is architectural, documented, and falls back honestly.
+  is architectural, documented, and falls back gracefully.
 - **Upstream gate (T8)**: no Unicorn release runs AVX TCG; the pin is
   deliberately not bumped until the written trigger fires. Any future bump
   follows the CLAUDE.md pinning rule (pinned version + SHA-256 digest line).
@@ -765,7 +765,7 @@ pointer to this task.
 ## Out of scope
 
 - **`src/ptrace_backend.c` control-flow reconstructors** — application-int3
-  classification, `rep` honesty, SP-aware `run_until`, IBS pre-cover:
+  classification, `rep` fidelity, SP-aware `run_until`, IBS pre-cover:
   [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md)
   (its T4 owns the re-entrancy-aware call-out in the backend; the scoped
   producer's own FIRST-arrival re-entrancy caveat at

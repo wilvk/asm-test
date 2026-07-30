@@ -118,10 +118,10 @@ int main() {
         check("complete:false alone flags truncation", trunc, "it did not");
     }
 
-    // --- the dishonesty fixture: skip_reason survives BYTE for byte ---------
+    // --- the low-fidelity fixture: skip_reason survives BYTE for byte ---------
     {
         data::FeaturesDoc doc = data::load_features_file(
-            std::string(ASMTEST_FIXTURE_DIR) + "/features-dishonest.json");
+            std::string(ASMTEST_FIXTURE_DIR) + "/features-low-fidelity.json");
         CompletenessTable t = build_completeness(doc);
         std::string text = render_completeness_text(t);
 
@@ -138,9 +138,9 @@ int main() {
         check("a measured-without-truth row shows its count",
               text.find("242 insns") != std::string::npos, text);
         check("the box header names the box",
-              text.find("dishonest-fixture") != std::string::npos, text);
+              text.find("low-fidelity-fixture") != std::string::npos, text);
         eq("truncated row count", std::to_string(t.n_truncated), "1");
-        golden("completeness-dishonest.txt", text);
+        golden("completeness-low-fidelity.txt", text);
     }
 
     // --- the committed REAL amd box record ----------------------------------

@@ -4,7 +4,7 @@ Implementation plan for the posture the
 [managed single-step decision doc](managed-singlestep-posture-plan.md)
 recommended and that is now approved: **B** (lazy-arm around a native-dispatched call)
 as the in-process default for `AsmTrace.Method()`, **C** (out-of-process stepper) as the
-automatic fallback for signatures B cannot cover, **D** (a runtime honesty note)
+automatic fallback for signatures B cannot cover, **D** (a runtime fidelity note)
 immediately, and **A** (the pinned-worker suite mitigation) retained regardless.
 
 > **COMPLETE (2026-07-07) — archived.** All of B0–B3, C-fallback, D, and A shipped and
@@ -50,12 +50,12 @@ The crash surface is removed *by construction* for covered signatures, and the
 
 ## Phases
 
-### B0 — D's runtime honesty note *(landed)*
+### B0 — D's runtime fidelity note *(landed)*
 
 Add one sentence to `HwTrace.DegradationNote()` and a caveat to
 [docs/bindings/dotnet.md](../../../../docs/bindings/dotnet.md): an in-process managed
 window is fatal if the runtime spawns a thread in-window; pin the tiering worker or
-use the out-of-process path. Zero protection, full honesty — lands first because it
+use the out-of-process path. Zero protection, full fidelity — lands first because it
 protects users on day one independent of the rest.
 
 ### B1 — the C helper `asmtest_hwtrace_call_scoped` *(landed, host-tested)*

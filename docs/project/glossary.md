@@ -167,7 +167,7 @@ CI
 
 conformance corpus
   A shared set of canonical routines and their expected captures that **every**
-  language {term}`binding` must reproduce, keeping all ten bindings honest and in
+  language {term}`binding` must reproduce, keeping all ten bindings faithful and in
   lock-step.
 
 CO-RE
@@ -853,7 +853,7 @@ hollow span
   took is known but its *value* is not (it was never captured). Expert synonym:
   an *edge with a known path but no recorded datum*. A filled span would look
   exactly like one carrying a measurement, so the hollow outline keeps them
-  honestly distinct.
+  faithfully distinct.
 
 hot-edges
   A desktop Observer view showing which control-flow edges were taken most often,

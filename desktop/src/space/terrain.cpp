@@ -193,7 +193,7 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     // 37 T3: redeemed for a df recording. A dataflow recording carries no `trace`,
     // so counting only trace offsets pinned every detected churn at step 0 (the
     // pre-existing bug 36 T3 flagged) — now its df_step offsets are counted as
-    // steps too. It still retains only the FIRST bump per base; the honest limit
+    // steps too. It still retains only the FIRST bump per base; the real limit
     // that version resets to 0 mid-recording on a candidate walk (so a re-armed
     // span's baseline never registers as churn under the greater-than rule) is
     // benign while candidates have distinct bases and is stated, not papered over.

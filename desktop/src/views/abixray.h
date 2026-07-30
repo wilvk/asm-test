@@ -17,7 +17,7 @@
 // The builder is pure — no ImGui, no I/O, no engine (D4) — so every rule below
 // is a headless assertion; abixray_draw.cpp renders the built model.
 //
-// Honesty (D7), refused rather than papered over:
+// Fidelity (D7), refused rather than papered over:
 //   - A pane has NO regstate producer -> present==false, the placard names the
 //     --steps producer and deep-links the docs (the scrubber's absent case).
 //   - The two panes are NOT step-aligned (different lengths) -> aligned==false
@@ -68,7 +68,7 @@ struct dt_abixray {
     std::string sysv_label = "System V (SysV)";
     std::string win64_label = "Microsoft x64 (Win64)";
     std::string desc;   // the state-descriptor id both panes render from
-    std::string banner; // alignment / torn honesty placard (empty when clean)
+    std::string banner; // alignment / torn fidelity placard (empty when clean)
 
     bool aligned = false; // the two panes share one step space [0, total)
     uint64_t total = 0;   // that shared step count

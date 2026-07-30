@@ -18,7 +18,7 @@ internal static class Report
         if (!ww.Armed)
         {
             Console.WriteLine($"# self-skip: {ww.SkipReason}");
-            return true; // honest degradation (ptrace denied) — block still ran, no crash
+            return true; // graceful degradation (ptrace denied) — block still ran, no crash
         }
 
         int r2r = 0;

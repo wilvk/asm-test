@@ -643,7 +643,7 @@ static void register_search_tests(ImGuiTestEngine *engine) {
         ctx->KeyPress(ImGuiKey_R);    // reset to the default pose
         ctx->Yield();
         IM_CHECK(sv.cam.yaw == scene3d::Camera{}.yaw);
-        ctx->KeyPress(ImGuiKey_T); // the honest top-down 2D-ish fallback
+        ctx->KeyPress(ImGuiKey_T); // the plain top-down 2D-ish fallback
         ctx->Yield();
         IM_CHECK(sv.cam.pitch >= scene3d::Camera::kPitchLimit - 1e-4f);
     };

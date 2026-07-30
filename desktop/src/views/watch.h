@@ -73,7 +73,7 @@ struct WatchView {
 
 // The value-over-hit series for the ImPlot chassis (15-T1 follow-on): `steps` is
 // the hit number, `values` the watched value AS A double. Only `value_ok` hits
-// are included — an un-read-back value is NOT a zero (honesty), so it is a GAP in
+// are included — an un-read-back value is NOT a zero (fidelity), so it is a GAP in
 // the series, never a fabricated point. Pure, so it is unit-tested without ImPlot
 // (D4); the draw feeds it to PlotStairs guarded on the ImPlot context.
 struct WatchPlot {

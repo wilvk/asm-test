@@ -37,11 +37,11 @@ Three properties hold across every binding:
 
 - **Thread scope, not logical-operation scope.** Capture follows the calling thread.
   Work that hops threads is not captured unless the (forward-look) async-hop stitching
-  is active; the `truncated` bit is the honest backstop.
+  is active; the `truncated` bit is the faithful backstop.
 - **You get everything that ran — including the runtime.** An unwarmed body traces the
   JIT compiling it, GC, and BCL plumbing. The region-scoped mode used by the shipped
   decoders is clean (out-of-region instructions are dropped at decode); the empty-scope
-  whole-window mode is honest but noisy.
+  whole-window mode is faithful but noisy.
 - **Self-skip is the house style, and the model is Linux-only.** Every scope compiles
   and runs everywhere; where no faithful backend is available it degrades to a recorded
   no-op that records why. On any x86-64 Linux the single-step backend (`EFLAGS.TF`)

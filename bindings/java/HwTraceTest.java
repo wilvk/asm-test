@@ -115,7 +115,7 @@ public final class HwTraceTest {
     private static int testNo = 0;
 
     // B2 (2026-07-21 review): with libasmtest_hwtrace ABSENT, every
-    // availability-QUERY entry point must degrade to its honest "unavailable"
+    // availability-QUERY entry point must degrade to its faithful "unavailable"
     // value — never throw. A harness legitimately asks status()/resolve()
     // BEFORE its available() skip guard; pre-fix these threw RuntimeException
     // ("Bail out!" + exit 1) instead of a clean "# SKIP".
@@ -614,7 +614,7 @@ public final class HwTraceTest {
     }
 
     // Region-free WHOLE-WINDOW capture (§Z1 — the empty-ctor `using (new AsmTrace())`).
-    // HONEST-BUT-NOISY: single-stepping the JVM captures the FFI dispatch + harness too, so the
+    // FAITHFUL-BUT-NOISY: single-stepping the JVM captures the FFI dispatch + harness too, so the
     // routine's absolute addresses are a SUBSET. Mirrors the C whole-window test.
     private static void windowTracesAWholeScope() {
         HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
@@ -623,7 +623,7 @@ public final class HwTraceTest {
             // The JVM whole-window is very noisy — HotSpot + FFM linkage run >1M insns per
             // call, exceeding the single-step whole-window's internal SS_WINDOW_CAP (1<<20),
             // so `truncated` is set no matter how big the caller buffer is. The test handles
-            // that honestly below (skips the exact-subset assert on a truncated capture).
+            // that transparently below (skips the exact-subset assert on a truncated capture).
             HwTrace.WindowResult res = HwTrace.window(() -> r[0] = code.call(20, 22)); // 42
             System.out.println("# window: armed=" + res.armed() + " truncated=" + res.truncated()
                 + " insns=" + res.insns().length);
@@ -643,7 +643,7 @@ public final class HwTraceTest {
                     ok(subset, "window: the routine's absolute addresses are all captured (subset)");
                 } else {
                     System.out.println("# note: window truncated (managed capture overflowed) "
-                        + "— skipping the exact-subset assert (honest best-effort)");
+                        + "— skipping the exact-subset assert (faithful best-effort)");
                 }
             } else {
                 System.out.println("# note: window self-skipped (begin_window unavailable)");
@@ -787,7 +787,7 @@ public final class HwTraceTest {
             trace.region("auto", () -> r[0] = code.call(20, 22));
             ok(r[0] == 42, "auto call(20,22): result == 42 (got " + r[0] + ")");
             ok(trace.covered(0) || trace.truncated(),
-                "auto covers block offset 0 (or honestly truncates)");
+                "auto covers block offset 0 (or faithfully truncates)");
             if (ab == HwTrace.SINGLESTEP) { // the pick off PT/AMD hosts: byte-exact parity
                 long[] insns = trace.insnOffsets();
                 long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
@@ -1007,7 +1007,7 @@ public final class HwTraceTest {
         // EXACT even when the stream is best-effort — and TF is never armed on the calling thread.
         ok(res.result() == 42, "stealthTrace(20,22): result == 42 out of band (got " + res.result() + ")");
         // Stream: EXACT when the reverse-attach single-step ran to completion; over a LIVE runtime
-        // it may truncate (async signals interrupt the per-insn step) — honest best-effort, like
+        // it may truncate (async signals interrupt the per-insn step) — faithful best-effort, like
         // dotnet's outOfProcess AsmTrace.Method and window(). Assert exactness only when complete.
         if (!res.truncated()) {
             long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
@@ -1015,7 +1015,7 @@ public final class HwTraceTest {
                 "stealthTrace: exact offsets [0,3,6,12,17] over two blocks (got "
                     + Arrays.toString(res.offsets()) + ")");
         } else {
-            ok(true, "stealthTrace: stream truncated over the live runtime (honest best-effort; result exact)");
+            ok(true, "stealthTrace: stream truncated over the live runtime (faithful best-effort; result exact)");
         }
         code.free();
     }
@@ -1079,7 +1079,7 @@ public final class HwTraceTest {
                         "stealthWindow: records the driver frame AND both pre-published leaves");
                     ok(c[3] >= 0 && c[4] > c[3], "stealthWindow: follows the calls in order (m1 before m2)");
                 } else {
-                    ok(true, "stealthWindow: stream truncated over the live runtime (honest best-effort; result exact)");
+                    ok(true, "stealthWindow: stream truncated over the live runtime (faithful best-effort; result exact)");
                 }
             }
         }

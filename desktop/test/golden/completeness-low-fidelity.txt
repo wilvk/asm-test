@@ -1,4 +1,4 @@
-dishonest-fixture — Fixture CPU — Fixture 1.0 — 0badbed 2026-07-24T00:00:00Z
+low-fidelity-fixture — Fixture CPU — Fixture 1.0 — 0badbed 2026-07-24T00:00:00Z
 4 rows, 3 available, 3 measured, 1 complete, 1 truncated
 TIER         BACKEND     ARCH    SCOPE         COMPLETENESS      STATUS
 emulator     guest       x86_64  guest         4/4 complete      ok

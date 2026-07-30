@@ -1,4 +1,4 @@
-// canvas_draw.cpp — the ImGui half of the trace canvas + the ONE graded honesty
+// canvas_draw.cpp — the ImGui half of the trace canvas + the ONE graded fidelity
 // vocabulary's draw half (23-graded-truth-layer.md T1) + the uniform busy signal
 // (T4). Draws only; every grading rule is pure in ui/fidelity.h / ui/progress.h.
 #include <cfloat>
@@ -13,7 +13,7 @@
 
 namespace asmdesk {
 
-// Warn / refusal colours from the shared honesty-chrome palette (ui/theme.h) so
+// Warn / refusal colours from the shared fidelity-chrome palette (ui/theme.h) so
 // every placard in the app looks the same and none can be mistaken for chrome.
 static const ImVec4 kWarn = dt_warn_col();
 static const ImVec4 kRefuse = dt_refuse_col();
@@ -117,10 +117,10 @@ void draw_progress(LongOp &op) {
     ImGui::TextUnformatted(op.label);
     ImGui::SameLine();
     if (op.mode() == ProgressMode::Determinate)
-        // An HONEST fraction: only when a real total exists (progress.h's rule).
+        // A FAITHFUL fraction: only when a real total exists (progress.h's rule).
         ImGui::ProgressBar(op.fraction(), ImVec2(-FLT_MIN, 0));
     else
-        // No honest total -> the indeterminate spinner/bar, never a fake %.
+        // No real total -> the indeterminate spinner/bar, never a fake %.
         ImGui::ProgressBar(-1.0f * (float)op.now, ImVec2(-FLT_MIN, 0),
                            "working");
     ImGui::Text("elapsed %.1fs", op.elapsed());

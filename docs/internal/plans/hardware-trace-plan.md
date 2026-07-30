@@ -188,7 +188,7 @@ silicon-validated 2026-07-21 (`c7b4ef7`,
   >    code. A "fixture-fed facade test" of the PT dispatch would therefore have to
   >    **subvert the availability gate** — which tests a mock of the hardware detector, not
   >    the facade.
-  > 2. **There is no honest wiring to add ahead of the capture.** `begin_window`'s PT arm
+  > 2. **There is no genuine wiring to add ahead of the capture.** `begin_window`'s PT arm
   >    *is* the capture (`perf_event_open` on the `intel_pt` PMU + AUX mmap + a recorder
   >    `when`); it self-skips at [hwtrace.c:2585-2587](../../../src/hwtrace.c). Wiring only
   >    `end_window`'s PT arm would create a decode arm that `begin_window` can never arm —

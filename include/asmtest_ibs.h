@@ -58,7 +58,7 @@ typedef struct {
     unsigned is_return; /* samples whose retired op was a return   */
 } asmtest_ibs_edge_t;
 
-/* A statistical survey: edges sorted by DESCENDING count, plus honest provenance. */
+/* A statistical survey: edges sorted by DESCENDING count, plus faithful provenance. */
 typedef struct {
     asmtest_ibs_edge_t *edges; /* malloc'd; free via survey_free */
     size_t n;                  /* number of distinct edges       */
@@ -74,7 +74,7 @@ typedef struct {
 /* opt OUT of the dispatched-op default -> count clock cycles (cnt_ctl=0). */
 #define ASMTEST_IBS_OPT_COUNT_CYCLES (1u << 0)
 /* attach a frame-pointer caller stack per sample (PERF_SAMPLE_CALLCHAIN +
- * exclude_callchain_kernel). HONESTY NOTE: no in-tree consumer decodes the
+ * exclude_callchain_kernel). FIDELITY NOTE: no in-tree consumer decodes the
  * callchain — the drain parses PAST it to reach the RAW payload — so today
  * this flag buys no call-graph output; it costs ring bandwidth (records grow
  * to ~1.2 KB worst case) and a kernel get_callchain_buffers allocation that
@@ -197,7 +197,7 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s);
  * same out-of-band, unprivileged envelope (exclude_kernel; perf_event_paranoid
  * <= 2 or CAP_PERFMON; the target runs unperturbed, no ptrace).
  *
- * WHAT IT MEASURES, honestly: a time-based IP histogram is RESIDENCY — where
+ * WHAT IT MEASURES, accurately: a time-based IP histogram is RESIDENCY — where
  * the target SPENDS TIME — not control flow. There are no edges here and no
  * entry evidence: a function entered once that never returns (main, an event
  * loop) DOMINATES a residency ranking even though an entry breakpoint on it

@@ -53,7 +53,7 @@ and no `examples/apx_*` files. Everything below is the substrate you build on:
 - [mk/native-trace.mk](../../../mk/native-trace.mk) — the self-skip shape for a
   lane target (lines 137–142): `drtrace-test` prints `== drtrace-test ==`,
   `# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=...`, `1..0 # skipped`.
-- [mk/cli.mk](../../../mk/cli.mk) (lines 15–21) — the honest **architecture**
+- [mk/cli.mk](../../../mk/cli.mk) (lines 15–21) — the accurate **architecture**
   gate: `CLI_ARCH := $(shell uname -m)` checked *before* any dependency check,
   because an architecture cannot be apt-installed.
 - Suite auto-discovery ([Makefile](../../../Makefile)): every
@@ -265,7 +265,7 @@ Dockerfile.drtrace's). User docs in T8.
 
 **Goal.** `make sde-test` runs existing suites under `sde64 -future` and proves
 SDE is byte-for-byte transparent to correct baseline code; it self-skips
-honestly off x86-64 and when SDE is absent.
+transparently off x86-64 and when SDE is absent.
 
 **Steps.**
 1. Create `mk/sde.mk` and add `include mk/sde.mk` in
@@ -391,7 +391,7 @@ in-container run: `make docker-sde`.
    enter `make test`. The generic `$(BUILD)/test_%` pattern rule already links
    the pair; no link rule needed.
 5. Wire into `mk/sde.mk` with an assembler-capability probe so a host-side
-   `sde-test` without the pinned GAS degrades honestly:
+   `sde-test` without the pinned GAS degrades gracefully:
    ```make
    SDE_GAS_APX := $(shell printf 'movq %%r16, %%rax\naddq %%rsi, %%rdi, %%rax\n' | \
                     $(CC) -x assembler -c -o /dev/null - 2>/dev/null && echo 1)
@@ -551,7 +551,7 @@ canonical trace-report shape.
    is an acceptable design change, note it in the tool header.
 3. Link rule: `$(BUILD)/sde_mix_report: $(BUILD)/sde_mix_report.o
    $(BUILD)/trace.o` (trace.o is dependency-free — Makefile ~line 793).
-4. Honesty limit, stated in the tool's header comment: `-mix` counts are
+4. Fidelity limit, stated in the tool's header comment: `-mix` counts are
    process-wide dynamic totals, not region-scoped offsets — `insns`/`blocks`
    offset arrays stay empty and `blocks_total` stays 0. Scoping mix to a
    marker region is future work for the Pin tracing tier, not this lane.
@@ -594,7 +594,7 @@ nonzero with a message naming the file. No self-skip surface beyond
    assertions on emulated ISA; Runs where: any x86-64 Linux). Content: what
    the lane is, `make docker-sde` / `make sde-test SDE_HOME=$(scripts/fetch-sde.sh)`,
    the transparency guarantee, the APX example, the `-mix` report, and the
-   honest boundary — SDE is an *emulator*: timing, and the real ABI at silicon
+   disclosed boundary — SDE is an *emulator*: timing, and the real ABI at silicon
    level, are asserted only up to emulation fidelity, which is why T6 anchors
    it to Unicorn and T3 to native TAP identity. Link this implementation doc
    via a GitHub blob URL only (published pages must not relative-link into

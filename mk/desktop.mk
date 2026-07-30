@@ -304,7 +304,7 @@ $(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $
 # DESKTOP_TEST_SHELL_OBJ), hence the fourth entry.
 $(BUILD)/desktop/app/ui/asm_language.o $(BUILD)/desktop/render/ui/asm_language.o \
 $(BUILD)/desktop/test/ui/asm_language.o $(BUILD)/desktop/uitest/ui/asm_language.o: | $(ICTEDIT_HOME)/TextEditor.h
-# canvas_draw.cpp now #includes IconsCodicons.h for the ONE glyph set per honesty
+# canvas_draw.cpp now #includes IconsCodicons.h for the ONE glyph set per fidelity
 # tier (23-graded-truth-layer.md T1), so the codicon header fetch must land before
 # it compiles on a clean tree — the same order-only prereq fonts.o carries.
 $(BUILD)/desktop/app/vw/canvas_draw.o $(BUILD)/desktop/render/vw/canvas_draw.o \
@@ -465,7 +465,7 @@ $(BUILD)/desktop/app/ig/imgui_freetype.o $(BUILD)/desktop/render/ig/imgui_freety
 # The test fixtures + golden corpus reach their tests through compile defines, so
 # the tests need no argv wiring (and run identically host + docker).
 $(BUILD)/desktop/test/t/test_recording.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
-# test_shell reads BOTH trees: the honesty fixtures (banners, the render smoke)
+# test_shell reads BOTH trees: the fidelity fixtures (banners, the render smoke)
 # and the golden corpus, for the regstate recording + the ABI x-ray pair that
 # exercise the two surfaced doc-09 tabs (Scrubber / ABI x-ray) end to end.
 $(BUILD)/desktop/test/t/test_shell.o: \
@@ -475,7 +475,7 @@ $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_
 # test_theme's source-lint (24 T1) reads the drift files straight from the tree,
 # so it needs the source root as a compile define (it runs from the repo root).
 $(BUILD)/desktop/test/t/test_theme.o:     DESKTOP_TEST_EXTRA = -DASMTEST_DESKTOP_SRC_DIR='"desktop/src"'
-# test_fidelity (23 T1) loads the committed dishonesty fixtures from the corpus.
+# test_fidelity (23 T1) loads the committed low-fidelity fixtures from the corpus.
 $(BUILD)/desktop/test/t/test_fidelity.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
@@ -849,7 +849,7 @@ $(BUILD)/desktop/app/lv/ptslice.o: \
 $(BUILD)/desktop/app/ui/author_door.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
 # The Scrubber's synthesise-register-history action (30 R3 T4) is the same story:
-# the app tree gets the engine call (regsynth), the viewer + tests get the honest
+# the app tree gets the engine call (regsynth), the viewer + tests get the truthful
 # "full app only" note. Only the app object references regsynth.o.
 $(BUILD)/desktop/app/vw/scrubber_draw.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
@@ -1294,7 +1294,7 @@ $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
     $(BUILD)/desktop/test/doc/recording.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# The drill-in router + the two honesty invariants (10-spacetime-3d-overview.md T6)
+# The drill-in router + the two fidelity invariants (10-spacetime-3d-overview.md T6)
 # links the GL-free pick resolver (scene3d/pick.o) + the space/ models it routes
 # from (terrain + projection + trajectory) + nav.o (04's deep-link router the pick
 # lands in) + the trace canvas builder (it reads the truncation banner the torn
@@ -1539,8 +1539,8 @@ $(BUILD)/desktop_test_completeness_view: \
     $(BUILD)/desktop/test/t/test_completeness_view.o $(DESKTOP_TEST_DA)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# The ONE graded honesty vocabulary (23-graded-truth-layer.md T1): the pure grader
-# against the committed dishonesty fixtures + the graded chrome (banner/chip/glyph)
+# The ONE graded fidelity vocabulary (23-graded-truth-layer.md T1): the pure grader
+# against the committed low-fidelity fixtures + the graded chrome (banner/chip/glyph)
 # drawing under the null backend. Links canvas_draw.o (the components), the doc
 # model (to load the fixtures) and imgui — no engine, no GL.
 $(BUILD)/desktop_test_fidelity: $(BUILD)/desktop/test/t/test_fidelity.o \
@@ -1715,7 +1715,7 @@ DESKTOP_REPLAY_TESTS := $(BUILD)/desktop_test_ptslice_run
 # Worth stating why this is not a hardware-gated lane: CAPTURING a PT path needs
 # PT silicon, REPLAYING one does not. The path is decoded at capture time and
 # recorded (`stitch`), the bytes with it (`codeimage`), so everything after the
-# capture runs anywhere the full app builds — and the honest half of "a live
+# capture runs anywhere the full app builds — and the truthful half of "a live
 # slice with zero single-steps" gets tested on hosts with no Intel PT at all.
 # The object sits one level deeper than its tree name suggests (testpt/lv/)
 # because the -MMD dependency include at the foot of this file globs

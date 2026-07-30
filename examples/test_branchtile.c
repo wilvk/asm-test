@@ -72,7 +72,7 @@ int asmtest_amd_lbr_depth(void);
 static volatile long g_sink;
 
 /* The COLD leaf: called exactly ONCE per window, among ~10^7 hot branches. This is the
- * "too small / too fast to be caught in-region" routine the sampled survey honestly
+ * "too small / too fast to be caught in-region" routine the sampled survey faithfully
  * drops — the case the plan says the deterministic snapshot exists to reconstruct. */
 __attribute__((noinline)) static long cold_leaf(long x) {
     g_sink += x ^ 0x5a5a;
@@ -170,7 +170,7 @@ struct cap_result {
     size_t ntiled;
     int islands;
     int tile_truncated; /* the ISLAND merge lost endpoints (the ONLY term an
-                         * island-content assert may honestly disjoin with) */
+                         * island-content assert may legitimately disjoin with) */
     int truncated;      /* survey-wide prefix: ALSO fires on SAMPLER-ring loss,
                          * which says nothing about island content */
     int cold_in_tiles; /* cold_leaf entry present in the ISLAND prefix        */
@@ -296,7 +296,7 @@ int main(void) {
      * ring goes near-full, which says nothing whatever about whether this island kept its
      * endpoints — a fixture that grew until the sampler lost records would satisfy this
      * assert forever with the island never checked again. tile_truncated means only "the
-     * island merge lost endpoints", which is exactly the honest escape for this claim. */
+     * island merge lost endpoints", which is exactly the legitimate escape for this claim. */
     if (probe.cold_in_tiles || probe.tile_truncated)
         printf(
             "ok - branchtile: the island prefix ips[0..%zu) contains the "

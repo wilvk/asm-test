@@ -932,7 +932,7 @@ fn scope_name(file: &str, line: u32) -> String {
 
 /// The outcome of [`HwTrace::call_scoped`]: the traced call's return value
 /// (`result`, `None` on a self-skip), the executed body's disassembly (`path`,
-/// empty when no decoder is present), the thread-scope honesty bit (`truncated`),
+/// empty when no decoder is present), the thread-scope fidelity bit (`truncated`),
 /// and the raw `ASMTEST_HW_*` status (`rc`, `0` == OK). Mirrors the Python/Ruby
 /// `CallScopedResult`.
 #[derive(Debug, Clone)]
@@ -948,7 +948,7 @@ pub struct CallScopedResult {
 }
 
 /// The outcome of [`HwTrace::window`]: the executed body's disassembly (`path`,
-/// empty when no decoder is present), the `truncated` honesty bit, and `armed`
+/// empty when no decoder is present), the `truncated` fidelity bit, and `armed`
 /// (`false` when the region-free window SELF-SKIPPED — a non-single-step backend or
 /// an older lib lacking the whole-window trio; the closure still ran). Mirrors
 /// dotnet's empty-ctor `new AsmTrace()` whole-window scope / the C++/Python
@@ -957,7 +957,7 @@ pub struct CallScopedResult {
 pub struct WindowResult {
     /// The executed body disassembly (empty when the decoder is absent).
     pub path: String,
-    /// True if the whole-window capture overflowed its cap (honestly noisy).
+    /// True if the whole-window capture overflowed its cap (faithfully noisy).
     pub truncated: bool,
     /// True when the region-free window armed (a single-step backend was up).
     pub armed: bool,
@@ -1374,7 +1374,7 @@ impl HwTrace {
     /// §Z1 region-free whole-window scope (the closure form of dotnet's empty-ctor
     /// `using (new AsmTrace())`). Arms a REGION-FREE single-step capture on THIS thread
     /// (no [`NativeCode`], no `[base,len)`), runs `body`, disarms, and renders the executed
-    /// body from live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin
+    /// body from live self-memory. FAITHFUL-BUT-NOISY: it records EVERYTHING between begin
     /// and end, so a traced leaf's ABSOLUTE addresses appear as a SUBSET of the listing.
     /// Keep `body` a TIGHT native leaf — EFLAGS.TF single-step is armed across it (never
     /// step arbitrary managed code). Returns a [`WindowResult`]; SELF-SKIPS (`armed`

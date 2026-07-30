@@ -126,7 +126,7 @@ push.
    - `runs-on: ubuntu-24.04-arm` (same label the `test` job already uses,
      line 37).
    - Dependencies: **do not** install `libipt-dev` (x86-only PT decode; the PT
-     backend honestly self-skips). Build the pinned Capstone 5.0.1 from source
+     backend candidly self-skips). Build the pinned Capstone 5.0.1 from source
      via the cache-then-build pair the `cli` job uses (ci.yml lines 577–584:
      `actions/cache` on `~/.cache/asmtest-thirdparty/capstone` keyed on the
      pinned inputs, then `sh scripts/thirdparty-cache.sh cached-build
@@ -188,7 +188,7 @@ the whole set is green).
 - The `hwtrace-arm64` job is green on `main`, its log shows the ptrace `ok`
   lines (not the qemu skip string), and the anti-vacuity step passes.
 - `make docker-hwtrace DOCKER_PLATFORM=linux/arm64` still passes locally with
-  the honest qemu self-skip (the emulation path keeps self-skipping cleanly on
+  the genuine qemu self-skip (the emulation path keeps self-skipping cleanly on
   this Intel-Mac / any x86-64 host).
 - The x86-64 `hwtrace` job and `make hwtrace-test` on x86-64 are unchanged
   and green.
@@ -289,7 +289,7 @@ plan's "record a benchmarks/boxes entry" deliverable.
    (mirror `row()` usage at lines 327–339); when 0, emit
    `available: false` with `asmtest_ptrace_skip_reason()`. Guard the whole row
    `#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))`,
-   emitting an honest unavailable row elsewhere (macOS).
+   emitting a truthful unavailable row elsewhere (macOS).
 2. Verify on the dev host: `make bench-report` — the report's `features` array
    gains the row (`available: true` on x86-64 Linux / in `make docker-bench`;
    `"skip_reason": "AArch64 PTRACE_SINGLESTEP is non-functional here…"` under
@@ -336,7 +336,7 @@ lines 150 and 177). Changelog in T6.
 - The three existing x86 box records are untouched (re-recording them to pick
   up the new row is optional and happens whenever those boxes next run
   `make bench-record`).
-- `make bench-report` on any host emits the row (available or honestly not).
+- `make bench-report` on any host emits the row (available or truthfully not).
 
 ### T4 — SS-A64-BIND: arch-selected AArch64 fixtures in all ten binding hwtrace suites  (M, depends on: T1)
 

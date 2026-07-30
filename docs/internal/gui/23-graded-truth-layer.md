@@ -1,17 +1,17 @@
-# Wave 3: restructure the truth layer — graded honesty tiers, session-end placard, split paused, progress everywhere — implementation
+# Wave 3: restructure the truth layer — graded fidelity tiers, session-end placard, split paused, progress everywhere — implementation
 
-> **LANDED 2026-07-27 (T1–T4, all four tasks).** T1: the ONE graded honesty
+> **LANDED 2026-07-27 (T1–T4, all four tasks).** T1: the ONE graded fidelity
 > vocabulary (`ui/fidelity.h` grader + `draw_fidelity_banner`/`draw_fidelity_chip` +
 > a Codicon glyph per tier) over a **derivable `severity` schema field** landed
 > under doc 01's append-only rule with **01-owner sign-off recorded in
 > `asmtrace-schema.md`** (the Phase-3-freeze checkpoint, D5) — the field is
 > derivable, additive, and gates no truth off (D7); `test_fidelity` pins the three
-> tiers against the committed dishonesty fixtures. T2: the persistent,
+> tiers against the committed low-fidelity fixtures. T2: the persistent,
 > cause-distinguished session-end placard (`live/end_state.h` `end_cause`) with the
 > verbatim protocol-mismatch fix; toasts supplement, never replace. T3: "paused"
 > split into "PAUSED (you) — Resume" vs "BLOCKED — jack held by …" with explicit
 > Swap/Queue/Cancel and no auto-swap. T4: `progress.h` generalised to a `LongOp`
-> (elapsed + Cancel + honest mode) with a degrade-to-coarse 3D scrub. Tests:
+> (elapsed + Cancel + faithful mode) with a degrade-to-coarse 3D scrub. Tests:
 > `test_fidelity`, `test_progress`, `test_terrain` (coarse_slice), `test_budget`
 > (queue + BLOCKED label), `test_inspect` (patch-bay split), `test_live_session`
 > (end_cause). All green on the host `make desktop desktop-render desktop-test`.
@@ -33,12 +33,12 @@
 
 ## Why this work exists
 
-- **F5 — honesty chrome is ungraded and proliferating.** A single recording
+- **F5 — fidelity chrome is ungraded and proliferating.** A single recording
   stacks a redaction placard, a statistical chip, a coarse-provenance chip, a
   bounded-window note, an `identity_note` row *and* sometimes a torn banner — all
   equally loud and non-collapsible — even though the schema grades them very
   differently. The one signal that means "do not trust the tail of this data"
-  drowns among four that mean "this is normal": honesty degrades into banner
+  drowns among four that mean "this is normal": fidelity degrades into banner
   blindness (T1/F5).
 - **F20 — the live session-end state is collapsed and silent.** When streaming
   stops the user cannot tell *why*: clean detach, a torn drop, an EOF, a
@@ -55,12 +55,12 @@
   cannot tell the tool from a hang and may kill it. `progress.h` shipped for file
   loads + live sessions but is not generalised (T4/F21).
 
-**Standing constraint for the whole brief: this restructures the honesty layer;
+**Standing constraint for the whole brief: this restructures the fidelity layer;
 it removes no truth (D7).** Every field the schema already carries
 (`truncated`, `torn`/no-`end`, `redacted`, `trust`, `skip`, `basis`,
 `identity_note`, `paused_dropped`, `drops`) still renders. F5's fix is to *grade*
 loudness, not to hide any tier — the graded system must keep passing against the
-committed deliberate-dishonesty fixtures, and the T3 (integrity) tier stays
+committed deliberate low-fidelity fixtures, and the T3 (integrity) tier stays
 non-collapsible exactly as `draw_banner`'s refusal path is today.
 
 ## What already exists (verified 2026-07-27)
@@ -81,7 +81,7 @@ non-collapsible exactly as `draw_banner`'s refusal path is today.
   extend, via doc 24 T5.1's named semantic accessors. Today every warn/truncation/
   statistical/skip/redacted placard shares the *same* amber (theme.h:14-18) — the
   proliferation is that one amber wears five meanings.
-- **The honesty schema fields.** [`asmtrace-schema.md`](asmtrace-schema.md): the
+- **The fidelity schema fields.** [`asmtrace-schema.md`](asmtrace-schema.md): the
   header carries `trust` (`exact|statistical|weak|strong`, :78) and `redacted`
   (:81); `coverage`/`end` carry `truncated` (:128,:300); a missing `end` **is
   torn** (:393); `basis` is mandatory and never defaulted (:115,:390); the `end`
@@ -90,7 +90,7 @@ non-collapsible exactly as `draw_banner`'s refusal path is today.
   (:544-546). **No `severity` field exists** — the schema grades severity in
   *data* (F5's own observation) but nothing names a tier for the *rendered*
   chrome.
-- **The committed dishonesty fixtures (D6/D7).**
+- **The committed low-fidelity fixtures (D6/D7).**
   [`tests/golden-asmtrace/low-fidelity/`](../../../tests/golden-asmtrace/low-fidelity/)
   holds `torn.asmtrace` (no `end`), `truncated.asmtrace`, `redacted.asmtrace`,
   `dropped.asmtrace` (statistical, `lost:12345`, `throttled:true`); each opens
@@ -136,8 +136,8 @@ non-collapsible exactly as `draw_banner`'s refusal path is today.
   is a pure, header-only, ImGui-free decision: `progress_mode(active, has_total,
   total) → {Hidden, Determinate, Indeterminate}` (:23-29) and
   `progress_fraction(done, total)` (:33-38). A determinate bar renders **only**
-  when an honest total exists (an `end` footer / a bounded budget); an unbounded
-  op honestly gets the indeterminate bar — no fabricated percentage. **One caller
+  when a genuine total exists (an `end` footer / a bounded budget); an unbounded
+  op faithfully gets the indeterminate bar — no fabricated percentage. **One caller
   today**: the growing-recording bar in `inspect_door.cpp:156-161`. It carries no
   elapsed-time, no Cancel, no spinner, and every other long op ignores it.
 - **The long-op sites with no busy signal.** The PT decode/replay slice
@@ -153,19 +153,19 @@ non-collapsible exactly as `draw_banner`'s refusal path is today.
 - **The test lanes.** `make desktop-test` (null backend, D1, `mk/desktop.mk`) is
   the model-level lane every task here targets; `make desktop-ui-test` (doc 17
   T1, `desktop/test/test_ui.cpp` on imgui_test_engine) is available for any
-  genuine interaction step. Existing honesty tests to extend:
+  genuine interaction step. Existing fidelity tests to extend:
   `test_completeness_view.cpp`, `test_null_render.cpp`, `test_loom_chrome.cpp`,
   `test_inspect.cpp`, `test_live_session.cpp`, `test_budget.cpp`.
 
 ## Tasks
 
-### T1 — one graded honesty-chrome vocabulary + a schema `severity` field  (L, depends on: 01 Phase-3 freeze, 24 T5.1)
+### T1 — one graded fidelity-chrome vocabulary + a schema `severity` field  (L, depends on: 01 Phase-3 freeze, 24 T5.1)
 
-**Goal.** Collapse the proliferating honesty forms into a small **fixed
+**Goal.** Collapse the proliferating fidelity forms into a small **fixed
 vocabulary** — one banner form, one inline chip, one glyph set — with **mandated
-placement**, built as shared components, and grade every honesty signal into
+placement**, built as shared components, and grade every fidelity signal into
 **three tiers** driven by a new `severity` field carried *beside* the existing
-honesty schema fields (so grading stays testable against the dishonesty
+fidelity schema fields (so grading stays testable against the low-fidelity
 fixtures). Restructure, never remove: every existing field still renders; F5's
 fix is loudness, not suppression (D7).
 
@@ -181,16 +181,16 @@ fix is loudness, not suppression (D7).
 1. **Schema `severity` field (coordinate with doc 01's Phase-3 freeze — D5).**
    This is a **schema change**: add a `severity` enum
    (`"neutral"|"caution"|"integrity"`) to `asmtrace-schema.md`, defined *beside*
-   the existing honesty fields, **derivable** from them so no producer is forced
+   the existing fidelity fields, **derivable** from them so no producer is forced
    to emit it and old recordings still grade (a reader computes the tier from
    `torn`/`truncated`/`trust`/`redacted`/`skip`/`basis` when the field is
    absent). Because it touches the frozen `.asmtrace` schema, land it under 01's
    append-only rule with **01 owner sign-off recorded in the schema doc** (as the
    `codeimage`/`stitch` additions were, schema:657) — do not merge the render
    half until that sign-off exists. State plainly in the schema note: the field
-   *grades* honesty, it does not gate any truth off.
+   *grades* fidelity, it does not gate any truth off.
 2. **A pure severity mapper.** Write `fidelity_severity()` in a new header-only
-   `ui/fidelity.h` (ImGui-free, like `progress.h`): given the honesty facts of a
+   `ui/fidelity.h` (ImGui-free, like `progress.h`): given the fidelity facts of a
    recording/stream (or the parsed `severity` when present), return the tier
    enum. This is the part that must be unit-testable without a context (D4) and
    the part the fixtures pin.
@@ -213,7 +213,7 @@ fix is loudness, not suppression (D7).
    state) so it is model-testable; the collapsed form is the same text as a chip,
    never gone. **T3 never collapses** (assert this).
 6. **Migrate the call sites.** Route the ten `draw_banner` sites and the loose
-   `TextColored(kMaybe, …)` honesty rows (`inspect_door.cpp:124,128,133`) through
+   `TextColored(kMaybe, …)` fidelity rows (`inspect_door.cpp:124,128,133`) through
    the graded components so no view hand-rolls a placard. A `skip` becomes a T1
    chip (schema:544 — a successful session), not an amber banner.
 
@@ -230,7 +230,7 @@ still render every field loud-enough for its tier (the truncated-is-loud
 assertion at :134-135 must still pass). Model state, not pixels (D4/D7). Null
 backend, `make desktop-test`.
 
-**Docs.** CHANGELOG `Changed`: honesty chrome is now a graded 3-tier system
+**Docs.** CHANGELOG `Changed`: fidelity chrome is now a graded 3-tier system
 (neutral chip / caution banner / integrity banner) over a derivable `severity`
 field; `Added`: schema `severity`. `asmtrace-schema.md`: the `severity` field +
 the 01-owner sign-off line. `desktop/README.md`: the tier table and the
@@ -238,9 +238,9 @@ placement contract. Cross-note doc 24 T5.1 (tier colours) and doc 16 (toasts map
 to tiers).
 
 **Done when.** the `severity` field is in the schema with 01 owner sign-off and
-is derivable for old recordings; `fidelity_severity()` grades all four dishonesty
+is derivable for old recordings; `fidelity_severity()` grades all four low-fidelity
 fixtures into the right tier and a `skip` grades neutral; the fixed vocabulary
-(one banner, one chip, one glyph set) is the only honesty chrome and its
+(one banner, one chip, one glyph set) is the only fidelity chrome and its
 placement is enforced by the API; T3 is non-collapsible and no truth was removed
 (every field still renders); `make desktop-test` green.
 
@@ -371,18 +371,18 @@ and `test_inspect.cpp` assert both states and the no-auto-swap invariant;
 
 ### T4 — generalise `progress.h` to every long op + degrade the 3D scrub  (M, depends on: 14 T3)
 
-**Goal.** Give **every** operation that can exceed a frame budget the honest busy
+**Goal.** Give **every** operation that can exceed a frame budget the faithful busy
 signal `progress.h` already decides — elapsed-time + Cancel + spinner — and give
 the 3D scrub a **degrade-to-coarse-terrain** path instead of a silent UI-thread
 stall (F21).
 
 **Steps.**
-1. **Extend the helper, keep it honest.** Add to `ui/progress.h` (still pure,
+1. **Extend the helper, keep it faithful.** Add to `ui/progress.h` (still pure,
    header-only, ImGui-free): an elapsed-time carrier and a `cancel_requested`
    flag on a small `LongOp` struct — the *decision* half only; the draw half
    (spinner/bar/Cancel button) stays in a thin `draw_progress(LongOp&)` in a
-   `.cpp`. The determinate-vs-indeterminate honesty rule is unchanged: no
-   fabricated total (progress.h:1-9) — an op with no honest total gets the
+   `.cpp`. The determinate-vs-indeterminate fidelity rule is unchanged: no
+   fabricated total (progress.h:1-9) — an op with no genuine total gets the
    indeterminate spinner, never a fake percentage.
 2. **Wire the long-op sites.** Route each through the helper:
    - **PT decode / replay slice** (`live/ptslice.*`) — indeterminate + elapsed +
@@ -397,7 +397,7 @@ stall (F21).
    `terrain.h` already defines (the flat/coarse plane, labelled coarse,
    terrain.h:18-23) for the in-flight frames and show the progress + Cancel, then
    swap to the full slice when it lands — instead of blocking the UI thread. The
-   coarse plane is *already an honest, labelled* representation (terrain.h:22),
+   coarse plane is *already a faithful, labelled* representation (terrain.h:22),
    so degrading to it hides nothing (D7): it is the same provenance chip the
    coarse rung shows normally. Decide the "exceeds budget → degrade" purely (a
    `should_degrade(cell_count, budget)` predicate) so it is testable without GL.
@@ -406,7 +406,7 @@ stall (F21).
    Cancel is a model flag the caller polls; assert it in the pure layer.
 
 **Tests.** Extend `progress.h`'s unit test (or a new `test_progress.cpp`): assert
-`progress_mode` still refuses a fabricated total (the honesty rule), that elapsed
+`progress_mode` still refuses a fabricated total (the fidelity rule), that elapsed
 advances, and that `cancel_requested` is observable. New `test_scene_degrade.cpp`
 (or extend `test_camera.cpp`/`test_drillin.cpp`): assert `should_degrade` returns
 coarse for an over-budget cell count and full otherwise, and that the degraded
@@ -422,7 +422,7 @@ the busy signal + the coarse-degrade behaviour.
 **Done when.** every long-op site (PT decode, symbol/codeimage load, terrain/
 trajectory rebuild) shows progress + elapsed + Cancel; the 3D scrub renders the
 labelled coarse terrain while a re-slice is in flight instead of freezing; the
-no-fabricated-total honesty rule still holds; `make desktop-test` green.
+no-fabricated-total fidelity rule still holds; `make desktop-test` green.
 
 ## Task order & parallelism
 
@@ -447,12 +447,12 @@ no-fabricated-total honesty rule still holds; `make desktop-test` green.
 
 - **D7 — restructure, never remove; keep EVERY truth.** This is the load-bearing
   constraint of the whole brief. No task hides a field: T1 grades loudness but
-  every honesty field still renders and the T3 integrity tier stays
+  every fidelity field still renders and the T3 integrity tier stays
   non-collapsible; T1's neutral tier for a statistical/dropped survey still
   surfaces its `lost`/`throttled` drop record; T2 makes the torn/mismatch causes
   *louder and more specific*, never quieter; T4's coarse-degrade shows the same
   labelled coarse provenance the rung shows normally. The graded system must keep
-  passing against the committed deliberate-dishonesty fixtures
+  passing against the committed deliberate low-fidelity fixtures
   (`tests/golden-asmtrace/low-fidelity/`, D6/D7).
 - **T1 is a schema change (D5, Phase-3 freeze).** The `severity` field lands
   under 01's append-only rule with **01 owner sign-off recorded in
@@ -467,8 +467,8 @@ no-fabricated-total honesty rule still holds; `make desktop-test` green.
 - **No auto-swap without confirmation (D6).** T3's Swap is a named two-step
   confirm and Queue starts only when the jack is genuinely free; the one-ptrace-
   jack invariant (budget.h) is never bypassed.
-- **No fabricated totals (14 T3).** T4 preserves `progress.h`'s honesty rule:
-  an op with no honest total gets the indeterminate spinner, never a fake
+- **No fabricated totals (14 T3).** T4 preserves `progress.h`'s fidelity rule:
+  an op with no genuine total gets the indeterminate spinner, never a fake
   percentage.
 - **Headlessly testable (D4).** Every task asserts **model state, not pixels**,
   on the null backend under `make desktop-test`; the pure decision halves

@@ -76,7 +76,7 @@ dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead,
         s.present = false;
         // The producer did not run. Where the recording is emulator-replayable
         // (30 R3 T4), OFFER to synthesise a history by re-running under the ring;
-        // otherwise keep the honest refusal and its machine reason. Either way,
+        // otherwise keep the genuine refusal and its machine reason. Either way,
         // point at the real producer (`--steps`) and deep-link the docs.
         s.absent_message =
             "no per-step register capture in this recording — the regstate "
@@ -85,7 +85,7 @@ dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead,
         if (replay.replayable) {
             s.synthesizable = true;
             s.synth_action = "synthesize register history";
-            // MANDATORY honesty (D6): a synthesised deck is a RE-DERIVATION, not
+            // MANDATORY fidelity (D6): a synthesised deck is a RE-DERIVATION, not
             // the bytes the original run observed.
             s.synth_label =
                 "re-derived by re-running the recorded code under the emulator "
@@ -131,7 +131,7 @@ dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead,
 
     const RegFile *rf = idx.at_step(ph);
     if (rf == nullptr) {
-        // Inside the torn region: an honest blank, never a synthesised file.
+        // Inside the torn region: a genuine blank, never a synthesised file.
         s.torn_here = true;
         s.at_held = false;
         return s;

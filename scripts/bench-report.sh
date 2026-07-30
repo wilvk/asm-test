@@ -77,7 +77,7 @@ hash8="$(printf '%s|%s|%s' "$cpu" "$os" "$arch" | { sha1sum 2>/dev/null || shasu
 box_id="${ASMTEST_BOX_ID:-${vendor_short}-${os}-${arch}-${hash8}}"
 
 uarch="${ASMTEST_UARCH:-unknown}"
-# Best-effort microarchitecture label from the CPU family (Linux). Honest
+# Best-effort microarchitecture label from the CPU family (Linux). Best-effort
 # "unknown" when we cannot tell; the env override always wins.
 if [ "$uarch" = unknown ] && [ "$os" = linux ]; then
     fam="$(sed -n 's/^cpu family[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)"

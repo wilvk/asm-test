@@ -25,7 +25,7 @@
  * a load failure and the whole availability-QUERY family self-skips cleanly —
  * callers never see a throw out of {@code available()}, {@code skipReason()},
  * {@code status()}, {@code resolve()}, {@code auto()}, {@code resolveTiers()},
- * {@code autoTier()} or {@code perfEventParanoid()}; each degrades to its honest
+ * {@code autoTier()} or {@code perfEventParanoid()}; each degrades to its faithful
  * "unavailable" value. Only the ACTION entry points ({@code init()} and the
  * trace/capture calls) throw when the library is not loaded.
  *
@@ -247,7 +247,7 @@ public final class HwTrace {
 
     /** The outcome of {@link #callScoped}: the call's {@code result} (the SysV integer
      *  return), the executed body's rendered disassembly ({@code path}), the thread-scope
-     *  {@code truncated} honesty bit, and the raw {@code rc}. On a clean self-skip (no
+     *  {@code truncated} fidelity bit, and the raw {@code rc}. On a clean self-skip (no
      *  single-step backend) {@code rc} is negative, {@code result} 0 and {@code path} empty;
      *  {@link #ok()} distinguishes it. Mirrors the Python {@code CallScopedResult}. */
     public record CallScopedResult(long result, String path, boolean truncated, int rc) {
@@ -258,7 +258,7 @@ public final class HwTrace {
     /** The outcome of {@link #traceCallAuto}: the call's {@code result} (the SysV integer
      *  return), the filled {@code trace} (a queryable {@link NativeTrace} the CALLER frees),
      *  the {@link TierChoice} that produced the final trace ({@code used} — inspect
-     *  {@code used.backend()} to see whether escalation fired), the {@code truncated} honesty
+     *  {@code used.backend()} to see whether escalation fired), the {@code truncated} fidelity
      *  bit, and the raw {@code rc}. On a self-skip (no call-owning native tier) {@code result}
      *  is 0 and {@code trace}/{@code used} are null; {@link #ok()} distinguishes it. Mirrors
      *  the Python {@code TraceCallAutoResult}. */
@@ -269,7 +269,7 @@ public final class HwTrace {
     }
 
     /** Outcome of {@link #window}: the rendered ABSOLUTE-address disassembly ({@code path},
-     *  honest-but-noisy — the FFI dispatch + JVM harness are included), the §Z4 thread-scope
+     *  faithful-but-noisy — the FFI dispatch + JVM harness are included), the §Z4 thread-scope
      *  {@code truncated} bit (also set when the managed window overflows its buffer), the
      *  captured ABSOLUTE instruction addresses ({@code insns}), and the raw {@code rc}.
      *  Self-skip (no single-step backend) =&gt; rc negative, path empty, insns empty. */
@@ -280,7 +280,7 @@ public final class HwTrace {
 
     /** Outcome of {@link #stealthTrace}: the leaf's {@code result} (read from the caller's
      *  RAX at the {@code ret}), the executed body's region-RELATIVE instruction {@code offsets},
-     *  the basic-block {@code count}, the {@code truncated} honesty bit, and the native {@code rc}
+     *  the basic-block {@code count}, the {@code truncated} fidelity bit, and the native {@code rc}
      *  ({@link #ASMTEST_HW_OK} when the reverse-attach armed; negative on a clean self-skip). */
     public record StealthResult(long result, long[] offsets, int blocks, boolean truncated, int rc) {
         /** True when the reverse-attached helper stepped the region (rc == ASMTEST_HW_OK). */
@@ -290,7 +290,7 @@ public final class HwTrace {
     /** Outcome of a WHOLE-WINDOW OOP capture ({@link #ptraceTraceWindowCall} / {@link #stealthWindow}):
      *  the window frame's {@code result} (its return value), the captured ABSOLUTE instruction
      *  addresses {@code insns} (the frame + every channel-published region, classify by range),
-     *  the {@code truncated} honesty bit, and the native {@code rc}. */
+     *  the {@code truncated} fidelity bit, and the native {@code rc}. */
     public record WindowTraceResult(long result, long[] insns, boolean truncated, int rc) {
         /** True when the capture armed (rc == ASMTEST_HW_OK / ASMTEST_PTRACE_OK == 0). */
         public boolean armed() { return rc == ASMTEST_HW_OK; }
@@ -893,7 +893,7 @@ public final class HwTrace {
      *  {@code stage} ({@code STAGE_*}), the probe errno and the kernel paranoid level. */
     public static HwStatus status(int backend) {
         // Availability QUERY, so it honors the class's self-skip contract like
-        // available(): an absent library is an honest "unavailable" verdict,
+        // available(): an absent library is a genuine "unavailable" verdict,
         // never a throw (a harness may ask status() before its skip guard).
         if (HW_STATUS == null)
             return new HwStatus(false, ASMTEST_HW_EUNAVAIL, STAGE_DECODER,
@@ -1069,7 +1069,7 @@ public final class HwTrace {
      *  runs. REGISTRY-FREE — consumes no MAX_REGIONS slot — so it is safe in a tight loop.
      *  {@code args} pass as C longs (0..6). Returns a {@link CallScopedResult}: {@code result}
      *  the call's return, {@code path} the executed body's disassembly, {@code truncated} the
-     *  thread-scope honesty bit. Self-skips ({@code rc} negative, {@code result} 0) where no
+     *  thread-scope fidelity bit. Self-skips ({@code rc} negative, {@code result} 0) where no
      *  single-step backend is available. Mirrors the Python {@code HwTrace.call_scoped}. */
     public static CallScopedResult callScoped(NativeCode code, long... args) {
         if (CALL_SCOPED_EX == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
@@ -1182,7 +1182,7 @@ public final class HwTrace {
     }
 
     /** {@link #window(Runnable)} with an explicit capture-buffer size (insns). If the managed
-     *  window overflows {@code insnsCap}, {@code truncated} is set (an honest best-effort
+     *  window overflows {@code insnsCap}, {@code truncated} is set (a faithful best-effort
      *  outcome) and the stored {@code insns} are a labelled PREFIX. */
     public static WindowResult window(Runnable body, int insnsCap) {
         if (BEGIN_WINDOW == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
@@ -1273,13 +1273,13 @@ public final class HwTrace {
      *  <p>The {@code result} is EXACT (the helper reads the caller's RAX at the {@code ret}), but
      *  the instruction STREAM is best-effort over a live runtime: single-stepping the runtime's own
      *  thread can be interrupted by its async signals, so {@code truncated} may be set with a
-     *  partial {@code offsets} — the same honest-degradation posture as {@link #window} and dotnet's
+     *  partial {@code offsets} — the same faithful-degradation posture as {@link #window} and dotnet's
      *  out-of-process {@code AsmTrace.Method}.
      *
      *  <p>{@code args} pass as C longs (0..6). Returns a {@link StealthResult}: {@code result}
      *  the leaf's return (from the helper's RAX read), {@code offsets} the executed body's
      *  region-RELATIVE instruction offsets, {@code blocks} the basic-block count,
-     *  {@code truncated} the honesty bit. On a refused reverse-attach (Yama {@code ptrace_scope},
+     *  {@code truncated} the fidelity bit. On a refused reverse-attach (Yama {@code ptrace_scope},
      *  no ptrace, or off-x86-64-Linux) it self-skips ({@code rc} negative, {@code armed()} false,
      *  {@code offsets} empty) — but the call STILL RUNS (never a silent miss), like dotnet's
      *  stealth path. Needs no {@link #init} (the stealth stepper is ptrace-based, independent of
@@ -1918,7 +1918,7 @@ public final class HwTrace {
 
         /** This operation's scope id (every stitched slice is tagged with it). */
         public long scopeId() { return scopeId; }
-        /** Honest self-skip reason for any hop that could not be captured in-process ("" when all captured). */
+        /** Truthful self-skip reason for any hop that could not be captured in-process ("" when all captured). */
         public String skipReason() { return skipReason; }
         /** Merged per-hop disassembly in seq order (a {@code ; hop N (tid…, +off):} header per hop,
          *  then its listing when Capstone is present); populated by {@link #complete}. */

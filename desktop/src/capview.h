@@ -98,7 +98,7 @@ extern const char *const kCapNativeOnlyEmpty;
 extern const char *const kCapFidelityLine;
 extern const char *const kCapStatisticalChip;
 extern const char *const kCapViewerNoProbe;
-// The honesty floor the summary always states (T4): Learn and Author work on any
+// The fidelity floor the summary always states (T4): Learn and Author work on any
 // host, so a red capture-backend wall never means "the tool does not work here".
 extern const char *const kCapLearnAuthorFloor;
 // The expander the negatives collapse under (T4).

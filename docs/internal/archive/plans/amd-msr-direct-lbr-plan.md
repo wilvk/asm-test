@@ -14,7 +14,7 @@ with **zero PMU interrupts**, decoded by the shared `asmtest_amd_decode`. This i
 > **tiny routine's branches survive** — `make docker-hwtrace-msr` (a `--privileged` lane
 > reading the real MSRs) reconstructs a 4-trip loop **complete, not truncated** (`insns=11`,
 > loop-body block covered, `rc=0`), with zero PMU interrupts. So it ships as a niche
-> zero-interrupt Tier-A tier, honestly `truncated` for routines too large for the surviving
+> zero-interrupt Tier-A tier, faithfully `truncated` for routines too large for the surviving
 > window (amd_decode's depth check). Self-skips everywhere without `amd_lbr_v2` +
 > `/dev/cpu/N/msr` (`CAP_SYS_ADMIN` + the `msr` module), so ordinary CI is untouched.
 
@@ -94,7 +94,7 @@ asmtest_trace_t *trace)` (callback-thunk model, like `asmtest_amd_snapshot_trace
 6. **Read** the 16 `FROM`/`TO` MSRs into a `perf_branch_entry[16]` (newest-first), decoding
    `ip[57:0]` + `valid`/`spec`.
 7. **`asmtest_amd_decode`** the array into `trace` (in-region-filtered; window overflow /
-   glue eviction → `truncated`, honest via the existing depth check). Restore MSR state.
+   glue eviction → `truncated`, faithful via the existing depth check). Restore MSR state.
 
 **Availability:** `asmtest_amd_msr_available()` = `amd_lbr_v2` flag **and** `/dev/cpu/0/msr`
 openable `O_RDWR`. Off AMD, without the `msr` module, or without `CAP_SYS_ADMIN`: 0 (self-skip).

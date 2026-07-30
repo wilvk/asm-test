@@ -62,7 +62,7 @@ the `asmtest_abi.json` manifest; the rest go through the opaque-handle accessors
 (`asmtest_regs_*`, `asmtest_emu_*`), so no `regs_t` layout is mirrored on their
 side.
 
-The whole substrate hangs off one flat C-ABI surface, kept honest by the layout
+The whole substrate hangs off one flat C-ABI surface, kept faithful by the layout
 manifest and a shared conformance corpus — the single source of truth every
 binding must reproduce:
 

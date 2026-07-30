@@ -159,7 +159,7 @@ help:
 	@echo '  addon-fetch-test          exercise scripts/fetch-addon.sh (pin + refuse-unpinned; network)'
 	@echo '  desktop-addon-compile-check  imgui-repin gate: vendored imgui_internal.h addons still build'
 	@echo '  asmtrace-export      build build/asmtrace_export (.asmtrace -> speedscope/Perfetto/lcov/DOT)'
-	@echo '  asmtrace-export-test byte-exact exporter goldens + the honest-refusal suite'
+	@echo '  asmtrace-export-test byte-exact exporter goldens + the genuine-refusal suite'
 	@echo ''
 	@echo 'Packaging & install:'
 	@echo '  lib             build the static libasmtest.a'

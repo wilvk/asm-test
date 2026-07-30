@@ -68,7 +68,7 @@ static inline void asmtest_addr_channel_init(asmtest_addr_channel_t *c) {
 /* PRODUCER: publish one region. Writes the slot, then bumps `head` with a release
  * store so a draining consumer that observes the new head also sees the slot contents.
  * Never blocks; on a full ring the oldest unread record is overwritten and `overrun`
- * is set (the consumer then honestly skips the lost span). */
+ * is set (the consumer then faithfully skips the lost span). */
 static inline void asmtest_addr_channel_publish(asmtest_addr_channel_t *c,
                                                 uint64_t base, uint64_t len,
                                                 uint64_t version) {

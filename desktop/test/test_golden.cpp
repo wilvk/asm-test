@@ -92,7 +92,7 @@ int main() {
         // golden that is NOT truncated fails here just as loudly.
         bool claims_truncation =
             f.find("-truncated.asmtrace") != std::string::npos;
-        check(f + " honest", r.truncated() == claims_truncation,
+        check(f + " truthful", r.truncated() == claims_truncation,
               claims_truncation
                   ? "a golden named -truncated must actually be truncated"
                   : "a flat golden should not be torn/truncated");

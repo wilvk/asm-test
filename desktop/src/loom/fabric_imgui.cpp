@@ -20,7 +20,7 @@ namespace asmdesk {
 
 namespace {
 
-// Every honesty prim shares the warn colour with the rest of the app's placards
+// Every fidelity prim shares the warn colour with the rest of the app's placards
 // via the shared palette (ui/theme.h), so a torn edge cannot be mistaken for
 // ordinary chrome and ordinary chrome cannot be mistaken for a warning. The
 // draw-list ImU32 form packs from the same floats every TextColored banner uses.
@@ -287,7 +287,7 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
     }
     int ph = static_cast<int>(L.playhead);
     // The ONE time-position widget, CONTINUOUS variant (24 T4): the fabric has a
-    // real step total, so a scrub is honest.
+    // real step total, so a scrub is faithful.
     if (dt_timepos_scrub("playhead", &ph, f.steps ? static_cast<int>(f.steps) - 1
                                                   : 0))
         L.playhead = static_cast<uint32_t>(ph);

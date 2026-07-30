@@ -162,7 +162,7 @@ const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
 /* Reverse lookup: the function whose [addr, addr+size) contains `addr`, else
  * NULL — there is NO nearest-addr<= fallback. A zero-SIZE symbol matches its
  * exact start only, and an address in the gap between two functions resolves
- * to nothing: for a tracer an honest NULL beats a confidently wrong neighbour.
+ * to nothing: for a tracer a truthful NULL beats a confidently wrong neighbour.
  * test_symtab.c pins these edges. */
 const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 
@@ -566,7 +566,7 @@ typedef struct {
 } asmspy_sample_edge_t;
 
 /* Snapshot sink: `edges[0..n)` are the current hot edges (sorted by count), plus
- * honest provenance — total samples drained, retired-taken-branch samples, dropped
+ * faithful provenance — total samples drained, retired-taken-branch samples, dropped
  * samples, and whether the kernel throttled the sample rate. Owned by the engine,
  * valid only for THIS call. Invoked after each sample window and once before
  * return. */

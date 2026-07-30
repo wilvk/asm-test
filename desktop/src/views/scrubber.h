@@ -6,12 +6,12 @@
 // step). The builder is pure — no ImGui, no I/O, no engine (D4) — so its every
 // decision is asserted headlessly; scrubber_draw.cpp renders the built model.
 //
-// Honesty (D7), two cases the view must never paper over:
+// Fidelity (D7), two cases the view must never paper over:
 //   - The ring DROPPED a prefix of steps: [0, dropped) is a TORN region, and
 //     seeking into it renders UNKNOWN (never a register file of zeros).
 //   - The recording has NO `regstate` events: the producer is ABSENT, and the
 //     view says so and deep-links the docs. The "re-run with a larger
-//     max_insns" fallback is documented as NOT day-one (the plan's honest-limits
+//     max_insns" fallback is documented as NOT day-one (the plan's candid-limits
 //     stance) and is deliberately not offered here.
 #ifndef ASMDESK_VIEWS_SCRUBBER_H
 #define ASMDESK_VIEWS_SCRUBBER_H
@@ -37,12 +37,12 @@ struct dt_scrubber_reg {
 // re-run lives in the full-build-only synthesiser (regsynth.h).
 struct dt_scrubber_replay {
     bool replayable = false; // synthesis is possible for this recording
-    std::string why;         // when !replayable, the honest machine reason
+    std::string why;         // when !replayable, the exact machine reason
 };
 
 // The pure replayability decision, from the recording's own facts (backend,
 // arch, codeimage) — no engine. Where it says replayable, the Scrubber offers
-// the synthesise action; where not, it keeps the honest refusal + its reason.
+// the synthesise action; where not, it keeps the genuine refusal + its reason.
 dt_scrubber_replay dt_scrubber_replayable(const Recording &r);
 
 // The scrubber's view-model at one playhead position.
@@ -55,7 +55,7 @@ struct dt_scrubber {
 
     // 30 R3 T4: producer absent BUT emulator-replayable — the deck offers to
     // SYNTHESISE a register history by re-running under the emulator ring.
-    // `synth_action` is the button label; `synth_label` is the mandatory honesty
+    // `synth_action` is the button label; `synth_label` is the mandatory fidelity
     // caveat (a re-derivation from code + seed, NOT the original run's bytes).
     bool synthesizable = false;
     std::string synth_action;

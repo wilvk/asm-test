@@ -72,7 +72,7 @@ struct SceneView {
     // 34 T3: the terrain-time play/pause transport, per recording so switching
     // tabs holds each scene's playback state. Advances hud.t over terr.nsteps —
     // the trace-residency axis, distinct from the execution step the flat views
-    // brush (the brief's honesty note).
+    // brush (the brief's fidelity note).
     Transport play;
     dt_primer_state primer; // the first-open primer (24 T5), per recording
 };
@@ -381,7 +381,7 @@ void shell_sync_live_tab(ShellState &s);
 // 34 T2: consume the Live-capture "View in 3D overview" intent
 // (InspectState::want_scene). When a live capture tab is up, jump the active tab
 // to it (want_open_tab) and request its 3D inner tab (want_view_id = Scene3D);
-// otherwise route an honest reason to the status bar. A pure model move (no
+// otherwise route a truthful reason to the status bar. A pure model move (no
 // ImGui), so test_shell drives it directly. Called once per frame from draw_shell.
 void shell_consume_scene_handoff(ShellState &s);
 

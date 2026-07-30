@@ -56,7 +56,7 @@ typedef enum {
 /* Execution fidelity of a tier. NATIVE runs the real bytes on the real CPU in this
  * process; VIRTUAL runs an isolated guest on an emulated CPU. The single
  * NATIVE->VIRTUAL transition is the fidelity line ASMTEST_TRACE_NATIVE_ONLY gates.
- * STATISTICAL is the third, orthogonal honesty class (F22/F26/F37 + the 2026-07-12
+ * STATISTICAL is the third, orthogonal fidelity class (F22/F26/F37 + the 2026-07-12
  * Zen-2 IBS review): real bytes on the real CPU, but SAMPLED — a hot-edge/hot-block
  * histogram (IBS-Op / LBR sampling survey), NOT an exact or complete instruction
  * stream. It can never prove "block X did not execute" and must never feed the
@@ -146,7 +146,7 @@ ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 4 * sizeof(int),
  * asmtest_blockstep_internal.h) so its per-#DB Capstone re-decode shrinks on cache hits.
  * The survey runs the routine ADDITIONAL times in a fork-isolated warm-up child (bounded,
  * ~30ms) purely to gather coverage — non-idempotent side effects repeat THERE, never in
- * the parent (the same in-process-re-run honesty stance as the MSR rung, trace_auto.c).
+ * the parent (the same in-process-re-run fidelity stance as the MSR rung, trace_auto.c).
  * IBS is statistical and only ever memoizes the reconstructor's tracer-side decode; it
  * can never change what gets recorded, so a trace produced with this bit set is
  * byte-for-byte identical to one produced without it. Off AMD (or without the bit) the

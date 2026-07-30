@@ -32,7 +32,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > int3/hardware breakpoint (a JIT self-check, a debugger breakpoint, a safepoint), which
 > re-arming the trap flag across cannot safely continue through (the asmspy engines' MEASURED
 > fatal-SIGTRAP-in-masked-handler finding). The scoped capture ends there — `vt->truncated`,
-> honestly — and the trap is DELIVERED via the existing crash-safe detach path
+> faithfully — and the trap is DELIVERED via the existing crash-safe detach path
 > (`fatal_sig = SIGTRAP`) so the target's own signal machinery runs exactly as it would
 > untraced, benefiting every entry point (`attach`, `attach_pid[_versioned]`, `attach_pid_tid`,
 > `attach_jit`) since it lives in the shared loop, not per-entry-point. The new
@@ -54,7 +54,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > target at both call sites (`asmspy.c`'s headless `--dataflow` and the TUI mode-9 window) is
 > **removed** — every target now goes through the same SEIZE-all-threads-and-race path, native
 > or managed, with no runtime-name special case (the dead `runtime_is_managed` helper was
-> deleted). Two **known, deliberately out-of-scope-here** gaps, carried forward honestly rather
+> deleted). Two **known, deliberately out-of-scope-here** gaps, carried forward transparently rather
 > than silently: (1) `attach_jit` is called with `img=NULL`/`when=0` from asmspy — a target
 > patched/re-JIT'd *mid-capture* decodes the live snapshot, same as the native tier, not the
 > time-correct versioned bytes (wiring a live code-image + addr-channel feed into asmspy is
@@ -243,7 +243,7 @@ denied host the entry point returns `DF_PTRACE_ETRACE` and the lane self-skips.
 > cleanup). Because it lives in the shared loop, the `_run`/`_attach`/`_attach_pid` paths all gain it.
 > Eleven new checks in `test_dataflow_ptrace.c` (45–55) assert a complete value trace across the call
 > with a def-use edge threading the call, four in-region steps only (no helper instruction recorded),
-> and an honest `truncated` on a non-returning callee — **55/55 on real ptrace**; existing 44 unchanged.
+> and a faithful `truncated` on a non-returning callee — **55/55 on real ptrace**; existing 44 unchanged.
 > The re-entrancy caveat (resume at first arrival at the return address) is carried in-code.
 
 Today the value producer treats "PC left the region" as "returned"
@@ -265,7 +265,7 @@ runtime helper ends at the first `call`. Real managed methods call helpers const
 
 **Exit criteria:** a fixture routine that calls a helper mid-region produces a **complete**
 value trace across the call; the helper's internal instructions are **not** recorded (no
-def-use threaded through them); a callee that never returns truncates honestly
+def-use threaded through them); a callee that never returns truncates faithfully
 (`vt->truncated`) rather than hanging.
 
 ---
@@ -372,7 +372,7 @@ is captured (no longer `NEVER_RAN`); the process's other threads keep running at
 > **Validation.** 11 new checks in `examples/test_dataflow_ptrace.c` (81–91; 91/91 total,
 > ASan+UBSan-clean, stable over 8 repeat runs): `test_signal_split` proves the mechanism
 > end-to-end — a victim with a hand-installed SIGTRAP handler executes its OWN embedded `int3`
-> mid-region; the capture detects it (`si_code == SI_KERNEL`), truncates honestly at exactly
+> mid-region; the capture detects it (`si_code == SI_KERNEL`), truncates faithfully at exactly
 > that point, DELIVERS the trap (the victim's handler is proven to have actually run via a
 > shared counter, not merely "the process didn't crash by coincidence"), and the victim
 > SURVIVES and keeps running afterward. `test_attach_jit_worker` proves the composed entry
@@ -382,7 +382,7 @@ is captured (no longer `NEVER_RAN`); the process's other threads keep running at
 > `attach_pid`), and the `runtime_is_managed` gate that hard-refused every managed target at
 > BOTH asmspy call sites (`--dataflow` headless, TUI mode-9 window) is removed — verified via
 > `make docker-cli` (`cli-smoke: PASS`, including the pre-existing native `--dataflow`/`--json`
-> regression). **What this does NOT cover, honestly:** no real dotnet/JVM process was attached
+> regression). **What this does NOT cover, to be transparent:** no real dotnet/JVM process was attached
 > to end-to-end — the exit criteria's original "reuse the existing dotnet / JVM smoke fixtures
 > under `bindings/`" wasn't executed, because no asmspy-specific harness against a real managed
 > runtime exists in-repo (the JIT smoke fixture `jit_victim` cli-smoke already uses is a
@@ -470,7 +470,7 @@ on the **dedicated tracer thread** (the ptrace-per-thread rule, [asmspy.h:14-17]
   the rest — a question no current view can answer.
 - **Bottom pane:** def-use for the selected step (who last wrote each value read here; who
   reads the value written here).
-- **Header:** steps/records totals + the `truncated` flag — the same honest-overflow
+- **Header:** steps/records totals + the `truncated` flag — the same faithful-overflow
   reporting the sample view gives. Snapshots copied under the view lock; slice navigation is
   UI-side over the copied trace and never touches ptrace.
 
@@ -487,7 +487,7 @@ picked function of a live process; the leader/worker and JIT caveats surface in-
   holds (GC alloc slow-path, JIT-compile helper, loader lock) — a deadlock no watchdog
   breaks ([jit-runtime-tracing.md:347-357](../../analysis/jit-runtime-tracing.md)). Scoping to a
   small region shrinks the window; followup F1 (block-step) shrinks it further; it never
-  fully closes. Bound every capture with `max_insns` and surface truncation honestly.
+  fully closes. Bound every capture with `max_insns` and surface truncation faithfully.
 - **Managed memory def-use is GC-uncanonicalized** until followup F4 wires the live move
   feed — a raw address collision across a compaction aliases. Document this in-view; the
   register def-use is exact.
@@ -522,4 +522,4 @@ and it is ready to archive per the repo's convention (moving `docs/internal/plan
 that housekeeping pass, consistent with how [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)
 records the same status. The two gaps disclosed in the Increment 5 note (the addr-channel
 re-arm-on-stale-breakpoint mitigation, and the W^X hardware-breakpoint entry fallback) and a
-real dotnet/JVM validation run are the honest remaining follow-ons, not committed scope.
+real dotnet/JVM validation run are the genuine remaining follow-ons, not committed scope.

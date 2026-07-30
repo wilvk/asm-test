@@ -8,7 +8,7 @@ a managed runtime's threads?**
 > Status legend: **decided (2026-07-07) — B + C-fallback + D approved and
 > implemented.** This document stays as the rationale + options analysis; the
 > approved posture (lazy-arm the body in-process, out-of-process fallback for the
-> signatures the shim set can't cover, the honesty note, and the pinned-worker
+> signatures the shim set can't cover, the fidelity note, and the pinned-worker
 > mitigation retained) is built and validated in
 > [managed-singlestep-lazy-arm-plan.md](managed-singlestep-lazy-arm-plan.md)
 > (now **archived — complete**, including the slow-host / throttled-CI confirmation
@@ -110,11 +110,11 @@ the documented constraint.
 
 ### D — Guardrail telemetry (cheap, orthogonal)
 
-`DegradationNote()`/`SkipReason` already compose the honest-degradation ladder.
+`DegradationNote()`/`SkipReason` already compose the faithful-degradation ladder.
 Add one sentence when an in-process managed scope arms: "in-process TF window
 on a managed thread — fatal if the runtime spawns a thread in-window; pin the
 tiering worker (`DOTNET_TC_BackgroundWorkerTimeoutMs`) or use
-`outOfProcess: true`." Zero protection, full honesty.
+`outOfProcess: true`." Zero protection, full fidelity.
 
 ## Recommendation
 

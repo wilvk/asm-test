@@ -34,7 +34,7 @@ exporter instead of rebuilding those views; the plan's acceptance is literal:
 renders data three producers already emit (the live asmfeatures sweep, the
 committed `benchmarks/boxes/` records, the `perf-history.jsonl` trend lines),
 so the desktop app needs a small tested reader library plus one table view,
-not new probes. Honesty is load-bearing in both halves: statistical survey
+not new probes. Fidelity is load-bearing in both halves: statistical survey
 events are **never** exported as stacks, and the completeness panel renders
 `skip_reason` verbatim with truncated captures marked loudly (D7).
 
@@ -139,7 +139,7 @@ asmtrace_export --speedscope [--out=FILE] REC.asmtrace
 asmtrace_export --chrome     [--heat-cap=N] [--out=FILE] REC.asmtrace   (T2)
 asmtrace_export --lcov       [--name=SF]    [--out=FILE] REC.asmtrace   (T3)
 asmtrace_export --dot-tree   [--out=FILE]   REC.asmtrace                (T3)
-exit 0 = wrote output; 1 = I/O or parse error; 2 = honest refusal
+exit 0 = wrote output; 1 = I/O or parse error; 2 = genuine refusal
 ```
 
 Consumed input subset — **as shipped**, reconciled against 01's schema
@@ -186,9 +186,9 @@ Two subtle rules, spelled out:
   1`. A depth jumping deeper by more than 1 is legal (`--focus` re-bases
   depths) — just push.
 - **The time axis is the per-tid event ordinal.** No producer feed carries
-  timestamps (plan, "Killed in grounding"); `"unit":"none"` says so honestly.
+  timestamps (plan, "Killed in grounding"); `"unit":"none"` says so faithfully.
 
-Honesty chrome: provenance `truncated:true` or `lost > 0` appends
+Fidelity chrome: provenance `truncated:true` or `lost > 0` appends
 `" (truncated)"` to each affected profile's `name`. No tree events → exit 2:
 `"refusing --speedscope: no call-tree events in this recording"`; with survey
 events present, extend with `"survey events are statistical histograms, not
@@ -225,7 +225,7 @@ from per-offset heat, loadable in Perfetto (ui.perfetto.dev).
      the "heat" track — the multi-series `args` form). Cap distinct offsets
      at `--heat-cap` (default 256); past it, drop new offsets and record
      `"heat_offsets_dropped": N` in `otherData` — never silently.
-3. `otherData` honesty block: `{"ts_unit":"event ordinal — the producers
+3. `otherData` fidelity block: `{"ts_unit":"event ordinal — the producers
    record no timestamps","truncated":bool,"lost":N,"heat_offsets_dropped":N}`.
 4. Refusals as T1 (neither tree nor trace events → exit 2; survey-only → the
    edges-are-not-stacks reason).
@@ -296,7 +296,7 @@ exporter mode and refusal, wired as `make asmtrace-export-test`.
    those targets is needed; `export/README.md` records that.) Fixtures as
    shipped: `tree-small.asmtrace` (two tids; multi-frame depth jump-down;
    re-based jump-up), `tree-truncated.asmtrace` (`end` footer with
-   `truncated:true, lost:3` — a D7 dishonesty fixture), `trace-heat.asmtrace`
+   `truncated:true, lost:3` — a D7 low-fidelity fixture), `trace-heat.asmtrace`
    (loop: repeated trace offsets + one coverage event),
    `trace-truncated.asmtrace` (the lcov stderr-warning path),
    `survey-only.asmtrace`, `mixed-basis.asmtrace`, `future-major.asmtrace`
@@ -457,8 +457,8 @@ std::string render_completeness_text(const CompletenessTable &t);
 **Tests.** `desktop/test/test_completeness_view.cpp` (headless; in
 `desktop-test`): committed amd box record → `render_completeness_text` →
 byte-compare against committed `desktop/test/golden/completeness-amd.txt`
-(`UPDATE_GOLDEN=1` regenerates); dishonesty fixture
-`desktop/test/fixtures/features-dishonest.json` (an `available:false` row with
+(`UPDATE_GOLDEN=1` regenerates); low-fidelity fixture
+`desktop/test/fixtures/features-low-fidelity.json` (an `available:false` row with
 a multi-clause skip_reason; a capture row `trace_insns:16, insns_truth:242,
 complete:false`) → the render contains the skip_reason **byte-for-byte** and
 `"16/242 TRUNCATED"` (D7); unit asserts on the cell rule's four branches.
@@ -484,7 +484,7 @@ chrome rather than re-deriving the cell rule.
 
 ## Constraints & gates
 
-- **Honesty rules are hard requirements**: survey events never become stacks
+- **Fidelity rules are hard requirements**: survey events never become stacks
   (exit 2 + reason); truncation/loss always surfaces (profile-name suffix,
   `otherData`, TRUNCATED cells, DOT trailer); `skip_reason` verbatim; the
   ordinal axis is never labelled as time. Each has a test in T4/T6 (D7).
@@ -526,7 +526,7 @@ chrome rather than re-deriving the cell rule.
   lane CLAUDE.md forbids. Revisit when 07 lands; T3 is the template.
 - **SARIF export** — plan schedules it "later alongside the Wave 4 items".
 - **Compressed/framed container reading** — reserved in plan D1 for PT-scale
-  recordings (Phase 3); the exporter refuses it honestly (T1 step 2).
+  recordings (Phase 3); the exporter refuses it transparently (T1 step 2).
 - **Diff/compare in the completeness panel** — the diff primitive is plan D3,
   owned by [04-replay-views.md](04-replay-views.md); `scan_boxes` already
   returns every box, so a compare column can come later without reader changes.

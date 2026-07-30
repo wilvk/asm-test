@@ -3,7 +3,7 @@
 // The schema splits every syscall in two: `line` is the payload-FREE rendering
 // (name, fds, flag words, counts, return value — with `<path>` / `<N bytes>`
 // placeholders where content would be), and the decoded content travels
-// separately in `payload`. That split exists so this view can be honest about
+// separately in `payload`. That split exists so this view can be faithful about
 // two different things at once: what the target did, always; and what it did it
 // WITH, only when someone asked.
 //

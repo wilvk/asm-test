@@ -2,7 +2,7 @@
 
 > **Sources.** Actioned from [desktop-gui-plan.md](../plans/desktop-gui-plan.md) — section
 > **"Flagship interaction concept: the Loom"** (Pitch, Interaction model, **Day-one rung**,
-> Honest limits) and **"Phasing" Phase 2**, under constraints D5/D7. Written 2026-07-23. If this
+> Acknowledged limits) and **"Phasing" Phase 2**, under constraints D5/D7. Written 2026-07-23. If this
 > doc and a source disagree, this doc wins (sources may be stale); if the CODE and this doc
 > disagree, re-verify before implementing.
 >
@@ -10,7 +10,7 @@
 > place:**
 > 1. **T1's replay feeder.** The doc says 02's reader "materializes … back into
 >    an `asmtest_valtrace_t` + `asmtest_defuse_t`". 02 shipped a decoded
->    `DataflowStream` (`desktop/src/doc/streams.h`) instead — honest about what
+>    `DataflowStream` (`desktop/src/doc/streams.h`) instead — candid about what
 >    the SCHEMA carries rather than about what the C struct holds. The
 >    materialization therefore lives on the consumer side, in
 >    `desktop/src/loom/feed.cpp`.
@@ -44,7 +44,7 @@ vertical = location lanes — where every value is a worldline you can select, w
 fork. The **day-one rung** needs no new engine work: the emulator L0 producer fills
 `asmtest_valtrace_t` with per-step operand values, the pure L1 pass yields last-writer def-use
 edges, and the assemble/emulator/snapshot APIs make one-fact forks deterministic. This doc turns
-those structs into the fabric model, renderer + honesty chrome, selection-as-lineage, the lane
+those structs into the fabric model, renderer + fidelity chrome, selection-as-lineage, the lane
 annex, the fork mechanic, and the committed golden looms that pin it all.
 
 ## What already exists (verified 2026-07-23)
@@ -66,7 +66,7 @@ annex, the fork mechanic, and the committed golden looms that pin it all.
 - [include/asmtest_valtrace.h](../../../include/asmtest_valtrace.h) — pure header (stdlib +
   asmtest_trace.h only, [:29–33](../../../include/asmtest_valtrace.h#L29) — **safe in the
   render-only build**). `at_val_rec_t` ([:61–86](../../../include/asmtest_valtrace.h#L61));
-  `asmtest_valtrace_t` ([:93–116](../../../include/asmtest_valtrace.h#L93)) with honest-overflow
+  `asmtest_valtrace_t` ([:93–116](../../../include/asmtest_valtrace.h#L93)) with explicit-overflow
   `truncated` ([:113](../../../include/asmtest_valtrace.h#L113)) and `*_total` counters
   ([:98–99](../../../include/asmtest_valtrace.h#L98)); `asmtest_defuse_edge_t` {from_step,
   to_step, loc} ([:171–178](../../../include/asmtest_valtrace.h#L171)); `asmtest_defuse_build`
@@ -193,10 +193,10 @@ and `exact=false` input fails with err naming the statistical rule.
 **Docs.** Header comments (internal surface). **Done when.** `make desktop-test` prints the
 fabric tests passing; `ldd build/desktop-render` shows no unicorn/keystone/capstone.
 
-### T2 — Draw plan, zoom renderer, honesty chrome  (M, depends on: T1, 03)
+### T2 — Draw plan, zoom renderer, fidelity chrome  (M, depends on: T1, 03)
 
 **Goal.** A deterministic, testable draw plan plus a thin ImDrawList painter; zoom semantics and
-the plan-mandated honesty marks asserted headlessly.
+the plan-mandated fidelity marks asserted headlessly.
 
 **Steps.**
 1. `desktop/src/loom/fabric_plan.h` + `.cpp`: `loom_plan` is a pure function of (fabric, camera).
@@ -204,7 +204,7 @@ the plan-mandated honesty marks asserted headlessly.
    (per-column live-span count → intensity); a mem band at ≥ 12 px per byte explodes into
    `byte_row` prims with per-byte last-writer derived from the same records; `value_chip` only
    when the span fits its text; hops only when both endpoints are visible.
-2. Honesty chrome, as plan output: `prov.truncated` → one `torn_edge` prim at the right boundary,
+2. Fidelity chrome, as plan output: `prov.truncated` → one `torn_edge` prim at the right boundary,
    text `"trace truncated: N of M steps recorded"` (N = `steps_len`, M = `steps_total`);
    `t_end == UINT32_MAX` → `fade_out` ("alive at trace end") — **never** a thread-death cap;
    `born_untraced` → `born_untraced_glyph`, hover "born of untraced state — provenance starts at
@@ -221,7 +221,7 @@ the plan-mandated honesty marks asserted headlessly.
 // desktop/src/loom/fabric_plan.h
 enum class loom_prim {
     lane_header, span, span_hollow, hop, knot, value_chip, density_ribbon, byte_row,
-    torn_edge, fade_out, born_untraced_glyph, guest_badge,               // honesty chrome
+    torn_edge, fade_out, born_untraced_glyph, guest_badge,               // fidelity chrome
     take_dim, take_hot, take_dashed_tail, patient_zero, fault_card };    // forks (T6)
 struct loom_prim_t { loom_prim kind; float x0,y0,x1,y1; uint32_t a,b; std::string text; };
 struct loom_view_t { double step0, steps_per_px; int lane0; float lane_h, px_w, px_h; };
@@ -426,7 +426,7 @@ not a crash.
 ### T7 — Golden looms, render tests, fork differential  (M, depends on: T2, T3, T4, T6, 02)
 
 **Goal.** Committed walkthrough-grade fixtures + tests pinning the rung, per D6/D7: byte-stable
-goldens, a dishonesty fixture, a deterministic fork differential.
+goldens, a low-fidelity fixture, a deterministic fork differential.
 
 **Steps.**
 1. Extend the `make asmtrace-golden` generator (**new — 02**) with four entries written to
@@ -439,7 +439,7 @@ goldens, a dishonesty fixture, a deterministic fork differential.
    host-routine bytes ⇒ generate in the pinned x86-64 docker lane only (the generator refuses
    elsewhere with a printed reason). `loom-truncated.asmtrace` — `df_chain` with `recs_cap = 4`
    so `truncated` flips ([asmtest_valtrace.h:113](../../../include/asmtest_valtrace.h#L113)): the
-   D7 dishonesty fixture. `loom-fork-demo.asmtrace` — the base run (arg 3) of the fixture below.
+   D7 low-fidelity fixture. `loom-fork-demo.asmtrace` — the base run (arg 3) of the fixture below.
 2. Fork fixture `fork_demo` (bytes committed in generator + test with this listing as the
    comment; hand-verify encodings once against a disassembler):
 

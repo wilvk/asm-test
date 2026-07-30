@@ -274,7 +274,7 @@ binding); user-facing docs land with T4/T5.
 **Goal.** When the tier is inited with `backend == ASMTEST_HWTRACE_INTEL_PT`,
 `begin_window` arms a real region-free PT capture and `end_window` drains and
 decodes it through `asmtest_pt_decode_window`, filling the trace with ABSOLUTE
-addresses and honest truncation.
+addresses and faithful truncation.
 
 **Steps.**
 
@@ -371,7 +371,7 @@ the full existing suite stays green (`make docker-hwtrace`); (b)
 live end-to-end proof is T5 — say so in the test's `# SKIP` line. This split
 (synthetic decode in CI, capture on silicon) is the plan's own posture
 ([scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
-§Z2 "Build-gate honesty").
+§Z2 "Build-gate fidelity").
 
 **Docs.** Append a `### Changed` bullet under `## [Unreleased]` in
 [CHANGELOG.md](../../../CHANGELOG.md): `asmtest_pt_decode_window` gained a
@@ -630,7 +630,7 @@ that claims PT.
       (kernel matches filters only on file-backed VMAs; per-task file filters
       require a regular file) — assert the ioctl errors, then assert the
       decode-time path still recovers the region's instructions (the shipped
-      fallback: no capture filter, full-stream decode) — this is the honest
+      fallback: no capture filter, full-stream decode) — this is the genuine
       "anonymous JIT pages cannot be address-filtered" exercise.
    f. Read `/sys/bus/event_source/devices/intel_pt/nr_addr_filters` and print
       it (`# pt nr_addr_filters: N`) — recorded, not asserted (hardware

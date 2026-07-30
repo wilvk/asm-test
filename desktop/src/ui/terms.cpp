@@ -45,7 +45,7 @@ std::string dt_term_lookup(const char *word) {
 }
 
 // --- per-view metadata (one table) -------------------------------------------
-// Domain term leads; metaphor is the subtitle; caveat is the verbatim honest
+// Domain term leads; metaphor is the subtitle; caveat is the verbatim truthful
 // note the "?" popover shows. The coined surfaces of shell.cpp's tab strip.
 static const dt_view_meta k_meta[] = {
     {"loom", "Data-flow lineage", "Loom",

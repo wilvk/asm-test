@@ -152,7 +152,7 @@ int main() {
               a.limit_note == std::string(kAuthorArchLimit), a.limit_note);
     }
 
-    // --- RULE 3b: the arm64 value fabric is honest about what it is NOT ----
+    // --- RULE 3b: the arm64 value fabric is faithful about what it is NOT ----
     // (32-per-guest-value-producer.md R5 T3). author_apply_run_vf is the
     // arm64 counterpart of author_apply_run (RULE 2 above) — same idea
     // (fold a run's outcome into the result), different SHAPE: no register
@@ -183,7 +183,7 @@ int main() {
                                   "edge(s)") != std::string::npos,
               author_dump(a));
 
-        // The guest did not reach a clean stop: honest about NOT having a
+        // The guest did not reach a clean stop: faithful about NOT having a
         // fault kind/address (unlike the x86-64 emu_result_t path).
         author_valuefabric_t bad;
         bad.ran = true;
@@ -207,7 +207,7 @@ int main() {
         check("a truncated arm64 fabric says it is a lower bound",
               c.vf_note.find("lower bound") != std::string::npos, c.vf_note);
 
-        // A producer setup failure degrades honestly, never silently.
+        // A producer setup failure degrades gracefully, never silently.
         author_valuefabric_t setup_fail;
         author_result_t d = author_from_assemble(&ok);
         author_apply_run_vf(d, setup_fail);

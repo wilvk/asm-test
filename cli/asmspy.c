@@ -114,7 +114,7 @@ static void proc_cmdline(pid_t pid, char *out, size_t cap) {
 /* rec_open, plus the optional `code` routine-identity header (28 R1 T1). A
  * non-NULL `code_sha` (a 64-char lowercase-hex SHA-256, with `code_name` and
  * `code_len`) arms the `code` object on every opened channel BEFORE its header
- * line; NULL omits it — the honest state for a producer without stable bytes. */
+ * line; NULL omits it — the truthful state for a producer without stable bytes. */
 static int rec_open_code(rec_t *r, const char *path, FILE *stream,
                          const char *backend, int exact, const char *trust,
                          pid_t pid, const char *code_name,
@@ -208,7 +208,7 @@ static void rec_set_steps_total(rec_t *r, unsigned long long total) {
 }
 
 /* Close with the measured drop counters and, when the run SKIPPED, the skip
- * code + its measured reason: a skipped run still produces a closed, honest
+ * code + its measured reason: a skipped run still produces a closed, faithful
  * recording rather than an empty file. */
 static void rec_close(rec_t *r, unsigned long long lost, int throttled,
                       int skip_code, const char *skip_reason) {
@@ -1033,7 +1033,7 @@ static void stream_print_sink(void *ctx, const char *line) {
     if (!c || !rec_on(c->r))
         return;
     /* The engine hands the front-end a formatted line only (asmspy.h), so v1
-     * records the text honestly instead of inventing fields it never measured. */
+     * records the text faithfully instead of inventing fields it never measured. */
     asmtrace_escape(esc, sizeof esc, line);
     rec_emitf(c->r, "stream", "\"text\":\"%s\"", esc);
 }
@@ -1108,7 +1108,7 @@ static void tree_capture_sink(void *ctx, const char *line,
         size_t nc = tc->cap ? tc->cap * 2 : 256;
         tree_rec *nv = realloc(tc->v, nc * sizeof *nv);
         if (!nv) {
-            rec_truncated(tc->r); /* OOM drop: honest in the recording too */
+            rec_truncated(tc->r); /* OOM drop: faithful in the recording too */
             return;               /* keep what we have */
         }
         tc->v = nv;
@@ -1539,7 +1539,7 @@ static void survey_record(rec_t *r, const sample_snap *s) {
 static int cmd_sample(pid_t pid, long ms, int json, const char *record) {
     rec_t rec;
     /* The recording is opened BEFORE the availability gate so a skipped run
-     * still produces a closed, honest file: "IBS is absent here" is a
+     * still produces a closed, faithful file: "IBS is absent here" is a
      * measurement, and an empty file would be the one thing it must not be. */
     if (rec_open(&rec, record, NULL, "ibs-op", 0, "statistical", pid) != 0)
         return 1;
@@ -1590,7 +1590,7 @@ static int cmd_sample(pid_t pid, long ms, int json, const char *record) {
     survey_record(&rec, &snap);
     rec_close(&rec, snap.lost, snap.throttled, 0, NULL);
 
-    if (json) { /* machine-readable: statistical edges + honest provenance */
+    if (json) { /* machine-readable: statistical edges + faithful provenance */
         printf("{\"pid\":%d,\"mode\":\"ibs-op\",\"samples\":%llu,"
                "\"branch_samples\":%llu,\"lost\":%llu,\"throttled\":%s,"
                "\"edges\":[",
@@ -2304,7 +2304,7 @@ typedef struct {
  * the body with the SHARED asmtrace_blame_body so a live blame and a golden one are
  * byte-identical. The cone is the ascending backward slice INCLUDING the sink; the
  * blamed `loc` is the seed step's first register write (or none for a memory-only /
- * writeless step); born_untraced (cone reached only the sink) is the honest
+ * writeless step); born_untraced (cone reached only the sink) is the truthful
  * "provenance starts at instrumentation" verdict, never an empty cone. Fail-closed
  * on OOM: no blame beats a truncated one. */
 static void dataflow_emit_blame(rec_t *r, const asmtest_valtrace_t *vt,
@@ -2662,7 +2662,7 @@ typedef struct {
 
 /* Sample the target OUT OF BAND, rank the entry arrivals, and hand back the
  * RANKED candidates (base,len,name,weight,sites). Returns how many were written
- * (>0), 0 when the sampler ran but nothing qualified (honest refusal, printed),
+ * (>0), 0 when the sampler ran but nothing qualified (genuine refusal, printed),
  * <0 for a clean self-skip (no IBS substrate / perf refused).
  *
  * Everything that can be WRONG about the choice lives in asmspy_autoregion_rank,
@@ -2734,7 +2734,7 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
                                        module, cands, cap);
     int nout = 0;
     if (nc == 0) {
-        /* An honest refusal, not a guess. Most processes are idle most of the
+        /* A genuine refusal, not a guess. Most processes are idle most of the
          * time, and an idle target yields no edges at all — picking SOMETHING
          * from nothing is how you arm a breakpoint that never fires. */
         fprintf(stderr,
@@ -2786,14 +2786,14 @@ typedef enum {
 
 /* The PORTABLE pick: software-clock IP survey -> residency ranking
  * (asmspy_autoregion_rank_ip). Returns how many candidates were written
- * (> 0), 0 when the sampler ran but nothing qualified (honest refusal,
+ * (> 0), 0 when the sampler ran but nothing qualified (genuine refusal,
  * printed), <0 for a clean self-skip (perf refused; reason printed).
  *
  * Residency's top pick can be a function that never re-enters — the hazard
  * the picker header documents — so this hands back up to `max_out` RANKED
  * candidates and cmd_dataflow WALKS them on NEVER_RAN. The walk is the
  * difference between "portable --auto hangs on main-shaped winners" and
- * "portable --auto lands the hot callee two rows down, reporting each honest
+ * "portable --auto lands the hot callee two rows down, reporting each genuine
  * refusal on the way". */
 static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
                         auto_cand_copy *out, int max_out, int window_ms) {
@@ -2814,7 +2814,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 
     /* Survey buckets -> picker input. On OOM keep the heaviest 64: sv.ips is
      * sorted descending, so truncation degrades coverage, never the ORDER of
-     * what it kept — the same honest-degradation posture as auto_pick's. */
+     * what it kept — the same graceful-degradation posture as auto_pick's. */
     asmspy_ip_hit_t stackh[64];
     asmspy_ip_hit_t *hits = stackh;
     size_t nh = sv.n;
@@ -3021,7 +3021,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                                     dataflow_render_sink, &dc);
         /* The candidate walk (39 T1): residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
-         * NEVER_RAN is the bounded entry wait saying exactly that — an honest
+         * NEVER_RAN is the bounded entry wait saying exactly that — a genuine
          * refusal about THIS candidate, not about the target. The advance /
          * exhausted / stop decision is pure and unit-tested
          * (asmspy_autoregion_walk); move to the next-ranked one on ADVANCE,
@@ -3844,7 +3844,7 @@ static void serve_run_engine(serve_session_t *s) {
         /* BOTH paths hand back RANKED candidates and the walk below tries them
          * on NEVER_RAN, exactly as cmd_dataflow does: a ranked winner that never
          * re-enters is the rule's known failure shape, not a fact about the
-         * target, and each refusal is reported honestly on the way. 39 T2 gave
+         * target, and each refusal is reported faithfully on the way. 39 T2 gave
          * the IBS/entry path the same list + walk the sw/residency path had. */
         auto_cand_copy cands[AUTO_TRIES];
         int ncand = 0, attempt = 0;
@@ -4000,7 +4000,7 @@ static void *serve_tracer(void *arg) {
         asmspy_symtab_free(&s->syms);
 
     /* The `end` footer carries the skip when the engine reported one, so the
-     * sliced-out recording is closed and honest even for a session that had
+     * sliced-out recording is closed and faithful even for a session that had
      * nothing to report. */
     if (s->rc > 0)
         serve_skip_reason(s, s->rc, skiptext, sizeof skiptext);

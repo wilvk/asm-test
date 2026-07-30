@@ -667,7 +667,7 @@ class HwTrace {
    *  initialized single-step tier (HwTrace.init). Returns `{ result, path, truncated }`:
    *  `result` the call's return (a JS number, BigInt out of safe range), `path` the
    *  executed body's disassembly ('' when the decoder is absent), `truncated` the
-   *  honesty bit. On a non-single-step backend (rc != OK) returns result null. */
+   *  fidelity bit. On a non-single-step backend (rc != OK) returns result null. */
   static callScoped(code, ...args) {
     // Own trace handle (Python parity: instructions=256, blocks=64); freed in finally.
     const handle = _fn.traceNew(256, 64);
@@ -683,7 +683,7 @@ class HwTrace {
         argBuf, n, resultBuf, scope);
       if (rc !== ASMTEST_HW_OK) return { result: null, path: '', truncated: false };
       // Render the body from the just-captured (thread-local) scope handle, then read
-      // the honesty bit off the trace before freeing it.
+      // the fidelity bit off the trace before freeing it.
       const path = _renderScope(scope);
       const truncated = _fn.truncated(handle) !== 0;
       return { result: _safeInt(resultBuf.readBigInt64LE(0)), path, truncated };
@@ -705,7 +705,7 @@ class HwTrace {
    *  the call's return (a JS number, BigInt out of safe range), `trace` a queryable `HwTrace`
    *  the CALLER frees via `trace.free()`, `used` the { tier, backend, fidelity, mechanism } choice that
    *  produced the final trace (inspect `used.backend` to see whether escalation fired),
-   *  `truncated` the honesty bit. Self-skips where no call-owning native tier is available (off
+   *  `truncated` the fidelity bit. Self-skips where no call-owning native tier is available (off
    *  x86-64 Linux, or with no lib): `result`/`trace`/`used` are null and `rc` is negative. */
   static traceCallAuto(code, ...args) {
     if (!_lib) // self-skip, like autoTier(): no lib -> no call-owning tier
@@ -741,7 +741,7 @@ class HwTrace {
    *  §Z1 whole-window scope, the callback form of dotnet's `using (new AsmTrace())`.
    *  Arms a REGION-FREE single-step capture on THIS thread (no NativeCode, no
    *  [base,len)), runs `fn`, disarms, and renders. Unlike `callScoped`'s clean 5-insn
-   *  body this is HONEST-BUT-NOISY: it records EVERYTHING between begin and end (the
+   *  body this is FAITHFUL-BUT-NOISY: it records EVERYTHING between begin and end (the
    *  FFI dispatch + harness too), so the traced routine's own ABSOLUTE addresses appear
    *  as a SUBSET of `insns` (surfaced as BigInt). Keep the window TIGHT — single-step
    *  steps every instruction. Returns `{ path, truncated, insns, armed }`; on a
@@ -757,7 +757,7 @@ class HwTrace {
    *
    *  `insnsCap` sizes the capture buffer. Single-stepping a managed runtime records a
    *  LOT — a single V8-dispatched call runs ~100k instructions — so the default is
-   *  generous (~1M insns); if the window overflows it, `truncated` is set (an honest
+   *  generous (~1M insns); if the window overflows it, `truncated` is set (a faithful
    *  best-effort outcome) and the stored `insns` are a labelled PREFIX. */
   static window(fn, insnsCap = 1 << 20) {
     // whole-window is insns-only: insns_cap FIRST, blocks_cap=0 SECOND.
@@ -798,13 +798,13 @@ class HwTrace {
    *  The `result` is EXACT (the helper reads the caller's RAX at the ret), but the instruction
    *  STREAM is best-effort over a live runtime: single-stepping the runtime's own thread can be
    *  interrupted by its async signals, so `truncated` may be set with a partial `offsets` — the
-   *  same honest-degradation posture as `window()` and dotnet's out-of-process `AsmTrace.Method`.
+   *  same faithful-degradation posture as `window()` and dotnet's out-of-process `AsmTrace.Method`.
    *
    *  Args pass as C longs, up to two (the `NativeCode.call` ceiling). Returns
    *  `{ result, offsets, blocks, truncated, armed }`: `result` the leaf's return (from the
    *  helper's RAX read, a JS number / BigInt out of safe range), `offsets` the executed
    *  body's region-RELATIVE instruction offsets, `blocks` the basic-block count, `truncated`
-   *  the honesty bit. On a refused reverse-attach (Yama `ptrace_scope`, no ptrace, or
+   *  the fidelity bit. On a refused reverse-attach (Yama `ptrace_scope`, no ptrace, or
    *  off-x86-64-Linux) it self-skips: `armed` is false, `offsets` empty — but the call STILL
    *  RUNS (never a silent miss), exactly like dotnet's stealth path. Needs no `HwTrace.init`
    *  (the stealth stepper is ptrace-based, independent of the single-step tier). */
@@ -850,7 +850,7 @@ class HwTrace {
    *  runtime/glue between them is stepped over, not recorded. (asmtest_hwtrace_stealth_trace_windowed.)
    *  Returns `{ result, insns, truncated, armed }`: `result` the frame's return (from the
    *  helper's RAX read — a JS number, BigInt out of safe range), `insns` the captured ABSOLUTE
-   *  addresses (BigInt), `truncated` the honesty bit. Self-skips (armed:false, empty insns)
+   *  addresses (BigInt), `truncated` the fidelity bit. Self-skips (armed:false, empty insns)
    *  where the reverse-attach is refused
    *  (Yama ptrace_scope) — but the body STILL RUNS (never a silent miss). Needs no HwTrace.init. */
   static stealthWindow(driver, channel) {
@@ -1312,7 +1312,7 @@ class AsyncStitchedTrace {
     this._seq = 0;
     this._completed = false;
     this._freed = false;
-    this.skipReason = '';  // honest reason any hop ran uninstrumented ('' when all captured)
+    this.skipReason = '';  // truthful reason any hop ran uninstrumented ('' when all captured)
     this.path = '';        // merged per-hop disassembly (set by complete())
     this.truncated = false;
     this.hops = [];        // per-hop { seq, tid, insnOff } bounds (set by complete())
@@ -1473,7 +1473,7 @@ class Ptrace {
    *  when the frame returns. (asmtest_ptrace_trace_window_call.) Fork-internal — needs no
    *  reverse-attach permission, runs on any ptrace-capable x86-64 Linux. Returns
    *  `{ result, insns, truncated }`: `result` the frame's return (BigInt out of safe range),
-   *  `insns` the captured ABSOLUTE addresses (BigInt), `truncated` the honesty bit. Throws on a
+   *  `insns` the captured ABSOLUTE addresses (BigInt), `truncated` the fidelity bit. Throws on a
    *  non-OK rc; gate with `Ptrace.available()` (the deterministic side-effecting `driver` runs
    *  in the forked child, so it must be re-runnable). */
   static windowCall(driver, args, channel) {

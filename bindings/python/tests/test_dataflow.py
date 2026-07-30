@@ -166,7 +166,7 @@ def test_pipeline_no_spurious_edge():
 # The tier is Linux x86-64 only (src/dataflow_ptrace.c's own #if). On such a host
 # the live tests MUST run: an unavailable tier there means the lib was linked
 # without Capstone — a build defect that has to be RED, not a skip. Anywhere else
-# the ISA genuinely lacks the tier and skipping is the honest answer.
+# the ISA genuinely lacks the tier and skipping is the accurate answer.
 _LIVE_EXPECTED = platform.system() == "Linux" and platform.machine() == "x86_64"
 _VICTIM = os.environ.get("ASMTEST_DATAFLOW_VICTIM")
 

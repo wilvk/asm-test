@@ -156,7 +156,7 @@
  *      Measured before the fix, on the legacy-SSE path: `divsd` under RC=toward-zero gave
  *      oracle 0x3fc9999999999999 vs replay 0x3fc999999999999a at rc=OK, truncated=0.
  *
- * THE HONEST BOUNDARY — WHAT "YMM/ZMM SUPPORT" DOES AND DOES NOT MEAN HERE. Measured against
+ * THE FAITHFUL BOUNDARY — WHAT "YMM/ZMM SUPPORT" DOES AND DOES NOT MEAN HERE. Measured against
  * the bundled Unicorn (2.0.1) AND against 2.1.3 built from source (2026-07-17, Zen 5):
  *
  *   - SEEDED + REPLAYED: XMM / 128-bit ONLY (plus MXCSR). Legacy SSE executes correctly in
@@ -1216,7 +1216,7 @@ static void fill_mem_value(cap_ctx *c, at_val_rec_t *r) {
 /* A vector REGISTER record's value, taken from a boundary snapshot at the register's
  * architectural width. Returns 1 iff the record was filled. A snapshot narrower than the
  * register (e.g. the replay, which models XMM only) declines rather than reporting a
- * zero-extended lie — an unfilled record stays value_valid = false, which is honest. */
+ * zero-extended lie — an unfilled record stays value_valid = false, which is truthful. */
 static int fill_vec_value(cap_ctx *c, at_val_rec_t *r, const dfb_snap_t *s) {
     int idx, w;
     if (!vec_reg_info(r->reg, &idx, &w))
@@ -1439,7 +1439,7 @@ typedef struct {
 } dfb_scan_t;
 
 /* Does the region get the block-step + replay path? F2 widens F1's rule: a region is no longer
- * required to be PURE, only to have no impurity the replay cannot honestly carry. */
+ * required to be PURE, only to have no impurity the replay cannot faithfully carry. */
 static int scan_replay_ok(const dfb_scan_t *s) {
     return (s->pure || s->injectable) && s->replayable;
 }
@@ -1577,7 +1577,7 @@ static const char *insn_impurity(const cs_insn *insn) {
  *   3. cs_open FAILING. Handled by region_scan before this is ever called.
  *
  * A linear sweep is still only exact for a straight instruction stream; failing closed per
- * extent is what makes that honest when a caller's extent list is itself wrong (e.g. the
+ * extent is what makes that accurate when a caller's extent list is itself wrong (e.g. the
  * "extent" still contains an undecodable byte, or a real instruction longer than what the
  * caller vouched for). */
 static void region_scan_extent(csh h, cs_insn *insn, const uint8_t *code,
@@ -1614,7 +1614,7 @@ static void region_scan_extent(csh h, cs_insn *insn, const uint8_t *code,
              * no DR-breakpoint plan either. */
             out->injectable = 0;
             /* Name the impurity that actually DISQUALIFIES the region, not merely the first one
-             * seen: with `syscall; sysenter` the honest reason is "sysenter" — a caller told
+             * seen: with `syscall; sysenter` the accurate reason is "sysenter" — a caller told
              * "syscall" would go looking for a gate that no longer exists. */
             out->impure_reason = imp;
         }
@@ -1692,7 +1692,7 @@ static void region_scan(const uint8_t *code, size_t len,
          * already caps hwrec_off at — a 5th+ site has no slot to watch, so the region keeps
          * the whole-region single-step fallback rather than silently under-cover it. Checked
          * once, after every extent's sweep (not inside region_scan_extent), so a region whose
-         * first four HWREC sites are seen before the 5th disqualifies still gets the honest
+         * first four HWREC sites are seen before the 5th disqualifies still gets the accurate
          * reason. */
         out->injectable = 0;
         out->impure_reason = "hwrec-overflow";
@@ -1801,7 +1801,7 @@ static int dfb_arm_hw_bp(pid_t pid, int slot, uint64_t addr,
  * status bits. Best-effort (mirrors clear_hw_bp / rgn_hw_bp_disarm), and called on EVERY exit
  * path before the tracee is reaped: PTRACE_DETACH does not clear the debug registers (measured
  * in the F3 work, cli/asmspy_engine.c:2443) — this tracee is always SIGKILLed rather than
- * detached, so nothing outlives it, but disarming here keeps the pattern honest regardless of
+ * detached, so nothing outlives it, but disarming here keeps the pattern correct regardless of
  * how the tracee's lifetime ends. */
 static void dfb_clear_hw_bps(pid_t pid) {
     ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(7), (void *)0UL);
@@ -2023,7 +2023,7 @@ static int uc_seed_vec(uc_engine *uc, const dfb_vecstate_t *vs, int seed_mxcsr,
     /* MXCSR too — the XMM file is only half the state an SSE instruction reads. Verified the
      * same way, and verified to be MEANINGFUL rather than merely accepted: Unicorn honours the
      * rounding-control bits and agrees with this silicon on 1.0/5.0 under both RN (…999a) and
-     * RZ (…9999). Had it merely stored the value without honouring it, the honest move would
+     * RZ (…9999). Had it merely stored the value without honouring it, the truthful move would
      * have been to gate FP regions off the replay rather than lie about them. */
     uint32_t back = 0;
     if (seed_mxcsr &&
@@ -2034,7 +2034,7 @@ static int uc_seed_vec(uc_engine *uc, const dfb_vecstate_t *vs, int seed_mxcsr,
     return n;
 }
 
-/* Read Unicorn's XMM file into a snapshot. width = 16 states honestly what the replay models:
+/* Read Unicorn's XMM file into a snapshot. width = 16 states accurately what the replay models:
  * a YMM/ZMM record asked of this snapshot declines rather than reporting a zero-extended lie. */
 static void uc_get_vec(uc_engine *uc, dfb_vecstate_t *vs) {
     memset(vs, 0, sizeof *vs);
@@ -2140,7 +2140,7 @@ static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next,
              * REAL TRACEE at the real boundary. Nothing is fabricated, no syscall-specific
              * table is consulted, and no argument is decoded — the kernel's own retired result
              * is simply carried across. rcx/r11 are injected rather than computed because r11
-             * provably CANNOT be computed honestly: measured, it comes back as the pre-syscall
+             * provably CANNOT be computed faithfully: measured, it comes back as the pre-syscall
              * rflags OR'd with TF (0x100) — the ptrace single-step bit — so a "computed" r11
              * would have to model the debug mechanism perturbing the value it reports. */
             uint64_t v = next->gp.rax;
@@ -2619,7 +2619,7 @@ int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
  * of the code and ten other things ask it, whereas this is a property of what THIS tier can
  * carry. A caller wanting F1's question still gets F1's answer.
  *
- * The honest boundary, MEASURED rather than assumed (see dfb_impurity_kind): `syscall` and
+ * The faithful boundary, MEASURED rather than assumed (see dfb_impurity_kind): `syscall` and
  * `int 0x80` are trapped by DEBUGCTL.BTF because they are control transfers, so the forward pass
  * gets a real post-retirement boundary for free. `rdtsc` / `rdtscp` / `rdrand` / `rdseed` /
  * `cpuid` are NOT trapped — a block runs straight through them — so there is no boundary at

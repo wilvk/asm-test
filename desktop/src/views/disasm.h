@@ -90,7 +90,7 @@ CodeBytes obs_disasm_bytes_at(const DisasmView &v, uint64_t addr,
 // A single byte at `addr` as of `when`, for the interactive byte view's ReadFn
 // (14-quick-wins.md T4). Returns the byte and sets `*known`; when no image
 // covers `addr` at or before `when`, `*known` is false and the return is 0 — the
-// editor shows an UNKNOWN byte dimmed, never a fabricated value (the same honesty
+// editor shows an UNKNOWN byte dimmed, never a fabricated value (the same fidelity
 // obs_disasm_bytes_at enforces for the run form). Pure, so the ReadFn adapter is
 // unit-tested without an ImGui context (D4).
 uint8_t obs_disasm_byte_at(const DisasmView &v, uint64_t addr, uint64_t when,

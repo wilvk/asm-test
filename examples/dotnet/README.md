@@ -22,7 +22,7 @@ hardware tier (`amdhot`/`amdlbr`/`amd-period-sweep`, needs Zen 3+ + `CAP_PERFMON
 | [localscope_oop/](localscope_oop/) | `Ptrace.TraceWindowCall` + `AddrChannel` | the **§D3 crash-proof, OUT-OF-PROCESS** whole-window scope — captures a whole window (a frame + published leaf regions) from a forked tracee, so THIS thread is never `EFLAGS.TF`-armed (a ptrace-stop is not gated by the tracee's signal mask, so it survives code the in-process `localscope` is forbidden to step) |
 | [localscope_oop_managed/](localscope_oop_managed/) | `AsmTrace.Window(() => {…})` | the same crash-proof OOP scope over a whole block of **MANAGED C#** — a reverse-attached helper single-steps this thread out of band, so the block **survives an in-scope thrown/caught exception** that `localscope` (in-process) must omit. Names the block's own compiled code; deep mid-window JITs are elided (a documented follow-up) |
 | [windowhybrid/](windowhybrid/) | `AsmTrace.WindowHybrid(() => {…})` | the **hybrid** whole-window (§E1): compose the two crash-proof forms — pass 1 runs the cheap `WindowHot` AMD-LBR survey to find the hot methods, pass 2 runs the exact `Window` but publishes **ONLY the hot methods' regions**, so the per-instruction stepper is spent on the hot managed slice while the cold remainder is elided (no new native stepper — `WindowHot` + `Window` composed). `Survey` exposes the pass-1 histogram. **Degrades** to a full exact `Window` off Zen/`CAP_PERFMON`, self-skips off ptrace. Runs `body` twice (must be deterministic) |
-| [amdhot/](amdhot/) | `using (new AsmTrace(HwBackend.AmdLbr))` | the **statistical AMD-LBR whole-window survey**, as an **inline `using` scope** — AMD LBR samples the branch stack out of band while the managed block runs at **native speed**, bucketing sampled branch-target endpoints into a **hot-method histogram** (`IsStatistical`, `Methods[].Count` = sample weight, deep BCL named). Crash-proof (no `EFLAGS.TF`/SIGTRAP) and near-native, the honest AMD whole-window shape (exact is a hardware dead end). `AsmTrace.WindowHot(Action)` is the delegate sibling. Needs Zen 3+/LBR + `CAP_PERFMON` → self-skips in the plain lane |
+| [amdhot/](amdhot/) | `using (new AsmTrace(HwBackend.AmdLbr))` | the **statistical AMD-LBR whole-window survey**, as an **inline `using` scope** — AMD LBR samples the branch stack out of band while the managed block runs at **native speed**, bucketing sampled branch-target endpoints into a **hot-method histogram** (`IsStatistical`, `Methods[].Count` = sample weight, deep BCL named). Crash-proof (no `EFLAGS.TF`/SIGTRAP) and near-native, the faithful AMD whole-window shape (exact is a hardware dead end). `AsmTrace.WindowHot(Action)` is the delegate sibling. Needs Zen 3+/LBR + `CAP_PERFMON` → self-skips in the plain lane |
 | [amdlbr/](amdlbr/) | `HwTrace.Init(AmdLbr)` + `using (new AsmTrace(code))` | the **region** scope on the **AMD LBR hardware tier** — the same `using (new AsmTrace(code))` shape as [region/](region/) but reconstructing a native routine from the 16-deep branch-record stack (out-of-band, near-native) instead of single-step. AMD LBR is region-scoped + sampled, so the capture is retried until a window lands in-region. Needs Zen 3+/LBR + `CAP_PERFMON` |
 | [assemblies/](assemblies/) | `new AsmTrace(byMethod: true, withRundown: true)` | groups the labelled window **by declaring assembly**, listing the methods called in each (`AsmMethod.Assembly` / `.ShortName`) |
 | [annotated/](annotated/) | `new AsmTrace(byMethod: true, withRundown: true)` | an **annotated execution trace** — each executed instruction next to the method it ran in (`AsmTrace.Disassembly` / `AsmInstruction`) |
@@ -50,17 +50,17 @@ hardware tier (`amdhot`/`amdlbr`/`amd-period-sweep`, needs Zen 3+ + `CAP_PERFMON
 | [async-stitch/](async-stitch/) | `AsmStitchedTrace.Step` | follow **one logical operation across an `await`/`Task.Run` hop** and stitch each hop's capture into one seq-ordered trace — the first LIVE producer of the shipped stitch-merge core (a pool-thread hop merges by `Seq`) |
 | [trace-diff/](trace-diff/) | two `HwTrace` regions + set-diff | an **exact coverage DELTA between two runs** — which basic blocks a change turned ON/OFF + per-instruction count deltas. Distinct from `coverage` (a union) and `codeimage` (two bodies at one address) |
 | [coverage-guided-fuzz/](coverage-guided-fuzz/) | region single-step per input | the **per-input marginal coverage delta** driving an AFL keep/discard decision — watch the corpus grow until the input that reaches the rare guarded block is flagged |
-| [trace-cost-overhead/](trace-cost-overhead/) | Stopwatch × every tier | the **honest cost of each tier** — the same native loop untraced vs single-step vs block-step vs OOP ptrace vs AMD LBR, as a slowdown-multiplier + stop-count table |
-| [descend-all/](descend-all/) | `Descent(DescendAll)` + guardrails | **auto-descend into UNKNOWN callees**, bounded by `SetMaxDepth`/`SetInsnBudget`/`SetWatchdogMs`/denylist, reporting honest `DepthCapped()`/`Truncated()` — the inverse of [descent/](descent/)'s curated allow-set |
+| [trace-cost-overhead/](trace-cost-overhead/) | Stopwatch × every tier | the **true cost of each tier** — the same native loop untraced vs single-step vs block-step vs OOP ptrace vs AMD LBR, as a slowdown-multiplier + stop-count table |
+| [descend-all/](descend-all/) | `Descent(DescendAll)` + guardrails | **auto-descend into UNKNOWN callees**, bounded by `SetMaxDepth`/`SetInsnBudget`/`SetWatchdogMs`/denylist, reporting accurate `DepthCapped()`/`Truncated()` — the inverse of [descent/](descent/)'s curated allow-set |
 | [crashproof-showdown/](crashproof-showdown/) | in-proc child vs `AsmTrace.Window` | the FATAL boundary **as an observed fact** — the same thread-spawning block force-kills an in-process single-step child (exit 133 = SIGTRAP) yet is captured clean out of band |
 | [crashproof-survey/](crashproof-survey/) | Method / Window / WindowHot | one workload through all three crash-proof-capable forms side by side — a **fidelity / cost / safety table** (exact-body vs exact-window vs sampled-AMD) |
-| [tier-ladder/](tier-ladder/) | `HwTrace.ResolveTiers` / `AutoTier` | this host's **honest degradation ladder** with a reason per rung, from the public cascade API — and how `CeilingFree`/`NativeOnly` policies drop rungs. Pure enumeration, no tracing |
+| [tier-ladder/](tier-ladder/) | `HwTrace.ResolveTiers` / `AutoTier` | this host's **faithful degradation ladder** with a reason per rung, from the public cascade API — and how `CeilingFree`/`NativeOnly` policies drop rungs. Pure enumeration, no tracing |
 | [amd-period-sweep/](amd-period-sweep/) | `AsmTrace.WindowHot(period:)` | the AMD-LBR statistical survey **swept across sample periods** — finer (more PMIs/throttle) vs coarser (cheaper) on the same hot block. Needs Zen 3+/LBR + `CAP_PERFMON` |
 | [amd-snapshot/](amd-snapshot/) | `AmdSnapshot.Trace` | the **deterministic boundary LBR snapshot** — EXACT capture of a tiny single-shot routine that the sampled survey truncates, via a HW breakpoint at the region exit + `bpf_get_branch_snapshot`. Needs `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build → self-skips otherwise |
 | [amd-tile/](amd-tile/) | `AsmTrace.WindowHot(tileCheckpoints:)` | §E6 — the same snapshot **TILED at MANAGED checkpoints** and merged into `WindowHot.Addresses`: a breakpoint on a JIT'd method entry, and each hit's frozen ~16-branch island joins the sampled endpoint stream. Catches a method that runs ONCE where the sampler is blind. **SAMPLED/PARTIAL coverage** — exact AT the checkpoints, blind between them; NOT a whole-window trace. Same gate as `amd-snapshot` |
 
 See the [dotnet examples roadmap](../../docs/internal/archive/plans/dotnet-examples-roadmap.md) for the full design
-pass behind these and what the single-step tier honestly cannot do.
+pass behind these and what the single-step tier genuinely cannot do.
 
 (The sibling [jit_dotnet/](jit_dotnet/) is **not** a scope demo: it is a bare CoreCLR
 workload traced *out of process* by the C `jit_trace` harness — driven by
@@ -153,7 +153,7 @@ attribution of the captured window, by origin:
 
 The ~1M runtime instructions are the .NET runtime's own JIT'd code — single-step of
 a managed caller amplifies enormously, which is why the leaves sit past the old 64k
-window and the buffer had to grow (and is honestly `truncated`). The same separation
+window and the buffer had to grow (and is faithfully `truncated`). The same separation
 is proven deterministically, with no runtime noise, by the C host test
 `test_wholewindow_buckets` (two native leaves → `leafA: 5`, `leafB: 5` as separate
 named buckets via `asmtest_hwtrace_attribute_window`). The clean managed path is the
@@ -195,7 +195,7 @@ managed methods that executed in the window (by instruction count):
 (the native runtime — RyuJIT, GC, PAL — is the unlabelled remainder: 971688 instructions.)
 ```
 
-Honest limits: this is the single-step WEAK tier, so it also single-steps the JIT
+Candid limits: this is the single-step WEAK tier, so it also single-steps the JIT
 compiling the cold method (the ~977k "native runtime" instructions) — intrusive and
 slow. It needs no launch knob and no Intel PT, but the non-intrusive, clean path is
 the **STRONG** whole-window PT tier (forward-look here). See
@@ -258,7 +258,7 @@ The parse anchors the assembly on the `] ` immediately before `::` (not the firs
 bracketed return type (`instance !0[] [System.Private.CoreLib] …`, an array return) or a
 generic type right before `::` (`…[System.__Canon]::FromManaged`) is grouped by its real
 assembly, not a stray bracket. Listener-spelled cold names (`§D0.1`, dotted `Type.Method`)
-carry no tag and fall into the `(in-scope / no assembly tag)` bucket honestly.
+carry no tag and fall into the `(in-scope / no assembly tag)` bucket faithfully.
 
 ## annotated — each instruction next to its method (observed output)
 
@@ -319,7 +319,7 @@ rundown enabled: True; 1300 labelled instructions across 41 methods, 4 tiers.
 ```
 
 Most of a one-line `Work()` runs precompiled R2R BCL. `RundownEnabled` gates whether `[PreJIT]`
-methods are present at all (reported for honesty).
+methods are present at all (reported for transparency).
 
 ## hotspots — the most-executed instructions (observed output)
 
@@ -387,7 +387,7 @@ top call edges (by frequency):
 ```
 
 The exact, noise-free tree (with self-vs-inclusive counts) is the out-of-process descent example
-(forward-look); this is the honest in-process reconstruction.
+(forward-look); this is the faithful in-process reconstruction.
 
 ## ptrace_native — out-of-process single-step (observed output)
 
@@ -633,7 +633,7 @@ BytesAt the SAME address, read AFTER the patch, at two logical times:
   seq 2:  b8 02 00 00 00 c3   mov eax, 2
 ```
 
-Honest caveat: a real tier0→tier1 relocates to a *new* address, so a fixed-region code image does
+Candid caveat: a real tier0→tier1 relocates to a *new* address, so a fixed-region code image does
 not capture managed tiering — this shows the mechanism on a controlled blob. Self-skips where the
 recorder or W^X patching is unavailable.
 
@@ -667,7 +667,7 @@ block 0x0e  dec rax  + ON in B   <- the block the change turned on ;  per-insn d
 ```
 
 `coverage-guided-fuzz` flags the input that first reaches a rare guarded block (`validate(4919)=57005 KEEP
-+1 block 0x20 <== deep bug block reached`); `trace-cost-overhead` prints the honest tier cost:
++1 block 0x20 <== deep bug block reached`); `trace-cost-overhead` prints the true tier cost:
 
 ```
 untraced          1.19 us   1.0x        block-step (OOP fork)   29.69 ms   2 blocks     24,976x
@@ -680,7 +680,7 @@ AMD LBR region     5.83 us  4.9x
 SURVIVED, captured 10 methods`);
 `crashproof-survey` tables Method vs Window vs WindowHot; `tier-ladder` prints this host's cascade
 with a reason per rung and shows `CeilingFree` drop the AMD LBR rung + `NativeOnly` drop the emulator
-floor. `descend-all` auto-descends unknown callees and trips its guardrail honestly
+floor. `descend-all` auto-descends unknown callees and trips its guardrail transparently
 (`SetMaxDepth(1) → DepthCapped=true, C folded into B`).
 
 **AMD** — `amd-period-sweep` sweeps the survey period (smaller = more samples/throttle, larger =
@@ -724,7 +724,7 @@ lane carrying both the .NET SDK and the BPF toolchain, and it runs this LIVE on 
   `Truncated()` — region **coverage** (basic blocks + instruction offsets). Used by
   [coverage/](coverage/).
 - `AsmTrace.Path` — the rendered disassembly (region-scoped form).
-- `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and honest degradation.
+- `AsmTrace.Armed` / `.Truncated` / `.SkipReason` — arm state and graceful degradation.
 - `JitMethodMap` — the underlying in-process address→method map (§D0.1), if you want
   it standalone; `Stop()` then `Freeze()` then `Resolve(addr)`.
 - `HwTrace.SymbolizeBuckets(ips, pid, cap)` / `HwBucket` — bucket ABSOLUTE addresses by

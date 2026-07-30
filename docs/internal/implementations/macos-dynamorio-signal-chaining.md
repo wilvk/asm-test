@@ -205,7 +205,7 @@ signal chains to CPython's handler, no SIGILL, no wedge.
    fork `api.startstop`/`api.detach` 10/10 filtered, `make docker-drtrace`).
 4. If the full fix proves out of reach in reasonable effort (macOS signal
    delivery is the least-maintained DR surface), the fallback is recorded
-   honestly: fix what is fixable, and if chaining still cannot work, convert
+   candidly: fix what is fixable, and if chaining still cannot work, convert
    the guide/plan wording from "hangs" to the precise residual behavior and
    keep the skip — but only after SC2's invariant is named and chased, not
    before. A partial land is `◐`, not a silent re-scope.
@@ -282,7 +282,7 @@ path and consumes both. SC4 is mechanical once SC3 is green.
 - **Release-flow purity:** `make dynamorio-macos` output at an unchanged pin
   must be byte-identical throughout (commit-stamp reuse); the debug mode is
   opt-in via `DR_MACOS_BUILD_TYPE=Debug` only.
-- **Honest fallback** (SC3 step 4): if full chaining is unreachable, the
+- **Candid fallback** (SC3 step 4): if full chaining is unreachable, the
   residual behavior is re-measured and re-documented precisely — but only
   after the debug invariant is named; the current "hangs" wording may not
   survive contact with the root cause either way.
@@ -411,7 +411,7 @@ landed.** Two pieces of hard evidence, plus three eliminations:
   undermaintained surface. **This re-scopes SC3:** it is very likely not a
   surgical "fourth fork fix" but part of macOS multi-thread signal delivery
   (i#58) — a substantial DR-core effort. **No fork fix is committed; SC3
-  remains open at this diagnosis, with the scope corrected.** The honest
+  remains open at this diagnosis, with the scope corrected.** The candid
   fallback (SC3 step 4) is now the live option: the guide/plan wording is
   already precise ("signal chaining under an attached trace hangs on
   macOS"), the Darwin skip stays, and the residual is a named i#58-class

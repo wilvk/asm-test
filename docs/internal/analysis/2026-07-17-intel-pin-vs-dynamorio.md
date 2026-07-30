@@ -44,7 +44,7 @@ peer-reviewed, *independently implemented* byte-level taint engine on Pin — a
 second in-band DBI taint producer diffed byte-for-byte against the DR client is
 the strongest possible check, and it is exactly the `ASSERT_MATCHES_REF`
 "independent reference model" idiom the repo already lives by. It carries into
-the plan as a track, framed honestly as oracle-hardening rather than new reach.
+the plan as a track, framed candidly as oracle-hardening rather than new reach.
 
 ## The genuine deltas — things DynamoRIO cannot do
 
@@ -102,7 +102,7 @@ maintains its own decoder and lags structurally:
 So "the DBI trace/taint tier works on a routine using the newest extensions" is
 currently a **Pin-only** property on capable hardware. For a framework whose
 users are the people writing that assembly, this is the difference between the
-DBI tier tracing their routine and refusing it. (Honest scope: this is a decoder
+DBI tier tracing their routine and refusing it. (Candid scope: this is a decoder
 *currency* advantage that erodes as DR catches each extension up; it is a real
 gap at any given moment, not a permanent architectural one like #1.)
 

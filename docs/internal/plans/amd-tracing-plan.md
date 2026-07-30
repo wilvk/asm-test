@@ -138,7 +138,7 @@ the hwtrace image with `--security-opt seccomp=unconfined --cap-add=PERFMON` so
 `perf_event_open` is permitted) exercises the real `PERF_SAMPLE_BRANCH_STACK` capture +
 decode: a branch-heavy loop is reconstructed from the live 16-deep LbrExtV2 stack
 (loop-body block, `truncated` past 16 branches), and a tiny single-shot routine
-honestly `truncated`s (perf delivers the stack only at a PMU sample, so a fast
+faithfully `truncated`s (perf delivers the stack only at a PMU sample, so a fast
 single-run routine is never sampled in-region). That run also fixed a capture bug:
 `hwtrace_end_amd` kept the *last* perf sample — all post-routine glue for a small
 routine, decoding to nothing yet flagged complete — and now keeps the sample **richest
@@ -277,7 +277,7 @@ fixture routines (within the Tier-A window).
 
 ## Phase 4 — Window-overflow truncation & DynamoRIO fallback routing *(LANDED)*
 
-**Goal.** Make the 16-branch ceiling *safe and honest*, never silently wrong.
+**Goal.** Make the 16-branch ceiling *safe and truthful*, never silently wrong.
 
 - **Detect overflow.** If the routine executed more taken branches than the stack depth
   (16), the snapshot is incomplete. Detect this — the captured array is full (`nr ==
@@ -317,7 +317,7 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
     [examples/test_hwtrace.c](../../../examples/test_hwtrace.c) `test_amd_stitch` synthesizes
     the `sample_period=1` windows of an 18-iteration loop, stitches them back to the
     gapless 18-edge sequence, and proves the decode is **complete** (all 55 instructions,
-    two blocks, not truncated) where a single Tier-A 16-window honestly truncates — plus a
+    two blocks, not truncated) where a single Tier-A 16-window faithfully truncates — plus a
     gap-detection case.
   - _Done — live wiring (Zen 5-validated)._ `hwtrace_end_amd`
     ([hwtrace.c](../../../src/hwtrace.c)) now collects **every** branch-stack sample in the
@@ -329,7 +329,7 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
     loss signals: a stitch **gap**, OR a `PERF_RECORD_LOST`/`PERF_RECORD_THROTTLE` record
     (the data ring is non-overwrite, so on overflow the kernel drops the *newest* samples
     and emits `LOST` — the signal the surviving windows alone cannot show, since they
-    stitch gaplessly yet are missing the tail). Either → honestly `truncated`.
+    stitch gaplessly yet are missing the tail). Either → faithfully `truncated`.
     **Validated live on a Zen 5** (Ryzen 9 9950X, `make docker-hwtrace-amd`): a
     20000-trip loop reconstructs ~290 instructions — ≈95 stitched taken branches, far past
     a single 16-deep window (which caps ~49) — and stays truncated, as the two hardware
@@ -348,7 +348,7 @@ orchestrating caller falls back to DynamoRIO); a within-window routine does not.
   optimization, not portable). `asmtest_amd_msr_trace` / `asmtest_amd_msr_available`
   ([src/msr_lbr.c](../../../src/msr_lbr.c)); validated live on the Zen 5 dev box
   (`make docker-hwtrace-msr`, `--privileged`): a tiny routine reconstructs complete despite
-  the userspace freeze-syscall glue (thinned by a user-only `LBR_SELECT`), honestly
+  the userspace freeze-syscall glue (thinned by a user-only `LBR_SELECT`), faithfully
   `truncated` beyond the surviving window. The deterministic BPF boundary snapshot (Part II
   #2) stays the cleaner-boundary default where `CAP_BPF` is available.
 
@@ -506,7 +506,7 @@ CPU do the block-stepping.
 | **P1** | **BRS period-adjust single-window capture** (fixed period ≈ N−16) | Replaces `sample_period=1` — the dominant Tier-B throttle / ring-overflow truncation cause — with **one** frozen overflow for ≤16-branch routines | **Zen 3 BRS**, Linux ≥5.19 | SUPPORTED | Small–Med |
 | **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | **LANDED** (2026-07, Phase 4) | Small |
 | **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | **LANDED** (ring 64KB→256KB, Phase 5) | Small |
-| **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
+| **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else disclosed gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — accurately scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
 | **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md) (Phases 0–4, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
 | **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
 | **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3; **widened to 1..4 exits 2026-07-12**), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | **LANDED** (2026-07-10, Phase 8) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
@@ -575,7 +575,7 @@ guarantee an exit-anchored window. `5d8e0d2` replaced the freeze-conditional gat
 and lives in `asmtest_amd_ring_parse_decode` ([src/hwtrace.c](../../../src/hwtrace.c), the
 Tier-A completeness block), **not** `hwtrace_end_amd`: a window is trusted complete only if
 it recorded the region-exit branch (or its trailing straight-line run reached a region
-exit), else it is honestly `truncated`. The `asmtest_amd_freeze_available` probe was retired
+exit), else it is faithfully `truncated`. The `asmtest_amd_freeze_available` probe was retired
 (zero live consumers); a resurrected probe would re-introduce the vacuous-pass hazard the
 unconditional check fixed. See
 [amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md) T4.
@@ -673,7 +673,7 @@ TUs:
 - **Unchecked `PERF_EVENT_IOC_ENABLE`** (robustness). The arm ioctl is fire-and-forget at
   every site ([hwtrace.c:727](../../../src/hwtrace.c),
   [branchsnap.c:211](../../../src/branchsnap.c)); a failed enable yields an empty ring, but the
-  AMD sampled and survey paths already convert that to an honest `truncated`, so on the AMD
+  AMD sampled and survey paths already convert that to a faithful `truncated`, so on the AMD
   tiers this is robustness, not a correctness fix.
 
 **Tail-call snapshot widening. LANDED (Phase 9, 2026-07-10) and since GENERALISED — see the
@@ -716,9 +716,9 @@ AMD hardware ceiling** — but remove its sharpest edges.
 |---|---|---|---|
 | **BRS period-adjust** (Zen 3) | Fixed `sample_period ≥ 17` on the raw `0xc4` event (the ONLY config `amd_brs_hw_config` accepts — a generic `period=1` open is rejected `-EINVAL`); the kernel then subtracts `x86_pmu.lbr_nr` via `amd_pmu_limit_period` and BRS freezes/holds the NMI until the 16-branch buffer saturates | **One** PMI delivers the complete ≤16 window at region exit — and is the ONLY way BRS opens at all on Zen 3, since the generic `sample_period=1` baseline the tree uses on Zen 4+ is rejected outright | Zen 3 BRS **only** (forward-capture, fixed mode, period ≥ 17). On Zen 4/5 the better lever is the software-event snapshot (P0 #2), not this |
 | **`spec`/`valid` filtering** (Zen 4/5) | `perf_branch_entry.spec` carries `PERF_BR_SPEC_WRONG_PATH`; the LbrExtV2 driver passes wrong-path entries through to userspace | Drops speculative/wrong-path phantom edges before `amd_replay`, which today filters only `abort` and *explicitly notes* (amd_backend.c comment) that it ignores every other flag | Wrong-path entries are relatively uncommon, so this is a precision refinement, not a step-change. LbrExtV2/Linux ≥6.1 only — a no-op on Zen 3 BRS (retired-only, no spec bits) |
-| **Throttle/ring hardening** | Larger `data_size` ring; `sysctl kernel.perf_event_max_sample_rate` up, `kernel.perf_cpu_time_max_percent=0` on the self-hosted runner | The Tier-B live path is bounded by ring size + throttling (a 20 000-trip loop already truncates); more headroom = longer gapless stitch before honest truncation | Operational, self-hosted-runner only; extends reach, does not remove the ceiling |
-| **Decodable-distance stitch check** | For each stitched boundary, assert reconstructed instruction count between consecutive branch targets == statically-decoded byte distance; reject a wrong minimal-shift match, else emit an honest gap | AMD sets `hw_idx ≡ 0` (register renaming keeps From[0]=TOS), so Intel's exact index-based overlap count **cannot** be ported — the current smallest-overlap heuristic can silently mis-stitch a self-overlapping loop (an open question in amd_backend.c). This is the AMD-available substitute check | Improves correctness for the common looping case; does not extend depth |
-| **Period-spaced Tier-B stitching** (Zen 4/5) — *#2A* | Set `sample_period = depth − overlap` (e.g. 16−4=12) instead of `1`, so consecutive 16-deep LbrExtV2 windows overlap by `overlap` and still stitch gaplessly at ~P× fewer PMIs | The `sample_period=1` PMI-per-branch flood is the dominant Tier-B throttle/ring truncation cause; spacing the PMIs cuts throttling exposure ~P× → **extends the exact window ~P×** before the run stops fitting. Generalizes the Zen 3 BRS period-adjust lever to LbrExtV2 *multi-window* stitching | LbrExtV2 (Zen 4/5). An over-large period simply yields a stitch gap → honest truncation, never silent corruption. Not for tiny single-shot routines (a spaced PMI may never fire in-region — keep `lbr_period=0` there) |
+| **Throttle/ring hardening** | Larger `data_size` ring; `sysctl kernel.perf_event_max_sample_rate` up, `kernel.perf_cpu_time_max_percent=0` on the self-hosted runner | The Tier-B live path is bounded by ring size + throttling (a 20 000-trip loop already truncates); more headroom = longer gapless stitch before faithful truncation | Operational, self-hosted-runner only; extends reach, does not remove the ceiling |
+| **Decodable-distance stitch check** | For each stitched boundary, assert reconstructed instruction count between consecutive branch targets == statically-decoded byte distance; reject a wrong minimal-shift match, else emit a disclosed gap | AMD sets `hw_idx ≡ 0` (register renaming keeps From[0]=TOS), so Intel's exact index-based overlap count **cannot** be ported — the current smallest-overlap heuristic can silently mis-stitch a self-overlapping loop (an open question in amd_backend.c). This is the AMD-available substitute check | Improves correctness for the common looping case; does not extend depth |
+| **Period-spaced Tier-B stitching** (Zen 4/5) — *#2A* | Set `sample_period = depth − overlap` (e.g. 16−4=12) instead of `1`, so consecutive 16-deep LbrExtV2 windows overlap by `overlap` and still stitch gaplessly at ~P× fewer PMIs | The `sample_period=1` PMI-per-branch flood is the dominant Tier-B throttle/ring truncation cause; spacing the PMIs cuts throttling exposure ~P× → **extends the exact window ~P×** before the run stops fitting. Generalizes the Zen 3 BRS period-adjust lever to LbrExtV2 *multi-window* stitching | LbrExtV2 (Zen 4/5). An over-large period simply yields a stitch gap → faithful truncation, never silent corruption. Not for tiny single-shot routines (a spaced PMI may never fire in-region — keep `lbr_period=0` there) |
 | **Slot-efficient branch filtering** (Zen 4/5) — *#2B* — **LANDED (SCOPE-SAFE)** | Reduced HW branch filter `cond \| ind_jmp \| any_call \| any_return`, dropping only the **direct unconditional jmp** (statically decodable) so the 16 LBR slots stretch further; `amd_replay` follows the dropped jmp from the region bytes for a byte-identical trace | A direct uncond jmp has a static target the decoder can follow, so recording it wastes a slot; dropping it stretches each window with **no** exactness loss — a reach multiplier orthogonal to #2A | Landed as SCOPE-SAFE: dropping direct **call** too (the original `ind_call` framing) was rejected — an out-of-region-callee return strands pre-call code, a silent-corruption risk. Opt-in `branch_filter`; the unified decoder is inert on the default filter. Live reach-gain pending a perf-permitted Zen host |
 
 ### Window-size levers — status (2026-07-08)
@@ -730,7 +730,7 @@ AMD hardware ceiling** — but remove its sharpest edges.
   `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) so an overlap always
   remains. The whole extension leans on the *existing, validated* stitch + gap/`lost`
   detection (`asmtest_amd_stitch` / `asmtest_amd_decode_stitched`): insufficient overlap
-  becomes a stitch gap → `truncated`, so a bad `lbr_period` degrades honestly rather than
+  becomes a stitch gap → `truncated`, so a bad `lbr_period` degrades gracefully rather than
   corrupting. **Host-independent validation added** (`test_amd_stitch_period_spaced`,
   [examples/test_hwtrace.c](../../../examples/test_hwtrace.c)): synthetic period-spaced
   (P=4) windows of a **distinct-edge** path stitch back to the exact full sequence — the
@@ -793,14 +793,14 @@ AMD hardware ceiling** — but remove its sharpest edges.
   **by default** on the substrate that supports it (`asmtest_amd_snapshot_available()`).
   *As first shipped* the default was gated to a **SINGLE-exit** region (`nret == 1`),
   because the snapshot planted ONE breakpoint at the last ret: a *multi*-exit routine
-  returning via an earlier ret would miss it and honestly truncate with no fall-through
+  returning via an earlier ret would miss it and faithfully truncate with no fall-through
   (snapshot mode is committed), so gating to a lone ret kept the boundary guaranteed-hit.
   **That restriction is gone.** The arm now plants **one HW execution breakpoint per exit,
   up to `ASMTEST_AMD_MAX_EXITS == 4`** — the x86 debug-register budget — via
   `asmtest_amd_all_exits` + `asmtest_amd_snapshot_begin_multi`
   ([src/amd_backend.h:57,69](../../../src/amd_backend.h)), so whichever exit the run leaves
   through hits a boundary; the gate is `amd_nexit >= 1 && … amd_nexit <=
-  ASMTEST_AMD_MAX_EXITS`. A BPF-side drop counter drives an honest truncated-on-drop
+  ASMTEST_AMD_MAX_EXITS`. A BPF-side drop counter drives a faithful truncated-on-drop
   contract. A region with **more than 4** exits stays on the sampled path by default (not
   enough debug registers to cover every boundary); an explicit `opts.snapshot` is still
   honored for any region and keeps the legacy last-exit best-effort there. The arm is
@@ -864,7 +864,7 @@ But it is **statistical**: one tagged micro-op per counter period, so it yields 
 probabilistic edge set — never an ordered, complete path — and its per-NMI edge yield is
 *lower* than LBR's ~16 records per interrupt. ~~It also requires
 `CAP_SYS_ADMIN`/`CAP_PERFMON` (IBS PMUs have no user/kernel filter).~~ **Corrected: user-only
-IBS opens unprivileged via `swfilt` — see the superseding plan.** So the honest role is
+IBS opens unprivileged via `swfilt` — see the superseding plan.** So the genuine role is
 a **coverage-confirmer / hot-edge pre-cover** that shrinks (does not bound) the block-step
 / DynamoRIO residual, or an indirect-branch-target resolver — not a replacement for the
 branch stack. (Two raw research proposals here were themselves wrong and were caught in
@@ -1019,7 +1019,7 @@ absent, the LBR keeps advancing past the overflow point, so a captured window ca
   in-region branches" truncation at [hwtrace.c:588-589](../../../src/hwtrace.c)), so the
   caller re-resolves under `CEILING_FREE` / falls to DynamoRIO.
 - Prefer the Phase-3 software-event snapshot (which stops the LBR in software) over PMI
-  sampling on freeze-absent parts once Phase 3 lands; until then, the honest `truncated`
+  sampling on freeze-absent parts once Phase 3 lands; until then, the faithful `truncated`
   is the correct degrade.
 - Keep the probe/capture attr divergence in mind: `amd_branch_probe`
   ([hwtrace.c:186-189](../../../src/hwtrace.c)) omits `exclude_hv` while `hwtrace_begin_amd`
@@ -1187,7 +1187,7 @@ fixtures, with a materially lower stop count; runs live under a **plain** `docke
 > standalone entry point. Validated: `test_branchsnap` grew a marker-path case (the tiny
 > single-shot routine reconstructs its entry block through `begin`/`end`), green in
 > `make docker-hwtrace-codeimage`; the clean fallback is asserted in `test_amd_live`
-> (`make docker-hwtrace-amd`, built without libbpf → honest sampled result). `opts.snapshot`
+> (`make docker-hwtrace-amd`, built without libbpf → genuine sampled result). `opts.snapshot`
 > is documented for both backends in [asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h).
 
 **Goal.** Read the 16-entry LbrExtV2 stack **deterministically at the region boundary** via
@@ -1277,13 +1277,13 @@ synthesized wrong-path entry without the phantom edge; behavior is unchanged whe
 > accepting a smallest-overlap shift, checks that the adjacency it would splice — the tail's
 > newest branch target → the first newly-appended branch source — is real straight-line code
 > (`amd_span_decodable`: a forward Capstone length-walk that lands exactly on the source).
-> An indecodable splice is rejected in favor of a larger shift, else an honest gap.
-> **Honest scope (corrects this plan's earlier overclaim):** on an *internally-consistent*
+> An indecodable splice is rejected in favor of a larger shift, else a disclosed gap.
+> **Accurate scope (corrects this plan's earlier overclaim):** on an *internally-consistent*
 > hardware branch-stack window, from+to adjacency already implies byte adjacency, so the
 > guard is a no-op there; it does **not** — and byte-level decodability *cannot* — catch a
 > control-flow *phase* alias (a byte-decodable-but-wrong stitch). What it does catch is a
 > **dropped/throttled-sample** mis-stitch whose smallest-overlap match splices non-contiguous
-> edges (a backwards/overshoot span), converting a silently-wrong stitch into an honest gap —
+> edges (a backwards/overshoot span), converting a silently-wrong stitch into a disclosed gap —
 > complementing the replay-side desync→`truncated` already downstream. (2) **Ring hardening.**
 > The AMD data ring default grew 64KB → 256KB ([hwtrace.c](../../../src/hwtrace.c)), extending
 > gapless stitch reach before the kernel drops the newest samples; the
@@ -1291,11 +1291,11 @@ synthesized wrong-path entry without the phantom edge; behavior is unchanged whe
 > The [asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) comment now documents both backend
 > defaults (Intel PT 8KB, AMD 256KB) instead of the stale single "0=8KB". Validated by
 > `test_amd_stitch_decodable` ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) — a
-> decodable contiguous splice is accepted, an indecodable one yields an honest gap — plus the
+> decodable contiguous splice is accepted, an indecodable one yields a disclosed gap — plus the
 > existing stitch/drain fixtures staying green (no over-rejection); `make docker-hwtrace-amd`
 > on the Ryzen 9 9950X.
 
-**Goal.** Reduce silent mis-stitches and extend Tier-B reach before honest truncation,
+**Goal.** Reduce silent mis-stitches and extend Tier-B reach before faithful truncation,
 without pretending an unavailable HW facility exists (Intel's `hw_idx`-based stitch cannot
 port — AMD sets `hw_idx ≡ 0`; this is a confirmed dead end).
 
@@ -1321,7 +1321,7 @@ port — AMD sets `hw_idx ≡ 0`; this is a confirmed dead end).
   rather than flipping the single number (which would then be wrong for Intel PT).
 
 **Acceptance.** A synthetic self-overlapping-loop fixture that the current smallest-overlap
-heuristic mis-stitches now either stitches correctly or reports an honest gap (`truncated`);
+heuristic mis-stitches now either stitches correctly or reports a disclosed gap (`truncated`);
 `make docker-hwtrace-amd`'s 20 000-trip loop reconstructs further before truncating with the
 enlarged ring.
 
@@ -1505,7 +1505,7 @@ block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
   the only way to recover the routine's result across the void callback. This inherits the
   fast tier's integer-SysV-only limitation (`long a[6]`); FP/xmm-argument routines remain
   unsupported, same as today.
-- **Re-run semantics + honesty rule.** The fast tier already executed `code(args)` once
+- **Re-run semantics + fidelity rule.** The fast tier already executed `code(args)` once
   in-process (`ran = 1` even when truncated), and `asmtest_amd_msr_trace` invokes `run_fn`
   **in-process** — not fork-isolated like the block-step/single-step tiers that follow. An
   MSR attempt is therefore a **second real execution in the tracer's own address space**:
@@ -1524,7 +1524,7 @@ block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
   ([trace_auto.c:74](../../../src/trace_auto.c)). Wrap the rung in
   `if (!(policy & ASMTEST_TRACE_CEILING_FREE)) { … }` so the ceiling-free contract excludes
   it in lock-step with `AMD_LBR`.
-- **Gate on the genuine privilege probe; stay honest about reach.**
+- **Gate on the genuine privilege probe; stay candid about reach.**
   `asmtest_amd_msr_available` ([msr_lbr.c:93](../../../src/msr_lbr.c)) opens `/dev/cpu/N/msr`
   `O_RDWR`, so it is a true privilege/device gate (root / `CAP_SYS_ADMIN` + the `msr`
   module) — when it returns 1 the path is genuinely present; it returns 0 off x86-64 Linux,
@@ -1532,7 +1532,7 @@ block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
   branches between `run_fn` returning and the freezing `wrmsr`
   ([msr_lbr.c:12-18](../../../src/msr_lbr.c)) occupy the newest slots of the same 16-deep
   window, so the read completes only **very small** routines — and the existing
-  nothing-in-region check already converts a miss to an honest `truncated`
+  nothing-in-region check already converts a miss to a faithful `truncated`
   ([msr_lbr.c:190-193](../../../src/msr_lbr.c)), which then falls through to block-step.
 
 **Why this is worth a rung.** For the too-fast-to-sample tiny routine — including the
@@ -1541,7 +1541,7 @@ any region whose snapshot arm failed / whose substrate lacks it — see the 2026
 amendment above; at 1..4 exits the fast tier now catches it)* — this rung reconstructs the
 trace complete with zero PMU interrupts instead of falling straight to fork-isolated
 block-step, avoiding its roughly three-orders-of-magnitude stop-count cost on hosts with
-`msr` access (the dev box, self-hosted runners). The scope is honest: it is a narrow,
+`msr` access (the dev box, self-hosted runners). The scope is modest: it is a narrow,
 privilege-gated rung, not a new tier — but the entry point already ships, so the
 composition is cheap.
 
@@ -1630,12 +1630,12 @@ continue;` — the `|| spec` term dropped exactly as prescribed here.)*
   ([hwtrace.c:625](../../../src/hwtrace.c)). A routine that exits via a tail-call `jmp target`
   (target *outside* `[base, base+len)`) has **zero** ret-class instructions, so it returns
   `(size_t)-1` with `*nret==0` — both halves of the gate fail and a genuinely single-exit routine is
-  forced onto the sampled richest-window path, the exact "too-fast tiny routine honestly truncated"
+  forced onto the sampled richest-window path, the exact "too-fast tiny routine faithfully truncated"
   case the snapshot exists to fix ([branchsnap.c:1-12](../../../src/branchsnap.c)). Extend
   `amd_last_ret_off` in place (its only caller is `hwtrace_begin_amd`,
   [hwtrace.c:653](../../../src/hwtrace.c); renaming it `amd_last_exit_off` / `amd_nret`→
   `amd_nexit` and updating the [hwtrace.c:636-651](../../../src/hwtrace.c) comment block to say
-  "last region-exit (ret or region-leaving direct jmp)" makes the broadened semantics honest):
+  "last region-exit (ret or region-leaving direct jmp)" makes the broadened semantics accurate):
   alongside the `is_ret` check, count offset `o` as an exit when
   `asmtest_disas_is_uncond_jump(...)==1` **AND** `asmtest_disas_branch_target(...)==1` **AND** the
   decoded target leaves the region (`tgt < base_ip || tgt >= base_ip + len`, the same predicate
@@ -1718,7 +1718,7 @@ continue;` — the `|| spec` term dropped exactly as prescribed here.)*
   already-mapped ring yields an empty capture. Gate each:
   `if (ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) != 0) { <existing teardown>; return <EUNAVAIL/-1>; }`
   (branchsnap must fail both, running `bsnap_teardown()`). Mostly robustness: the AMD sampled and
-  both survey paths already convert an empty ring to an **honest** `truncated`
+  both survey paths already convert an empty ring to a **faithful** `truncated`
   (`best==NULL` / `insns_total==0` / `n==0`), so the one exposed edge is the PT/CoreSight site
   ([hwtrace.c:1366](../../../src/hwtrace.c)), which has no empty→truncated backstop and relies
   on decode-non-OK or the overflow flag. The paired `RESET`/`DISABLE` ioctls stay unchecked (benign).
@@ -1863,7 +1863,7 @@ in `amd_backend.c` (`asmtest_amd_lbr_depth`, next to the other CPUID probes) rat
   (not fork-isolated like the block-step/single-step tiers below it): non-idempotent side
   effects run again and a faulting routine crashes the tracer — acceptable only because it
   matches the fast begin/end tier the rung sits beside, and `asmtest_trace_call_auto` already
-  re-runs the routine per tier. The honesty pattern (`call_auto_reset` before the attempt;
+  re-runs the routine per tier. The fidelity pattern (`call_auto_reset` before the attempt;
   `truncated` on any miss; fall through, never early-return) is the guard — get it wrong and a
   failed MSR attempt reads as an empty-yet-complete trace.
 - **Tail-`jmp` boundary non-eviction (Phase 9). — CONFIRMED live 2026-07-17; no longer an
@@ -1914,7 +1914,7 @@ in `amd_backend.c` (`asmtest_amd_lbr_depth`, next to the other CPUID probes) rat
 
   **Consequence for the widened default:** the precondition the plan set ("re-confirm live
   before the widened default ships enabled") is **met** — default-on for a single tail-`jmp`
-  exit is empirically sound on Zen 5. **Residual (unmeasured, honest):** this is one part
+  exit is empirically sound on Zen 5. **Residual (unmeasured, candid):** this is one part
   (Zen 5 / `amd_lbr_v2`); Zen 4 and Zen 3 BRS remain under the standing "Hardware coverage"
   gate above. The tiling consumer's inherited assumption
   ([branchsnap.c:415-422](../../../src/branchsnap.c)) is a CALL-target checkpoint — the third

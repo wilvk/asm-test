@@ -9,7 +9,7 @@ internal static class Report
 {
     public static void Print(int rc, HwTrace tr, long add2)
     {
-        // The gated non-OK codes are honest self-skips, not failures: the substrate/privilege
+        // The gated non-OK codes are legitimate self-skips, not failures: the substrate/privilege
         // is absent (EUNAVAIL) or the lib was built without the BPF toolchain (ENOSYS).
         if (rc == HwNative.ASMTEST_HW_ENOSYS)
         {
@@ -43,7 +43,7 @@ internal static class Report
         Console.WriteLine();
         Console.WriteLine("-> the boundary snapshot captured the tiny single-shot routine EXACTLY — its\n"
                           + "   entry block is reconstructed precisely where the sampled survey (amdhot /\n"
-                          + "   amdlbr) honestly truncates a routine too small/fast to accumulate weight.\n"
+                          + "   amdlbr) faithfully truncates a routine too small/fast to accumulate weight.\n"
                           + "   (0x0c, the `dec rax`, is absent: add2(20,22)=42<=100, so the jle is taken.)");
     }
 }

@@ -120,7 +120,7 @@ int main() {
               control.got);
     }
 
-    // --- the D7 dishonesty fixture ----------------------------------------
+    // --- the D7 low-fidelity fixture ----------------------------------------
     {
         wt_model m = load("square-truncated.asmtrace");
         std::string d = wt_dump(m);

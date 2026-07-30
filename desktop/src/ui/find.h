@@ -2,7 +2,7 @@
 // (docs/internal/gui/22-selection-and-search.md T3, F17).
 //
 // Ctrl+F opens a find that highlights EVERY hit (it never hides rows — that is
-// the honesty distinction from a filter, D7), reports the match COUNT and the
+// the fidelity distinction from a filter, D7), reports the match COUNT and the
 // aggregate COST, and cycles matches with Enter / Shift+Enter. "How much does
 // mnemonic/address/symbol X occur, and at what cost" is a measurement an expert
 // could not answer before without manual scrolling.
@@ -11,7 +11,7 @@
 // its Observer deck — so it is unit-tested with no draw (D4). Matches are kept in
 // STREAM ORDER per surface (like the syscalls filter, syscalls.h:100-105), never
 // relevance-ranked: "these rows matched, in the order they occurred" is a
-// different and more honest claim than "these are the most relevant".
+// different and more truthful claim than "these are the most relevant".
 //
 // It deliberately does NOT search the call TREE: a client-side match over an
 // engine-unfiltered tree would leave surviving depths claiming a parentage the

@@ -1,9 +1,9 @@
-// test_fidelity.cpp — the ONE graded honesty vocabulary (23-graded-truth-layer.md
+// test_fidelity.cpp — the ONE graded fidelity vocabulary (23-graded-truth-layer.md
 // T1, F5). Model state, not pixels (D4/D7).
 //
-// The load-bearing test: fidelity_severity() grades the committed deliberate-
-// dishonesty fixtures (tests/golden-asmtrace/low-fidelity/*) into the RIGHT tier, so
-// the grading is pinned against the same fixtures the whole honesty layer is. The
+// The load-bearing test: fidelity_severity() grades the committed deliberately
+// low-fidelity fixtures (tests/golden-asmtrace/low-fidelity/*) into the RIGHT tier, so
+// the grading is pinned against the same fixtures the whole fidelity layer is. The
 // grading must RESTRUCTURE, never remove: a neutral tier for a statistical/
 // dropped survey still surfaces its lost/throttled drop record (D7), and the T3
 // integrity tier stays non-collapsible.
@@ -45,7 +45,7 @@ static Recording load(const std::string &name) {
 static const char *tname(FidelityTier t) { return fidelity_tier_name(t); }
 
 int main() {
-    // --- the four dishonesty fixtures grade into the right tier ---------------
+    // --- the four low-fidelity fixtures grade into the right tier ---------------
     {
         // torn.asmtrace: no `end` footer -> INTEGRITY (loud, non-collapsible).
         Recording r = load("torn.asmtrace");
@@ -203,7 +203,7 @@ int main() {
         io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
 
         ImGui::NewFrame();
-        ImGui::Begin("honesty");
+        ImGui::Begin("fidelity");
         draw_fidelity_chip("statistical survey", FidelityTier::Neutral);
         bool collapsed = false;
         draw_fidelity_banner("truncated but usable", FidelityTier::Caution,

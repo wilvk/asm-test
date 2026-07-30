@@ -276,11 +276,11 @@ points at.
 3. **Compile-gated to the imgui pin**: if the addon includes
    `imgui_internal.h`, it is added to `addon_compile_probe.cpp` (T3) so any
    future repin rebuilds it before landing.
-4. **View-model purity preserved (D4/D-honesty)**: addons are *draw-half
+4. **View-model purity preserved (D4/D-fidelity)**: addons are *draw-half
    chassis only*. The pure view-models and the golden-text test surfaces stay
    the source of truth — an addon never becomes the place a rule is decided or
    tested.
-5. **Honesty ethos as a selection filter**: nothing that renders statistical
+5. **Fidelity ethos as a selection filter**: nothing that renders statistical
    data as stacks, imposes force-directed layout (banned in
    [04-replay-views.md](04-replay-views.md) and
    [08-observer-views.md](08-observer-views.md)), or hides refusals. Doc 11's
