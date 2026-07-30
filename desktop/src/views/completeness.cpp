@@ -110,6 +110,12 @@ void draw_completeness(CompletenessState &s, const std::string &repo_root) {
             ImGui::TextUnformatted(c);
         }
         ImGui::TableNextColumn();
+        // In-cell completeness bar (#1): the fraction of the truth count captured
+        // (trace/truth). A full bar reads complete at a glance, a short one reads
+        // truncated — the number stays on top and the amber still carries the tier.
+        // insns_truth 0 (only "N insns", or "—") draws nothing: an absence.
+        dt_cell_magnitude_bar(dt_magnitude_frac(r.trace_insns, r.insns_truth),
+                              dt_dim_u32());
         if (r.truncated) {
             ImGui::PushStyleColor(ImGuiCol_Text, kWarnCell);
             ImGui::TextUnformatted(r.completeness.c_str());

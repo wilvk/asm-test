@@ -41,6 +41,10 @@ struct CompletenessRow {
     std::string note; // "" when the row carried none
     bool available = false;
     bool truncated = false; // this row's capture is known to be incomplete
+    // Numeric completeness for the in-cell magnitude bar (#1): the fraction
+    // captured is trace_insns/insns_truth. 0 means absent (never barred) — a row
+    // with no truth count ("N insns") or no measurement ("—") has insns_truth 0.
+    double trace_insns = 0, insns_truth = 0;
 };
 
 struct CompletenessTable {
@@ -103,6 +107,8 @@ inline CompletenessTable build_completeness(const data::FeaturesDoc &doc) {
         r.available = f.available;
         r.status = f.available ? "ok" : f.skip_reason;
         r.completeness = completeness_cell(f, &r.truncated);
+        r.trace_insns = f.trace_insns ? static_cast<double>(*f.trace_insns) : 0.0;
+        r.insns_truth = f.insns_truth ? static_cast<double>(*f.insns_truth) : 0.0;
         r.note = f.note.value_or("");
         t.rows.push_back(std::move(r));
 
