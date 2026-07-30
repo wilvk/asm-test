@@ -43,11 +43,14 @@ loom_take_view_t loom_run_reweave(const loom_fabric_t &base,
     // reweave faulted after the edit" or "operand buffers filled: a lower
     // bound". Passing std::string() here would silently drop that notice
     // exactly like an unasserted engine warning; take.err must reach the
-    // gutter verbatim (D7). `take.fault_card()` stays empty for a reweave —
-    // loom_take_run_from_step never populates `result` (only loom_take_run's
-    // session-bracketed leg does), so there is no rich fault_kind/addr to
-    // render; that is a known, honest gap (docs/internal/gui/42-loom-reweave-
-    // consumption.md), not fabricated here.
+    // gutter verbatim (D7). `take.fault_card()` now renders REAL fault detail
+    // (kind / address / disassembly at the faulting rip) whenever the reweave
+    // actually faulted: loom_take_run_from_step populates `result` from the
+    // resume seam's emu_result_t (src/dataflow_resume.c:
+    // asmtest_dataflow_emu_run_from_current's result_out), closing the gap
+    // docs/internal/gui/42-loom-reweave-consumption.md's status banner
+    // recorded. `fault_card()` itself stays empty for a clean (non-faulting)
+    // reweave — it checks result.faulted before rendering anything.
     return loom_take_view(base, take_fabric, take.edges.data(),
                           take.edges.size(), desc, take.fault_card(),
                           take.err);

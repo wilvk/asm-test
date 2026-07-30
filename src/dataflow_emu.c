@@ -452,15 +452,50 @@ void asmtest_df_seed(const df_guest *g, struct uc_struct *uc_s,
         g->setup_fp_args(uc, fargs, nfargs);
 }
 
+/* UC_HOOK_MEM_INVALID: record ONLY THE FIRST invalid access (mirrors
+ * src/emu.c's on_invalid_mem/kind_of pattern) and refuse the retry — same
+ * convention as emu.c: leave the access invalid and stop. */
+static int df_fault_kind_of(uc_mem_type type) {
+    switch (type) {
+    case UC_MEM_READ_UNMAPPED:
+    case UC_MEM_READ_PROT:
+        return 1; /* EMU_FAULT_READ */
+    case UC_MEM_WRITE_UNMAPPED:
+    case UC_MEM_WRITE_PROT:
+        return 2; /* EMU_FAULT_WRITE */
+    case UC_MEM_FETCH_UNMAPPED:
+    case UC_MEM_FETCH_PROT:
+        return 3; /* EMU_FAULT_FETCH */
+    default:
+        return 0; /* EMU_FAULT_NONE */
+    }
+}
+
+static bool df_on_invalid_mem(uc_engine *uc, uc_mem_type type,
+                              uint64_t address, int size, int64_t value,
+                              void *user) {
+    (void)uc;
+    (void)size;
+    (void)value;
+    df_fault_t *fo = (df_fault_t *)user;
+    if (!fo->faulted) {
+        fo->faulted = 1;
+        fo->addr = address;
+        fo->kind = df_fault_kind_of(type);
+    }
+    return false; /* do not retry: leave the access invalid and stop */
+}
+
 /* Shared seam: attach the value-capture hooks, run guest `g` from `start_addr` to
  * the sentinel, finalize the last step, and detach — one engine, whoever owns it.
  * `base` is the offset origin for the step spine (DF_CODE_BASE); `extra_hook` (or
- * NULL) is one more UC_HOOK_CODE the checkpoint path uses to snapshot at a step. */
+ * NULL) is one more UC_HOOK_CODE the checkpoint path uses to snapshot at a step.
+ * `fault_out` (or NULL) reports the first invalid memory access. */
 int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
                        const uint8_t *code, size_t code_len, uint64_t base,
                        uint64_t start_addr, uint64_t max_insns,
                        asmtest_valtrace_t *vt, df_code_hook_t extra_hook,
-                       void *extra_user) {
+                       void *extra_user, df_fault_t *fault_out) {
     uc_engine *uc = (uc_engine *)uc_s;
     df_ctx c;
     memset(&c, 0, sizeof c);
@@ -471,7 +506,10 @@ int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
     c.code_len = code_len;
     c.base = base;
 
-    uc_hook hcode = 0, hread = 0, hwrite = 0, hextra = 0;
+    if (fault_out != NULL)
+        memset(fault_out, 0, sizeof *fault_out);
+
+    uc_hook hcode = 0, hread = 0, hwrite = 0, hextra = 0, hinvalid = 0;
     uc_hook_add(uc, &hcode, UC_HOOK_CODE, (void *)df_on_code, &c, 1, 0);
     uc_hook_add(uc, &hread, UC_HOOK_MEM_READ_AFTER, (void *)df_on_mem, &c, 1,
                 0);
@@ -479,6 +517,9 @@ int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
     if (extra_hook != NULL)
         uc_hook_add(uc, &hextra, UC_HOOK_CODE, (void *)extra_hook, extra_user,
                     1, 0);
+    if (fault_out != NULL)
+        uc_hook_add(uc, &hinvalid, UC_HOOK_MEM_INVALID,
+                    (void *)df_on_invalid_mem, fault_out, 1, 0);
 
     uc_err err = uc_emu_start(uc, start_addr, DF_RET_MAGIC, 0, (size_t)max_insns);
     if (c.have_cur)
@@ -489,6 +530,8 @@ int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
     uc_hook_del(uc, hwrite);
     if (hextra)
         uc_hook_del(uc, hextra);
+    if (fault_out != NULL)
+        uc_hook_del(uc, hinvalid);
     free(c.cur.v);
     return err == UC_ERR_OK ? 0 : 1;
 }
@@ -511,7 +554,7 @@ static int df_run_impl(const df_guest *g, const uint8_t *code, size_t code_len,
     }
     asmtest_df_seed(g, uc, code, code_len, iargs, niargs, fargs, nfargs);
     int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE,
-                                DF_CODE_BASE, max_insns, vt, NULL, NULL);
+                                DF_CODE_BASE, max_insns, vt, NULL, NULL, NULL);
     uc_close(uc);
     return rc;
 }

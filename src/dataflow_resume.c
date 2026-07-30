@@ -61,7 +61,7 @@ int asmtest_dataflow_emu_run_hosted(emu_t *e, const uint8_t *code,
     vt->mem_space = AT_LOC_MEM_ABS;
     asmtest_df_seed(g, uc, code, code_len, args, nargs, NULL, 0);
     return asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, DF_CODE_BASE,
-                              max_insns, vt, NULL, NULL);
+                              max_insns, vt, NULL, NULL, NULL);
 }
 
 /* Extra UC_HOOK_CODE for the checkpoint run: fires pre-instruction alongside the
@@ -110,7 +110,7 @@ int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
     asmtest_df_seed(g, uc, code, code_len, args, nargs, NULL, 0);
     df_ckpt_ctx cc = {e, k, 0, NULL};
     int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, DF_CODE_BASE,
-                                max_insns, vt, df_snap_at_k, &cc);
+                                max_insns, vt, df_snap_at_k, &cc, NULL);
     *snap_out = cc.snap;
     return rc;
 }
@@ -121,11 +121,19 @@ int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
  * resume a checkpoint — and, with an edit applied first, to run a counterfactual.
  * Offsets stay relative to DF_CODE_BASE so the trace aligns with the original's.
  * `code`/`code_len` drive the operand enumerator; the guest bytes are already in
- * the engine. Returns like _run_hosted.
+ * the engine. If `result_out` is non-NULL it is filled with a rich emu_result_t
+ * (ok/faulted/fault_addr/fault_kind + the FULL register file read back via
+ * emu_x86_read_all_regs, unconditionally — mirroring emu_call/emu_call_traced in
+ * src/emu.c) so a caller (the Reweave fork engine) can render a real fault card
+ * for a resumed/edited tail, not just a plain "it faulted" string; NULL means
+ * "no result detail wanted" (today's behavior, and the cheaper path — no extra
+ * hook). `result_out->uc_err` is left 0: there is no meaningful raw Unicorn
+ * error code available at this call boundary. Returns like _run_hosted.
  */
 int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
                                           size_t code_len,
-                                          asmtest_valtrace_t *vt) {
+                                          asmtest_valtrace_t *vt,
+                                          emu_result_t *result_out) {
     if (e == NULL || vt == NULL || code == NULL)
         return -1;
     struct uc_struct *uc = emu_uc(e);
@@ -135,8 +143,19 @@ int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
     vt->mem_space = AT_LOC_MEM_ABS;
     uint64_t rip = 0;
     uc_reg_read((uc_engine *)uc, UC_X86_REG_RIP, &rip);
-    return asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, rip, 0, vt,
-                              NULL, NULL);
+    df_fault_t local_fault = {0};
+    int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, rip, 0, vt,
+                                NULL, NULL, result_out != NULL ? &local_fault
+                                                               : NULL);
+    if (result_out != NULL) {
+        memset(result_out, 0, sizeof *result_out);
+        result_out->ok = (rc == 0);
+        result_out->faulted = (local_fault.faulted != 0);
+        result_out->fault_addr = local_fault.addr;
+        result_out->fault_kind = (emu_fault_kind_t)local_fault.kind;
+        emu_x86_read_all_regs(uc, &result_out->regs);
+    }
+    return rc;
 }
 
 /*
@@ -148,8 +167,9 @@ int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
  * original's pre-step-k state exactly. For a counterfactual, split this:
  * emu_restore(e, snap), then asmtest_dataflow_emu_edit_gp(...), then
  * asmtest_dataflow_emu_run_from_current — the edit diverges the tail only where it
- * reaches. Returns like _run_hosted; -1 if the restore fails.
- */
+ * reaches. Returns like _run_hosted; -1 if the restore fails. This plain resume
+ * needs no fault detail, so it passes NULL for _run_from_current's result_out;
+ * this function's own signature is unchanged. */
 int asmtest_dataflow_emu_resume(emu_t *e, const emu_snapshot_t *snap,
                                 const uint8_t *code, size_t code_len,
                                 asmtest_valtrace_t *vt) {
@@ -157,7 +177,7 @@ int asmtest_dataflow_emu_resume(emu_t *e, const emu_snapshot_t *snap,
         return -1;
     if (!emu_restore(e, snap))
         return -1;
-    return asmtest_dataflow_emu_run_from_current(e, code, code_len, vt);
+    return asmtest_dataflow_emu_run_from_current(e, code, code_len, vt, NULL);
 }
 
 /* Poke an x86-64 GP register (by SysV/x86 name: "rax".."r15", "rip", "rflags") on

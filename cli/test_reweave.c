@@ -46,7 +46,8 @@ int asmtest_dataflow_emu_resume(emu_t *e, const emu_snapshot_t *snap,
                                 asmtest_valtrace_t *vt);
 int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
                                           size_t code_len,
-                                          asmtest_valtrace_t *vt);
+                                          asmtest_valtrace_t *vt,
+                                          emu_result_t *result_out);
 bool asmtest_dataflow_emu_edit_gp(emu_t *e, const char *name, uint64_t val);
 
 static int fails = 0;
@@ -294,9 +295,13 @@ int main(void) {
     CHECK(emu_restore(e, snap), "edited: emu_restore failed");
     CHECK(asmtest_dataflow_emu_edit_gp(e, "rax", 0),
           "edited: edit_gp(rax) failed");
-    int rce =
-        asmtest_dataflow_emu_run_from_current(e, POLY, sizeof POLY, edited);
+    emu_result_t edited_result = {0};
+    int rce = asmtest_dataflow_emu_run_from_current(e, POLY, sizeof POLY,
+                                                    edited, &edited_result);
     CHECK(rce == 0, "edited resume rc=%d", rce);
+    CHECK(!edited_result.faulted,
+          "edited (rax:=0) resume should not fault (straight-line code, only "
+          "values diverge)");
     /* Same instruction spine as the clean tail (offsets + step count unchanged). */
     CHECK(edited->steps_len == tail->steps_len,
           "edited tail steps_len %zu != clean tail %zu (control flow moved?)",
@@ -312,6 +317,33 @@ int main(void) {
     CHECK(nd > 0,
           "edit at K (rax:=0) changed no record value — the counterfactual is "
           "not diverging");
+
+    /* ============================================================= *
+     * T3 — a genuine post-edit fault carries a rich emu_result_t    *
+     * ============================================================= *
+     * Reweave rsp to a non-canonical address right before poly's step-4
+     * stack write ("mov [rsp-8], rax") reliably faults the guest (the same
+     * trick desktop/test/test_loom_reweave.cpp uses). Reuses the SAME
+     * checkpoint/snapshot (e/snap) T2 already set up above; e/snap are only
+     * closed/freed after this block, at the end of main(). */
+    CHECK(emu_restore(e, snap), "fault case: emu_restore failed");
+    CHECK(asmtest_dataflow_emu_edit_gp(e, "rsp", 0x8000000000000000ULL),
+          "fault case: edit_gp(rsp) failed");
+    asmtest_valtrace_t *faulted_tail = asmtest_valtrace_new(64, 512, 512);
+    CHECK(faulted_tail != NULL, "faulted_tail valtrace_new failed");
+    emu_result_t fault_result = {0};
+    int rcflt = asmtest_dataflow_emu_run_from_current(
+        e, POLY, sizeof POLY, faulted_tail, &fault_result);
+    CHECK(rcflt == 1,
+          "fault case: expected a guest fault (rc==1), got rc=%d", rcflt);
+    CHECK(fault_result.faulted,
+          "fault case: emu_result_t.faulted should be true");
+    CHECK(fault_result.fault_kind != EMU_FAULT_NONE,
+          "fault case: emu_result_t.fault_kind should not be EMU_FAULT_NONE");
+    CHECK(fault_result.regs.rip != 0,
+          "fault case: emu_result_t.regs.rip should be nonzero — proves the "
+          "register file was genuinely read back, not left zeroed");
+    asmtest_valtrace_free(faulted_tail);
 
     emu_snapshot_free(snap);
     asmtest_valtrace_free(full);
