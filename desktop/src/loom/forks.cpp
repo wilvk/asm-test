@@ -26,7 +26,8 @@ int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
                                     emu_snapshot_t **snap_out);
 int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
                                           size_t code_len,
-                                          asmtest_valtrace_t *vt);
+                                          asmtest_valtrace_t *vt,
+                                          emu_result_t *result_out);
 bool asmtest_dataflow_emu_edit_gp(emu_t *e, const char *name, uint64_t val);
 bool asmtest_dataflow_emu_edit_mem(emu_t *e, uint64_t addr, const void *bytes,
                                    size_t n);
@@ -309,7 +310,9 @@ bool loom_take_run_from_step(const uint8_t *code, size_t code_len,
     if (tail == nullptr)
         return fail("could not allocate the reweave's tail value trace", base,
                     nullptr, snap);
-    int rct = asmtest_dataflow_emu_run_from_current(e, code, code_len, tail);
+    emu_result_t fault_result{};
+    int rct = asmtest_dataflow_emu_run_from_current(e, code, code_len, tail,
+                                                    &fault_result);
     if (rct < 0)
         return fail("the reweave resume could not run forward from step " +
                         std::to_string(edit.step),
@@ -344,6 +347,14 @@ bool loom_take_run_from_step(const uint8_t *code, size_t code_len,
         out->edges.assign(g->edges, g->edges + g->n);
         asmtest_defuse_free(g);
     }
+
+    // Unconditional: fault_card() itself checks result.faulted before
+    // rendering anything, so this is simplest and safest — no need to gate on
+    // rct==1. `out->code` is already the base (unedited) code assigned above;
+    // that is correct because a Reweave never changes the code, only a
+    // register/memory value, so disassembling the base code at the faulting
+    // rip (fault_card()) is accurate.
+    out->result = fault_result;
 
     if (truncated)
         out->err = "the reweave's operand buffers filled: its fabric is a lower "

@@ -29,6 +29,14 @@ struct uc_struct;
 /* The Unicorn engine backing `e`, or NULL for a NULL handle. INTERNAL. */
 struct uc_struct *emu_uc(emu_t *e);
 
+/* Forwards to emu.c's internal read_all_regs helper (the full x86-64 GP + rip/
+ * rflags + XMM register readback also used by emu_call/emu_call_traced's
+ * result fill and the per-step ring). Exposed so a resumed run
+ * (src/dataflow_resume.c) can fill a rich emu_result_t after
+ * asmtest_dataflow_emu_run_from_current without duplicating Unicorn's
+ * per-register table. INTERNAL. */
+void emu_x86_read_all_regs(struct uc_struct *uc, emu_x86_regs_t *r);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

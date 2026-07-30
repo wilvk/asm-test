@@ -191,6 +191,15 @@ int main() {
               "it is not a hard refusal");
         check("the caveat names the fault, verbatim from the engine",
               v.node.err.find("faulted") != std::string::npos, v.node.err);
+        check("a faulted reweave carries a rich fault card, not an empty one",
+              !v.node.fault.empty(),
+              "expected fault_card() text (kind/addr/disasm), got empty -- "
+              "the resume seam should now populate emu_result_t");
+        // Observed empirically (run this test and read v.node.fault): this
+        // rsp-to-a-non-canonical-address edit right before poly's step-4
+        // stack write ("mov [rsp-8], rax") faults on that WRITE.
+        check("the fault card names the real fault kind (write)",
+              v.node.fault.find("write") != std::string::npos, v.node.fault);
     }
 
     if (failures) {

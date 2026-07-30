@@ -47,6 +47,18 @@ struct df_guest;
 typedef void (*df_code_hook_t)(struct uc_struct *uc, uint64_t address,
                                uint32_t size, void *user);
 
+/* First-invalid-access fault detail, optionally reported by asmtest_df_capture
+ * (R3 follow-up, gui/42): a plain POD so this header stays free of an
+ * asmtest_emu.h dependency. `kind` matches emu_fault_kind_t (asmtest_emu.h)
+ * numerically: 0 none, 1 read, 2 write, 3 fetch. */
+typedef struct {
+    int faulted;
+    uint64_t addr;
+    int kind; /* 0 none, 1 read, 2 write, 3 fetch -- matches emu_fault_kind_t
+                 (asmtest_emu.h) numerically, kept as a plain int here so this
+                 header stays free of an asmtest_emu.h dependency */
+} df_fault_t;
+
 /* The per-guest descriptor for `arch` (R5), or NULL if no guest is armed for it. */
 const struct df_guest *df_guest_for(asmtest_arch_t arch);
 
@@ -67,14 +79,17 @@ void asmtest_df_seed(const struct df_guest *g, struct uc_struct *uc,
  * value trace whose step offsets are relative to `base`. `code`/`code_len` drive
  * the operand enumerator. If `extra_hook` is non-NULL it is added as one more
  * UC_HOOK_CODE with `extra_user` (used by the checkpoint path to snapshot at a
- * chosen step). Returns 0 on a clean run to the sentinel, 1 on a guest
- * fault/error (a partial trace is still produced). Does NOT map, seed, open, or
- * close the engine. */
+ * chosen step). If `fault_out` is non-NULL, one more hook (UC_HOOK_MEM_INVALID)
+ * is attached and *fault_out is zeroed then filled with the FIRST invalid
+ * memory access the run hits (or left zeroed/unfaulted for a clean run); NULL
+ * means "do not report a fault", i.e. exactly today's behavior. Returns 0 on a
+ * clean run to the sentinel, 1 on a guest fault/error (a partial trace is
+ * still produced). Does NOT map, seed, open, or close the engine. */
 int asmtest_df_capture(const struct df_guest *g, struct uc_struct *uc,
                        const uint8_t *code, size_t code_len, uint64_t base,
                        uint64_t start_addr, uint64_t max_insns,
                        asmtest_valtrace_t *vt, df_code_hook_t extra_hook,
-                       void *extra_user);
+                       void *extra_user, df_fault_t *fault_out);
 
 #ifdef __cplusplus
 } /* extern "C" */

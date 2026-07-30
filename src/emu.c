@@ -339,6 +339,13 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
         uc_reg_read(uc, UC_X86_REG_XMM0 + i, r->xmm[i].u8);
 }
 
+/* Exported forwarder (asmtest_emu_internal.h) so the resume seam
+ * (src/dataflow_resume.c) can fill a rich emu_result_t.regs without
+ * duplicating this per-register table. */
+void emu_x86_read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
+    read_all_regs(uc, r);
+}
+
 /* UC_HOOK_CODE companion (emu_step_capture): captures the full register file
  * BEFORE each executed instruction into the handle's bounded ring, evicting and
  * counting the earliest entry once the ring is full. Reads the SAME register set
