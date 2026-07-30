@@ -141,15 +141,26 @@ void asmtrace_escape(char *dst, size_t cap, const char *src);
 /* live one cannot spell the same operand differently.                  */
 /* ------------------------------------------------------------------ */
 
-/* {"step":N,"off":N,"rbase":N?,"disasm":"..."?,"ops":[...]} — `recs[0..n)` must
- * be exactly this step's operand records. `off` is REGION-RELATIVE by definition
- * (an offset from the scoped region base). `rbase` (37) is that absolute region
- * base: emitted immediately after `off` ONLY when nonzero, and OMITTED entirely
- * — never null, never 0-as-unknown — when the producer does not know a base
- * (address 0 is never a mapped code span, so base==0 means "not known"). A reader
- * that has `rbase` places the step at `rbase + off` and joins its span by base;
- * without it, 36's single-`codeimage`-span anchor is the documented fallback. An
- * absolute-offset producer is OUT OF CONTRACT and must not be wired here.
+/* {"step":N,"off":N,"rbase":N?,"when":N?,"disasm":"..."?,"ops":[...]} —
+ * `recs[0..n)` must be exactly this step's operand records. `off` is
+ * REGION-RELATIVE by definition (an offset from the scoped region base).
+ * `rbase` (37 T1) is that absolute region base: emitted immediately after `off`
+ * ONLY when nonzero, and OMITTED entirely — never null, never 0-as-unknown —
+ * when the producer does not know a base (address 0 is never a mapped code
+ * span, so base==0 means "not known"). A reader that has `rbase` places the
+ * step at `rbase + off` and joins its span by base; without it, 36's single-
+ * `codeimage`-span anchor is the documented fallback. An absolute-offset
+ * producer is OUT OF CONTRACT and must not be wired here.
+ * `when` (37 T4) is the logical `codeimage` timestamp (asmtest_codeimage_now)
+ * whose bytes were live when this step's invocation STARTED: emitted
+ * immediately after `rbase`, ONLY when nonzero, and OMITTED — never null, never
+ * 0-as-unknown — when the producer holds no codeimage timeline (a live
+ * `codeimage` version's `seq` is assigned from `++img->seq`, so a real version
+ * is never `when == 0`). A reader resolves the step's bytes as the `codeimage`
+ * version with the greatest `when` <= this value, keyed by `(rbase, when)`
+ * together — `when` alone is not distinguishing, because it restarts at each
+ * re-armed span in a candidate walk. Without `when`, a reader falls back to its
+ * existing (addr, version-guess or manual override) behaviour, unchanged.
  * `disasm` may be NULL/"" (D10: a producer without Capstone omits the field and
  * readers degrade to offsets). `wide`/`wide_len` are the valtrace's side buffer
  * (asmtest_valtrace_t.wide): a >8-byte operand's `size` bytes at its wide_off are
@@ -157,7 +168,7 @@ void asmtrace_escape(char *dst, size_t cap, const char *src);
  * producer has no side buffer, and a wide operand degrades to `"wide":true` with
  * no bytes. Returns the body length written (truncated to fit `cap`). */
 size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
-                             uint64_t rbase, const char *disasm,
+                             uint64_t rbase, uint64_t when, const char *disasm,
                              const at_val_rec_t *recs, size_t n,
                              const uint8_t *wide, size_t wide_len);
 

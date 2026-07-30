@@ -3306,4 +3306,56 @@ fi
 kill -9 "$CIPID" 2>/dev/null || true
 wait "$CIPID" 2>/dev/null || true
 
+# ---------------------------------------------------------------------------
+# --serve + dataflow: df_step states its codeimage `when` (37 T4)
+# ---------------------------------------------------------------------------
+# The serve sink is the ONLY producer that ever states `when` (it is the only
+# one holding a live codeimage timeline) — the headless `--dataflow --record`
+# case above asserts `rbase` but must carry NO `when`, and this asserts the
+# serve path's positive case: a codeimage-capable host's df_step lines carry a
+# `when` immediately after `rbase`, matching the schema's normative order.
+echo "--- asmspy --serve + dataflow (df_step states its codeimage when, 37 T4) ---"
+"$BUILD/auto_victim" 2>/dev/null &
+DFWPID=$!
+sleep 1
+kill -0 "$DFWPID" 2>/dev/null || fail "when: auto_victim did not start"
+DFW_OUT="$RECDIR/serve_dataflow_when.ndjson"
+set +e
+{
+    printf '{"cmd":"start","mode":"dataflow","pid":%d,"func":"entered_often","max":64}\n' "$DFWPID"
+    sleep 3
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 90 "$ASM" --serve >"$DFW_OUT" 2>/dev/null
+dfwrc=$?
+set -e
+[ "$dfwrc" -eq 124 ] && fail "--serve dataflow (when): hung"
+[ "$dfwrc" -eq 0 ] || fail "--serve dataflow (when): exited $dfwrc"
+kill -0 "$DFWPID" 2>/dev/null \
+    || fail "--serve dataflow (when): the victim did not survive the session"
+
+ndfstep=$(grep -c '"k":"df_step"' "$DFW_OUT" || true)
+[ "$ndfstep" -gt 0 ] || fail "--serve dataflow (when): no df_step events captured"
+ndfw_ci=$(grep -c '"k":"codeimage"' "$DFW_OUT" || true)
+if [ "$ndfw_ci" -gt 0 ]; then
+    # Codeimage is available on this host: every df_step must carry `when`,
+    # immediately after `rbase` (the schema's normative field order), and it
+    # must be a positive integer — never a 0-as-unknown sentinel (D7).
+    ndfw_when=$(grep '"k":"df_step"' "$DFW_OUT" | grep -cE '"rbase":[0-9]+,"when":[1-9][0-9]*,' || true)
+    [ "$ndfw_when" = "$ndfstep" ] \
+        || fail "--serve dataflow (when): $ndfw_when of $ndfstep df_step events carry a well-formed rbase-then-when"
+    echo "  $ndfw_when/$ndfstep df_step events carry when, right after rbase"
+else
+    # No codeimage on this host: df_step must carry NO when at all — the
+    # serve sink omits it exactly like the headless/corpus producers do,
+    # rather than guessing.
+    ndfw_nowhen=$(grep '"k":"df_step"' "$DFW_OUT" | grep -c '"when"' || true)
+    [ "$ndfw_nowhen" -eq 0 ] \
+        || fail "--serve dataflow (when): no codeimage, but $ndfw_nowhen df_step events carry when anyway"
+    echo "  (no code image on this host — df_step correctly carries no when)"
+fi
+
+kill -9 "$DFWPID" 2>/dev/null || true
+wait "$DFWPID" 2>/dev/null || true
+
 echo "cli-smoke: PASS"

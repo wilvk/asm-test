@@ -9,6 +9,7 @@
 // image that was never captured. A draw half that crashed on the refusal path
 // would be a UI that works until the moment it matters.
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -151,6 +152,43 @@ int main() {
               "min-trace carries trace events but no coverage footer");
         check("empty deck draws", frame(s, rec) >= 0,
               "the nothing-here message");
+    }
+
+    // 37 T4: observer_build seeds the manual "as of logical time" slider from
+    // the recording's own df_step `when` — until the analyst genuinely edits
+    // it, at which point a live session's repeated rebuilds must never walk it
+    // back to the recording's default.
+    {
+        std::string nd =
+            "{\"asmtrace\":1,\"container\":\"ndjson\",\"producer\":{\"name\":"
+            "\"test\",\"version\":\"0\"},\"provenance\":{\"backend\":\"ptrace-"
+            "dataflow\",\"exact\":true,\"trust\":\"exact\"},\"arch\":"
+            "\"x86_64\"}\n"
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4096,"
+            "\"when\":5,\"ops\":[]}\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto recOpt = load_recording(in, err);
+        check("when-default fixture loads", recOpt.has_value(), err);
+        if (recOpt) {
+            ObserverState s;
+            observer_build(s, *recOpt);
+            check("disasm_when defaults from the recording's own `when`",
+                  s.disasm_when == 5,
+                  "want 5, got " + std::to_string(s.disasm_when));
+            check("disasm_when_touched stays false on a seeded default",
+                  !s.disasm_when_touched,
+                  "a seeded default must not read as a manual edit");
+
+            // A manual override, then a rebuild (as a live session's growth
+            // tick would trigger): the override must survive.
+            s.disasm_when = 99;
+            s.disasm_when_touched = true;
+            observer_build(s, *recOpt);
+            check("a manual override survives a rebuild", s.disasm_when == 99,
+                  "want 99 (the manual value), got " +
+                      std::to_string(s.disasm_when));
+        }
     }
 
     ImGui::DestroyContext();

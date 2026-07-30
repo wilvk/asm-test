@@ -8,7 +8,12 @@
 // obvious check and be wrong exactly where the mechanism was needed.
 #include "views/disasm.h"
 
+#include <sstream>
+#include <string>
+
 #include "view_test.h"
+
+#include "doc/streams.h"
 
 using namespace asmdesk;
 
@@ -115,5 +120,88 @@ int main() {
 
     vt::golden("obs-codeimage.txt", obs_disasm_dump(v));
     vt::golden("obs-codeimage-gate.txt", obs_disasm_dump(g));
+
+    // --- 37 T4: stamped_when — the manual slider's default, from df_step -----
+    // `obs-codeimage.asmtrace` carries no df_step at all (it is a `trace`-mode
+    // fixture), so the default stays unset — the pre-T4 recordings this test
+    // already covers must not spontaneously grow a default from nowhere.
+    vt::eq("no df_step: stamped_when stays 0", v.stamped_when, uint64_t{0});
+    {
+        // A continuous capture's LATER pass restates `when` (a re-arm can see a
+        // different codeimage timeline) — the default tracks the FRESHEST one,
+        // last write in event order.
+        std::string nd = std::string(
+            "{\"asmtrace\":1,\"container\":\"ndjson\",\"producer\":{\"name\":"
+            "\"test\",\"version\":\"0\"},\"provenance\":{\"backend\":\"ptrace-"
+            "dataflow\",\"exact\":true,\"trust\":\"exact\"},\"arch\":"
+            "\"x86_64\"}\n");
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4096,"
+              "\"when\":5,\"ops\":[]}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"rbase\":4096,"
+              "\"when\":5,\"ops\":[]}\n";
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":8192,"
+              "\"when\":9,\"ops\":[]}\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto recOpt = load_recording(in, err);
+        vt::check("stamped_when fixture loads", recOpt.has_value(), err);
+        if (recOpt) {
+            DisasmView sv = obs_disasm_build(*recOpt);
+            vt::eq("stamped_when: the freshest (last) pass's when", sv.stamped_when,
+                   uint64_t{9});
+        }
+    }
+
+    // --- 37 T4: (rbase, when) keying — `when` alone must never conflate two --
+    // spans. A candidate walk re-arms the codeimage timeline per span, so two
+    // DIFFERENT spans can each stamp `when:1` on their own first step; only the
+    // address (rbase + off) disambiguates which version answers which step.
+    {
+        std::string nd = std::string(
+            "{\"asmtrace\":1,\"container\":\"ndjson\",\"producer\":{\"name\":"
+            "\"test\",\"version\":\"0\"},\"provenance\":{\"backend\":\"ptrace-"
+            "dataflow\",\"exact\":true,\"trust\":\"exact\"},\"arch\":"
+            "\"x86_64\"}\n");
+        // Span A: base 0x1000, one byte 0xaa, at version/when 1.
+        nd += "{\"k\":\"codeimage\",\"base\":4096,\"len\":1,\"version\":0,"
+              "\"when\":1,\"bytes\":\"aa\"}\n";
+        // Span B: an unrelated candidate region, base 0x9000, one byte 0xbb,
+        // ALSO at when 1 — its own timeline restarted at the same seq.
+        nd += "{\"k\":\"codeimage\",\"base\":36864,\"len\":1,\"version\":0,"
+              "\"when\":1,\"bytes\":\"bb\"}\n";
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4096,"
+              "\"when\":1,\"ops\":[]}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":0,\"rbase\":36864,"
+              "\"when\":1,\"ops\":[]}\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto recOpt = load_recording(in, err);
+        vt::check("keying fixture loads", recOpt.has_value(), err);
+        if (recOpt) {
+            DisasmView kv = obs_disasm_build(*recOpt);
+            SegmentedDataflow seg = build_segmented_dataflow(*recOpt);
+            vt::eq("keying: one pass", seg.passes.size(), size_t{1});
+            if (!seg.passes.empty()) {
+                const DataflowStream &p = seg.passes[0];
+                vt::eq("keying: two steps", p.nsteps, uint32_t{2});
+                if (p.insn_rbase.size() == 2 && p.insn_when.size() == 2 &&
+                    p.insn_off.size() == 2) {
+                    uint64_t addrA = p.insn_rbase[0] + p.insn_off[0];
+                    uint64_t addrB = p.insn_rbase[1] + p.insn_off[1];
+                    CodeBytes a = obs_disasm_bytes_at(kv, addrA, p.insn_when[0]);
+                    CodeBytes b = obs_disasm_bytes_at(kv, addrB, p.insn_when[1]);
+                    vt::check("keying: span A resolves", a.found, a.why);
+                    vt::check("keying: span B resolves", b.found, b.why);
+                    if (a.found && a.len > 0)
+                        vt::eq("keying: span A gets its OWN bytes", a.data[0],
+                               uint8_t{0xaa});
+                    if (b.found && b.len > 0)
+                        vt::eq("keying: span B gets its OWN bytes, not A's",
+                               b.data[0], uint8_t{0xbb});
+                }
+            }
+        }
+    }
+
     return vt::report("test_obs_disasm");
 }

@@ -5,6 +5,7 @@
 // that decode_streams resolves Streams::df to the LATEST pass, and that a one-shot
 // recording (no marker) stays exactly one pass — byte-identical to the pre-40 flat
 // decode.
+#include <sstream>
 #include <string>
 
 #include "view_test.h"
@@ -14,6 +15,24 @@
 using namespace asmdesk;
 
 namespace {
+
+// A valid exact header; callers append event lines (37 T4's inline fixtures —
+// mirrors test_trajectory.cpp's kHdrExact).
+const char *kHdrExact =
+    "{\"asmtrace\":1,\"container\":\"ndjson\",\"producer\":{\"name\":\"test\","
+    "\"version\":\"0\"},\"provenance\":{\"backend\":\"emu-l0\",\"exact\":true,"
+    "\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n";
+
+Recording load_ndjson(const std::string &ndjson) {
+    std::istringstream in(ndjson);
+    std::string err;
+    auto rec = load_recording(in, err);
+    if (!rec) {
+        vt::fail("inline fixture load", err);
+        return Recording{};
+    }
+    return *rec;
+}
 
 Recording load_rec(const std::string &name) {
     std::string path = std::string(ASMTEST_GOLDEN_DIR) + "/" + name;
@@ -94,6 +113,15 @@ void test_oneshot_is_one_pass() {
     vt::eq("oneshot: edges 4", only.edges.size(), size_t{4});
     vt::check("oneshot: rbase present", only.rbase_present,
               "mem-df-chain states rbase on every df_step");
+    // 37 T4: this is a corpus-recorder golden, which holds no codeimage
+    // timeline and so never states `when` — the existing (rbase, no when)
+    // fallback case, proven against a real committed recording rather than a
+    // synthetic one.
+    vt::check("oneshot: when NOT present (corpus recorder has no codeimage)",
+              !only.when_present,
+              "mem-df-chain gained a `when` field it should not have");
+    for (uint64_t w : only.insn_when)
+        vt::eq("oneshot: insn_when entry is 0", w, uint64_t{0});
 
     // decode_streams surfaces that single pass unchanged — the counts and the
     // leading offset all agree, which is the single-pass path being the flat decode.
@@ -106,10 +134,58 @@ void test_oneshot_is_one_pass() {
         vt::eq("oneshot: Streams::df off[0]", s.df.insn_off[0], uint64_t{0});
 }
 
+// 37 T4: the `when` decode — a serve dataflow session stamps the SAME `when` on
+// every df_step of one pass (sampled once before it), so decode_dataflow must
+// carry it per step, parallel to insn_rbase, and say when none was stated.
+void test_when_decode() {
+    // A tagged pass: two steps, same rbase, same when (as a real serve session
+    // would emit — sampled once, stamped on every step of the invocation).
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+              "\"when\":3,\"ops\":[]}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"rbase\":4194304,"
+              "\"when\":3,\"ops\":[]}\n";
+        Recording r = load_ndjson(nd);
+        SegmentedDataflow seg = build_segmented_dataflow(r);
+        vt::eq("when: one pass", seg.passes.size(), size_t{1});
+        if (seg.passes.empty())
+            return;
+        const DataflowStream &p = seg.passes[0];
+        vt::check("when: when_present", p.when_present, "when never set");
+        vt::eq("when: nsteps", p.nsteps, uint32_t{2});
+        if (p.insn_when.size() == 2) {
+            vt::eq("when: step0", p.insn_when[0], uint64_t{3});
+            vt::eq("when: step1", p.insn_when[1], uint64_t{3});
+        }
+    }
+    // rbase present, when ABSENT: the pre-T4 shape, unchanged — when_present
+    // stays false and every entry decodes to 0, never a guessed value.
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+              "\"ops\":[]}\n";
+        Recording r = load_ndjson(nd);
+        SegmentedDataflow seg = build_segmented_dataflow(r);
+        vt::eq("when-absent: one pass", seg.passes.size(), size_t{1});
+        if (seg.passes.empty())
+            return;
+        const DataflowStream &p = seg.passes[0];
+        vt::check("when-absent: rbase still present", p.rbase_present,
+                  "rbase regressed");
+        vt::check("when-absent: when_present stays false", !p.when_present,
+                  "an absent `when` field was reported present");
+        if (!p.insn_when.empty())
+            vt::eq("when-absent: insn_when[0] is 0", p.insn_when[0],
+                   uint64_t{0});
+    }
+}
+
 } // namespace
 
 int main() {
     test_continuous_segments();
     test_oneshot_is_one_pass();
+    test_when_decode();
     return vt::report("test_streams");
 }

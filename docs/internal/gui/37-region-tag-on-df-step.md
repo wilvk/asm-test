@@ -24,15 +24,24 @@
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
 >
-> **Status (2026-07-29) — ☑ 5/6. LANDED.** T1 the `rbase` writer + all 4 producers +
-> schema + corpus regen (`6612ef8`); T2 the desktop reader resolves the span from
-> the wire (`ad32299`); T3 the churn walk region-as-of-step resolver (`06f2991`, + a
-> review-surfaced fidelity fix `07fa0d1`); T5 the `anchor_source` HUD grade + 36
-> reconciliation (`7f5b048`); T6 the `scene-df-two-span` end-to-end golden
-> (`2516d06`). **T4 (`when`) DEFERRED as the severable extension this brief marks it**
-> — a serve-path disasm-version refinement, no view breaks without it (reader-rule 2
-> is sound). Corpus byte-stable under docker-cli; a live `cli_smoke` asserts
-> `df_step.rbase` == the region base. This is a producer + schema change (D5).
+> **Status (2026-07-31) — ☑ 6/6. LANDED IN FULL.** T1 the `rbase` writer + all 4
+> producers + schema + corpus regen (`6612ef8`); T2 the desktop reader resolves the
+> span from the wire (`ad32299`); T3 the churn walk region-as-of-step resolver
+> (`06f2991`, + a review-surfaced fidelity fix `07fa0d1`); T5 the `anchor_source`
+> HUD grade + 36 reconciliation (`7f5b048`); T6 the `scene-df-two-span` end-to-end
+> golden (`2516d06`); **T4 the `when` tag, landed (`5ceef62`)** — the serve
+> sink (`cli/asmspy.c`'s `serve_dataflow_sink`) samples `asmtest_codeimage_now`
+> once before each pass and stamps it on every `df_step`, keyed with `rbase`
+> (never `when` alone); the headless sink and both corpus recorders hold no
+> codeimage timeline and omit it, so T4 churned no golden (only the two
+> `abixray-make_pair` code-identity shas regenerated, the same parameter-shift
+> precedent T1 hit); `DataflowStream` carries `insn_when`/`when_present`, the
+> PT-replay `ptslice.cpp` states it from the exact version it replayed against,
+> and `observer_build` seeds the Observer Disassembly pane's manual "as of
+> logical time" slider from it, without disturbing a genuine hand override.
+> Corpus byte-stable under docker-cli; a live `cli_smoke` asserts `df_step.rbase`
+> == the region base and (37 T4) `df_step.when` rides immediately after it. This
+> is a producer + schema change (D5).
 
 ## Why this work exists
 

@@ -74,6 +74,16 @@ struct DisasmView {
     // nobody asked to capture, which is why the producer emits one.
     std::string unavailable_reason;
 
+    // 37 T4: the `when` a live `--serve --dataflow`/`auto` session stamped on
+    // its `df_step` events — the bytes in force when that capture's invocation
+    // started. 0 when the recording carries no `df_step`, or none stated one (a
+    // pre-T4 recording, a headless/corpus recording with no codeimage timeline,
+    // or a `trace`-mode recording). The manual "as of logical time" query's
+    // DEFAULT (observer_build seeds it from here), so a dataflow capture opens
+    // already resolved against its own bytes instead of guessing the newest
+    // version; a manual override still wins once the analyst sets one.
+    uint64_t stamped_when = 0;
+
     // Distinct spans, in ascending base order — one "region" per tracked span.
     std::vector<uint64_t> spans() const;
 };

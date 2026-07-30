@@ -95,6 +95,21 @@ DisasmView obs_disasm_build(const Recording &r, const ObsLifecycle *lc) {
         }
     }
 
+    // 37 T4: the `when` a live serve dataflow session stamped on its df_step
+    // events — last write wins, so a continuous capture's default tracks its
+    // FRESHEST invocation (every step of one pass shares the same value by
+    // construction, so "last" and "any" agree within a pass). 0 (unset) when
+    // the recording carries no df_step, or none stated a when (the common case:
+    // only the serve path ever does).
+    auto df = r.by_kind.find("df_step");
+    if (df != r.by_kind.end()) {
+        for (const Event &e : df->second) {
+            uint64_t w = e.body.value("when", uint64_t{0});
+            if (w)
+                v.stamped_when = w;
+        }
+    }
+
     // The producer's measured reason for having no code image at all. Matched
     // by prefix so the note stays human-readable text rather than a code.
     auto nt = r.by_kind.find("note");
