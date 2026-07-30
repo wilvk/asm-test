@@ -37,8 +37,9 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status (2026-07-29) — ☐ 0/6.** Not started; re-verified still 0/6 against HEAD
-> `54b004a` on the Zen 5 box (2026-07-29).
+> **Status (2026-07-29) — ✅ 6/6.** All six tasks landed (see
+> [README.md](README.md)'s row for the commit-by-commit summary); this banner
+> was stale (still read ☐ 0/6 after landing) and is corrected in place.
 
 ## Why this work exists
 

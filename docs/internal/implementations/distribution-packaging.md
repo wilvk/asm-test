@@ -46,8 +46,11 @@ never run:
   job, lines 956–972), and the `ldd -r` drapp loadability gate
   (`91bb4f4`/`206be56`; [mk/bindings.mk](../../../mk/bindings.mk) lines
   344–353, inside `package-libs-drtrace`).
-- `VERSION` is `1.1.0` but `git tag --list 'v*'` prints only `v1.0.0`
-  (2026-06-24) — **the tag trigger has never fired**; every prior run was a
+- `VERSION` is `1.1.0` but `git tag --list 'v*'` prints **nothing at all** —
+  corrected 2026-07-30: this section previously claimed a `v1.0.0` tag
+  existed (2026-06-24); re-verified against both the local repo and
+  `git ls-remote --tags origin` and **no tag has ever been cut on this repo**.
+  **The tag trigger has never fired**; every prior run was a
   `workflow_dispatch` dry-run. Matching this, [CHANGELOG.md](../../../CHANGELOG.md)
   already carries a **populated `## [1.1.0] — 2026-07-06` section** (line 1286)
   sitting below a populated `## [Unreleased]` section (line 7): 1.1.0 is
@@ -66,9 +69,9 @@ never run:
   module.
 - The C core installs with `make install` (headers + `libasmtest.a` +
   `asmtest.pc`, honoring `PREFIX`/`DESTDIR` —
-  [Makefile](../../../Makefile) lines 524–537); **the `v1.0.0` tag already has
-  this** (`git show v1.0.0:Makefile` shows `install:` with
-  `PREFIX`/`DESTDIR`/`pcdir`), so system packages can build the released tag.
+  [Makefile](../../../Makefile) lines 524–537); **HEAD already has this**
+  (there is no released tag to check it against — see above — so the T7–T13
+  Docker lanes build straight off HEAD's `Makefile`, not a tagged checkout).
 - Docker lane pattern to mirror: a `Dockerfile.<lane>` plus a
   `docker-<lane>:` rule in [mk/docker.mk](../../../mk/docker.mk) that builds
   with `--build-arg BASE=$(DOCKER_BASE)` and runs `--rm` (e.g.
@@ -80,7 +83,7 @@ Prove the baseline before touching anything:
 
 ```sh
 cat VERSION                      # -> 1.1.0
-git tag --list 'v*'              # -> v1.0.0 (only)
+git tag --list 'v*'              # -> (empty — no tag has ever been cut)
 make test && make check          # local core green
 gh run list --workflow=release.yml -L 3
                                  # newest dispatch (2026-07-17) green on every job
