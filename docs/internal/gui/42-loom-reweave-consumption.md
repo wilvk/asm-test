@@ -101,20 +101,30 @@
 > faulted reweave) and `test_shell.cpp` (`take_rec` cross-recording undo
 > guard, mirroring the existing Filter/`filter_rec` test).
 >
-> **Recorded, not fixed here** (lower severity / larger or orthogonal scope):
-> - Rich `fault_card()` for a reweave (fault_kind/addr/disassembly) needs
+> **Recorded, not fixed here** (lower severity / larger or orthogonal scope) —
+> **status as of 2026-07-31, three of four now closed:**
+> - ~~Rich `fault_card()` for a reweave (fault_kind/addr/disassembly) needs
 >   `loom_take_run_from_step` to populate `result`, which needs the resume
 >   seam's C API (`src/dataflow_resume.c`) to expose fault details it does not
->   today — a C-library signature change, out of scope here.
-> - CI's `desktop` job installs no Keystone, so `DESKTOP_ENGINE_TESTS`
+>   today — a C-library signature change, out of scope here.~~ **CLOSED.**
+>   `asmtest_dataflow_emu_run_from_current` gained an optional `emu_result_t
+>   *result_out` (threaded through a new `df_fault_t` out-param on
+>   `asmtest_df_capture`, plus an exported `emu_x86_read_all_regs` seam);
+>   `loom_take_run_from_step` now assigns `out->result` unconditionally, so a
+>   faulted Reweave renders the same kind/address/disasm-at-rip fault card a
+>   plain fork already got. Adversarially reviewed clean (independently
+>   rebuilt + retested, zero golden churn beyond a pre-existing link-layout
+>   quirk already documented in this tree).
+> - ~~CI's `desktop` job installs no Keystone, so `DESKTOP_ENGINE_TESTS`
 >   (`desktop_test_loom_forks`/`desktop_test_regsynth`/the new
 >   `desktop_test_loom_reweave`) likely self-skip there silently — inherited by
->   this change, not introduced by it. `ci.yml` was being concurrently edited
->   by another agent during this pass; not touched here.
-> - No automated `ldd`/`nm` check mechanically re-proves `asmtest-viewer` stays
->   engine-free on every build — today it rests on object-list membership plus
->   this pass's one-off manual verification. A `desktop-addon-compile-check`-
->   style Makefile target would close this.
+>   this change, not introduced by it.~~ **CLOSED** (`a86c5eb`): CI's `desktop`
+>   job now builds Keystone from pinned source so these tests actually run,
+>   with a log-grep step that fails loud on a self-skip.
+> - ~~No automated `ldd`/`nm` check mechanically re-proves `asmtest-viewer`
+>   stays engine-free on every build~~ **CLOSED** (`a86c5eb`): a new
+>   `make desktop-engine-boundary-check` target mechanizes this, wired into CI
+>   and `Dockerfile.desktop`'s CMD.
 > - `reweave_apply.o` joining `forks.o` under `DESKTOP_LOOM_APP` widens (1→2)
 >   the set of `desktop/src/loom/*.o` basenames that are silently NOT
 >   engine-free despite sharing a directory with five that are; not exploitable
