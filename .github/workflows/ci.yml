@@ -1768,14 +1768,31 @@ jobs:
         # libgl1-mesa-dri + libegl1-mesa-dev: llvmpipe + EGL, so the offscreen
         # FBO smoke RUNS headlessly instead of self-skipping.
         # libunicorn-dev + libcapstone-dev: the Author-tier engines, and what
-        # arms the golden byte-stability gate below.
+        # arms the golden byte-stability gate below. Keystone has no distro
+        # package (build-keystone.sh below), so it is deliberately not in this
+        # apt line — see the caching step that follows.
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends \
             pkg-config libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri \
             libegl1-mesa-dev libunicorn-dev libcapstone-dev
 
+      # K1: same pinned-source-build cache as the package-libs jobs. Without this,
+      # DESKTOP_ENGINE_MISSING (mk/desktop.mk) stays non-empty on this runner and
+      # DESKTOP_ENGINE_TESTS (desktop_test_loom_forks/loom_reweave/regsynth)
+      # self-skip — exactly the gap gui/42's status banner recorded as
+      # pre-existing and CLAUDE.md calls out ("a test that can only ever
+      # self-skip is not a test").
+      - name: Cache the pinned Keystone source build (K1)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/keystone
+          key: tp-keystone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-keystone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build Keystone from source (pinned; arms DESKTOP_ENGINE_TESTS)
+        run: sh scripts/thirdparty-cache.sh cached-build keystone   # restores from the cache when warm
+
       - name: Headless desktop tests (null ImGui backend + the GL FBO smoke)
-        run: make WERROR=1 desktop-test
+        run: make WERROR=1 desktop-test | tee /tmp/desktop-test.log
 
       - name: Prove the GL smoke really ran (it must not self-skip on this lane)
         # A lane that silently degraded to the self-skip path would report green
@@ -1788,6 +1805,20 @@ jobs:
           grep -q "GL smoke ran" /tmp/fbo.log \
             || { echo "::error::the scene FBO smoke self-skipped — no GL on this runner"; exit 1; }
 
+      - name: Prove the engine tests really ran (fork/reweave/regsynth must not self-skip)
+        # Mirrors the GL-smoke proof above, for the OTHER self-skip path
+        # desktop-test has: DESKTOP_ENGINE_SAY only prints when Keystone was
+        # missing at configure time. Belt-and-suspenders alongside the cache
+        # steps above — a broken/stale cache restore should fail loud here,
+        # not report green having quietly run nothing.
+        run: |
+          set -eo pipefail
+          grep -q "the full-build fork tests need" /tmp/desktop-test.log \
+            && { echo "::error::DESKTOP_ENGINE_TESTS self-skipped — Keystone was not armed on this runner"; exit 1; }
+          grep -q "desktop_test_loom_forks" /tmp/desktop-test.log
+          grep -q "desktop_test_loom_reweave" /tmp/desktop-test.log
+          grep -q "desktop_test_regsynth" /tmp/desktop-test.log
+
       - name: .asmtrace golden corpus is byte-stable (gate armed by libunicorn)
         run: |
           set -eo pipefail
@@ -1799,6 +1830,9 @@ jobs:
 
       - name: Both binaries link (full app + the engine-free viewer)
         run: make WERROR=1 desktop desktop-render
+
+      - name: asmtest-viewer stays engine-free (D4 boundary check, gui/42 follow-up)
+        run: make desktop-engine-boundary-check
 
   # Quality: clang-format drift (style in .clang-format). A GATE since the
   # one-shot `make fmt` pass (e32a12f) brought the tree clean — new drift now

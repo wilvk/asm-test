@@ -897,6 +897,31 @@ desktop-render:
 	$(call DESKTOP_GUIDE,asmtest-viewer (render-only),$(DESKTOP_MISSING))
 endif
 
+# Engine/viewer boundary check (D4): mechanically re-proves what gui/42's status
+# banner recorded as only a manual, one-off verification — that asmtest-viewer
+# links NONE of unicorn/keystone/capstone, so the render-only binary stays
+# permissively distributable no matter what the app tree grows to link next.
+# Reads the actual dynamic dependency list (ldd on Linux, otool -L on Darwin),
+# not source inspection — a stray #ifdef could still compile clean and pull an
+# engine in silently, which is exactly the class of regression a grep would miss.
+.PHONY: desktop-engine-boundary-check
+desktop-engine-boundary-check: $(BUILD)/asmtest-viewer
+	@echo "desktop-engine-boundary-check: verifying $(BUILD)/asmtest-viewer links no engine..."
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+	   command -v otool >/dev/null 2>&1 || { echo "desktop-engine-boundary-check: FATAL — no otool available"; exit 1; }; \
+	   deps=$$(otool -L $(BUILD)/asmtest-viewer | tail -n +2); \
+	 else \
+	   command -v ldd >/dev/null 2>&1 || { echo "desktop-engine-boundary-check: FATAL — no ldd available"; exit 1; }; \
+	   deps=$$(ldd $(BUILD)/asmtest-viewer); \
+	 fi; \
+	 hit=$$(printf '%s\n' "$$deps" | grep -iE 'unicorn|keystone|capstone' || true); \
+	 if [ -n "$$hit" ]; then \
+	   echo "desktop-engine-boundary-check: FATAL — asmtest-viewer links an engine (D4 broken):"; \
+	   echo "$$hit" | sed 's/^/    /'; \
+	   exit 1; \
+	 fi
+	@echo "desktop-engine-boundary-check: OK — asmtest-viewer is engine-free"
+
 # --- desktop-install: launcher + themed icons so the app has a dock identity ---
 # The compiled-in window icon (main.cpp -> glfwSetWindowIcon) already gives an X11
 # session a titlebar/taskbar icon straight from `./build/asmtest-desktop`, but for

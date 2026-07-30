@@ -158,6 +158,7 @@ help:
 	@echo '  desktop-ui-test imgui_test_engine interaction lane: keymap + door/flow tests, JUnit XML (fetches the one test-lane-only non-MIT dep; make docker-desktop runs it)'
 	@echo '  addon-fetch-test          exercise scripts/fetch-addon.sh (pin + refuse-unpinned; network)'
 	@echo '  desktop-addon-compile-check  imgui-repin gate: vendored imgui_internal.h addons still build'
+	@echo '  desktop-engine-boundary-check  D4 gate: asmtest-viewer links no unicorn/keystone/capstone'
 	@echo '  asmtrace-export      build build/asmtrace_export (.asmtrace -> speedscope/Perfetto/lcov/DOT)'
 	@echo '  asmtrace-export-test byte-exact exporter goldens + the genuine-refusal suite'
 	@echo ''
