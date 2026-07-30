@@ -5,6 +5,7 @@
 #include "ImZoomSlider.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 
 #include "loom/loom_draw.h"
@@ -15,6 +16,10 @@
 #include "ui/theme.h"
 #include "ui/timepos.h"
 #include "views/overview.h" // whole-fabric minimap projection (21 T3)
+
+#ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+#include "loom/reweave_apply.h" // the reweave engine leg (42 T3); app-tree only
+#endif
 
 namespace asmdesk {
 
@@ -155,7 +160,7 @@ void draw_loom_plan(const std::vector<loom_prim_t> &prims, std::string *hover) {
 
 void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
                const std::function<void(const dt_link &)> &go, Selection *shared,
-               UndoStack *undo) {
+               UndoStack *undo, const ReweaveSource *reweave_src) {
     if (!L.built || L.source_id != s.id) {
         L.source_id = s.id;
         L.built = true;
@@ -166,6 +171,15 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
         L.has_selection = false;
         L.lane = -1;
         L.playhead = L.fabric.steps ? L.fabric.steps - 1 : 0;
+        // 42: takes/take_views are counterfactuals of THIS recording's fabric —
+        // their step indices and cones mean nothing against a different one.
+        // ShellState::loom is a single, non-per-tab state, so switching
+        // recordings must drop them or a stale take paints onto the new
+        // recording's canvas as if it belonged there (not undo-tracked, like
+        // the other per-recording resets just above: a tab switch is a context
+        // change, not a user edit).
+        L.takes.clear();
+        L.take_views.clear();
     }
     // Domain-term-first heading + the "?" caveat, which also re-opens the primer
     // (24 T3/T5). "Data-flow lineage (Loom)", caveat "lineage is def-use, not
@@ -311,6 +325,14 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
 
     std::vector<loom_prim_t> prims;
     loom_plan(f, L.cam, &prims);
+    // 42 T4: paint every accumulated take's verdict overlay (patient-zero, dim/
+    // hot, dashed tails, the fault card) on top of the base plan. Pure — ships
+    // in asmtest-viewer too, so a take somebody else authored still renders.
+    // Skip a take with no real fabric (a hard refusal) — its gutter `err`
+    // already says why; painting it would fabricate a divergence graphic.
+    for (const loom_take_view_t &v : L.take_views)
+        if (v.node.has_fabric)
+            loom_take_plan(v, L.cam, &prims);
     std::string hover;
     ImGui::BeginChild("loom-canvas", ImVec2(L.cam.px_w, L.cam.px_h), true);
     draw_loom_plan(prims, &hover);
@@ -392,10 +414,66 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Takes")) {
+            // 42 T2: the identity latch — may THIS recording be reweaved with the
+            // Author door's last run? Computed uniformly across all three
+            // binaries (reweave_src is null/empty wherever there is nothing
+            // eligible), so the viewer/test builds naturally see it refuse.
+            const bool identity_ok =
+                reweave_src != nullptr &&
+                loom_reweave_available(s.code_sha, reweave_src->code_sha,
+                                       reweave_src->nargs);
+#ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+            const bool can_reweave = identity_ok;
+            const char *reweave_reason =
+                can_reweave ? nullptr : kLoomReweaveUnavailableCopy;
+#else
+            const bool can_reweave = false;
+            const char *reweave_reason = kLoomReweaveViewerOnlyCopy;
+            (void)identity_ok; // uniform across builds; unused in this one
+#endif
             // 30 R3 T3: the Reweave gesture — fork from a chosen step K. Emits a
             // request the full app applies through loom_take_run_from_step; the
-            // form itself runs no engine (D4), like the gutter below.
-            draw_loom_reweave_form(L.reweave);
+            // form itself runs no engine (D4), like the gutter below. `can_reweave`
+            // disables the button rather than letting a doomed request build.
+            draw_loom_reweave_form(L.reweave, can_reweave, reweave_reason);
+            if (L.reweave.requested) {
+                L.reweave.requested = false; // one-frame latch, always cleared
+                loom_edit_desc_t desc;
+                desc.from_step_edit = true;
+                desc.from_step = static_cast<uint32_t>(L.reweave.req_step);
+                loom_take_view_t view;
+#ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+                if (can_reweave)
+                    view = loom_run_reweave(f, *reweave_src, L.reweave.req_step,
+                                            L.reweave.req_reg,
+                                            L.reweave.req_value);
+                else
+                    view = loom_take_view(f, loom_fabric_t{}, nullptr, 0, desc,
+                                          "", kLoomReweaveUnavailableCopy);
+#else
+                view = loom_take_view(f, loom_fabric_t{}, nullptr, 0, desc, "",
+                                      kLoomReweaveViewerOnlyCopy);
+#endif
+                // Append as one reversible TakeSet (22 T4): `takes` (the gutter's
+                // textual summary) and `take_views` (42 T4's paintable overlay)
+                // move in lockstep, in the SAME undo Command, so they can never
+                // drift out of index alignment across a Ctrl+Z/Ctrl+Y.
+                if (undo != nullptr) {
+                    UndoCommand cmd;
+                    cmd.kind = UndoCommand::Kind::TakeSet;
+                    cmd.take_rec = L.source_id;
+                    cmd.takes_before = L.takes;
+                    cmd.take_views_before = L.take_views;
+                    L.takes.push_back(view.node);
+                    L.take_views.push_back(view);
+                    cmd.takes_after = L.takes;
+                    cmd.take_views_after = L.take_views;
+                    undo->push(std::move(cmd));
+                } else {
+                    L.takes.push_back(view.node);
+                    L.take_views.push_back(view);
+                }
+            }
             ImGui::Separator();
             // The persistent takes gutter (22 T4): per-take remove + clear forks,
             // both reversible. The accumulator is empty here until a full build
@@ -445,16 +523,23 @@ void draw_loom_takes_gutter(LoomState &L, UndoStack *undo) {
     }
 
     // Clear forks — empties the whole set, reversibly (Ctrl+Z restores it).
+    // take_views clears alongside takes (42 T4) so the paint overlay never
+    // outlives the gutter entry it came from.
     if (ImGui::SmallButton("clear forks")) {
         if (undo != nullptr) {
             UndoCommand cmd;
             cmd.kind = UndoCommand::Kind::TakeSet;
+            cmd.take_rec = L.source_id;
             cmd.takes_before = L.takes;
+            cmd.take_views_before = L.take_views;
             loom_takes_clear(L.takes);
+            L.take_views.clear();
             cmd.takes_after = L.takes;
+            cmd.take_views_after = L.take_views;
             undo->push(std::move(cmd));
         } else {
             loom_takes_clear(L.takes);
+            L.take_views.clear();
         }
     }
 
@@ -481,15 +566,29 @@ void draw_loom_takes_gutter(LoomState &L, UndoStack *undo) {
         ImGui::PopID();
     }
     if (remove_idx >= 0) {
+        const size_t idx = static_cast<size_t>(remove_idx);
+        // Defensive bounds check: take_views may be shorter than takes when a
+        // caller pushed a bare loom_take_node_t directly (existing tests do,
+        // e.g. test_loom_gutter) without a paired view — nothing to remove
+        // there, and takes/remove below still works on its own vector.
         if (undo != nullptr) {
             UndoCommand cmd;
             cmd.kind = UndoCommand::Kind::TakeSet;
+            cmd.take_rec = L.source_id;
             cmd.takes_before = L.takes;
-            loom_takes_remove(L.takes, static_cast<size_t>(remove_idx));
+            cmd.take_views_before = L.take_views;
+            loom_takes_remove(L.takes, idx);
+            if (idx < L.take_views.size())
+                L.take_views.erase(L.take_views.begin() +
+                                   static_cast<std::ptrdiff_t>(idx));
             cmd.takes_after = L.takes;
+            cmd.take_views_after = L.take_views;
             undo->push(std::move(cmd));
         } else {
-            loom_takes_remove(L.takes, static_cast<size_t>(remove_idx));
+            loom_takes_remove(L.takes, idx);
+            if (idx < L.take_views.size())
+                L.take_views.erase(L.take_views.begin() +
+                                   static_cast<std::ptrdiff_t>(idx));
         }
     }
 }
@@ -501,7 +600,8 @@ const std::vector<std::string> &loom_reweave_regs() {
     return regs;
 }
 
-void draw_loom_reweave_form(loom_reweave_form_t &f) {
+void draw_loom_reweave_form(loom_reweave_form_t &f, bool available,
+                            const char *unavailable_reason) {
     // `requested` is a latch the CALLER consumes (clears after applying), not a
     // per-frame flag — a one-frame reset here would be gone by the time an
     // interaction-test (or the app) reads it the frame after the click.
@@ -531,6 +631,10 @@ void draw_loom_reweave_form(loom_reweave_form_t &f) {
     ImGui::InputText("value", f.value_hex, sizeof f.value_hex,
                      ImGuiInputTextFlags_CharsNoBlank);
 
+    // 42 T2: disabled rather than left to build a doomed request — "whether a
+    // request is even built" is decided here, not after the click.
+    if (!available)
+        ImGui::BeginDisabled();
     if (ImGui::Button("Reweave from step K")) {
         f.requested = true;
         f.req_step = static_cast<uint64_t>(f.step);
@@ -538,9 +642,12 @@ void draw_loom_reweave_form(loom_reweave_form_t &f) {
         // base 0: accepts a 0x-prefixed hex or a plain decimal, whatever typed.
         f.req_value = std::strtoull(f.value_hex, nullptr, 0);
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("(full app re-runs the emulator replay; this build "
-                        "captures the request)");
+    if (!available)
+        ImGui::EndDisabled();
+    // The reason is stated, never a silent gray-out (D7) — a disabled button
+    // with no explanation reads as broken, not as "not yet eligible".
+    if (!available && unavailable_reason != nullptr)
+        ImGui::TextWrapped("%s", unavailable_reason);
 }
 
 } // namespace asmdesk

@@ -16,6 +16,7 @@
 #include "loom/fabric_plan.h"
 #include "loom/feed.h"
 #include "loom/lineage.h"
+#include "loom/reweave_input.h" // ReweaveSource + loom_reweave_available (42 T1/T2)
 #include "loom/take_view.h" // loom_take_node_t + the takes-gutter accumulator (22 T4)
 #include "nav.h"            // dt_link — the minimap click routes through 04's router
 #include "ui/primer.h"      // first-open primer state (24 T5)
@@ -79,6 +80,14 @@ struct LoomState {
     // reversible undo Commands (each keeps its `err`/`disclosure` verbatim, so a
     // clear never quietly drops a take's loud refusal — D7).
     std::vector<loom_take_node_t> takes;
+    // The full paintable view for each take, index-parallel to `takes` (42 T4).
+    // `loom_take_view_t` already embeds a `.node` (the same summary `takes`
+    // holds), so this is genuinely "alongside", not a duplicate model — kept as
+    // its own vector (rather than widening `takes`' element type) so the
+    // existing gutter/undo call sites that construct a bare `loom_take_node_t`
+    // are untouched. Mutated in lockstep with `takes` (same push/remove/clear,
+    // same undo Command) so the two never drift out of index alignment.
+    std::vector<loom_take_view_t> take_views;
 
     // The Reweave form state (30 R3 T3), persisted across frames per recording.
     loom_reweave_form_t reweave;
@@ -107,9 +116,13 @@ inline std::vector<uint32_t> loom_shared_dim(const LoomState &L,
 // slice/3D) and the fabric dim reads it (loom_shared_dim). `undo` records the
 // takes gutter's remove/clear as reversible Commands (22 T4). All may be null (a
 // standalone draw with no shell), leaving the Loom's own behaviour unchanged.
+// `reweave_src` is the engine-free view of the Author door's last eligible run
+// (42 T1) — null or `code == nullptr` when there is nothing to reweave with,
+// which the identity latch (loom_reweave_available) then correctly refuses.
 void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
                const std::function<void(const dt_link &)> &go = {},
-               Selection *shared = nullptr, UndoStack *undo = nullptr);
+               Selection *shared = nullptr, UndoStack *undo = nullptr,
+               const ReweaveSource *reweave_src = nullptr);
 
 // The persistent takes gutter (22 T4): each accumulated take with a per-node
 // [remove] and a gutter-level [clear forks], both reversible via `undo`. Public
@@ -122,7 +135,13 @@ void draw_loom_takes_gutter(LoomState &L, UndoStack *undo);
 // emits a fork-from-step-K request into `f` (never runs the engine — that is the
 // full app's loom_take_run_from_step). Public so the interaction lane drives the
 // gesture directly (test_ui), like the takes gutter. Call inside an ImGui window.
-void draw_loom_reweave_form(loom_reweave_form_t &f);
+// `available` (42 T2) disables the button and `unavailable_reason` states why
+// when the identity latch refuses — "whether a request is even built" — so
+// requested never latches true for a reweave that could only be refused
+// anyway (D7: never a silent gray-out). Both default to "available, no
+// reason needed" for callers with no eligibility of their own to check.
+void draw_loom_reweave_form(loom_reweave_form_t &f, bool available = true,
+                            const char *unavailable_reason = nullptr);
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_DRAW_H

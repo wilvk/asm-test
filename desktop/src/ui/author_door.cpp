@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "asmtest_valtrace.h" // asmtest_valtrace_t / at_val_rec_t (R5 T3)
+#include "asmtrace_sha256.h" // the routine-identity hash (42 T1/T2), zero-dep
 #include "author_vm.h"
 #include "ui/asm_language.h" // per-dialect syntax highlighting (17 T2 follow-on)
 #include "ui/doors.h"
@@ -114,6 +115,8 @@ void author_run(AuthorState &s) {
     s.saved_ok = false;
     s.save_status.clear();
     s.image.clear();
+    s.image_sha.clear();
+    s.frozen_nargs = 0;
     s.image_base = EMU_CODE_BASE;
     s.vf = author_valuefabric_t{}; // clear any earlier arm64 run's fabric
     if (r.ok && r.bytes != nullptr && r.len > 0)
@@ -138,6 +141,22 @@ void author_run(AuthorState &s) {
         author_run_vf(s, r);
         asmtest_asm_free(&r);
         return;
+    }
+
+    // Past this point s.arch == ASM_X86_64 (the only other can_run row) — the
+    // resume seam a reweave uses (forks.h) is x86-64-guest only, so this is the
+    // one place `image_sha` may be computed (42 T1/T2). `frozen_args`/
+    // `frozen_nargs` are captured HERE too, from the exact args this run is
+    // about to use below — s.args/s.nargs are live widget state that keeps
+    // mutating after this point with no further Run, so a reweave must replay
+    // THESE frozen values, never a re-read of s.args/s.nargs.
+    if (!s.image.empty()) {
+        char hex[65];
+        asmtrace_sha256_hex(s.image.data(), s.image.size(), hex);
+        s.image_sha = hex;
+        s.frozen_nargs = s.nargs;
+        for (int i = 0; i < s.nargs && i < 6; i++)
+            s.frozen_args[i] = s.args[i];
     }
 
     emu_t *e = emu_open();

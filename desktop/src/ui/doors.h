@@ -93,6 +93,21 @@ struct AuthorState {
     // save clears it.
     std::vector<uint8_t> image;
     uint64_t image_base = 0;
+    // The routine-identity hash of `image` (42 T1/T2), precomputed once here —
+    // never in the draw path — so the Loom's reweave latch can compare it
+    // against a recording's Streams::code_sha with a plain string equality.
+    // Populated ONLY for an x86-64 run (the resume seam's scope, forks.h): an
+    // arm64/other-arch image leaves this empty, which the latch already treats
+    // as "nothing eligible" rather than needing its own arch check.
+    std::string image_sha;
+    // The entry args that ACTUALLY produced `image`/`image_sha` (42), frozen
+    // alongside them at Run time. `args`/`nargs` above stay live, editable
+    // ImGui widget state (the slider/inputs keep mutating them after a Run
+    // with no re-Run) — a reweave must replay the args that made this exact
+    // recording, not whatever the slider currently reads, or it silently
+    // re-seeds entry registers with values that never produced it.
+    long frozen_args[6] = {0, 0, 0, 0, 0, 0};
+    int frozen_nargs = 0;
     bool dirty = false;
     char save_path[1024] = "authored.asmtrace";
     std::string save_status;

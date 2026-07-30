@@ -19,6 +19,17 @@ const char *const kLoomReweaveBanner =
     "forks re-run the emulator replay — an explicit crossing of the "
     "native→virtual line; never evidence about a live process or silicon "
     "timing";
+// 42 T2/T3: the two reasons a Reweave request can go nowhere. Never silent —
+// each renders as the take's own loud `err`, exactly like an engine refusal.
+const char *const kLoomReweaveUnavailableCopy =
+    "no Author run matches this recording's routine — reweave needs the "
+    "exact bytes (and entry args) that produced it, which only the Author "
+    "door's last run carries";
+// Deliberately names no specific binary: fabric_imgui.cpp compiles into THREE
+// non-app variants (render/test/uitest), and this copy shows in all of them —
+// "the render-only viewer" would be a wrong claim from a test/uitest build.
+const char *const kLoomReweaveViewerOnlyCopy =
+    "this build cannot run a reweave — open the full asmtest-desktop app";
 
 namespace {
 
@@ -108,6 +119,14 @@ loom_take_view(const loom_fabric_t &base, const loom_fabric_t &take,
     v.node.fault = fault;
     v.node.err = err;
     v.node.disclosure = kLoomReweaveBanner;
+    // A hard refusal (no engine run at all) hands us an empty `take` — `err`
+    // above already says why. Stop here: computing alignment/cone/steps
+    // against an empty fabric would report "diverged at step 0" and mark
+    // every base step unaligned, painting a fabricated whole-canvas
+    // divergence for a take that never ran (42's D7 hazard).
+    v.node.has_fabric = take.steps > 0;
+    if (!v.node.has_fabric)
+        return v;
 
     // --- alignment: 04's shared-prefix helper, over the two insn_off arrays --
     v.div = dt_first_divergence(base.insn_off, take.insn_off,

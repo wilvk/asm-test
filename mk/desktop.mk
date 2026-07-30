@@ -529,7 +529,9 @@ DESKTOP_LOOM_DRAW := fabric_imgui
 # forks.cpp calls asmtest_assemble / emu_* / asmtest_dataflow_emu_run, so it is
 # GPL-side and compiles ONLY into the full app (D4/D7/D9). asmtest-viewer never
 # sees this TU, which is what keeps its `ldd` free of unicorn/keystone/capstone.
-DESKTOP_LOOM_APP  := forks
+# reweave_apply.cpp (42 T3) joins it for the same reason: it calls
+# loom_take_run_from_step (forks.h), so it is full-build-only too.
+DESKTOP_LOOM_APP  := forks reweave_apply
 
 # live/ — the capture host (07-serve-live-host.md T3/T4). It spawns
 # `asmspy --serve` and speaks its protocol; it links NO engine, which is what
@@ -852,6 +854,13 @@ $(BUILD)/desktop/app/ui/author_door.o: \
 # the app tree gets the engine call (regsynth), the viewer + tests get the truthful
 # "full app only" note. Only the app object references regsynth.o.
 $(BUILD)/desktop/app/vw/scrubber_draw.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
+# The Loom's Reweave consumption (42 T3) is the same story again: the app tree
+# gets the engine call (loom_run_reweave, reweave_apply.o), the viewer + tests
+# draw the same form and gutter but the request always refuses with the
+# truthful "render-only viewer" note. Only the app object calls the symbol, so
+# only it needs the define — render/test never reference reweave_apply.o.
+$(BUILD)/desktop/app/lo/fabric_imgui.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
 
 $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
@@ -1703,6 +1712,7 @@ $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
 # installs all three and runs it every time (CLAUDE.md — a test that can only
 # ever self-skip is not a test), and the gate below prints why on a bare host.
 DESKTOP_ENGINE_TESTS := $(BUILD)/desktop_test_loom_forks \
+                        $(BUILD)/desktop_test_loom_reweave \
                         $(BUILD)/desktop_test_regsynth
 # ...and the REPLAY half, which needs only Unicorn + Capstone (no assembler), so
 # it runs on strictly more hosts than the fork tests do.
@@ -1740,6 +1750,21 @@ $(BUILD)/desktop_test_ptslice_run: $(BUILD)/desktop/test/t/test_ptslice_run.o \
 $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
     $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o \
     $(BUILD)/desktop/test/lo/take_view.o $(BUILD)/desktop/test/lo/forks.o \
+    $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \
+    $(DESKTOP_TEST_DOC) \
+    $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o \
+    $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+    $(BUILD)/dataflow_resume.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
+	  $(CAPSTONE_LIBS) -o $@
+
+# The reweave consumption path (42 T3): loom_run_reweave (reweave_apply.cpp)
+# alongside forks.cpp, same object set as the fork test above (it exercises the
+# identical resume seam) plus reweave_apply.o itself.
+$(BUILD)/desktop_test_loom_reweave: $(BUILD)/desktop/test/t/test_loom_reweave.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o \
+    $(BUILD)/desktop/test/lo/take_view.o $(BUILD)/desktop/test/lo/forks.o \
+    $(BUILD)/desktop/test/lo/reweave_apply.o \
     $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \
     $(DESKTOP_TEST_DOC) \
     $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o \

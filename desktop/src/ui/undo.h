@@ -46,7 +46,18 @@ struct UndoCommand {
     std::string filter_before, filter_after;
 
     // TakeSet — the Loom takes gutter's accumulator (add / remove / clear).
+    // `take_rec` is the recording id the edit was made on (LoomState::source_id
+    // at push time) — mirrors filter_rec above: LoomState is a SINGLE,
+    // non-per-recording state (unlike the per-recording `observers` array), so
+    // switching the active recording clears it outright (42) rather than
+    // stashing it; a stale undo/redo from a different recording must not
+    // resurrect its takes onto whatever recording is showing now.
+    std::string take_rec;
     std::vector<loom_take_node_t> takes_before, takes_after;
+    // The paintable view alongside each take (42 T4), index-parallel to
+    // takes_before/after — moved through undo/redo in lockstep so the overlay
+    // never drifts out of alignment with the gutter after a Ctrl+Z/Ctrl+Y.
+    std::vector<loom_take_view_t> take_views_before, take_views_after;
 
     // Selection — the shared brushed entity.
     Selection sel_before, sel_after;

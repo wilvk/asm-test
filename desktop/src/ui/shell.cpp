@@ -1048,6 +1048,28 @@ static void shell_df_pass_pager(ShellState &s) {
                             applied + 1, npasses, npasses);
 }
 
+// The Loom's reweave input (42 T1): a plain-data view of the Author door's
+// last run, borrowed from ShellState::author for exactly one frame. `code` is
+// left null (and `code_sha` empty) whenever there is nothing eligible — no
+// Author run yet, or one whose bytes never got a sha (author_door.cpp
+// withholds it for any arch but x86-64, the resume seam's scope) — so the
+// identity latch (loom_reweave_available) correctly refuses downstream with
+// no arch-awareness needed at this call site. Reads `frozen_args`/
+// `frozen_nargs`, NEVER the live `args`/`nargs` widget fields — those keep
+// mutating after a Run with no further Run, so they can silently disagree
+// with the args that actually produced `image`/`image_sha`.
+static ReweaveSource shell_reweave_source(const ShellState &s) {
+    ReweaveSource rw;
+    if (!s.author.image_sha.empty()) {
+        rw.code = s.author.image.data();
+        rw.code_len = s.author.image.size();
+        rw.args = s.author.frozen_args;
+        rw.nargs = s.author.frozen_nargs;
+        rw.code_sha = s.author.image_sha;
+    }
+    return rw;
+}
+
 static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
     shell_df_pass_pager(s); // 40 T2: pick which invocation pass this view shows
     dt_timeline t = shell_timeline_model(s, a, b);
@@ -1328,13 +1350,16 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         shell_live_weave_banner(
             s); // 25 T5: perturb+torn caveat on a live weave
         shell_df_pass_pager(s); // 40 T2: pick which invocation pass this weave shows
-        draw_loom(
-            s.loom, *a, s.ws, s.active_tab,
-            [&s](const dt_link &l) {
-                if (!dt_nav_go(s.nav, l))
-                    s.status = s.nav.last_error;
-            },
-            &s.selection, &s.undo);
+        {
+            ReweaveSource rw = shell_reweave_source(s);
+            draw_loom(
+                s.loom, *a, s.ws, s.active_tab,
+                [&s](const dt_link &l) {
+                    if (!dt_nav_go(s.nav, l))
+                        s.status = s.nav.last_error;
+                },
+                &s.selection, &s.undo, &rw);
+        }
         break;
     case ViewId::Scrubber:
         body_scrubber(s);
@@ -2646,13 +2671,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                 s); // 25 T5: perturb+torn caveat on a live weave
             shell_df_pass_pager(
                 s); // 40 T2: pick which invocation pass this weave shows
+            ReweaveSource rw = shell_reweave_source(s);
             draw_loom(
                 s.loom, *a, s.ws, s.active_tab,
                 [&s](const dt_link &l) {
                     if (!dt_nav_go(s.nav, l))
                         s.status = s.nav.last_error;
                 },
-                &s.selection, &s.undo);
+                &s.selection, &s.undo, &rw);
         } else
             ImGui::TextDisabled("open a recording to weave its Loom");
     }
@@ -3046,7 +3072,18 @@ void undo_apply(ShellState &s, const UndoCommand &c, bool redo) {
         break;
     }
     case UndoCommand::Kind::TakeSet:
-        s.loom.takes = redo ? c.takes_after : c.takes_before;
+        // Restore only onto the recording this edit was made on (by id), like
+        // Filter above — LoomState is a single, non-per-recording state that
+        // gets cleared outright on a tab switch (42), so an undo/redo from a
+        // DIFFERENT recording has nowhere correct to land: skip it rather than
+        // paint a stale recording's takes onto whatever is active now.
+        if (c.take_rec == s.loom.source_id) {
+            s.loom.takes = redo ? c.takes_after : c.takes_before;
+            // take_views (42 T4) moves in lockstep with takes, never
+            // independently, so the paint overlay stays index-aligned across
+            // undo/redo.
+            s.loom.take_views = redo ? c.take_views_after : c.take_views_before;
+        }
         break;
     case UndoCommand::Kind::Selection:
         s.selection = redo ? c.sel_after : c.sel_before;

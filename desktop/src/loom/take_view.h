@@ -75,6 +75,15 @@ struct loom_take_node_t {
     std::string fault;     // "" when the take did not fault
     std::string err;       // the take's loud failure, verbatim
     std::string disclosure; // kLoomForkDisclosure, restated in the panel
+    // False for a HARD refusal (no engine run happened at all — an unknown
+    // register, a checkpoint past the run's length, a producer setup failure):
+    // `err` says why, but there is no real fabric behind it. loom_take_view
+    // computes this from the `take` fabric's own step count and, when false,
+    // skips computing alignment/cone/steps entirely — a caller (e.g. the
+    // paint layer) MUST gate on this before calling loom_take_plan, or it
+    // will render a fabricated "diverged at step 0" overlay for a refusal
+    // that never ran (docs/internal/gui/42-loom-reweave-consumption.md).
+    bool has_fabric = false;
 };
 
 struct loom_take_view_t {
@@ -132,6 +141,10 @@ extern const char *const kLoomAlignedEndToEnd;
 extern const char *const kLoomDashedTailHover;
 // The pure crossing-the-line disclosure the fork/reweave UX shows (30 R3 T3).
 extern const char *const kLoomReweaveBanner;
+// 42 T2/T3: the two reasons a Reweave request refuses (identity mismatch /
+// engine-free viewer), each a take's loud `err` verbatim.
+extern const char *const kLoomReweaveUnavailableCopy;
+extern const char *const kLoomReweaveViewerOnlyCopy;
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_TAKE_VIEW_H

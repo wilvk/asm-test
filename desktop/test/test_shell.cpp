@@ -1533,6 +1533,74 @@ int main() {
               "an undo for a closed recording must not write to any live tab");
     }
 
+    // --- 42: the Loom takes/take_views undo is recording-SCOPED, same shape as
+    // fix 6 above. Unlike s.observers (a per-recording array), s.loom is a
+    // SINGLE non-per-tab state that CLEARS OUTRIGHT on a tab switch (the
+    // review's Bug B fix) rather than stashing a per-recording slot — so a
+    // stale TakeSet command from a closed-over recording must be refused by
+    // id (take_rec), never replayed onto whatever recording the Loom shows
+    // now, or Ctrl+Z would resurrect recording A's takes onto B's canvas. ---
+    {
+        ShellState s;
+        std::string err;
+        int a = shell_open(s, gd("sum_via_rbx.asmtrace"), err);
+        int b = shell_open(s, gd("add_signed.asmtrace"), err);
+        check("42/opened two", a == 0 && b == 1, err.c_str());
+
+        // The Loom is showing A; one take gets added there.
+        s.loom.source_id = s.streams[static_cast<size_t>(a)].id;
+        loom_take_node_t n;
+        n.label = "arg0 := 11";
+        loom_take_view_t v;
+        v.node = n;
+        UndoCommand cmd;
+        cmd.kind = UndoCommand::Kind::TakeSet;
+        cmd.take_rec = s.loom.source_id; // A's id, stamped at push time
+        cmd.takes_before = {};
+        cmd.take_views_before = {};
+        s.loom.takes = {n};
+        s.loom.take_views = {v};
+        cmd.takes_after = s.loom.takes;
+        cmd.take_views_after = s.loom.take_views;
+        s.undo.push(std::move(cmd));
+
+        // Switch the Loom to B — draw_loom's reset block would clear both
+        // vectors outright here (Bug B's fix); simulate that directly since
+        // this test links no ImGui draw path.
+        s.loom.source_id = s.streams[static_cast<size_t>(b)].id;
+        s.loom.takes.clear();
+        s.loom.take_views.clear();
+
+        // Ctrl+Z now must NOT resurrect A's take onto B's (correctly empty)
+        // Loom state — the exact hazard a naive "just clear on switch" fix
+        // would reopen via the undo stack.
+        const UndoCommand *un = s.undo.undo();
+        check("42/undo pops the take command", un != nullptr, "one on the stack");
+        if (un)
+            undo_apply(s, *un, /*redo=*/false);
+        check("42/undo does not resurrect A's take onto B",
+              s.loom.takes.empty() && s.loom.take_views.empty(),
+              "a TakeSet command scoped to a closed-over recording (A) must "
+              "not restore onto the Loom's current recording (B)");
+
+        // Switch back to A and REDO the same command (un's cursor slot) — now
+        // the id matches, so it must actually apply. Using redo (takes_after
+        // = [the pushed take]) rather than re-undoing (takes_before = empty,
+        // which would be indistinguishable from the mismatched skip above)
+        // gives a result that only happens if the id-match path executed.
+        s.loom.source_id = s.streams[static_cast<size_t>(a)].id;
+        const UndoCommand *re = s.undo.redo();
+        check("42/redo re-arms the take command", re != nullptr, "");
+        if (re)
+            undo_apply(s, *re, /*redo=*/true);
+        check("42/redo restores the take with its view in lockstep, onto the "
+              "SAME recording it was made on",
+              s.loom.takes.size() == 1 && s.loom.take_views.size() == 1 &&
+                  s.loom.takes[0].label == "arg0 := 11",
+              "take_views must move in lockstep with takes, and the id-match "
+              "path must actually apply when the recording matches");
+    }
+
     // --- region gap: inspect_start_params attaches a scoped region ONLY for the
     // scoped modes (trace/dataflow) and picks base+len vs func by the spec shape.
     // A whole-process mode and `auto` send none — so the door never blocks Start on

@@ -46,11 +46,80 @@
 > code when you implement, the code wins — re-verify, then fix this doc in the same
 > change.
 >
-> **Status (2026-07-30) — ☐ 0/5.** Designed, not started. Cut from the review's #20
-> after the P0/P1 pass ([the three verified bugs + the magnitude-bar pass landed
-> `55fc624`..`4e06409`](../analysis/2026-07-29-gui-ux-dataviz-review.md)); this is the
-> one remaining review bet, deferred here because it is a build-graph + correctness
-> change, not a draw-side one.
+> **Status (2026-07-30) — ✅ 5/5, adversarially reviewed.** T1-T5 landed. All
+> three variants build green (`make desktop`, `desktop-render`, `desktop-test`)
+> and `ldd` confirms `asmtest-viewer` still links no unicorn/keystone/capstone.
+>
+> A 4-dimension Workflow review (fidelity / undo-lockstep / build-graph /
+> coverage, each independently adversarially verified) ran against the first
+> landing and confirmed 17 real findings — the design above held, but the
+> FIRST implementation pass had four real bugs, all fixed in the same change:
+>
+> 1. **Author `args`/`nargs` were never frozen** alongside `image`/`image_sha`
+>    — they are live, always-editable widget fields, so dragging the arg
+>    slider after a Run (with no re-Run) let a reweave replay args that never
+>    produced the identity-matched recording. Fixed: `AuthorState` gained
+>    `frozen_args`/`frozen_nargs`, captured at the exact point `image_sha` is
+>    computed; `shell_reweave_source` reads the frozen copies, never the live
+>    ones.
+> 2. **`L.takes`/`L.take_views` survived a Loom tab switch** — `ShellState::loom`
+>    is a single, non-per-recording state, and its `source_id`-change reset
+>    block never cleared them, so switching to an unrelated recording painted
+>    a stale take's patient-zero/cone overlay onto a fabric it had nothing to
+>    do with. Fixed: both clear in that reset block (not undo-tracked, like the
+>    other per-recording resets there). This reopened a second-order hazard —
+>    `Ctrl+Z` could resurrect the cleared recording's takes via a stale
+>    `TakeSet` command — closed by stamping `UndoCommand::take_rec` (the
+>    recording id at push time, mirroring the existing `Filter`/`filter_rec`
+>    pattern) and skipping the restore in `undo_apply` when it doesn't match
+>    the Loom's current `source_id`.
+> 3. **A refused reweave (K past the run's length, an unknown register) still
+>    painted a fabricated whole-canvas divergence** — `loom_take_view` computed
+>    real-looking alignment/cone/steps against an intentionally-EMPTY take
+>    fabric, so `dt_first_divergence` reported "diverged at step 0" and every
+>    base step got marked unaligned, painting a dashed band across the entire
+>    canvas plus a patient-zero line for a take that never ran. Fixed:
+>    `loom_take_node_t` gained `has_fabric` (`take.steps > 0`, computed inside
+>    `loom_take_view`); a hard refusal now short-circuits before computing any
+>    alignment/cone/steps, and the T4 paint loop skips a view with
+>    `!has_fabric`.
+> 4. **`reweave_apply.cpp`'s success path discarded `take.err`** — a genuine
+>    caveat ("faulted after the edit at step N" / "operand buffers filled: a
+>    lower bound") alongside a REAL, non-empty fabric was silently dropped
+>    (hardcoded to `std::string()`), so a partially-faulted counterfactual was
+>    indistinguishable from a clean one. Fixed: `take.err` now reaches
+>    `node.err` verbatim on the success path too. `fault_card()`/`node.fault`
+>    stay honestly empty for a reweave (`loom_take_run_from_step` never
+>    populates `result` — only `loom_take_run`'s session-bracketed leg does);
+>    fabricating fault_kind/addr without real data would be worse than no
+>    fault card, so that gap is recorded below, not papered over.
+>
+> Also fixed: the disabled-reweave copy said "the render-only viewer" even in
+> test/uitest builds that are not the viewer (reworded to name no specific
+> binary). Test coverage added for all four: `test_loom_reweave.cpp` (empty-
+> vs-real fabric, zero-prims on a refusal, a deterministically-reproducible
+> faulted reweave) and `test_shell.cpp` (`take_rec` cross-recording undo
+> guard, mirroring the existing Filter/`filter_rec` test).
+>
+> **Recorded, not fixed here** (lower severity / larger or orthogonal scope):
+> - Rich `fault_card()` for a reweave (fault_kind/addr/disassembly) needs
+>   `loom_take_run_from_step` to populate `result`, which needs the resume
+>   seam's C API (`src/dataflow_resume.c`) to expose fault details it does not
+>   today — a C-library signature change, out of scope here.
+> - CI's `desktop` job installs no Keystone, so `DESKTOP_ENGINE_TESTS`
+>   (`desktop_test_loom_forks`/`desktop_test_regsynth`/the new
+>   `desktop_test_loom_reweave`) likely self-skip there silently — inherited by
+>   this change, not introduced by it. `ci.yml` was being concurrently edited
+>   by another agent during this pass; not touched here.
+> - No automated `ldd`/`nm` check mechanically re-proves `asmtest-viewer` stays
+>   engine-free on every build — today it rests on object-list membership plus
+>   this pass's one-off manual verification. A `desktop-addon-compile-check`-
+>   style Makefile target would close this.
+> - `reweave_apply.o` joining `forks.o` under `DESKTOP_LOOM_APP` widens (1→2)
+>   the set of `desktop/src/loom/*.o` basenames that are silently NOT
+>   engine-free despite sharing a directory with five that are; not exploitable
+>   today since every link line enumerates objects explicitly (no wildcard
+>   aggregation exists), but worth a maintainer's eye if that ever changes.
 
 ## Why this is not a one-shot change (the two real hazards)
 
