@@ -894,6 +894,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.conv = &sv.conv;
     f.slice = &sv.slice;
     f.key = std::hash<std::string>{}(a.id);
+    // Fold the recording's growth into the frame so the GL host re-uploads the
+    // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant
+    // across the per-batch re-weave, but event_count advances each batch.
+    f.gen = r.event_count();
     f.slice_t = sv.slice_t;
     f.cam = sv.cam;
     f.layers = sv.hud.layers;

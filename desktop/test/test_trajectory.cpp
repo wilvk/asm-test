@@ -21,6 +21,7 @@
 #include "doc/recording.h"
 #include "space/projection.h"
 #include "space/trajectory.h"
+#include "ui/scene_gate.h" // the GL host's pure re-upload gate (headless-testable)
 
 using namespace asmdesk;
 using namespace asmdesk::space;
@@ -707,6 +708,24 @@ int main() {
                       abs.trajectories[0].points[0].addr &&
                   rel.trajectories[0].points[0].addr == 0x400010,
               "wire and abs disagree");
+    }
+
+    // The GL host's re-upload gate (ui/scene_gate.h): a LIVE, growing capture
+    // keeps ONE identity while its generation advances, so the worldlines must
+    // re-upload on growth — not identity alone (the live-3D-freeze defect).
+    {
+        // First frame: nothing uploaded yet -> must upload.
+        check("gate/first", scene_needs_traj_upload(7, 0, 0, 0, false),
+              "the first frame always uploads");
+        // Same identity, generation advanced (a grown live capture) -> re-upload.
+        check("gate/growth", scene_needs_traj_upload(7, 42, 7, 41, true),
+              "a growing capture (same id, higher gen) must re-upload worldlines");
+        // A new recording (identity changed) -> re-upload.
+        check("gate/identity", scene_needs_traj_upload(9, 5, 7, 5, true),
+              "a different recording must re-upload");
+        // Same identity AND generation (a mere scrub) -> no worldline upload.
+        check("gate/scrub-noop", !scene_needs_traj_upload(7, 42, 7, 42, true),
+              "an unchanged recording must NOT re-upload the worldlines");
     }
 
     if (failures) {

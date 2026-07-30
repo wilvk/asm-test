@@ -27,15 +27,19 @@ namespace asmdesk {
 // Everything the GL host needs to render one frame of the 3D overview. The shell
 // builds the pure, engine-free space/ models and hands POINTERS to them; the host
 // owns only GL (an offscreen colour framebuffer + a scene3d::Scene). `key`
-// identifies the uploaded model set (a hash of the recording id) and `slice_t` the
-// playhead the terrain was cut at, so the host re-uploads the terrain/trajectory
-// only when the recording or the playhead changes, not every frame.
+// identifies the uploaded model set (a hash of the recording id), `gen` is its
+// growth generation (the recording's event_count), and `slice_t` the playhead the
+// terrain was cut at, so the host re-uploads the terrain/trajectory only when the
+// recording changes, GROWS, or the playhead moves — not every frame. `gen` is what
+// keeps a LIVE, growing capture's worldlines from freezing: its identity never
+// changes as it grows, but its generation advances each batch.
 struct SceneFrame {
     const space::TerrainModel *terr = nullptr;
     const space::TrajectorySet *traj = nullptr;
     const space::ConvergenceSet *conv = nullptr;
     const space::Terrain *slice = nullptr; // the terrain slice [0, t] to display
     uint64_t key = 0;                      // recording identity
+    uint64_t gen = 0;                      // recording growth generation
     uint64_t slice_t = 0;                  // the t `slice` was cut at
     scene3d::Camera cam;
     scene3d::SceneLayers layers;

@@ -25,6 +25,7 @@
 
 #include "scene3d/scene.h"
 #include "ui/gl_scene_host.h"
+#include "ui/scene_gate.h"
 
 namespace asmdesk {
 
@@ -60,15 +61,18 @@ class GlSceneHost : public SceneHost {
         if (fbo_ == 0)
             return (ImTextureID)0;
 
-        // Re-upload only when the recording or the sliced playhead changed — the
-        // terrain slice depends on t; the trajectory + arcs depend only on the
-        // recording, so a scrub re-uploads the height field alone.
-        if (f.key != up_key_ || !have_upload_) {
+        // Re-upload the worldlines/arcs when the recording changes OR GROWS (a
+        // live capture keeps one identity but its generation advances each batch),
+        // and the terrain when the sliced playhead moves. Gating the worldlines on
+        // identity alone froze a growing capture's trajectories after batch 1.
+        if (scene_needs_traj_upload(f.key, f.gen, up_key_, up_gen_,
+                                    have_upload_)) {
             scene_.nsteps = static_cast<uint32_t>(f.terr->nsteps);
             scene_.set_trajectories(*f.traj, f.terr->proj);
             scene_.set_convergences(f.conv ? *f.conv : space::ConvergenceSet{},
                                     f.terr->proj);
             up_key_ = f.key;
+            up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below
         }
         if (f.slice_t != up_t_) {
@@ -147,8 +151,10 @@ class GlSceneHost : public SceneHost {
     GLuint fbo_ = 0, tex_ = 0, rbo_ = 0;
     int fbo_w_ = 0, fbo_h_ = 0;
 
-    // Upload cache: the recording key + the terrain-slice playhead last uploaded.
+    // Upload cache: the recording key + growth generation + the terrain-slice
+    // playhead last uploaded.
     uint64_t up_key_ = 0;
+    uint64_t up_gen_ = 0;
     uint64_t up_t_ = 0;
     bool have_upload_ = false;
 };
