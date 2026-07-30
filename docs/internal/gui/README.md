@@ -456,6 +456,44 @@ client-side; this is the reproducible/deep-linkable *convenience* only) but chea
 host-testable — `cli_smoke` asserts the live cone + the step-0-`computed:false` delta.
 Authored 2026-07-29. ✅ 3/3 · —.
 
+[42-loom-reweave-consumption.md](42-loom-reweave-consumption.md) — **consume the
+Reweave request** (review #20): wires the fully-built-but-unreachable
+fork-from-step-K counterfactual ([30 R3 T3](30-resume-from-state-and-reweave.md))
+into the Loom UI — `ReweaveSource`/`loom_reweave_available` (the `code_sha`
+identity latch), the app-only `reweave_apply.cpp` engine leg (verified via `ldd`
+to never link into `asmtest-viewer`), and a `LoomState::take_views` paint
+overlay. A 4-dimension adversarial review of the first landing caught 4 real
+bugs (frozen Author `args`/`nargs`, stale takes surviving a Loom tab switch, a
+refused reweave painting a fabricated alignment, `take.err` dropped on a
+faulted success path) — all fixed in the same change; see the doc's own status
+banner for detail. **This entry was missing from this table** (added
+2026-07-31 while cutting [43](43-faithful-city-roadmap.md)/[44](44-faithful-city-phase-a-mvp-terrain-reskin.md) —
+a pre-existing README gap, not new drift). ✅ 5/5 · —. Follow-up: rich
+`fault_card()` for a Reweave (needed a `src/dataflow_resume.c` C-API change) —
+**CLOSED 2026-07-31** (`65b2a54`, unrelated to the city family below).
+
+**The faithful city (docs 43–44, 2026-07-31): a new numbered family, not part of
+the ten core docs.** [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md)
+adopts the [computer-as-city 3D design](../analysis/2026-07-30-computer-as-city-3d.md)
+(which unifies the [3D visualization catalog](../analysis/2026-07-29-3d-visualization-catalog.md)'s
+14 layers + 12 scenes under one land/districts/buildings/traffic/weather
+metaphor) as the roadmap for future work on [doc 10](10-spacetime-3d-overview.md)'s
+scene, restates its 5-phase plan (A–E) with current status, and corrects two
+stale claims found while re-verifying (the live-GL-upload-freeze bug both source
+docs cite as open was already fixed in `55fc624`, before either doc was
+authored — do not re-touch that fix).
+[44-faithful-city-phase-a-mvp-terrain-reskin.md](44-faithful-city-phase-a-mvp-terrain-reskin.md)
+is the first per-phase implementation-ready brief cut from it (mirroring how
+[39](39-auto-capture-reliability.md)/[40](40-segment-dataflow-by-invocation.md)/[41](41-live-blame-statediff-serve-leg.md)
+were cut one at a time from [38](38-live-feed-completion-roadmap.md)'s gap
+table, not landed all at once like the UX-restructure or extension families):
+a pure terrain/trajectory reskin (zoned districts, a fidelity-driven weather
+sky, a physically separate statistical "ghost fog" surface, a followed-citizen
+vehicle) with **no new renderer primitive, no producer change, no schema
+change**. Phases B–E remain uncut; see [43](43-faithful-city-roadmap.md)§4 for
+sequencing guidance before starting one. 43: roadmap only, no tasks · —. 44:
+☐ 0/7 · *free*.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).

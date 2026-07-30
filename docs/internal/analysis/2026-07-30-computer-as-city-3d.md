@@ -325,3 +325,17 @@ over the software-city literature. Extends the existing 3D design
 [34-playhead-and-scene-reach.md](../gui/34-playhead-and-scene-reach.md)) and the
 [3D visualization catalog](2026-07-29-3d-visualization-catalog.md). Sibling
 analysis docs live in [`docs/internal/analysis/`](.).
+
+## Briefs cut from this design (2026-07-31)
+
+[../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md) adopts
+this doc's §5 roadmap as the numbered `gui/` family;
+[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
+is Phase A, implementation-ready. Two corrections surfaced while re-verifying
+against HEAD `d0c82b0` (see 43§2): the §8 "bug this surfaced" was already fixed
+in `55fc624` before this doc was authored, and Phase A's vehicle encoding
+("the placed PC vertex where t==exec-step") assumes an axis correspondence
+that does not hold in general — `TrajPoint.t` is a per-tid vertex counter, not
+`Selection.step`; 44's T5 states the resolution adopted instead of the
+literal reading here. Phases B–E remain uncut; the sequencing note in 43§4
+applies before starting one.

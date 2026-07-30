@@ -529,3 +529,17 @@ Generated 2026-07-29 by a 17-agent grounded-ideation workflow (8 domain ideators
 [34-playhead-and-scene-reach.md](../gui/34-playhead-and-scene-reach.md)) and the
 Wave-1 `mem[]` address stream ([29-mem-address-stream.md](../gui/29-mem-address-stream.md)).
 Sibling analysis docs live in [`docs/internal/analysis/`](.).
+
+## Brief cut from this catalog (2026-07-31)
+
+This catalog's 33 concepts are now unified under one metaphor by
+[2026-07-30-computer-as-city-3d.md](2026-07-30-computer-as-city-3d.md), which
+states outright that it "absorbs" this catalog. Future implementation-ready
+briefs should be cut from the CITY doc's phased roadmap (§5 there), not
+directly from this catalog — see
+[../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md) (the
+roadmap adoption) and
+[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
+(Phase A, the first cut). This catalog remains the more granular reference for
+per-concept fidelity rules and buildability notes when a city-doc row is too
+terse.

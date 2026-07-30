@@ -15,6 +15,12 @@
 > task is a pure `ShellState`/`HudState` move, so the null backend drives it
 > headlessly (D4) exactly as [22](22-selection-and-search.md)'s selection model is
 > driven.
+>
+> **Extended 2026-07-31** by [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md)/[44](44-faithful-city-phase-a-mvp-terrain-reskin.md):
+> the two-clock anti-fusion rule this brief establishes (T1/T3/T4 here) is the
+> precedent 44's `SceneFrame.sun` + a second `Transport` for the followed-citizen
+> vehicle explicitly follows — re-read T3's fidelity note before extending either
+> clock further.
 
 ## Why this work exists
 

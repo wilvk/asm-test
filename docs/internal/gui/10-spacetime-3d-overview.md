@@ -20,6 +20,13 @@
 > observer feed), [08-observer-views.md](08-observer-views.md) (the `codeimage`
 > event kind). Symbols from siblings are marked **(new — 0N)**; everything else
 > cited exists at HEAD `149f084`.
+>
+> **Extended 2026-07-31** by [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md)
+> and its per-phase briefs (starting with
+> [44](44-faithful-city-phase-a-mvp-terrain-reskin.md)) — a reskin of this same
+> scene under a land/districts/buildings/traffic/weather metaphor, layered on
+> top of the `TerrainModel`/`TrajectorySet`/`Projection` this doc builds. Nothing
+> here is superseded; check 43/44 for what has since been added on top.
 
 > **Status: growth-rung companion, NOT scheduled against Phase 2–4.** This view
 > is an *overview*, not a reading surface — see [The one rule](#the-one-rule-3d-to-find-2d-to-read).

@@ -1,5 +1,16 @@
 # Defect — the live 3D scene freezes its worldlines while the terrain grows
 
+> **RESOLVED 2026-07-30, same day as filing — `55fc624` "re-upload 3D
+> worldlines as a live capture grows".** The fix took the doc's own "Cleaner"
+> recommendation below: `SceneFrame` gained a `gen` field
+> (`shell.cpp:900`, `f.gen = r.event_count();`) and the host now gates on
+> `scene_needs_traj_upload(f.key, f.gen, ...)` (`gl_scene_host.cpp:68`) instead
+> of `key` alone. Kept for the file:line context and the reusable "identity vs.
+> state" analysis, not because anything below is still open — re-verified
+> 2026-07-31 while cutting
+> [../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md), whose
+> Phase C previously assumed this was still an open dependency.
+
 Review date: 2026-07-30. Severity: **medium** (live-capture only; visual
 staleness, no crash and no data loss). Scope: the GL upload gate of the 3D
 spacetime overview under a growing `asmspy --serve` capture. Found during the
