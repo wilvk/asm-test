@@ -206,6 +206,58 @@ int main() {
               "step0=" + std::to_string(v.step0));
     }
 
+    // --- vertical lane scroll: a deck taller than the viewport must reach every
+    // lane (the lane0-never-assigned bug) -----------------------------------
+    {
+        loom_view_t v;
+        v.px_h = 90;      // 5 full rows of 18px fit
+        v.lane_h = 18.0f; // -> lanes_full == 5
+        check("lanes_full from px_h/lane_h", loom_view_lanes_full(v) == 5,
+              "got " + std::to_string(loom_view_lanes_full(v)));
+
+        // A 12-lane deck: the last lane is reachable, so lane0 clamps at 12-5=7.
+        check("lane_max exposes the tail", loom_view_lane_max(v, 12) == 7,
+              "got " + std::to_string(loom_view_lane_max(v, 12)));
+
+        // Scrolling down advances lane0 and clamps at the max (never past it).
+        v.lane0 = 0;
+        loom_view_scroll_lanes(v, 12, +3);
+        check("scroll down advances lane0", v.lane0 == 3,
+              "lane0=" + std::to_string(v.lane0));
+        loom_view_scroll_lanes(v, 12, +100);
+        check("scroll down clamps at lane_max", v.lane0 == 7,
+              "lane0=" + std::to_string(v.lane0));
+
+        // Scrolling up returns to the top and never goes negative.
+        loom_view_scroll_lanes(v, 12, -100);
+        check("scroll up clamps at 0", v.lane0 == 0,
+              "lane0=" + std::to_string(v.lane0));
+
+        // A deck that fits entirely needs no scroll: lane_max is 0.
+        check("a deck that fits does not scroll", loom_view_lane_max(v, 4) == 0,
+              "got " + std::to_string(loom_view_lane_max(v, 4)));
+
+        // The scrolled lane0 actually reaches the tail lanes in the plan: with a
+        // fixture of N lanes, scrolling to lane_max draws a lane_header whose lane
+        // index (prim `a`) is the last lane.
+        loom_fabric_t big = f;
+        while (big.lanes.size() < 12)
+            big.lanes.push_back(big.lanes.empty() ? loom_lane_t{}
+                                                  : big.lanes.back());
+        v.px_w = 400;
+        loom_view_scroll_lanes(v, static_cast<int>(big.lanes.size()),
+                               loom_view_lane_max(v, 12));
+        std::vector<loom_prim_t> tail;
+        loom_plan(big, v, &tail);
+        uint32_t max_lane = 0;
+        for (const loom_prim_t &p : tail)
+            if (p.kind == loom_prim::lane_header && p.a > max_lane)
+                max_lane = p.a;
+        check("scrolled plan reaches the last lane",
+              max_lane == big.lanes.size() - 1,
+              "max lane header index " + std::to_string(max_lane));
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d loom plan check(s) failed\n", failures);
         return 1;

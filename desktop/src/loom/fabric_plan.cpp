@@ -26,6 +26,25 @@ void loom_view_set_step_window(loom_view_t &v, double lo, double hi) {
         v.steps_per_px = 1.0;
 }
 
+int loom_view_lanes_full(const loom_view_t &v) {
+    const float lane_h = v.lane_h > 0 ? v.lane_h : 1.0f;
+    return std::max(1, static_cast<int>(v.px_h / lane_h));
+}
+
+int loom_view_lane_max(const loom_view_t &v, int lane_count) {
+    return std::max(0, lane_count - loom_view_lanes_full(v));
+}
+
+void loom_view_scroll_lanes(loom_view_t &v, int lane_count, int delta) {
+    const int hi = loom_view_lane_max(v, lane_count);
+    int t = v.lane0 + delta;
+    if (t < 0)
+        t = 0;
+    if (t > hi)
+        t = hi;
+    v.lane0 = t;
+}
+
 const char *const kLoomFadeOutText = "alive at trace end";
 const char *const kLoomBornUntracedText =
     "born of untraced state — provenance starts at instrumentation";

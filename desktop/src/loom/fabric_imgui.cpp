@@ -314,6 +314,15 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
     std::string hover;
     ImGui::BeginChild("loom-canvas", ImVec2(L.cam.px_w, L.cam.px_h), true);
     draw_loom_plan(prims, &hover);
+    // Mouse-wheel scrolls the vertical lane deck: the canvas is exactly px_h tall
+    // (no native ImGui scroll), so a deck taller than the viewport needs the wheel
+    // to drive `lane0` or the lanes past the first screenful are unreachable.
+    if (ImGui::IsWindowHovered()) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f)
+            loom_view_scroll_lanes(L.cam, static_cast<int>(f.lanes.size()),
+                                   wheel > 0.0f ? -1 : 1);
+    }
     // Click-to-select: a lane row plus the horizontal step under the cursor.
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
         ImVec2 o = ImGui::GetCursorScreenPos();

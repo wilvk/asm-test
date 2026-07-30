@@ -92,6 +92,18 @@ std::string loom_plan_dump(const std::vector<loom_prim_t> &prims);
 void loom_view_step_window(const loom_view_t &v, double *lo, double *hi);
 void loom_view_set_step_window(loom_view_t &v, double lo, double hi);
 
+// The vertical deck's scroll, in lanes. A deck with more lanes than fit in the
+// viewport needs `lane0` to advance, or every lane past the first screenful is
+// unreachable — the bug this closes: `lane0` was only ever default-initialised, so
+// the extra lanes could not be reached. `loom_view_lanes_full` is how many lanes
+// fit fully in `px_h`; `loom_view_lane_max` is the largest valid `lane0` (so the
+// last lane still lands in the bottom full row); `loom_view_scroll_lanes` advances
+// `lane0` by `delta` lanes, clamped to [0, max]. Pure, so the wheel wiring in
+// fabric_imgui.cpp is a one-liner and the clamp is unit-tested without ImGui (D4).
+int loom_view_lanes_full(const loom_view_t &v);
+int loom_view_lane_max(const loom_view_t &v, int lane_count);
+void loom_view_scroll_lanes(loom_view_t &v, int lane_count, int delta);
+
 // --- the copy strings, in one place -----------------------------------------
 // They are asserted verbatim by test_loom_chrome.cpp. A view that reworded one
 // of these would be rewording a measurement claim, so the words live here and
