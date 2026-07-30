@@ -1,0 +1,45 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: asm-test
+Upstream-Contact: asm-test contributors <willvk@gmail.com>
+Source: https://github.com/wilvk/asm-test
+Comment: This package builds the asmtest-desktop GUI application (desktop/), which
+ links the GPL-2.0 Unicorn emulator and the BSD-3-Clause Keystone/Capstone engines
+ directly. Because it conveys Unicorn as a binary dynamically linked into the app,
+ the package as distributed is effectively GPL-2.0 as a whole, even though
+ asm-test's own code (this source tree) is MIT. Unicorn/Keystone/Capstone are not
+ part of this source package — they are built from pinned upstream source at
+ package-build time (scripts/build-keystone.sh, scripts/build-capstone.sh; Unicorn
+ itself from the libunicorn-dev Build-Depends) and vendored privately under
+ /usr/lib/asmtest-desktop/, with their exact-version license texts reproduced under
+ /usr/share/doc/asmtest-desktop/THIRD-PARTY-LICENSES/ (scripts/collect-licenses.sh).
+ The desktop app also statically compiles in Dear ImGui and nlohmann-json (both
+ MIT) and a handful of small permissively-licensed ImGui addons — see
+ licenses/README.md upstream for the full inventory; none is separately copyright
+ here since none is a Debian dependency.
+
+Files: *
+Copyright: 2026 asm-test contributors
+License: MIT
+
+Files: debian/*
+Copyright: 2026 asm-test contributors
+License: MIT
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.

@@ -1084,9 +1084,37 @@ docker-syspkg-conan: syspkg-stage
 	  -t asmtest-syspkg-conan .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-conan
 
-# T13 — aggregate: prove all five system packagings in one command (serial). The
-# `syspkg` CI job in .github/workflows/ci.yml runs the five lanes as a matrix.
+# Desktop GUI app packaging (distribution-packaging.md, desktop deb/AppImage
+# lanes) — installable end-user artifacts for the full asmtest-desktop app,
+# alongside the five C-core system packagings above. Both build the app fresh
+# from this tree (no staged tarball); native (3.0) for the deb, same as T9.
+
+# Desktop .deb: dpkg-buildpackage + lintian + install + dep/launcher smoke.
+# Shares DEB_BASE with docker-syspkg-deb (same pinned Debian base image).
+.PHONY: docker-syspkg-deb-desktop
+docker-syspkg-deb-desktop:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-deb-desktop \
+	  --build-arg DEB_BASE=$(DEB_BASE) -t asmtest-syspkg-deb-desktop .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-deb-desktop
+
+# Desktop AppImage: build + AppDir assembly + pack (pinned appimagetool +
+# runtime-stub) + structural smoke. Override APPIMAGETOOL_VERSION /
+# APPIMAGE_RUNTIME_VERSION to bump either pin.
+APPIMAGETOOL_VERSION      ?= 1.9.1
+APPIMAGE_RUNTIME_VERSION  ?= 20251108
+.PHONY: docker-syspkg-appimage
+docker-syspkg-appimage:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-appimage \
+	  --build-arg BASE=$(DOCKER_BASE) \
+	  --build-arg APPIMAGETOOL_VERSION=$(APPIMAGETOOL_VERSION) \
+	  --build-arg APPIMAGE_RUNTIME_VERSION=$(APPIMAGE_RUNTIME_VERSION) \
+	  -t asmtest-syspkg-appimage .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-appimage
+
+# T13 — aggregate: prove all system packagings in one command (serial). The
+# `syspkg` CI job in .github/workflows/ci.yml runs these lanes as a matrix.
 .PHONY: docker-syspkg
 docker-syspkg: docker-syspkg-brew docker-syspkg-deb docker-syspkg-aur \
-               docker-syspkg-vcpkg docker-syspkg-conan
+               docker-syspkg-vcpkg docker-syspkg-conan \
+               docker-syspkg-deb-desktop docker-syspkg-appimage
 

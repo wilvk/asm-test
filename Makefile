@@ -213,6 +213,8 @@ help:
 	@echo '  docker-fuzz                libFuzzer + AFL++ external-engine coverage shim (both find the planted crash)'
 	@echo '  docker-sve-sweep           SVE suite at VQ 1/3/8/16 under qemu binfmt (arm64)'
 	@echo '  docker-syspkg[-brew|-deb|-aur|-vcpkg|-conan]  system-package build+install lanes'
+	@echo '  docker-syspkg-deb-desktop  asmtest-desktop .deb: build+lintian+install+dep smoke'
+	@echo '  docker-syspkg-appimage     asmtest-desktop AppImage: build+pack+structural smoke'
 	@echo ''
 	@echo 'Native Win64 (cross-compile + Wine):'
 	@echo '  win64-check     substrate smoke + capture + runner-port slices'

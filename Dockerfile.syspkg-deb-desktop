@@ -1,0 +1,73 @@
+# Dockerfile.syspkg-deb-desktop — Debian packaging verification lane for the
+# desktop GUI app (distribution-packaging.md, desktop deb/AppImage lanes; see
+# Dockerfile.syspkg-deb for the C-core libasmtest-dev equivalent).
+#
+# Builds asmtest-desktop from this tree with debhelper, lintian-checks it, installs
+# it, then checks the installed binary's dynamic deps resolve and its .desktop
+# launcher validates. Unicorn (apt) + Keystone/Capstone (pinned source, no distro
+# package — scripts/build-{keystone,capstone}.sh) are vendored privately into the
+# package with an $ORIGIN rpath (packaging/debian-desktop/rules,
+# scripts/package-native.sh --app); GLFW/GL/FreeType stay real apt Depends.
+#
+# Hermetic in the T7/T9 sense: `3.0 (native)` straight from the copied tree, no
+# orig tarball. It DOES fetch at build time, same as `make docker-desktop`: the
+# pinned Dear ImGui + addon sources (mk/desktop.mk's fetch-*.sh scripts, each
+# B5-digest-verified) and the Keystone/Capstone pinned-commit-verified git clones.
+#
+# Build + run:  make docker-syspkg-deb-desktop
+ARG DEB_BASE=debian:bookworm-slim
+FROM ${DEB_BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+# build-essential/debhelper/devscripts/lintian/pkg-config: the packaging toolchain
+# (mirrors Dockerfile.syspkg-deb). git/cmake/python3/ca-certificates/curl: what
+# build-keystone.sh/build-capstone.sh and the desktop app's own fetch-*.sh scripts
+# need to clone/download + configure their pinned sources (mirrors
+# Dockerfile.bindings-base + Dockerfile.desktop). patchelf: package-native.sh's
+# rpath rewrite. libunicorn-dev/libglfw3-dev/libgl1-mesa-dev/libfreetype-dev: the
+# full app's build deps (mk/desktop.mk, scripts/install-deps.sh --desktop).
+# desktop-file-utils: desktop-file-validate for the launcher smoke below.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential debhelper devscripts lintian pkg-config ca-certificates curl \
+      git cmake python3 patchelf \
+      libunicorn-dev libglfw3-dev libgl1-mesa-dev libfreetype-dev \
+      desktop-file-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# debian:bookworm-slim ships its own dpkg config (/etc/dpkg/dpkg.cfg.d/docker) that
+# path-excludes ALL of /usr/share/doc/* (except copyright) to keep container images
+# small — a "slim" image sizing choice, not something present on a real Debian/
+# Ubuntu desktop install. Left in place, it silently drops this package's
+# THIRD-PARTY-LICENSES/ (the GPL-2.0 compliance notices) at unpack time, which would
+# make CHECK 6 below test doc-stripped behavior no real end user ever sees, instead
+# of the actual installed package. Removing it makes `apt-get install` here behave
+# like a normal desktop system.
+RUN rm -f /etc/dpkg/dpkg.cfg.d/docker
+
+WORKDIR /work/asm-test
+COPY . /work/asm-test
+
+# Do the build + lint + install + smoke at run time so `docker run --rm` streams it
+# and any dpkg-buildpackage/lintian failure surfaces as a non-zero lane.
+CMD set -eux; \
+    rm -rf debian; cp -r packaging/debian-desktop debian; \
+    dpkg-buildpackage -us -uc -b; \
+    echo "CHECK 1: lintian (fail on error+warning; pedantic tags overridden in-tree)"; \
+    lintian --fail-on error,warning --no-tag-display-limit /work/*.deb; \
+    echo "CHECK 2: install the built .deb"; \
+    apt-get update; \
+    apt-get install -y /work/asmtest-desktop_*_*.deb; \
+    echo "CHECK 3: installed tree"; \
+    dpkg -L asmtest-desktop; \
+    echo "CHECK 4: dynamic deps resolve (vendored engines + system GLFW/GL/FreeType)"; \
+    ldd /usr/lib/asmtest-desktop/asmtest-desktop > /tmp/ldd.out 2>&1; \
+    cat /tmp/ldd.out; \
+    if grep -q 'not found' /tmp/ldd.out; then echo "CHECK 4 FAILED: unresolved deps"; exit 1; fi; \
+    test -x /usr/bin/asmtest-desktop; \
+    echo "CHECK 5: .desktop launcher validates"; \
+    desktop-file-validate /usr/share/applications/asmtest-desktop.desktop; \
+    echo "CHECK 6: third-party license notices shipped"; \
+    ls -la /usr/share/doc/asmtest-desktop/THIRD-PARTY-LICENSES/; \
+    test -f /usr/share/doc/asmtest-desktop/THIRD-PARTY-LICENSES/NOTICE; \
+    echo "docker-syspkg-deb-desktop: OK — built, lintian-clean, installed, deps resolve"

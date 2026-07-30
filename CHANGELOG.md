@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Desktop GUI packaging: a Debian package and an AppImage for `asmtest-desktop`**
+  (`packaging/debian-desktop/`, `packaging/appimage/`). The full app links the
+  GPL-2.0 Unicorn emulator and the Keystone/Capstone engines directly, none of
+  which is a distro package on the pinned base images, so both artifacts vendor
+  the three privately (rpath `$ORIGIN`) via a new `scripts/package-native.sh --app`
+  mode; GLFW/GL/FreeType stay real host dependencies (declared `Depends:` for the
+  `.deb`, checked at launch by `packaging/appimage/AppRun` for the AppImage — GL
+  in particular must come from the host to match its driver). Both build straight
+  from a checkout (no released tarball needed) and are verified end to end in CI
+  via two new Docker lanes, `make docker-syspkg-deb-desktop` and
+  `make docker-syspkg-appimage` (folded into `docker-syspkg` and a new
+  `syspkg-desktop` CI job). The AppImage pack step pins its own tooling
+  (`scripts/fetch-appimagetool.sh`, `scripts/fetch-appimage-runtime.sh`) rather
+  than letting `appimagetool` fetch its runtime stub from a rolling tag on every
+  pack. See [installation.md](docs/getting-started/installation.md#install-the-desktop-gui-app).
+
 - **Live `blame` + `statediff` from the `asmspy` serve/dataflow leg**
   (docs/internal/gui/41-live-blame-statediff-serve-leg.md). The backward-attribution
   `blame` cone and the step-to-step `statediff` register delta were producible only by

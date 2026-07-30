@@ -1,0 +1,31 @@
+Source: asm-test-desktop
+Section: devel
+Priority: optional
+Maintainer: asm-test contributors <willvk@gmail.com>
+Build-Depends: debhelper-compat (= 13), pkg-config, git, cmake, python3,
+ ca-certificates, patchelf, libunicorn-dev, libglfw3-dev, libgl1-mesa-dev,
+ libfreetype-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/wilvk/asm-test
+Rules-Requires-Root: no
+Vcs-Git: https://github.com/wilvk/asm-test.git
+Vcs-Browser: https://github.com/wilvk/asm-test
+
+Package: asmtest-desktop
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: 3D assembly execution trace viewer and debugger (GUI)
+ asmtest-desktop is a Dear ImGui desktop application for recording, replaying
+ and inspecting per-instruction execution traces of hand-written assembly
+ routines exercised by the asm-test framework: register/flag/memory state,
+ disassembly, live-capture debugging, and a 3D spacetime visualization of the
+ recorded execution.
+ .
+ This package ships the full application, which links the GPL-2.0 Unicorn
+ emulator and the BSD-3-Clause Keystone assembler and Capstone disassembler
+ engines (all three built from pinned source and vendored privately under
+ /usr/lib/asmtest-desktop/, since none is a distro package). Because it
+ conveys Unicorn as a binary dynamically linked into the application, the
+ built package is effectively GPL-2.0 as a whole even though asm-test's own
+ code is MIT. The engines' verbatim license texts are reproduced under
+ /usr/share/doc/asmtest-desktop/THIRD-PARTY-LICENSES/.

@@ -115,8 +115,9 @@ present 'libumbra*' && \
 {
     echo
     echo "Because this package conveys the GPL-2.0 engines Unicorn and Keystone as"
-    echo "binaries dynamically linked into libasmtest_emu, the package as distributed"
-    echo "is effectively GPL-2.0 (MIT is GPL-compatible; Capstone is BSD-3-Clause)."
+    echo "binaries dynamically linked into this package's binaries, the package as"
+    echo "distributed is effectively GPL-2.0 (MIT is GPL-compatible; Capstone is"
+    echo "BSD-3-Clause)."
 } >> "$notice"
 
 if lgpl_present; then

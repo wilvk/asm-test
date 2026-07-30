@@ -51,6 +51,28 @@ Each package installs the same layout `make install` does, so a consumer builds
 against it with `pkg-config --cflags --libs asmtest`. The submission runbook for
 maintainers is in [releasing.md](../reference/releasing.md#system-packages).
 
+## Install the desktop GUI app
+
+The desktop app (`asmtest-desktop`, built with `make desktop`) — the full Dear
+ImGui trace viewer/debugger — has its own Debian package and AppImage, separate
+from the C-core specs above because it ships a different artifact under a
+different license: it links the GPL-2.0 Unicorn emulator directly, so the built
+package is effectively GPL-2.0 as a whole (see each spec's copyright/NOTICE).
+Unlike the five managers above, **neither needs a published release** — both
+build straight from a checkout, verified end to end in CI
+(`make docker-syspkg-deb-desktop` / `docker-syspkg-appimage`):
+
+| Format | Command | Spec |
+|---|---|---|
+| Debian / Ubuntu (.deb) | `dpkg-buildpackage -us -uc -b` with `packaging/debian-desktop/` symlinked to `debian/`, then `apt install ../asmtest-desktop_*.deb` | [`packaging/debian-desktop/`](https://github.com/wilvk/asm-test/blob/main/packaging/debian-desktop/) |
+| AppImage (any recent Linux) | assemble an AppDir (`make desktop` + `scripts/package-native.sh --app`) and pack it with `appimagetool`, per the Docker lane | [`packaging/appimage/AppRun`](https://github.com/wilvk/asm-test/blob/main/packaging/appimage/AppRun) |
+
+Both vendor the Unicorn/Keystone/Capstone engines privately (rpath `$ORIGIN`, no
+system install needed); GLFW/GL/FreeType stay real dependencies (the .deb declares
+them, the AppImage checks for them at launch and prints the `apt install` line if
+missing — GL in particular must come from the host to match its actual driver, so
+it is deliberately never bundled).
+
 ## Build and run the bundled suites
 
 ```sh

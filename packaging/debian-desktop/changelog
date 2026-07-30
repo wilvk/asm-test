@@ -1,0 +1,8 @@
+asm-test-desktop (1.1.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging of the asmtest-desktop GUI application: the full
+    app binary (links Unicorn/Keystone/Capstone, vendored privately under
+    /usr/lib/asmtest-desktop/), its .desktop launcher, and the hicolor icon
+    theme (distribution-packaging.md, desktop deb/AppImage lanes).
+
+ -- asm-test contributors <willvk@gmail.com>  Thu, 30 Jul 2026 00:00:00 +0000

@@ -29,6 +29,14 @@
 #     Tier mode does NOT (re)write licenses — the caller re-runs collect-licenses.sh
 #     over the finished slot once every lib is staged, so the NOTICE covers them all.
 #
+#   package-native.sh --app <slot_dir> <binary_name>
+#     A desktop-app EXECUTABLE (not a lib) that links the full emulator engine set
+#     directly (mk/desktop.mk's asmtest-desktop, GPL-2.0 as a whole — distribution-
+#     packaging.md's desktop deb/AppImage lanes). Same vendor set as the default
+#     emulator mode (Unicorn/Keystone/Capstone) and the same THIRD-PARTY-LICENSES
+#     assembly, but skips the asm/disas export assertion (an executable has no
+#     exports to check).
+#
 # Python uses auditwheel/delocate instead and skips this.
 set -eu
 
@@ -36,15 +44,19 @@ prog=$(basename "$0")
 
 tier=
 core=
+app=
 if [ "${1:-}" = "--tier" ]; then
     tier="${2:?usage: $prog --tier <role> <slot_dir> <lib>}"
     shift 2
 elif [ "${1:-}" = "--core" ]; then
     core=1
     shift
+elif [ "${1:-}" = "--app" ]; then
+    app=1
+    shift
 fi
-slot="${1:?usage: $prog [--tier <role> | --core] <slot_dir> <lib>}"
-lib_name="${2:?usage: $prog [--tier <role> | --core] <slot_dir> <lib>}"
+slot="${1:?usage: $prog [--tier <role> | --core | --app] <slot_dir> <lib>}"
+lib_name="${2:?usage: $prog [--tier <role> | --core | --app] <slot_dir> <lib>}"
 lib="$slot/$lib_name"
 PREFIX="${ASMTEST_DEP_PREFIX:-/usr/local}"
 # Repo root: this script lives in scripts/.
@@ -177,6 +189,18 @@ if [ -n "$tier" ]; then
             echo "$prog: unknown tier role '$tier'" >&2; exit 1 ;;
     esac
     echo "$prog: completed tier $tier in $slot"
+    exit 0
+fi
+
+# ===========================================================================
+# App mode: a desktop-app executable that links the engines directly, not
+# through libasmtest_emu. Same vendor set + licenses as the default mode below,
+# no export assertion (nothing to assert on an executable).
+# ===========================================================================
+if [ -n "$app" ]; then
+    vendor_and_rpath "$lib" unicorn keystone capstone
+    "$root/scripts/collect-licenses.sh" "$slot/THIRD-PARTY-LICENSES"
+    echo "$prog: completed app $slot"
     exit 0
 fi
 

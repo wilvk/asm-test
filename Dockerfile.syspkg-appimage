@@ -1,0 +1,86 @@
+# Dockerfile.syspkg-appimage — AppImage packaging verification lane for the
+# desktop GUI app (distribution-packaging.md, desktop deb/AppImage lanes; see
+# Dockerfile.syspkg-deb-desktop for the .deb equivalent).
+#
+# Builds asmtest-desktop, assembles a minimal AppDir (AppRun + .desktop + icon +
+# the binary), vendors Unicorn/Keystone/Capstone into it with an $ORIGIN rpath
+# (scripts/package-native.sh --app — same mechanism the .deb lane uses), and packs
+# it with the pinned appimagetool (scripts/fetch-appimagetool.sh). GLFW/GL/
+# FreeType are NOT bundled — GL in particular must come from the host to match its
+# actual driver — so packaging/appimage/AppRun checks for them at launch instead
+# (this image installs them too, so the structural checks below prove the
+# dependency graph a real Ubuntu desktop with those packages installed would see).
+#
+# The verify step is structural only, not a live GUI launch: this container has no
+# display, and Dockerfile.desktop already documents why the desktop-test lane
+# itself never launches the windowed app either. Extracting the AppImage and
+# checking the binary + vendored libs + ldd resolution + .desktop validity is the
+# proportionate CI-safe proof.
+#
+# Build + run:  make docker-syspkg-appimage
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+# git/cmake/python3/ca-certificates: build-{keystone,capstone}.sh's pinned source
+# builds (mirrors Dockerfile.bindings-base). patchelf: package-native.sh's rpath
+# rewrite. curl: scripts/fetch-appimagetool.sh /
+# scripts/fetch-appimage-runtime.sh. file: appimagetool shells out to it to
+# classify the AppDir's binaries when packing. libunicorn-dev/libglfw3-dev/
+# libgl1-mesa-dev/libfreetype-dev: the full app's build deps (also pulls in the
+# libglfw3/libgl1 runtime libs this lane's ldd check resolves against).
+# desktop-file-utils: desktop-file-validate for the launcher smoke below.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential pkg-config ca-certificates curl file \
+      git cmake python3 patchelf \
+      libunicorn-dev libglfw3-dev libgl1-mesa-dev libfreetype-dev \
+      desktop-file-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Pin the appimagetool + runtime-stub versions by overriding these build-args;
+# forwarded to the fetch scripts via their matching env vars. The runtime stub is
+# fetched separately and passed via --runtime-file below — left alone, appimagetool
+# fetches it itself from a rolling, unpinned tag on every pack (see
+# scripts/fetch-appimage-runtime.sh).
+ARG APPIMAGETOOL_VERSION=1.9.1
+ARG APPIMAGE_RUNTIME_VERSION=20251108
+ENV APPIMAGETOOL_VERSION=${APPIMAGETOOL_VERSION}
+ENV APPIMAGE_RUNTIME_VERSION=${APPIMAGE_RUNTIME_VERSION}
+RUN tool=$(sh scripts/fetch-appimagetool.sh) \
+ && cp "$tool" /usr/local/bin/appimagetool \
+ && chmod +x /usr/local/bin/appimagetool \
+ && runtime=$(sh scripts/fetch-appimage-runtime.sh) \
+ && cp "$runtime" "/usr/local/bin/appimage-runtime-$(uname -m)"
+
+CMD set -eux; \
+    ./scripts/build-keystone.sh; \
+    ./scripts/build-capstone.sh; \
+    make DESKTOP_FREETYPE=1 desktop; \
+    echo "== assembling AppDir =="; \
+    rm -rf AppDir; mkdir -p AppDir/usr/bin; \
+    cp build/asmtest-desktop AppDir/usr/bin/; \
+    install -m755 packaging/appimage/AppRun AppDir/AppRun; \
+    cp desktop/assets/asmtest-desktop.desktop AppDir/; \
+    cp desktop/assets/icons/hicolor/256x256/apps/asmtest-desktop.png AppDir/asmtest-desktop.png; \
+    ASMTEST_DEP_PREFIX=/usr/local ./scripts/package-native.sh --app AppDir/usr/bin asmtest-desktop; \
+    echo "== packing the AppImage (no FUSE in this container) =="; \
+    mkdir -p build/dist; \
+    arch=$(uname -m); \
+    out="build/dist/asmtest-desktop-${arch}.AppImage"; \
+    ARCH=${arch} appimagetool --appimage-extract-and-run --no-appstream \
+      --runtime-file "/usr/local/bin/appimage-runtime-${arch}" AppDir "$out"; \
+    echo "== structural smoke: extract + inspect (no display here — see header) =="; \
+    cd build/dist; \
+    chmod +x "asmtest-desktop-${arch}.AppImage"; \
+    "./asmtest-desktop-${arch}.AppImage" --appimage-extract >/dev/null; \
+    test -x squashfs-root/usr/bin/asmtest-desktop; \
+    test -x squashfs-root/AppRun; \
+    ldd squashfs-root/usr/bin/asmtest-desktop; \
+    ! ldd squashfs-root/usr/bin/asmtest-desktop | grep -q 'not found'; \
+    desktop-file-validate squashfs-root/asmtest-desktop.desktop; \
+    test -f squashfs-root/usr/bin/THIRD-PARTY-LICENSES/NOTICE; \
+    echo "docker-syspkg-appimage: OK — built, packed, deps resolve, launcher validates"

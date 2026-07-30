@@ -119,3 +119,21 @@ tarball-sha256  fa-solid-900       d00e45f  sha256:4312f534f4fc39b771774db6a5a00
 tarball-sha256  jetbrainsmono      v2.304  sha256:a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f
 tarball-sha256  codicons           0.0.35  sha256:e8eb23d7e283a9a866fb7a55f0096734f5cf947a419ffb99f0b6ffa07b14606d
 tarball-sha256  iconfontcppheaders 210b5a3  sha256:63c54192f597872c0d9e2f50485bb7bdc2625e4252deaaea0ec85cbbc9a0aeb1
+# appimagetool: packages the desktop app's AppImage lane (distribution-packaging.md
+# T9-desktop; Dockerfile.syspkg-appimage). A build TOOL only — never bundled into
+# the produced AppImage. Pinned to the 1.9.1 tagged release (NOT the "continuous"
+# rolling tag, which is not a stable pin target); self-hashed at pin time from the
+# GitHub release asset (same scheme as the unicorn/imgui rows above). Two
+# per-arch assets since the CI lane can run under DOCKER_PLATFORM=linux/arm64.
+tarball-sha256  appimagetool-x86_64   1.9.1  sha256:ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+tarball-sha256  appimagetool-aarch64  1.9.1  sha256:f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+# appimage-runtime: the type-2 runtime stub appimagetool prepends to every squashfs
+# it packs. Left alone, appimagetool fetches this itself from the "continuous"
+# (rolling, unpinned) tag on EVERY pack — scripts/fetch-appimage-runtime.sh fetches
+# it from the dated 20251108 release instead and passes it via
+# `appimagetool --runtime-file`, so the pack step is B5-pinned like everything
+# else here. A build TOOL input only — never bundled into the produced AppImage's
+# CONTENT (it becomes the AppImage's own header, which is upstream's, not ours —
+# same "not our code" reasoning as the DynamoRIO runtime we do NOT re-license).
+tarball-sha256  appimage-runtime-x86_64   20251108  sha256:2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+tarball-sha256  appimage-runtime-aarch64  20251108  sha256:00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444

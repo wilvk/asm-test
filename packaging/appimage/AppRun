@@ -1,0 +1,25 @@
+#!/bin/sh
+# AppRun — the AppImage entry point for asmtest-desktop (distribution-packaging.md
+# desktop AppImage lane; Dockerfile.syspkg-appimage assembles the AppDir this lives
+# in). Unicorn/Keystone/Capstone are vendored next to the binary (rpath $ORIGIN via
+# scripts/package-native.sh --app) so they need no help here; GLFW/GL/FreeType are
+# NOT bundled (GL in particular must come from the host to match its actual driver,
+# same reasoning Dockerfile.desktop documents for why the FBO smoke needs the host's
+# Mesa) — so this script checks for them first and fails with the apt-install line
+# instead of a raw dynamic-linker error, mirroring mk/desktop.mk's DESKTOP_GUIDE.
+set -eu
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+BIN="$HERE/usr/bin/asmtest-desktop"
+
+missing=""
+for lib in libglfw.so.3 libGL.so.1; do
+    ldconfig -p 2>/dev/null | grep -q "$lib" || missing="$missing $lib"
+done
+if [ -n "$missing" ]; then
+    echo "asmtest-desktop: missing system libraries:$missing" >&2
+    echo "  install them (Ubuntu/Debian): sudo apt-get install -y libglfw3 libgl1" >&2
+    exit 1
+fi
+
+exec "$BIN" "$@"
