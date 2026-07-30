@@ -29,7 +29,7 @@
 > span from the wire (`ad32299`); T3 the churn walk region-as-of-step resolver
 > (`06f2991`, + a review-surfaced fidelity fix `07fa0d1`); T5 the `anchor_source`
 > HUD grade + 36 reconciliation (`7f5b048`); T6 the `scene-df-two-span` end-to-end
-> golden (`2516d06`); **T4 the `when` tag, landed (`6112bca`)** — the serve
+> golden (`2516d06`); **T4 the `when` tag, landed (`5ceef62`)** — the serve
 > sink (`cli/asmspy.c`'s `serve_dataflow_sink`) samples `asmtest_codeimage_now`
 > once before each pass and stamps it on every `df_step`, keyed with `rbase`
 > (never `when` alone); the headless sink and both corpus recorders hold no
