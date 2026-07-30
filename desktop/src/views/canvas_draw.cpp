@@ -155,6 +155,17 @@ void draw_canvas(const dt_canvas &c) {
     ImGui::TableSetupScrollFreeze(0, 1);
     ImGui::TableHeadersRow();
 
+    // Per-column heat maxima for the in-cell magnitude bars (#1): the long-tail
+    // shape of a heat ranking is invisible as a bare integer. Computed draw-side
+    // from the already-built rows, so the golden model dump is untouched.
+    uint32_t heat_max = 0, heat_b_max = 0;
+    for (const dt_canvas_row &r : c.rows) {
+        if (r.heat > heat_max)
+            heat_max = r.heat;
+        if (r.heat_b > heat_b_max)
+            heat_b_max = r.heat_b;
+    }
+
     for (const dt_canvas_row &r : c.rows) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -177,9 +188,12 @@ void draw_canvas(const dt_canvas &c) {
         }
 
         ImGui::TableNextColumn();
+        dt_cell_magnitude_bar(dt_magnitude_frac(r.heat, heat_max), dt_hot_u32());
         ImGui::Text("%u", r.heat);
         if (c.two_up) {
             ImGui::TableNextColumn();
+            dt_cell_magnitude_bar(dt_magnitude_frac(r.heat_b, heat_b_max),
+                                  dt_hot_u32());
             ImGui::Text("%u", r.heat_b);
         }
         ImGui::TableNextColumn();

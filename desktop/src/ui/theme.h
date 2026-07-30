@@ -165,5 +165,38 @@ inline ImU32 dt_hot_u32() {
 }
 inline ImU32 dt_statistical_u32() { return dt_warn_u32(); }
 
+// The fraction value/max for an in-cell magnitude bar, clamped to [0, 1] and 0
+// when there is nothing to rank (max <= 0) or the value is absent (<= 0).
+inline float dt_magnitude_frac(double value, double max) {
+    if (max <= 0.0 || value <= 0.0)
+        return 0.0f;
+    const double f = value / max;
+    return f > 1.0 ? 1.0f : static_cast<float>(f);
+}
+
+// In-cell magnitude bar (dataviz #1) — the single highest-leverage dataviz
+// change. Draws a low-alpha horizontal fill behind the CURRENT cell, `frac`
+// (0..1) of the available column width wide and one text-line tall, so a sortable
+// ranking's long-tail shape and per-row severity read pre-attentively. The caller
+// draws the exact number ON TOP as the label — the bar is a SECOND channel, never
+// a replacement (it survives the null backend and a 2.0x text scale). `frac <= 0`
+// draws nothing: an absence ('—') is never barred. No new hue — pass dt_hot_u32()
+// for execution heat or dt_dim_u32() for a neutral ranking.
+inline void dt_cell_magnitude_bar(float frac, ImU32 col) {
+    if (frac <= 0.0f)
+        return;
+    if (frac > 1.0f)
+        frac = 1.0f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = ImGui::GetTextLineHeight();
+    // Replace the source colour's alpha with a low one so the number stays
+    // legible on top; the hue is the caller's (no new colour introduced).
+    const ImU32 fill =
+        (col & 0x00FFFFFFu) | (static_cast<ImU32>(0.24f * 255.0f) << 24);
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        p, ImVec2(p.x + w * frac, p.y + h), fill);
+}
+
 } // namespace asmdesk
 #endif // ASMDESK_UI_THEME_H

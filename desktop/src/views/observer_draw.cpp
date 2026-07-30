@@ -521,6 +521,13 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
         order = dt_sorted_order(keys, c.SortDirection ==
                                           ImGuiSortDirection_Ascending);
     }
+    // The hottest edge's sample count anchors the in-cell magnitude bars (#1) so
+    // the sampled long-tail reads at a glance. Computed draw-side from the model.
+    uint64_t count_max = 0;
+    for (const HotEdge &e : v.edges)
+        if (e.count > count_max)
+            count_max = e.count;
+
     for (int oi : order) {
         const HotEdge &e = v.edges[static_cast<size_t>(oi)];
         if (he_filtering &&
@@ -536,6 +543,10 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
         ImGui::TextUnformatted(e.to.empty() ? hexs(e.to_addr).c_str()
                                             : e.to.c_str());
         ImGui::TableNextColumn();
+        dt_cell_magnitude_bar(
+            dt_magnitude_frac(static_cast<double>(e.count),
+                              static_cast<double>(count_max)),
+            dt_hot_u32());
         ImGui::Text("%llu", (unsigned long long)e.count);
         ImGui::TableNextColumn();
         ImGui::Text("%llu / %llu", (unsigned long long)e.mispred,

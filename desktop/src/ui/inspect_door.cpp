@@ -1143,10 +1143,14 @@ void draw_processes_pane(InspectState &s) {
             // claim a zero the code never took. A genuinely idle process in a
             // sampled list does read 0%, and that is accurate — it was measured.
             if (!s.sample_cpu) {
-                ImGui::TextDisabled("—");
+                ImGui::TextDisabled("—"); // an absence is never barred (#1)
             } else {
                 const double pct =
                     clk_tck > 0 ? 100.0 * (double)r.cpu / (0.150 * clk_tck) : 0.0;
+                // %CPU is a neutral ranking — a dim in-cell magnitude bar (#1),
+                // number kept on top. The scale is fixed [0, 100%].
+                dt_cell_magnitude_bar(dt_magnitude_frac(pct, 100.0),
+                                      dt_dim_u32());
                 ImGui::Text("%.0f%%", pct);
             }
             ImGui::TableNextColumn();
