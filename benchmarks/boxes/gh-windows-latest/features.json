@@ -4,14 +4,14 @@
     "os": "windows",
     "os_version": "MINGW64_NT-10.0-26100",
     "arch": "x86_64",
-    "cpu": "AMD64 Family 25 Model 17 Stepping 1, AuthenticAMD",
+    "cpu": "AMD64 Family 25 Model 1 Stepping 1, AuthenticAMD",
     "uarch": "unknown",
-    "vendor": "AMD64 Family 25 Model 17 Stepping 1, AuthenticAMD",
+    "vendor": "AMD64 Family 25 Model 1 Stepping 1, AuthenticAMD",
     "cc": "cc.exe (Rev5, Built by MSYS2 project) 16.1.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "f98f23d",
-    "timestamp": "2026-07-30T09:29:29Z"
+    "commit": "3ed78d4",
+    "timestamp": "2026-07-31T09:41:59Z"
   },
   "features": [
     {
