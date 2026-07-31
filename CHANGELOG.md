@@ -33,6 +33,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `make desktop-test-xvfb` proves window resolution against a live
     (virtual) X11 display and a real second window, not a mock.
 
+- **The faithful city, Phase A — the MVP terrain reskin**
+  (docs/internal/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md). The 3D
+  spacetime overview now reads as a place, not an abstract density field: the
+  terrain is zoned by memory-region kind (`Scene::set_zoning`, a new `uKind`
+  R8UI texture blended into `kTerrainFrag`), an in-domain but never-touched
+  cell reads as a sunken fog-of-war pit (`TerrainFlag::TF_UNKNOWN`), the
+  recording's dominant fidelity tier drives a damped weather sky
+  (`scene3d/atmosphere.h`, byte-identical in colour source to the 2D fidelity
+  banner), IBS survey residency renders as a physically separate, stippled
+  "ghost district" terrain that never scrubs with the playhead
+  (`Scene::set_stat_terrain`), and a followed "citizen" vehicle glyph with a
+  comet tail rides the placed PC vertex at a new, independently-ticking
+  `follow_step` playhead (`SceneView::follow_play`) that deliberately never
+  fuses with the terrain-time or execution-step clocks. All five new
+  `SceneLayers` toggles (`zoning`/`weather`/`ghost_fog`/`vehicle`, plus the
+  pre-existing five) default on, so the "city" preset is the out-of-the-box
+  view; no `.asmtrace` schema change.
+
 - **Desktop GUI packaging: a Debian package and an AppImage for `asmtest-desktop`**
   (`packaging/debian-desktop/`, `packaging/appimage/`). The full app links the
   GPL-2.0 Unicorn emulator and the Keystone/Capstone engines directly, none of
