@@ -22,17 +22,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 # libfreetype-dev: the imgui freetype rasteriser (13-foundation-moves.md F3) —
 # the app + viewer build with DESKTOP_FREETYPE=1 below. The fonts themselves load
 # via stb_truetype and need none of this; freetype is the higher-quality path.
-# ccache: the CMD below runs FOUR separate `make` trees in this one container
-# (desktop, desktop-render, desktop-test, desktop-ui-test) that share most of
-# their addon TUs (ImPlot/node-editor/TextEditor/etc. compile with identical
-# flags in every tree — see mk/desktop.mk's per-tree addon rules) — so the
-# second and third tree hit cache instead of recompiling them from scratch.
-# Debian's ccache package puts compiler-name symlinks under /usr/lib/ccache, so
-# prepending it to PATH is enough; no CC/CXX change needed in the Makefile.
+# libx11-dev (docs/internal/gui/45-launch-and-window-target.md T6/T9): the
+# Home rail's window-picker (desktop/src/platform/window_picker.cpp) compiles
+# against Xlib directly — GLFW already links X11 transitively at the shared-
+# library level, this adds only the development HEADERS. xvfb: T9's own
+# integration lane needs a REAL (virtual) X11 display + a second real window
+# to hit-test, not a mock — CLAUDE.md: "a missing dependency is not a
+# blocker" applies to both (installable software, not hardware/credentials),
+# so neither may be left for the feature to self-skip on.
+# ccache: the CMD below runs several separate `make` trees in this one
+# container (desktop, desktop-render, desktop-test, desktop-ui-test,
+# desktop-test-xvfb) that share most of their addon TUs (ImPlot/node-editor/
+# TextEditor/etc. compile with identical flags in every tree — see
+# mk/desktop.mk's per-tree addon rules) — so the second and third tree hit
+# cache instead of recompiling them from scratch. Debian's ccache package
+# puts compiler-name symlinks under /usr/lib/ccache, so prepending it to
+# PATH is enough; no CC/CXX change needed in the Makefile.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri libegl1-mesa-dev \
-      libfreetype-dev ccache \
+      libfreetype-dev libx11-dev xvfb ccache \
  && rm -rf /var/lib/apt/lists/*
 ENV PATH=/usr/lib/ccache:$PATH
 # Force software rendering for the headless GL smoke (no GPU in CI).
@@ -41,4 +50,8 @@ COPY . .
 # DESKTOP_FREETYPE=1: the app + viewer link imgui's freetype rasteriser (F3). The
 # headless desktop-test tree stays stb_truetype-only (no freetype), so it needs
 # no libfreetype at link time — the fonts still load and render there.
-CMD sh -c 'make desktop desktop-render desktop-test DESKTOP_FREETYPE=1 && make desktop-engine-boundary-check && make desktop-ui-test'
+# desktop-test-xvfb (T9) runs LAST and separately: it is the one lane in this
+# image that needs a display server rather than just a compiler, wrapped in
+# its own xvfb-run — never gated off here (DESKTOP_XVFB_MISSING is empty in
+# this image by construction, since libx11-dev + xvfb are pinned above).
+CMD sh -c 'make desktop desktop-render desktop-test DESKTOP_FREETYPE=1 && make desktop-engine-boundary-check && make desktop-ui-test && make desktop-test-xvfb'

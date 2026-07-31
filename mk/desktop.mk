@@ -385,6 +385,12 @@ $$(BUILD)/desktop/$(1)/sp/%.o:  desktop/src/space/%.cpp | $$(IMGUI_HOME)/imgui.c
 $$(BUILD)/desktop/$(1)/s3/%.o:  desktop/src/scene3d/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
+# doc 45 T6: window_picker.cpp — X11-only, no imgui/json dependency at all,
+# so no order-only prereq on those fetches (unlike every rule above). Built
+# into all three trees (app/render/test) identically, per D4.
+$$(BUILD)/desktop/$(1)/pf/%.o:  desktop/src/platform/%.cpp
+	@mkdir -p $$(@D)
+	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(X11_CFLAGS) $$(X11_DEF) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
@@ -597,7 +603,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
-  $(BUILD)/desktop/$(1)/s3/hud.o
+  $(BUILD)/desktop/$(1)/s3/hud.o \
+  $(BUILD)/desktop/$(1)/pf/window_picker.o
 # regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
 # the emulator (emu.o), so — like forks.o — it is APP-ONLY (never in the viewer's
 # object set, which is what keeps asmtest-viewer engine-free, D4).
@@ -699,6 +706,26 @@ DESKTOP_DISPLAY_SAY := (DISPLAY / WAYLAND_DISPLAY)
 endif
 EGL_LIBS  ?= -lEGL
 
+# X11 (docs/internal/gui/45-launch-and-window-target.md T6/T9): the window
+# picker's ONLY platform dependency (D4 — no ptrace, no other engine).
+# Auto-detected exactly like CAPSTONE_DEF (Makefile:883-885): present when
+# libx11-dev is installed (Dockerfile.desktop pins it, T9), absent
+# otherwise. Either way desktop/src/platform/window_picker.cpp compiles —
+# its own #ifdef degrades to a stub whose window_picker_supported() reads
+# false (T6 step 4) — so a host without the dev headers builds cleanly
+# rather than failing; GLFW already links X11 transitively at the
+# shared-library level, this adds only the Xlib development HEADERS the new
+# TU compiles against directly. Linux-only: window_picker.cpp itself also
+# excludes __APPLE__ even if X11 headers happen to be findable there
+# (Non-goals — a macOS picker is out of scope).
+X11_CFLAGS ?= $(shell pkg-config --cflags x11 2>/dev/null)
+X11_LIBS   ?= $(shell pkg-config --libs x11 2>/dev/null)
+ifeq ($(shell pkg-config --exists x11 2>/dev/null && echo 1),1)
+ifneq ($(UNAME_S),Darwin)
+X11_DEF := -DASMTEST_HAVE_X11
+endif
+endif
+
 # The 3D-scene FBO smoke (10-spacetime-3d-overview.md T4) renders offscreen via
 # EGL surfaceless + software Mesa, so it needs the EGL + GL 3.x headers (the app
 # already links -lGL; the smoke adds -lEGL). Absence -> the smoke is not built and
@@ -717,6 +744,21 @@ DESKTOP_GL_MISSING += libgl1-mesa-dev
 endif
 ifeq ($(shell ls /usr/include/EGL/egl.h /usr/local/include/EGL/egl.h 2>/dev/null | head -1),)
 DESKTOP_GL_MISSING += libegl1-mesa-dev
+endif
+
+# doc 45 T9: the window-picker's Xvfb integration lane needs a REAL (virtual)
+# X11 display + a dummy second window to hit-test — xvfb-run and X11 dev
+# headers, both installable software (CLAUDE.md: not a hardware/credential
+# gate, so this must not silently self-skip anywhere it CAN be installed;
+# Dockerfile.desktop pins both). DESKTOP_XVFB_MISSING gates desktop-test-xvfb
+# the same shape DESKTOP_GL_MISSING gates the FBO smoke — printed, not hidden,
+# on a bare host that lacks them.
+DESKTOP_XVFB_MISSING :=
+ifeq ($(shell command -v xvfb-run 2>/dev/null),)
+DESKTOP_XVFB_MISSING += xvfb
+endif
+ifneq ($(X11_DEF),-DASMTEST_HAVE_X11)
+DESKTOP_XVFB_MISSING += libx11-dev
 endif
 
 # The full app links unicorn/keystone/capstone (D4). Keystone's kit ships no
@@ -863,15 +905,26 @@ $(BUILD)/desktop/app/vw/scrubber_draw.o: \
 $(BUILD)/desktop/app/lo/fabric_imgui.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
 
+# doc 45 T7: the Home rail's crosshair drag needs GLFW (glfwSetCursor /
+# glfwCreateStandardCursor) for the app AND the viewer (unlike author_door.o
+# above, this is not an engine dependency D4 forbids the viewer — GLFW/window
+# management is already all over both binaries' main.cpp) — but NEVER for
+# the null-backend test tree, which promises no GL/display dependency at
+# all. shell.cpp's own #ifdef ASMTEST_DESKTOP_HAVE_GLFW is what actually
+# branches; this just arms it for the two trees that have a real window.
+$(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_HAVE_GLFW=1
+
 $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
                           $(DESKTOP_CAP_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(LINK_LIBBPF) \
-	  $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) -ldl -lpthread -o $@
+	  $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) $(X11_LIBS) -ldl -lpthread -o $@
 	@echo "built $@ — the full app (GPL-2.0 as a whole; links the engines)"
 
 $(BUILD)/asmtest-viewer: $(DESKTOP_RENDER_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) \
+	  $(X11_LIBS) -o $@
 	@echo "built $@ — the render-only viewer (engine-free; permissively distributable)"
 
 # Both recipes recurse through a sub-$(MAKE) -j$(DESKTOP_JOBS) rather than
@@ -1097,7 +1150,8 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_obs_region \
                  $(BUILD)/desktop_test_obs_disasm \
                  $(BUILD)/desktop_test_obs_ptslice \
-                 $(BUILD)/desktop_test_obs_draw
+                 $(BUILD)/desktop_test_obs_draw \
+                 $(BUILD)/desktop_test_window_picker
 
 # The fabric model links fabric.o and NOTHING else — that link line is the proof
 # that asmtest-viewer can weave a recording with zero engine deps (D4), the same
@@ -1364,6 +1418,14 @@ $(BUILD)/desktop/test/t/test_camera.o \
 $(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
 $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# doc 45 T6: links NOTHING but window_picker.o — the proof this module
+# carries zero desktop deps of its own (D4), same shape test_loom_fabric
+# makes for the Loom. X11_LIBS is empty on the stub path (no libx11-dev /
+# Darwin), so this link succeeds either way.
+$(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.o \
+    $(BUILD)/desktop/test/pf/window_picker.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # The GL FBO smoke (T4): scene.o + pick.o + the pure space/ + doc model it renders
 # from, linked with EGL + GL for the surfaceless offscreen context. GATED on the
@@ -1635,11 +1697,12 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/trajectory.o \
     $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/s3/hud.o \
-    $(BUILD)/desktop/test/s3/pick.o $(DESKTOP_TEST_IG)
+    $(BUILD)/desktop/test/s3/pick.o $(DESKTOP_TEST_IG) \
+    $(BUILD)/desktop/test/pf/window_picker.o
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # --- 21-spine-navigation.md tests --------------------------------------------
 # T1: the command palette. build_palette + palette_parse_goto need a real
@@ -1650,7 +1713,7 @@ $(BUILD)/desktop/test/t/test_palette.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop_test_palette: $(BUILD)/desktop/test/t/test_palette.o \
     $(DESKTOP_TEST_SHELL_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # T2: the persistent wayfinding chrome. disambiguated_label is a pure function of
 # paths (hand-built Workspace, no I/O); breadcrumb_model reads nav.current after a
@@ -1659,7 +1722,7 @@ $(BUILD)/desktop/test/t/test_wayfinding.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop_test_wayfinding: $(BUILD)/desktop/test/t/test_wayfinding.o \
     $(DESKTOP_TEST_SHELL_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # T3: the overview/minimap model. overview.o is pure; it links the timeline
 # builder (to derive a strip from a REAL recording's rows and pin no-fabrication)
@@ -1679,7 +1742,7 @@ $(BUILD)/desktop_test_overview: $(BUILD)/desktop/test/t/test_overview.o \
 # DESKTOP_TEST_SHELL_OBJ is defined, since prerequisites expand at parse time).
 $(BUILD)/desktop_test_selection: $(BUILD)/desktop/test/t/test_selection.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # --- 20-workspace-and-settings.md tests --------------------------------------
 # T1: the data-driven view set. view_presence.o reads observer_has_any (the
@@ -1691,7 +1754,7 @@ $(BUILD)/desktop/test/t/test_view_presence.o: \
                          -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop_test_view_presence: \
     $(BUILD)/desktop/test/t/test_view_presence.o $(DESKTOP_TEST_SHELL_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # T3/T4: the persisted workspace store. workspace_state.o links nlohmann/json
 # only — no ImGui, no engine — so the round-trip is a pure model assert.
@@ -1725,11 +1788,11 @@ DESKTOP_UITEST_ENGINE_OBJ := $(ITE_ENGINE_SRC:%=$(BUILD)/desktop/uitest/ite/%.o)
 
 $(BUILD)/desktop_ui_test: $(BUILD)/desktop/uitest/t/test_ui.o \
     $(DESKTOP_UITEST_APP_OBJ) $(DESKTOP_UITEST_ENGINE_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $(ITE_CXX) $^ -o $@ -lpthread
+	$(CXX) $(DESKTOP_CXXFLAGS) $(ITE_CXX) $^ $(X11_LIBS) -o $@ -lpthread
 
 $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
     $(DESKTOP_TEST_SHELL_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
 # The FULL-BUILD half of desktop-test: the Loom's fork engine (05 T5/T7) is the
 # one desktop TU that links the engines, so its test needs unicorn + keystone.
@@ -1852,6 +1915,7 @@ desktop-test: $(DESKTOP_TESTS)
 	@$(DESKTOP_REPLAY_SAY)
 	@$(DESKTOP_GL_SAY)
 	@$(DESKTOP_UITEST_SAY)
+	@$(DESKTOP_XVFB_SAY)
 	@for t in $(DESKTOP_ALL_TESTS); do echo "== $$t =="; $$t || exit 1; done
 
 # desktop-ui-test (17-T1): the imgui_test_engine interaction lane. Kept SEPARATE
@@ -1865,6 +1929,42 @@ desktop-ui-test: $(BUILD)/desktop_ui_test
 	$(BUILD)/desktop_ui_test
 	@echo "desktop-ui-test: JUnit XML -> $(BUILD)/desktop-ui-test-results.xml"
 DESKTOP_UITEST_SAY = echo "desktop-test: the imgui_test_engine interaction lane is separate (fetches the one non-MIT, test-lane-only dep) — run 'make desktop-ui-test' or 'make docker-desktop'"
+
+# docs/internal/gui/45-launch-and-window-target.md T9: the window-picker's
+# Xvfb integration lane — a REAL (virtual) X11 display + a second real
+# window, proving window_picker.cpp's resolve_window_at_screen_point end to
+# end (test_window_picker.cpp, the null-backend binary, deliberately cannot:
+# it has no display). Kept SEPARATE from `desktop-test` for the same reason
+# desktop-ui-test is: it needs something desktop-test's "any host with a
+# C++17 compiler" bar does not promise (here, a display server rather than a
+# fetched dependency) — `desktop-test` only NOTES it via DESKTOP_XVFB_SAY, so
+# the coverage gap is never silently absent on a host that skips it.
+#
+# x11_dummy_window is a bare C fixture (no X11 C++ wrapper needed, and no
+# extra apt package — cheaper than an xterm, CLAUDE.md's own preference
+# among installable options when there is a choice).
+$(BUILD)/x11_dummy_window: desktop/test/fixtures/x11_dummy_window.c
+	$(CC) $(CFLAGS) $(X11_CFLAGS) $< $(X11_LIBS) -o $@
+
+$(BUILD)/desktop/test/t/test_window_picker_xvfb.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_X11_DUMMY_WINDOW='"$(BUILD)/x11_dummy_window"'
+$(BUILD)/desktop_test_window_picker_xvfb: \
+    $(BUILD)/desktop/test/t/test_window_picker_xvfb.o \
+    $(BUILD)/desktop/test/pf/window_picker.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
+
+.PHONY: desktop-test-xvfb
+ifeq ($(strip $(DESKTOP_XVFB_MISSING)),)
+desktop-test-xvfb: $(BUILD)/desktop_test_window_picker_xvfb $(BUILD)/x11_dummy_window
+	@echo "== $(BUILD)/desktop_test_window_picker_xvfb (xvfb-run, a live virtual X11 display) =="
+	xvfb-run -a --server-args="-screen 0 1024x768x24" \
+	  $(BUILD)/desktop_test_window_picker_xvfb
+DESKTOP_XVFB_SAY = echo "desktop-test: the window-picker Xvfb lane is separate (needs a display server, not just a compiler) — run 'make desktop-test-xvfb' or 'make docker-desktop'"
+else
+desktop-test-xvfb:
+	@echo "# SKIP desktop-test-xvfb: needs$(DESKTOP_XVFB_MISSING) — not built here; 'make docker-desktop' installs them and runs it (this must NOT be the CI answer, CLAUDE.md: both are installable software)"
+DESKTOP_XVFB_SAY = echo "desktop-test: the window-picker Xvfb lane needs:$(DESKTOP_XVFB_MISSING) — not run here; 'make desktop-test-xvfb' or 'make docker-desktop' provides them"
+endif
 
 # ---------------------------------------------------------------------------
 # gen_walkthroughs — the Learn door's bundled walkthroughs, as recordings
