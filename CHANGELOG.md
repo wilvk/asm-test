@@ -32,6 +32,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     target. `libx11-dev` + `xvfb` are pinned in `Dockerfile.desktop`, and
     `make desktop-test-xvfb` proves window resolution against a live
     (virtual) X11 display and a real second window, not a mock.
+
+- **Desktop GUI packaging: a Debian package and an AppImage for `asmtest-desktop`**
   (`packaging/debian-desktop/`, `packaging/appimage/`). The full app links the
   GPL-2.0 Unicorn emulator and the Keystone/Capstone engines directly, none of
   which is a distro package on the pinned base images, so both artifacts vendor

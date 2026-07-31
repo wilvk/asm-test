@@ -516,7 +516,24 @@ window-icon precedent already in `main.cpp` for degrading a per-window OS
 feature that Wayland has no equivalent of — reusing GLFW's built-in
 `GLFW_CROSSHAIR_CURSOR` and, on release, the exact same
 `inspect_attach_full_detail` path a Processes-row click already uses (T7–T8).
-Authored 2026-07-31 against HEAD `5ef06e5`. ◐ 0/9 (batch wip…) · will · 2026-07-31.
+Authored 2026-07-31 against HEAD `5ef06e5`. ✅ 9/9 (T1+T2 landed as one
+integrated change — building the launch primitive surfaced that the fork must
+run on the exact OS thread that keeps tracing the child, so T1's interim
+detach/re-SEIZE gap was never shipped standalone and needed no retiring;
+`already_traced` threads through every direct SEIZE site — log/stream/graph/
+tree/procs/watch/trace — `dataflow`/`auto` attach through a separate, deeper
+subsystem this brief doesn't touch and are refused with a stated wire error
+rather than risked; T6+T9 the X11 window→PID resolver + `libx11-dev`/`xvfb`
+pinned in `Dockerfile.desktop` + a genuine Xvfb-backed integration lane
+(`test_window_picker_xvfb`, a live virtual display + a real second window,
+not a mock); T3/T4/T7/T8 the Launch pane/CTA + crosshair drag-to-attach,
+reusing `inspect_attach_full_detail` unchanged on release). Both
+`docker-desktop` lanes green on merged main (`desktop-test`,
+`desktop-engine-boundary-check` — D9 stays intact, the desktop process itself
+never calls `PTRACE_TRACEME`/`PTRACE_SEIZE` — `desktop-ui-test` 28/28,
+`desktop-test-xvfb`); `cli-smoke` green headless. `asmtrace-golden-check`'s
+one diff (`abixray-make_pair-sysv`) is a pre-existing host-Capstone-version
+artifact, confirmed unrelated via baseline comparison. · —.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
