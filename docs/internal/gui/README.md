@@ -492,7 +492,23 @@ sky, a physically separate statistical "ghost fog" surface, a followed-citizen
 vehicle) with **no new renderer primitive, no producer change, no schema
 change**. Phases B–E remain uncut; see [43](43-faithful-city-roadmap.md)§4 for
 sequencing guidance before starting one. 43: roadmap only, no tasks · —. 44:
-◐ 0/7 (batch wip…) · will · 2026-07-31.
+✅ 7/7 (T1 `kind_by_cell` + the zoning shader, an off-domain sentinel distinct
+from `Region::Unknown`; T2 `TF_UNKNOWN` fog-of-war, per-slice frontier,
+off-domain cells never flagged; T3 the fidelity weather sky —
+`scene3d/atmosphere.h`, `scene_atmosphere_for_tier()` sourced only from
+`ui/theme.h`'s shared palette, byte-identical to the 2D banner, damped ~0.5s;
+T4 `Scene::set_stat_terrain` — the ghost-district survey surface, its own
+texture pair, uploaded once per weave, never scrubs; T5 the two-clock
+plumbing — `SceneFrame.sun` + a second, independent `follow_step` `Transport`,
+the axis-mismatch decision (`follow_step` free-runs `TrajPoint.t`'s own axis,
+never seeded from `Selection.step`) written down in `shell.h`'s own comment;
+T6 the followed-citizen vehicle + comet tail, sharing the underlying PC
+vertex's pick id, no VBO schema change, unplaced steps draw nothing; T7 the
+`zoning`/`weather`/`ghost_fog`/`vehicle` `SceneLayers` bools, default true —
+the "city" preset is the struct's own defaults). `docker-desktop` green on
+merged main (`desktop-test` incl. `test_terrain`/`test_scene_fbo`,
+`desktop-engine-boundary-check` — D4 intact, `desktop-ui-test` 28/28,
+alongside doc 45's Xvfb lane); no `.asmtrace` schema touched. · —.
 
 [45-launch-and-window-target.md](45-launch-and-window-target.md) — **two new
 Home-rail entries** (not cut from a prior analysis doc): **launch** a fresh
