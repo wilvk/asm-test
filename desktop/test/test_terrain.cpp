@@ -153,9 +153,31 @@ int main() {
               "data must be empty");
         check("not torn", !m.torn, "a complete recording is not torn");
         check("no churn without a version change", !m.churn_present, "churn?");
-        for (uint32_t f : full.flags)
-            check("no flags set on a clean coarse terrain", f == 0u,
+        // T2 (44-faithful-city-phase-a): a "clean" terrain still carries
+        // TF_UNKNOWN over its many in-domain-but-untouched cells (the plane
+        // packs a 64x64 grid over a two-region domain of a few hundred
+        // bytes) — that is the fog-of-war feature working, not a leak. Only
+        // TORN/STAT/CHURN/READ/WRITE must stay unset with nothing to justify
+        // them; a populated cell must never ALSO read as unknown.
+        for (size_t i = 0; i < full.flags.size(); i++) {
+            check("no non-UNKNOWN flags on a clean coarse terrain",
+                  (full.flags[i] & ~TF_UNKNOWN) == 0u,
                   "a flag bit is set with nothing to justify it");
+            if (full.height[i] > 0.0f)
+                check("a populated cell is never flagged fog-of-war",
+                      (full.flags[i] & TF_UNKNOWN) == 0u,
+                      "populated cell " + std::to_string(i) + " reads unknown");
+        }
+        check("an under-described plane shows fog-of-war",
+              [&] {
+                  size_t n = 0;
+                  for (uint32_t f : full.flags)
+                      if (f & TF_UNKNOWN)
+                          n++;
+                  return n;
+              }() > 0,
+              "no TF_UNKNOWN cell on a plane with only 3 of ~512 in-domain "
+              "cells touched");
 
         // --- REUSE PROOF: slice(full) reproduces the canvas per-offset heat ---
         // The coarse height source is 04-T3's per-offset count; re-project every
@@ -188,6 +210,42 @@ int main() {
                   near(t2.height[cA1], std::log1p(1.0f)) &&
                   t2.height[cB0] == 0.0f,
               "the prefix at step 2 is wrong");
+
+        // === T2 (44-faithful-city-phase-a): fog-of-war is per-slice ==========
+        // B0's cell is IN-DOMAIN (it is code region 2's cell — hit at steps
+        // 3-5) but not yet touched at t=2: it must read TF_UNKNOWN there, and
+        // must NOT once it is (t=5, the full slice) — the same cell, two
+        // different fidelity states depending on WHEN you look, which is the
+        // whole point of a fog-of-war frontier.
+        check("T2: an in-domain, not-yet-touched cell is fog-of-war at t=2",
+              (t2.flags[cB0] & TF_UNKNOWN) != 0u,
+              "B0 has no hit yet at t=2 and must read unknown");
+        check("T2: the same cell stops being fog-of-war once it is touched",
+              (full.flags[cB0] & TF_UNKNOWN) == 0u,
+              "B0 is populated by the full slice and must not read unknown");
+        check("T2: a touched cell never carries TF_UNKNOWN even early",
+              (t0.flags[cA0] & TF_UNKNOWN) == 0u,
+              "A0 is hit at step 0 and must never read unknown");
+        // An off-domain cell (kind_by_cell's sentinel) must NEVER be flagged
+        // TF_UNKNOWN, at any t — it is void, not fog. Locate one by scanning
+        // kind_by_cell (this plane is 64x64 over a two-region, few-hundred-
+        // byte domain, so an off-domain cell certainly exists).
+        {
+            long off_domain = -1;
+            for (size_t i = 0; i < m.kind_by_cell.size(); i++)
+                if (m.kind_by_cell[i] == kKindByCellNone) {
+                    off_domain = static_cast<long>(i);
+                    break;
+                }
+            check("T2: an off-domain cell exists on this plane (test setup)",
+                  off_domain >= 0, "every cell claimed a region — check math");
+            if (off_domain >= 0)
+                check("T2: an off-domain cell is never flagged fog-of-war",
+                      (full.flags[static_cast<size_t>(off_domain)] &
+                       TF_UNKNOWN) == 0u,
+                      "off-domain padding must stay undrawn/dark water, "
+                      "never fog-of-war land");
+        }
 
         // Scrubbing the whole range is cheap (the prefix is a per-cell binary
         // search, not an event re-scan). A generous ceiling catches an O(n^2)
@@ -654,6 +712,89 @@ int main() {
         check("M: plane is flat", nonzero(m.full()) == 0,
               "cells on an empty df");
         steps_explained("M", m);
+    }
+
+    // === Fixture N: T1 (44-faithful-city-phase-a) — kind_by_cell, 2+ kinds ===
+    // A code region (from codeimage) plus a manually-added data region (the
+    // shape 07's maps snapshot will add later; test_terrain's own fixture C/D
+    // pattern for a non-code region) — kind_by_cell must name each cell's
+    // OWNING region's kind correctly, stay byte-stable across slice(t) (it is
+    // built once, not re-derived), and carry the sentinel off-domain.
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-region\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"
+            "{\"k\":\"end\",\"events\":2,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        std::vector<Region> regs = regions_from_codeimage(rec);
+        check("N: one code region from codeimage", regs.size() == 1,
+              "got " + std::to_string(regs.size()));
+        Region data;
+        data.base = D0;
+        data.len = 4096;
+        data.kind = Region::Data;
+        data.label = "heap";
+        regs.push_back(data);
+        Region stack;
+        stack.base = 0x700000;
+        stack.len = 4096;
+        stack.kind = Region::Stack;
+        stack.label = "[stack]";
+        regs.push_back(stack);
+        Projection p = build_projection(regs);
+        TerrainModel m = build_terrain(p, rec);
+
+        check("N: kind_by_cell sized w*h",
+              m.kind_by_cell.size() == static_cast<size_t>(m.w) * m.h,
+              "got " + std::to_string(m.kind_by_cell.size()) + " want " +
+                  std::to_string(static_cast<size_t>(m.w) * m.h));
+
+        bool ok = false;
+        uint32_t cCode = cell_at(p, A0, &ok);
+        check("N: A0 projects (test setup)", ok, "A0 did not project");
+        uint32_t cData = cell_at(p, D0, &ok);
+        check("N: D0 projects (test setup)", ok, "D0 did not project");
+        uint32_t cStack = cell_at(p, 0x700000, &ok);
+        check("N: stack addr projects (test setup)", ok,
+              "stack addr did not project");
+
+        check("N: the code cell carries Region::Code",
+              m.kind_by_cell[cCode] == static_cast<uint8_t>(Region::Code),
+              "got kind " + std::to_string(m.kind_by_cell[cCode]));
+        check("N: the data cell carries Region::Data",
+              m.kind_by_cell[cData] == static_cast<uint8_t>(Region::Data),
+              "got kind " + std::to_string(m.kind_by_cell[cData]));
+        check("N: the stack cell carries Region::Stack",
+              m.kind_by_cell[cStack] == static_cast<uint8_t>(Region::Stack),
+              "got kind " + std::to_string(m.kind_by_cell[cStack]));
+
+        // An off-domain cell carries the sentinel, NEVER Region::Unknown's
+        // raw value (5) — the two are different concepts (T1 step 2).
+        long off_domain = -1;
+        for (size_t i = 0; i < m.kind_by_cell.size(); i++)
+            if (m.kind_by_cell[i] == kKindByCellNone) {
+                off_domain = static_cast<long>(i);
+                break;
+            }
+        check("N: an off-domain cell exists on this plane (test setup)",
+              off_domain >= 0, "every cell claimed a region — check math");
+        check("N: kKindByCellNone != Region::Unknown's raw value",
+              kKindByCellNone != static_cast<uint8_t>(Region::Unknown),
+              "the sentinel must be distinguishable from a real Unknown kind");
+
+        // Byte-stable across slice(t) calls (same weave, different t): T1's
+        // Done-when. kind_by_cell is a TerrainModel field, not part of
+        // Terrain — slicing at different t must not touch it at all.
+        std::vector<uint8_t> before = m.kind_by_cell;
+        (void)m.slice(0);
+        (void)m.slice(1);
+        (void)m.full();
+        check("N: kind_by_cell is byte-stable across slice(t) calls",
+              m.kind_by_cell == before,
+              "slice(t) must never mutate the slice-invariant kind map");
     }
 
     if (failures) {

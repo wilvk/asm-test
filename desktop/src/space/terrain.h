@@ -52,7 +52,22 @@ enum TerrainFlag : uint32_t {
     TF_CHURN = 1u << 2, // a codeimage version changed within [0, t] over here
     TF_READ = 1u << 3,  // rich rung: a `mem` read tinted this data cell
     TF_WRITE = 1u << 4, // rich rung: a `mem` write tinted this data cell
+    // T2 (44-faithful-city-phase-a): the fog-of-war pit — an IN-DOMAIN cell
+    // that carries neither code/data content nor TF_STAT at this slice. Set
+    // per-slice in TerrainModel::slice(), never in build_terrain() (a cell
+    // untouched so far can still be hit later). Distinct from an off-domain
+    // cell (never drawn as land at all) and from TF_TORN (a KNOWN lower
+    // bound) — TF_UNKNOWN means "no content", not "a floor on real content".
+    TF_UNKNOWN = 1u << 5,
 };
+
+// T1 (44-faithful-city-phase-a): the kind_by_cell sentinel for an off-domain /
+// unowned cell (Projection::unproject fails there) — DISTINCT from
+// Region::Kind::Unknown (space/types.h), which names a REAL region whose kind
+// the recording did not classify. kind_by_cell never stores Region::Unknown's
+// raw value (5) to mean "no region data at all"; it stores this instead, so
+// "no owning region" and "an unclassified region" cannot be confused.
+inline constexpr uint8_t kKindByCellNone = 255;
 
 // The precomputed, re-sliceable terrain. Built ONCE by build_terrain(); slice(t)
 // is O(touched cells). Also carries the provenance a HUD must surface so a flat
@@ -61,6 +76,15 @@ struct TerrainModel {
     Projection proj; // the plane the cells live on (10-T1), kept for the HUD
     uint32_t w = 0, h = 0; // = 2^order each (== proj plane side)
     uint64_t nsteps = 0; // ordered trace steps — the extent of the time axis
+
+    // T1 (44-faithful-city-phase-a): the memory-region KIND that provably
+    // owns each cell — slice-invariant (a cell's owning region never changes
+    // within one recording), so this is built ONCE by build_terrain, never
+    // re-derived per slice(t). Sized w*h; an off-domain / unowned cell
+    // carries kKindByCellNone (see that constant's comment for why it is not
+    // Region::Unknown). The GL side (Scene::set_zoning) uploads this once per
+    // weave, never on a playhead scrub.
+    std::vector<uint8_t> kind_by_cell;
 
     // Provenance chips (T2 step 2 / step 4): never a silent flat/zero plane.
     std::string basis;       // the trace basis ("abs" | "rel"), from the canvas

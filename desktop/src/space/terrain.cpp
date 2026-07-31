@@ -110,6 +110,24 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     TerrainModel m;
     m.w = m.h = uint32_t{1} << proj.order;
 
+    // T1 (44-faithful-city-phase-a): kind_by_cell — one O(cells) sweep, BEFORE
+    // any early return, so it is populated on every path (a basis-refused or
+    // anchor-refused terrain still has a real plane to zone). Reuses the
+    // SAME per-cell-to-region resolution the churn join below already uses
+    // (Projection::unproject over the cell centre) rather than a second one.
+    // An off-domain cell (unproject fails) gets kKindByCellNone.
+    m.kind_by_cell.assign(static_cast<size_t>(m.w) * m.h, kKindByCellNone);
+    for (uint32_t y = 0; y < m.h; ++y) {
+        for (uint32_t x = 0; x < m.w; ++x) {
+            const float u = (x + 0.5f) / m.w, v = (y + 0.5f) / m.h;
+            uint64_t a = 0;
+            const Region *r = nullptr;
+            if (proj.unproject(u, v, &a, &r) && r)
+                m.kind_by_cell[static_cast<size_t>(y) * m.w + x] =
+                    static_cast<uint8_t>(r->kind);
+        }
+    }
+
     Streams s = decode_streams(rec);
     // REUSE 04-T3: the trace canvas owns the per-offset execution count and the
     // basis handling; the coarse height is that count, not a re-derivation.
@@ -441,6 +459,22 @@ Terrain TerrainModel::slice(uint64_t t) const {
         out.flags[dc.cell] |= dc.cum_rw[idx - 1];
         if (torn)
             out.flags[dc.cell] |= TF_TORN;
+    }
+
+    // T2 (44-faithful-city-phase-a): fog-of-war. An IN-DOMAIN cell (kind_by_cell
+    // != kKindByCellNone — the same in-domain test T1 already builds, reused
+    // here rather than a second unproject sweep) that carries no content at
+    // THIS slice — no code/data hit yet, and no TF_STAT (the exact slice never
+    // carries TF_STAT; the statistical layer is the SEPARATE `stat` Terrain,
+    // per the T6 isolation invariant, so this check is a defensive mirror of
+    // the doc's stated rule rather than a reachable branch today) — reads as
+    // "no content", never a described low cell and never off-domain void. This
+    // is inherently PER-SLICE: a cell first touched at step 50 is fog before
+    // it, not after, which is the whole point of a fog-of-war frontier.
+    for (size_t i = 0; i < n; ++i) {
+        if (i < kind_by_cell.size() && kind_by_cell[i] != kKindByCellNone &&
+            out.height[i] <= 0.0f && (out.flags[i] & TF_STAT) == 0u)
+            out.flags[i] |= TF_UNKNOWN;
     }
     return out;
 }
