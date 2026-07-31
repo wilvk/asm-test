@@ -492,7 +492,7 @@ sky, a physically separate statistical "ghost fog" surface, a followed-citizen
 vehicle) with **no new renderer primitive, no producer change, no schema
 change**. Phases B–E remain uncut; see [43](43-faithful-city-roadmap.md)§4 for
 sequencing guidance before starting one. 43: roadmap only, no tasks · —. 44:
-☐ 0/7 · *free*.
+◐ 0/7 (batch wip…) · will · 2026-07-31.
 
 [45-launch-and-window-target.md](45-launch-and-window-target.md) — **two new
 Home-rail entries** (not cut from a prior analysis doc): **launch** a fresh
@@ -516,7 +516,7 @@ window-icon precedent already in `main.cpp` for degrading a per-window OS
 feature that Wayland has no equivalent of — reusing GLFW's built-in
 `GLFW_CROSSHAIR_CURSOR` and, on release, the exact same
 `inspect_attach_full_detail` path a Processes-row click already uses (T7–T8).
-Authored 2026-07-31 against HEAD `5ef06e5`. ☐ 0/9 · *free*.
+Authored 2026-07-31 against HEAD `5ef06e5`. ◐ 0/9 (batch wip…) · will · 2026-07-31.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
