@@ -71,6 +71,15 @@ class GlSceneHost : public SceneHost {
             scene_.set_trajectories(*f.traj, f.terr->proj);
             scene_.set_convergences(f.conv ? *f.conv : space::ConvergenceSet{},
                                     f.terr->proj);
+            // T1/T4 (44-faithful-city-phase-a): both are slice-invariant
+            // (kind_by_cell never varies with t; a survey is a whole-
+            // recording aggregate), so they upload on the SAME gate as the
+            // worldlines — once per weave/growth batch, never on a scrub.
+            scene_.set_zoning(f.terr->kind_by_cell, f.terr->w, f.terr->h);
+            if (f.terr->has_stat)
+                scene_.set_stat_terrain(f.terr->stat);
+            else
+                scene_.clear_stat_terrain();
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below
@@ -81,6 +90,13 @@ class GlSceneHost : public SceneHost {
             up_t_ = f.slice_t;
         }
         have_upload_ = true;
+
+        // T3/T6 (44): the sky and the followed citizen are per-FRAME state
+        // (the atmosphere is already damped by the shell every frame; the
+        // followed step advances under its own Transport) — set every call,
+        // never gated on the upload condition above.
+        scene_.set_atmosphere(f.atmo);
+        scene_.follow_step = f.follow_step;
 
         GLint prev_fbo = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);

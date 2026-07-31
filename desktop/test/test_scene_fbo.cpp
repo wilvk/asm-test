@@ -679,6 +679,127 @@ int main() {
         }
     }
 
+    // --- T1/T7 (44-faithful-city-phase-a): zoning toggles the HUE, never a --
+    // pick id. A data cell (kind != Code) with real height (via `mem`, so the
+    // height*kind blend is actually visible — kindHue mixes toward DARK at
+    // height 0 regardless of kind) must paint a visibly different colour with
+    // zoning on vs off; the pick pass takes no SceneLayers at all, so its id
+    // is unaffected by construction — asserted here as the regression guard.
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,"
+              "\"version\":0}\n";
+        nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n";
+        nd += "{\"k\":\"mem\",\"step\":0,\"ea\":6291456,\"size\":64,"
+              "\"rw\":\"w\"}\n";
+        nd += "{\"k\":\"end\",\"events\":3,\"truncated\":false}\n";
+        Recording rec = load(nd);
+        space::Region data_region;
+        data_region.base = 0x600000;
+        data_region.len = 4096;
+        data_region.kind = space::Region::Data;
+        std::vector<space::Region> regs = space::regions_from_codeimage(rec);
+        regs.push_back(data_region);
+        space::TerrainModel terr =
+            space::build_terrain(space::build_projection(regs), rec);
+        check("T1 GL: the rich-mem fixture built a data cell (test setup)",
+              !terr.data.empty(), "no data cell built");
+        space::TrajectorySet traj = space::build_trajectories(rec, terr.proj);
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_zoning(terr.kind_by_cell, terr.w, terr.h);
+        scene.set_trajectories(traj, terr.proj);
+
+        uint32_t data_cell = cell_of(terr.proj, terr.w, 0x600000);
+        int dpx = pixel_of_id(scene, cam, W, H, pick_id_cell(data_cell));
+        check("T1 GL: the data cell is on screen", dpx >= 0,
+              "data cell not rendered");
+        if (dpx >= 0) {
+            SceneLayers zoning_on;
+            SceneLayers zoning_off;
+            zoning_off.zoning = false;
+            std::vector<unsigned char> px_on = capture(scene, cam, cf, zoning_on);
+            std::vector<unsigned char> px_off =
+                capture(scene, cam, cf, zoning_off);
+            const unsigned char *pon = &px_on[dpx * 4];
+            const unsigned char *poff = &px_off[dpx * 4];
+            check("T1 GL: the zoning toggle changes the data cell's hue",
+                  pon[0] != poff[0] || pon[1] != poff[1] || pon[2] != poff[2],
+                  "a Data-kind cell rendered identically with zoning on/off");
+            int px_x = dpx % W, py = dpx / W; // bottom-left origin
+            int y_top = H - 1 - py;
+            uint32_t id_on = scene.pick(cam, W, H, px_x, y_top);
+            check("T1 GL: the pick id is unaffected by the zoning toggle "
+                  "(colour-pass only)",
+                  id_on == pick_id_cell(data_cell),
+                  "the pick id changed when zoning was toggled");
+        }
+    }
+
+    // --- T3 (44-faithful-city-phase-a): the weather sky quad draws under ----
+    // each fidelity tier, without GL error, and the weather layer toggle owns
+    // the background pixels it draws. The tier->Atmosphere MAPPING itself
+    // (byte-identical to the 2D banner's colours) is asserted in test_shell's
+    // pure half, which needs no GL context; this is the GL-side "it renders"
+    // smoke the T3 Tests section separately calls for.
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_hotcold()))),
+            load(ndjson_hotcold()));
+        space::TrajectorySet traj =
+            space::build_trajectories(load(ndjson_hotcold()));
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+
+        const scene3d::Atmosphere kTiers[3] = {
+            [] {
+                scene3d::Atmosphere a;
+                a.front[0] = 0.10f;
+                a.front[1] = 0.14f;
+                a.front[2] = 0.22f;
+                return a;
+            }(),
+            [] {
+                scene3d::Atmosphere a;
+                a.front[0] = 0.95f;
+                a.front[1] = 0.75f;
+                a.front[2] = 0.25f;
+                a.fog_density = 0.35f;
+                return a;
+            }(),
+            [] {
+                scene3d::Atmosphere a;
+                a.front[0] = 0.95f;
+                a.front[1] = 0.45f;
+                a.front[2] = 0.40f;
+                a.fog_density = 0.6f;
+                return a;
+            }(),
+        };
+        SceneLayers weather_on;
+        SceneLayers weather_off;
+        weather_off.weather = false;
+        std::vector<unsigned char> prev_on;
+        for (int i = 0; i < 3; i++) {
+            scene.set_atmosphere(kTiers[i]);
+            std::vector<unsigned char> on = capture(scene, cam, cf, weather_on);
+            check("T3 GL: the sky quad draws without GL error",
+                  glGetError() == GL_NO_ERROR, "a GL error followed set_atmosphere/render");
+            std::vector<unsigned char> off =
+                capture(scene, cam, cf, weather_off);
+            check("T3 GL: the weather layer toggle owns background pixels",
+                  pixels_differ(on, off) > 0,
+                  "turning weather off changed nothing — no sky was drawn");
+            if (i > 0)
+                check("T3 GL: distinct tiers paint visibly distinct skies",
+                      pixels_differ(on, prev_on) > 0,
+                      "two different Atmosphere values rendered identically");
+            prev_on = on;
+        }
+    }
+
     // --- (e) 36 T4: the ANCHORED df trajectory puts pixels on screen ---------
     // scene-df-loop is a live dataflow capture (df_step + codeimage, no trace):
     // its PC path is rel and must ANCHOR to the single span (base+off) before the
@@ -716,6 +837,12 @@ int main() {
         tube_only.statistical = false;
         tube_only.access_marks = false;
         tube_only.convergence = false; // exact (the tube) stays on
+        // 44-faithful-city-phase-a T3: the weather sky quad now draws by
+        // default (SceneLayers::weather) and would fill the WHOLE frame above
+        // the 16-brightness `lit()` threshold, drowning out the tube's pixel
+        // count this check reads — off here since this block is about the
+        // trajectory tube, not the sky (T3 gets its own dedicated GL smoke).
+        tube_only.weather = false;
         SceneLayers nothing = tube_only;
         nothing.exact = false;
         check("df GL: the anchored trajectory puts pixels on screen",
@@ -769,6 +896,145 @@ int main() {
               "no arc pixels");
         check("convergence arc turns off with its layer", without == 0,
               "arc still visible with its layer off");
+    }
+
+    // --- T4 (44-faithful-city-phase-a): ghost districts — a stat surface ----
+    // PHYSICALLY SEPARATE from the exact terrain, in the SAME scene. A
+    // combined fixture (exact trace/codeimage in one region + a survey
+    // targeting a disjoint data region) proves both surfaces render, the
+    // ghost-fog layer toggle owns those extra pixels, presence survives a
+    // playhead move (does not key on t), and an absent survey draws nothing.
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,"
+              "\"version\":0}\n";
+        for (int i = 0; i < 3; i++)
+            nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n";
+        nd += "{\"k\":\"survey\",\"sampler\":\"ibs-op\",\"edges\":["
+              "{\"from_addr\":6291456,\"to_addr\":6291712,\"count\":50}],"
+              "\"samples\":500,\"lost\":0}\n";
+        nd += "{\"k\":\"end\",\"events\":5,\"truncated\":false}\n";
+        Recording rec = load(nd);
+
+        space::Region data_region;
+        data_region.base = 0x600000;
+        data_region.len = 4096;
+        data_region.kind = space::Region::Data;
+        std::vector<space::Region> regs = space::regions_from_codeimage(rec);
+        regs.push_back(data_region);
+        space::TerrainModel terr =
+            space::build_terrain(space::build_projection(regs), rec);
+        check("T4 GL: the combined fixture has a stat layer", terr.has_stat,
+              "no survey layer built");
+        check("T4 GL: the combined fixture also has exact code",
+              !terr.code.empty(), "no exact code cells");
+        space::TrajectorySet traj = space::build_trajectories(rec, terr.proj);
+
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_stat_terrain(terr.stat);
+
+        SceneLayers ghost_on;
+        SceneLayers ghost_off;
+        ghost_off.ghost_fog = false;
+        std::vector<unsigned char> px_full_on = capture(scene, cam, cf, ghost_on);
+        std::vector<unsigned char> px_full_off =
+            capture(scene, cam, cf, ghost_off);
+        check("T4 GL: the ghost-fog layer toggle puts pixels on screen",
+              pixels_differ(px_full_on, px_full_off) > 0,
+              "the stat surface drew nothing extra");
+
+        // Presence survives a playhead move (hud.t change): move the exact
+        // terrain to a DIFFERENT slice (the stat terrain is never re-uploaded
+        // on a scrub, T4 step 4) and confirm the ghost-fog toggle still shows
+        // a difference — proving the stat surface truly does not key on t.
+        scene.set_terrain(terr.slice(0));
+        std::vector<unsigned char> px_t0_on = capture(scene, cam, cf, ghost_on);
+        std::vector<unsigned char> px_t0_off =
+            capture(scene, cam, cf, ghost_off);
+        check("T4 GL: the ghost-fog surface survives a playhead move",
+              pixels_differ(px_t0_on, px_t0_off) > 0,
+              "the stat surface vanished after the exact terrain re-sliced");
+
+        // An absent survey uploads and draws nothing extra (no GL error, no
+        // visible surface): clear_stat_terrain() is what the real caller
+        // (gl_scene_host.cpp) calls when TerrainModel::has_stat is false.
+        scene.clear_stat_terrain();
+        std::vector<unsigned char> px_clear_on =
+            capture(scene, cam, cf, ghost_on);
+        std::vector<unsigned char> px_clear_off =
+            capture(scene, cam, cf, ghost_off);
+        check("T4 GL: has_stat=false draws nothing extra",
+              pixels_differ(px_clear_on, px_clear_off) == 0,
+              "the ghost-fog toggle changed pixels with no survey present");
+
+        // Picking: a stat-only cell (no exact content) routes to hotedges via
+        // the SAME cell-id space the exact terrain already uses (44's own
+        // deviation note: the two surfaces share one (x,y) grid, so
+        // resolve_pick's existing has_stat/TF_STAT branch already serves
+        // both — no second pick-id band was needed).
+        // Residency is credited to the survey edge's ARRIVAL (`to`) cell
+        // (space/terrain.cpp's build_stat), so the flagged cell is at
+        // to_addr = 0x600100, not the region base.
+        uint32_t stat_cell = cell_of(terr.proj, terr.w, 0x600100);
+        Pick spk = decode_pick(pick_id_cell(stat_cell), terr.w);
+        auto slink = resolve_pick(terr, traj, "rec.asmtrace", spk);
+        check("T4 GL: a stat-only cell resolves", slink.has_value(),
+              "no link for the stat-only cell");
+        if (slink)
+            check("T4 GL: a stat-only cell routes to hotedges, never exact",
+                  slink->view == dt_view::hotedges, "wrong view");
+    }
+
+    // --- T6 (44-faithful-city-phase-a): the followed citizen reuses its -----
+    // underlying PC vertex's pick id — no new id space (the city doc's rule).
+    // follow_step names a KNOWN placed vertex; the pick buffer at that
+    // vertex's screen position must return the SAME id whether or not the
+    // vehicle layer draws the head glyph over it.
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_hotcold()))),
+            load(ndjson_hotcold()));
+        space::TrajectorySet traj =
+            space::build_trajectories(load(ndjson_hotcold()));
+        const uint32_t n = terr.w;
+        check("T6 GL: at least one trajectory to follow",
+              !traj.trajectories.empty(), "no trajectory");
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+
+        const uint64_t kFollow = 2; // t=2: a placed, exact PC vertex
+        uint32_t vid = pick_id_vertex(n, kFollow);
+        int vpx = pixel_of_id(scene, cam, W, H, vid);
+        check("T6 GL: the followed vertex is on screen", vpx >= 0,
+              "vertex not rendered");
+        if (vpx >= 0) {
+            scene.follow_step = kFollow;
+            SceneLayers with_vehicle; // vehicle = true by default
+            capture(scene, cam, cf, with_vehicle); // draws the head glyph
+            int px_x = vpx % W, py = vpx / W;       // bottom-left origin
+            int y_top = H - 1 - py;
+            uint32_t got = scene.pick(cam, W, H, px_x, y_top);
+            check("T6 GL: the vehicle draw does not disturb the underlying "
+                  "vertex's pick id",
+                  got == vid, "the head glyph changed the pick id underneath it");
+        }
+
+        // An absent/unplaced follow_step draws NOTHING — never a mis-snapped
+        // vehicle. A step with no matching TrajPoint.t on any exact
+        // trajectory: the vehicle layer toggle must then be a no-op.
+        scene.follow_step = 999999;
+        SceneLayers v_on;
+        SceneLayers v_off;
+        v_off.vehicle = false;
+        check("T6 GL: an absent follow_step draws no vehicle",
+              pixels_differ(capture(scene, cam, cf, v_on),
+                            capture(scene, cam, cf, v_off)) == 0,
+              "a follow_step naming no placed vertex still drew something");
     }
 
     // ===== 3. the T7 GOLDEN SCENES, rendered ================================

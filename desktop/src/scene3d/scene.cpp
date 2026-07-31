@@ -126,14 +126,41 @@ bool Scene::init_gl(std::string *err) {
     if (prog_pick_terrain_)
         prog_pick_pt_ = link_program(shaders::kPickPointVert,
                                      shaders::kPickPointFrag, true, true, e);
-    if (!prog_pick_pt_) {
+    // T4 (44): the ghost-fog terrain reuses kTerrainVert (it needs only vUV +
+    // the displaced depth, no flags-dependent branch to duplicate) with the
+    // new kStatFrag.
+    if (prog_pick_pt_)
+        prog_stat_ = link_program(shaders::kTerrainVert, shaders::kStatFrag,
+                                  false, false, e);
+    // T3 (44): the weather sky quad, a separate minimal vert/frag pair.
+    if (prog_stat_)
+        prog_sky_ =
+            link_program(shaders::kSkyVert, shaders::kSkyFrag, false, false, e);
+    if (!prog_sky_) {
         err_ = e;
         if (err)
             *err = e;
         return false;
     }
+    build_sky_quad();
     ready_ = true;
     return true;
+}
+
+void Scene::build_sky_quad() {
+    if (vao_sky_)
+        return;
+    // A full-screen NDC quad, drawn at the far plane with depth-write off
+    // (T3 step 5): a triangle strip of 2 XY corners each in [-1, 1].
+    static const float kQuad[8] = {-1, -1, 1, -1, -1, 1, 1, 1};
+    glGenVertexArrays(1, &vao_sky_);
+    glGenBuffers(1, &vbo_sky_);
+    glBindVertexArray(vao_sky_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_sky_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kQuad), kQuad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(kAttrPos);
+    glVertexAttribPointer(kAttrPos, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
 }
 
 void Scene::build_grid(uint32_t n) {
@@ -213,6 +240,59 @@ void Scene::set_terrain(const space::Terrain &t) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void Scene::set_zoning(const std::vector<uint8_t> &kind_by_cell, uint32_t w,
+                       uint32_t h) {
+    if (w == 0 || h == 0 ||
+        kind_by_cell.size() != static_cast<size_t>(w) * h)
+        return;
+    if (!tex_kind_)
+        glGenTextures(1, &tex_kind_);
+    glBindTexture(GL_TEXTURE_2D, tex_kind_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER,
+                 GL_UNSIGNED_BYTE, kind_by_cell.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Scene::set_stat_terrain(const space::Terrain &t) {
+    if (t.w == 0 || t.h == 0)
+        return;
+    build_grid(t.w); // same dims as the exact terrain; idempotent if already built
+
+    float maxh = 0.0f;
+    for (float h : t.height)
+        maxh = std::max(maxh, h);
+    const float scale = maxh > 0.0f ? 1.0f / maxh : 1.0f;
+    std::vector<float> norm(t.height.size());
+    for (size_t i = 0; i < t.height.size(); i++)
+        norm[i] = t.height[i] * scale;
+
+    if (!tex_height_stat_)
+        glGenTextures(1, &tex_height_stat_);
+    glBindTexture(GL_TEXTURE_2D, tex_height_stat_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, t.w, t.h, 0, GL_RED, GL_FLOAT,
+                 norm.data());
+
+    if (!tex_flags_stat_)
+        glGenTextures(1, &tex_flags_stat_);
+    glBindTexture(GL_TEXTURE_2D, tex_flags_stat_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, t.w, t.h, 0, GL_RED_INTEGER,
+                 GL_UNSIGNED_INT, t.flags.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    has_stat_terrain_ = true;
+}
+
 void Scene::free_traj() {
     for (Line &l : traj_lines_) {
         if (l.vbo)
@@ -241,6 +321,7 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
     free_traj();
     const float scale =
         time_scale > 0.0f ? time_scale : (nsteps > 0 ? 0.6f / nsteps : 0.02f);
+    traj_scale_ = scale; // T6: render() derives uHeadY from this later
 
     std::vector<float> spur_verts; // GL_LINES pairs
     std::vector<float> pts_pos;    // pick points (all PC vertices)
@@ -252,6 +333,14 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
         std::vector<float> line; // PC vertices as a strip
         float last_pc[3] = {0, 0, 0};
         bool have_last_pc = false;
+        // T6: parallel per-PC-vertex facts (see Line::pt_* doc comment) — one
+        // entry per `!is_access` point, in the SAME order pick_vertex_order
+        // enumerates them, so pt_pick_id can reuse pick_id_vertex(n_, vindex)
+        // directly (no second id scheme).
+        std::vector<uint64_t> pt_t;
+        std::vector<uint8_t> pt_placed;
+        std::vector<float> pt_pos;
+        std::vector<uint32_t> pt_pick_id;
         for (const space::TrajPoint &pt : tr.points) {
             float u = 0, v = 0;
             bool projected = proj.project(pt.addr, &u, &v);
@@ -262,8 +351,14 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
                 // scene's ids stay aligned with resolve_pick's replay).
                 pts_pos.insert(pts_pos.end(), {projected ? u : -1.0f, y,
                                                projected ? v : -1.0f});
-                pts_id.push_back(pick_id_vertex(n_, vindex));
+                const uint32_t pid = pick_id_vertex(n_, vindex);
+                pts_id.push_back(pid);
                 vindex++;
+                pt_t.push_back(pt.t);
+                pt_placed.push_back((pt.placed && projected) ? 1u : 0u);
+                pt_pos.insert(pt_pos.end(),
+                             {projected ? u : 0.0f, y, projected ? v : 0.0f});
+                pt_pick_id.push_back(pid);
                 if (projected) {
                     line.insert(line.end(), {u, y, v});
                     last_pc[0] = u;
@@ -293,7 +388,11 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
             glEnableVertexAttribArray(kAttrPos);
             glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
             glBindVertexArray(0);
-            traj_lines_.push_back(l);
+            l.pt_t = std::move(pt_t);
+            l.pt_placed = std::move(pt_placed);
+            l.pt_pos = std::move(pt_pos);
+            l.pt_pick_id = std::move(pt_pick_id);
+            traj_lines_.push_back(std::move(l));
         }
         tid_seq++;
     }
@@ -410,12 +509,15 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
     glBindVertexArray(0);
 }
 
-void Scene::draw_terrain_common(unsigned prog, const float mvp[16]) {
+void Scene::draw_terrain_common(unsigned prog, const float mvp[16],
+                                bool zoning) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex_height_);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, tex_flags_);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, tex_kind_); // T1: harmless if 0 / unused
     glUniformMatrix4fv(glGetUniformLocation(prog, "uMVP"), 1, GL_FALSE, mvp);
     glUniform1f(glGetUniformLocation(prog, "uYScale"), y_scale);
     glUniform1f(glGetUniformLocation(prog, "uN"), static_cast<float>(n_));
@@ -425,9 +527,86 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16]) {
     GLint uf = glGetUniformLocation(prog, "uFlags");
     if (uf >= 0)
         glUniform1i(uf, 1);
+    GLint uk = glGetUniformLocation(prog, "uKind");
+    if (uk >= 0)
+        glUniform1i(uk, 2);
+    // T7: SceneLayers::zoning off -> uZoning=0, the shader falls back to
+    // kindHue[Code] (today's plain amber ramp) regardless of uKind.
+    GLint uz = glGetUniformLocation(prog, "uZoning");
+    if (uz >= 0)
+        glUniform1i(uz, zoning ? 1 : 0);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
+}
+
+// T4 (44): the SEPARATE statistical terrain — same draw shape as
+// draw_terrain_common, but its own program + its own texture pair, so it can
+// never alias the exact terrain's.
+void Scene::draw_stat_terrain(const float mvp[16]) {
+    glUseProgram(prog_stat_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex_height_stat_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tex_flags_stat_);
+    glUniformMatrix4fv(glGetUniformLocation(prog_stat_, "uMVP"), 1, GL_FALSE,
+                       mvp);
+    glUniform1f(glGetUniformLocation(prog_stat_, "uYScale"), y_scale);
+    glUniform1f(glGetUniformLocation(prog_stat_, "uN"),
+               static_cast<float>(n_));
+    GLint uh = glGetUniformLocation(prog_stat_, "uHeight");
+    if (uh >= 0)
+        glUniform1i(uh, 0);
+    GLint uf = glGetUniformLocation(prog_stat_, "uFlags");
+    if (uf >= 0)
+        glUniform1i(uf, 1);
+    glBindVertexArray(vao_grid_);
+    glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+}
+
+// T3 (44): the weather sky quad — drawn FIRST, far plane, depth-write off.
+void Scene::draw_sky() {
+    if (!prog_sky_ || !vao_sky_)
+        return;
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(prog_sky_);
+    glUniform3fv(glGetUniformLocation(prog_sky_, "uAmbient"), 1, atmo_.ambient);
+    glUniform3fv(glGetUniformLocation(prog_sky_, "uFrontColor"), 1,
+                atmo_.front);
+    glUniform3fv(glGetUniformLocation(prog_sky_, "uSunDir"), 1, atmo_.sun_dir);
+    glUniform1f(glGetUniformLocation(prog_sky_, "uFogDensity"),
+               atmo_.fog_density);
+    glBindVertexArray(vao_sky_);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+}
+
+bool Scene::find_head(float out_pos[3], int *out_line) const {
+    for (size_t li = 0; li < traj_lines_.size(); ++li) {
+        const Line &l = traj_lines_[li];
+        if (l.statistical)
+            continue; // T6: only an exact trajectory can host a vehicle
+        // pt_t is ascending (TrajPoint.t is a monotonic per-tid counter,
+        // space/types.h) — a linear scan is fine at Phase-A's cell/vertex
+        // counts and keeps this branch trivially readable; binary_search
+        // would need a paired index lookup for no real win here.
+        for (size_t i = 0; i < l.pt_t.size(); ++i) {
+            if (l.pt_t[i] != follow_step)
+                continue;
+            if (!l.pt_placed[i])
+                return false; // T6: an unplaced target step draws NOTHING
+            out_pos[0] = l.pt_pos[i * 3 + 0];
+            out_pos[1] = l.pt_pos[i * 3 + 1];
+            out_pos[2] = l.pt_pos[i * 3 + 2];
+            if (out_line)
+                *out_line = static_cast<int>(li);
+            return true;
+        }
+    }
+    return false;
 }
 
 void Scene::render(const Camera &cam, int fbw, int fbh,
@@ -438,10 +617,35 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     cam.mvp(mvp, fbh > 0 ? static_cast<float>(fbw) / fbh : 1.0f);
 
     glViewport(0, 0, fbw, fbh);
+
+    // T3: the sky, first, before anything depth-tested.
+    if (layers.weather)
+        draw_sky();
+
     glEnable(GL_DEPTH_TEST);
 
     if (layers.terrain)
-        draw_terrain_common(prog_terrain_, mvp);
+        draw_terrain_common(prog_terrain_, mvp, layers.zoning);
+
+    // T4: the ghost-fog terrain, after the exact terrain — depth-tested but
+    // depth-write off (so it never occludes anything BEHIND it either) and
+    // blended, so it reads as "a hair above" the exact land.
+    if (layers.ghost_fog && has_stat_terrain_) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+        draw_stat_terrain(mvp);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
+
+    // T6: locate the followed citizen's head, once, before the trajectory
+    // draw loop below (both the per-line tail uniform and the head glyph use
+    // the same lookup).
+    float head_pos[3] = {0, 0, 0};
+    int head_line = -1;
+    const bool have_head =
+        layers.vehicle && find_head(head_pos, &head_line);
 
     // Trajectories over the terrain.
     glUseProgram(prog_traj_);
@@ -452,17 +656,30 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     GLint uColor = glGetUniformLocation(prog_traj_, "uColor");
     GLint uStipple = glGetUniformLocation(prog_traj_, "uStipple");
+    GLint uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
+    GLint uHeadY = glGetUniformLocation(prog_traj_, "uHeadY");
+    GLint uTailHalf = glGetUniformLocation(prog_traj_, "uTailHalf");
+    const float head_y = static_cast<float>(follow_step) * traj_scale_;
+    const float tail_half = 3.0f * traj_scale_; // ~3 steps either side
     glLineWidth(2.0f);
-    for (const Line &l : traj_lines_) {
+    for (size_t li = 0; li < traj_lines_.size(); ++li) {
+        const Line &l = traj_lines_[li];
         if (l.statistical && !layers.statistical)
             continue;
         if (!l.statistical && !layers.exact)
             continue;
         glUniform4fv(uColor, 1, l.color);
         glUniform1i(uStipple, l.statistical ? 1 : 0);
+        const bool is_head_line = have_head && static_cast<int>(li) == head_line;
+        glUniform1i(uHasHead, is_head_line ? 1 : 0);
+        if (is_head_line) {
+            glUniform1f(uHeadY, head_y);
+            glUniform1f(uTailHalf, tail_half);
+        }
         glBindVertexArray(l.vao);
         glDrawArrays(GL_LINE_STRIP, 0, l.count);
     }
+    glUniform1i(uHasHead, 0); // T6: never leak the tail effect onto spurs/arcs
     if (layers.access_marks && access_spurs_.count) {
         glUniform4fv(uColor, 1, access_spurs_.color);
         glUniform1i(uStipple, 0);
@@ -480,6 +697,38 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         glDrawArrays(GL_LINES, 0, conv_arcs_.count);
     }
     glBindVertexArray(0);
+
+    // T6: the head glyph — a single bright point at head_pos, tid-coloured
+    // (the followed line's own colour), reusing prog_traj_'s existing
+    // gl_PointSize support (kTrajVert already sets it). No new pick pass: the
+    // head vertex is already among the existing pickable PC points
+    // (vbo_pts_pos_/vbo_pts_id_), so a click there resolves to the SAME id
+    // the underlying PC vertex carries (T6's "no new id space" rule).
+    if (have_head) {
+        if (!vao_head_) {
+            glGenVertexArrays(1, &vao_head_);
+            glGenBuffers(1, &vbo_head_);
+        }
+        glBindVertexArray(vao_head_);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_head_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(head_pos), head_pos,
+                    GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glUniform1i(uStipple, 0);
+        glUniform1i(uHasHead, 0);
+        const float *hc = (head_line >= 0)
+                              ? traj_lines_[static_cast<size_t>(head_line)].color
+                              : nullptr;
+        const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        glUniform4fv(uColor, 1, hc ? hc : white);
+        glUniform1f(glGetUniformLocation(prog_traj_, "uPointSize"), 10.0f);
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glDisable(GL_PROGRAM_POINT_SIZE);
+        glBindVertexArray(0);
+    }
+
     glDisable(GL_BLEND);
 }
 
@@ -585,19 +834,37 @@ void Scene::shutdown() {
         glDeleteTextures(1, &tex_height_);
     if (tex_flags_)
         glDeleteTextures(1, &tex_flags_);
+    if (tex_kind_)
+        glDeleteTextures(1, &tex_kind_);
+    if (tex_height_stat_)
+        glDeleteTextures(1, &tex_height_stat_);
+    if (tex_flags_stat_)
+        glDeleteTextures(1, &tex_flags_stat_);
+    if (vbo_sky_)
+        glDeleteBuffers(1, &vbo_sky_);
+    if (vao_sky_)
+        glDeleteVertexArrays(1, &vao_sky_);
+    if (vbo_head_)
+        glDeleteBuffers(1, &vbo_head_);
+    if (vao_head_)
+        glDeleteVertexArrays(1, &vao_head_);
     if (tex_pick_)
         glDeleteTextures(1, &tex_pick_);
     if (rbo_pick_depth_)
         glDeleteRenderbuffers(1, &rbo_pick_depth_);
     if (fbo_pick_)
         glDeleteFramebuffers(1, &fbo_pick_);
-    for (unsigned p :
-         {prog_terrain_, prog_traj_, prog_pick_terrain_, prog_pick_pt_})
+    for (unsigned p : {prog_terrain_, prog_traj_, prog_pick_terrain_,
+                       prog_pick_pt_, prog_stat_, prog_sky_})
         if (p)
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
+    tex_kind_ = tex_height_stat_ = tex_flags_stat_ = 0;
+    vbo_sky_ = vao_sky_ = vbo_head_ = vao_head_ = 0;
+    has_stat_terrain_ = false;
     tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
+    prog_stat_ = prog_sky_ = 0;
     ready_ = false;
     n_ = 0;
 }

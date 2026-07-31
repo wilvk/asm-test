@@ -852,6 +852,39 @@ static void scene_apply_camera_keys(scene3d::Camera &cam) {
         scene3d::camera_key(cam, CamKey::TopDown);
 }
 
+// T3 (44-faithful-city-phase-a): the fidelity-tier -> Atmosphere mapping.
+// Reads ONLY the shared palette (dt_warn_col/dt_refuse_col/dt_dim_col,
+// ui/theme.h) — never an independently-chosen RGB literal — so the sky is
+// byte-identical in COLOR SOURCE to the 2D fidelity banner (the load-bearing
+// invariant test_shell asserts). dt_panel_bg_col is the shared dark baseline
+// every tier ambient sits on; only the `front` colour and fog change by tier.
+scene3d::Atmosphere scene_atmosphere_for_tier(FidelityTier tier) {
+    scene3d::Atmosphere a;
+    const ImVec4 amb = dt_panel_bg_col();
+    ImVec4 front;
+    switch (tier) {
+    case FidelityTier::Neutral:
+        front = dt_dim_col(); // clear: quiet, not a warning
+        a.fog_density = 0.0f;
+        break;
+    case FidelityTier::Caution:
+        front = dt_warn_col(); // amber overcast — same source as the 2D banner
+        a.fog_density = 0.35f;
+        break;
+    case FidelityTier::Integrity:
+        front = dt_refuse_col(); // red dusk — same source as the 2D banner
+        a.fog_density = 0.6f;
+        break;
+    }
+    a.ambient[0] = amb.x;
+    a.ambient[1] = amb.y;
+    a.ambient[2] = amb.z;
+    a.front[0] = front.x;
+    a.front[1] = front.y;
+    a.front[2] = front.z;
+    return a;
+}
+
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (s.active_tab < 0 || i >= s.scenes.size())
@@ -923,10 +956,30 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             sv.hud.t = 0;
             sv.play.accum = 0.0f;
         }
+        // T5 (44): the SAME Play button also starts/stops the SECOND,
+        // independent follow_step playhead (SceneView::follow_play) — one
+        // shared user INTENT ("Play"), two separately-ticking Transports
+        // (distinct accum/value), never one value read from the other. This
+        // is the UI-convenience half of "both playheads advance independently
+        // under Play" (T5's Done-when); see SceneView::follow_play's doc
+        // comment for the axis this playhead actually walks.
+        sv.follow_play.playing = sv.play.playing;
+        if (sv.follow_play.playing && sv.follow_step >= sv.terr.nsteps) {
+            sv.follow_step = 0;
+            sv.follow_play.accum = 0.0f;
+        }
     }
     if (sv.play.playing)
         sv.hud.t = transport_tick(sv.play, sv.hud.t, sv.terr.nsteps,
                                   ImGui::GetIO().DeltaTime);
+    // T5: follow_step walks TrajPoint.t's own axis — approximated here by
+    // terr.nsteps as the upper bound (sound for the common single-tid case
+    // T5's doc comment names; a later phase's real resolver can tighten this
+    // to the followed trajectory's own max t).
+    if (sv.follow_play.playing)
+        sv.follow_step = transport_tick(sv.follow_play, sv.follow_step,
+                                        sv.terr.nsteps,
+                                        ImGui::GetIO().DeltaTime);
 
     // 22 T2 (F18): the keyboard camera acts when the HUD (reported above) or the 3D
     // viewport holds focus. The viewport target is drawn in the branches below —
@@ -993,6 +1046,34 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
                 .c_str());
     }
 
+    // T3 (44): damp the weather-sky tier transition (~0.5s) so a one-tier
+    // flicker never strobes the sky — a simple lerp-toward-target each frame,
+    // gated on DeltaTime (mirrors transport_tick's dt handling, 34 T3). The
+    // tier itself is fidelity_severity(fidelity_facts_of(r)) — the SAME
+    // computation the 2D fidelity banner uses, never a second GL-side
+    // judgment. Runs every frame regardless of scene_host so the damped state
+    // stays live even while the viewport placard is showing.
+    {
+        const scene3d::Atmosphere target =
+            scene_atmosphere_for_tier(fidelity_severity(fidelity_facts_of(r)));
+        if (!sv.atmo_inited) {
+            sv.atmo = target; // first weave: snap, never lerp from zero-init
+            sv.atmo_inited = true;
+        } else {
+            const float dt = ImGui::GetIO().DeltaTime;
+            const float k = dt > 0.0f ? std::min(1.0f, dt / 0.5f) : 0.0f;
+            for (int i = 0; i < 3; i++) {
+                sv.atmo.ambient[i] +=
+                    (target.ambient[i] - sv.atmo.ambient[i]) * k;
+                sv.atmo.front[i] += (target.front[i] - sv.atmo.front[i]) * k;
+                sv.atmo.sun_dir[i] +=
+                    (target.sun_dir[i] - sv.atmo.sun_dir[i]) * k;
+            }
+            sv.atmo.fog_density +=
+                (target.fog_density - sv.atmo.fog_density) * k;
+        }
+    }
+
     // The GL scene is drawn by the host threaded in from main.cpp. It is absent
     // under the null test backend (and any run with no GL context): the models +
     // HUD above are the whole pane there, with this placard in place of the
@@ -1040,6 +1121,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.layers = sv.hud.layers;
     f.fbw = fbw;
     f.fbh = fbh;
+    f.atmo = sv.atmo;                                    // T3
+    f.sun = scene_sun_from_hud(sv.hud.t, sv.hud.nsteps);  // T5
+    f.follow_step = sv.follow_step;                       // T5/T6
 
     ImTextureID tex = s.scene_host->render(f);
     if (!tex) {

@@ -184,6 +184,17 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::Checkbox("statistical", &s.layers.statistical);
     ImGui::SameLine();
     ImGui::Checkbox("access", &s.layers.access_marks);
+    // T7 (44-faithful-city-phase-a): the four new city-reskin bools, extending
+    // this same checkbox list — each independently toggleable, matching the
+    // existing five.
+    ImGui::SameLine();
+    ImGui::Checkbox("zoning", &s.layers.zoning);
+    ImGui::SameLine();
+    ImGui::Checkbox("weather", &s.layers.weather);
+    ImGui::SameLine();
+    ImGui::Checkbox("ghost fog", &s.layers.ghost_fog);
+    ImGui::SameLine();
+    ImGui::Checkbox("vehicle", &s.layers.vehicle);
 
     // --- camera presets --------------------------------------------------------
     if (ImGui::Button("reset view"))

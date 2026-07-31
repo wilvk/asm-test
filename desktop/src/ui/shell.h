@@ -19,12 +19,14 @@
 #include "loom/loom_draw.h"
 #include "nav.h"
 #include "platform/window_picker.h" // PickedWindow (doc 45 T7/T8) — X11-only, D4
+#include "scene3d/atmosphere.h" // T3 (44): Atmosphere, SceneView::atmo
 #include "scene3d/camera.h"
 #include "scene3d/hud.h"
 #include "space/converge.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
+#include "ui/fidelity.h" // T3 (44): FidelityTier, scene_atmosphere_for_tier
 #include "ui/find.h"     // global find model (22 T3)
 #include "ui/mode.h"     // task-language modes (20 T2)
 #include "ui/primer.h"   // first-open primer state (24 T5)
@@ -76,6 +78,36 @@ struct SceneView {
     // brush (the brief's fidelity note).
     Transport play;
     dt_primer_state primer; // the first-open primer (24 T5), per recording
+
+    // T3 (44-faithful-city-phase-a): the DAMPED weather-sky config, persisted
+    // per recording so switching tabs holds the current sky rather than
+    // snapping. draw_scene_overview lerps this toward
+    // scene_atmosphere_for_tier(...)'s target every frame and passes the
+    // result straight through via SceneFrame.atmo; Scene itself does no
+    // damping (scene3d/atmosphere.h's own doc comment).
+    scene3d::Atmosphere atmo;
+    bool atmo_inited = false; // first weave snaps atmo to its target, no lerp
+
+    // T5/T6 (44-faithful-city-phase-a): the SECOND, independent playhead over
+    // TrajPoint.t's own per-tid axis — the "followed citizen" (T6). THE
+    // AXIS-MISMATCH DECISION (read before extending this code, per the brief's
+    // own instruction): `Selection.step` is a dataflow-step index (the flat
+    // views' execution-step axis, ui/transport.h's playhead_project) while
+    // `TrajPoint.t` is a per-tid trace-vertex COUNTER (space/trajectory.cpp,
+    // `next_t[tid]++`) — the two do NOT coincide in general for a multi-tid
+    // recording. This brief adopts the SAFE default: follow_step walks
+    // TrajPoint.t as an INDEPENDENT playhead, advanced by its own Transport
+    // (follow_play) exactly like hud.t walks terrain-time — it is NEVER
+    // seeded from the shared Selection here (unlike the Scrubber's
+    // playhead_project seed, ui/transport.h:72-78 / shell.cpp's execution-step
+    // pane), because a reliable step->TrajPoint.t mapping cannot be
+    // established in general (it would require verifying a single-tid,
+    // trace-ordinal recording — not attempted in Phase A). follow_step
+    // free-runs on Play/Pause alone. A later phase may add a real
+    // Selection.step -> TrajPoint.t resolver and cross-brush where it is
+    // verified sound (43's roadmap); this brief does not.
+    Transport follow_play;
+    uint64_t follow_step = 0;
 };
 
 struct ShellState {
@@ -502,6 +534,29 @@ void draw_home_rail(ShellState &s);
 // HUD + placard path. Public so test_shell can drive it without forcing the tab
 // selection. Call inside an ImGui window, with s.active_tab set to the recording.
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a);
+
+// T3 (44-faithful-city-phase-a): the fidelity-tier -> Atmosphere mapping,
+// pure and public so it is unit-testable with NO ImGui frame and no GL
+// context (test_shell.cpp calls it directly). Reads ONLY the shared palette
+// (ui/theme.h's dt_warn_col/dt_refuse_col/dt_dim_col) — never an
+// independently-chosen RGB literal — so the sky is byte-identical in COLOR
+// SOURCE to the 2D fidelity banner, per the brief's load-bearing invariant
+// ("weather is byte-identical to the 2D fidelity verdict"). Lives here (the
+// ImGui-linked shell TU) rather than in scene3d/ because theme.h must stay
+// OUT of the engine-free scene TU (D4-adjacent).
+scene3d::Atmosphere scene_atmosphere_for_tier(FidelityTier tier);
+
+// T5 (44-faithful-city-phase-a): SceneFrame.sun as a PURE function of
+// existing HudState fields (t / nsteps) — no new persisted UI state
+// duplicates it, so this is directly unit-testable with no ImGui frame.
+// `nsteps == 0` (nothing placed yet) returns a fixed "noon" constant per the
+// brief's own note, rather than dividing by zero.
+inline float scene_sun_from_hud(uint64_t t, uint64_t nsteps) {
+    if (nsteps == 0)
+        return 0.5f; // noon
+    const float s = static_cast<float>(t) / static_cast<float>(nsteps);
+    return s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s);
+}
 
 // Apply one undo Command onto the shell (22 T4). `redo` selects the after-value
 // (Ctrl+Y) vs the before-value (Ctrl+Z); it restores the filter / cone /

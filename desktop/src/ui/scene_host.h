@@ -16,7 +16,8 @@
 
 #include "imgui.h" // ImTextureID
 
-#include "scene3d/camera.h" // Camera (pure math)
+#include "scene3d/atmosphere.h" // Atmosphere (a POD; T3, 44-faithful-city-phase-a)
+#include "scene3d/camera.h"     // Camera (pure math)
 #include "scene3d/scene.h"  // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/converge.h"
 #include "space/terrain.h"
@@ -44,6 +45,23 @@ struct SceneFrame {
     scene3d::Camera cam;
     scene3d::SceneLayers layers;
     int fbw = 0, fbh = 0; // desired offscreen size, in pixels
+
+    // T3 (44-faithful-city-phase-a): the already-damped weather sky config,
+    // recomputed by the shell every frame from fidelity_severity() and passed
+    // straight through (Scene does no damping of its own).
+    scene3d::Atmosphere atmo;
+    // T5: the terrain-time sun position in [0, 1] (sv.hud.t / max(nsteps, 1)),
+    // recomputed every frame from existing HudState fields — no new persisted
+    // UI state duplicates it. Reserved for a future sun-angle use; T3's sky
+    // itself keys on the fidelity tier, not this axis (see shell.cpp's own
+    // doc comment on why the two clocks stay separate).
+    float sun = 0.0f;
+    // T5/T6: the SECOND, independent playhead (SceneView::follow_step) —
+    // TrajPoint.t's OWN per-tid axis, NEVER fused with `slice_t` (the
+    // terrain-time axis) or with Selection.step (the flat views' execution-
+    // step axis). See ui/shell.cpp's draw_scene_overview doc comment for the
+    // axis-mismatch decision this field embodies.
+    uint64_t follow_step = 0;
 };
 
 // The abstract GL host. main.cpp constructs one (make_gl_scene_host), calls init()

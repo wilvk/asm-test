@@ -12,8 +12,11 @@
 #include "doc/recording.h"
 #include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
 #include "scene3d/hud.h"         // 36 T4: placement_chips (fidelity chrome)
+#include "ui/fidelity.h" // 44 T3: FidelityTier
 #include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
+#include "ui/theme.h"         // 44 T3: dt_warn_col/dt_refuse_col/dt_dim_col
+#include "ui/transport.h"     // 44 T5: transport_tick, direct on Transport
 #include "ui/view_presence.h" // 20 T1: the data-driven view set
 #include "views/abixray.h"    // 09-T4: the surfaced ABI x-ray tab's model
 #include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
@@ -2325,6 +2328,98 @@ int main() {
             check("dfpass/oneshot-one-pass",
                   ps.seg_df[static_cast<size_t>(oi)].passes.size() == 1,
                   "a one-shot recording has a single pass and no pager");
+    }
+
+    // === 44-faithful-city-phase-a T3: scene_atmosphere_for_tier ==============
+    // The load-bearing fidelity invariant (44's §6 point 9 / T3's own Tests
+    // section): the sky's colour SOURCE must be byte-identical to whatever
+    // the 2D fidelity banner reads (dt_warn_col/dt_refuse_col), never an
+    // independently-chosen RGB literal. Asserted with no ImGui frame, no GL.
+    {
+        auto eq3 = [](const float a[3], const ImVec4 &b) {
+            return a[0] == b.x && a[1] == b.y && a[2] == b.z;
+        };
+        auto eqf3 = [](const float a[3], const float b[3]) {
+            return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+        };
+        scene3d::Atmosphere neutral =
+            scene_atmosphere_for_tier(FidelityTier::Neutral);
+        check("atmo/neutral-front-is-dim-col", eq3(neutral.front, dt_dim_col()),
+              "neutral tier's front colour must be the shared dim colour");
+        check("atmo/neutral-no-fog", neutral.fog_density == 0.0f,
+              "a clear/neutral sky must carry no fog");
+
+        scene3d::Atmosphere caution =
+            scene_atmosphere_for_tier(FidelityTier::Caution);
+        check("atmo/caution-front-is-warn-col", eq3(caution.front, dt_warn_col()),
+              "caution tier's front colour must be the SAME dt_warn_col() the "
+              "2D banner reads — not an independently-chosen amber");
+
+        scene3d::Atmosphere integrity =
+            scene_atmosphere_for_tier(FidelityTier::Integrity);
+        check("atmo/integrity-front-is-refuse-col",
+              eq3(integrity.front, dt_refuse_col()),
+              "integrity tier's front colour must be the SAME dt_refuse_col() "
+              "the 2D banner reads — not an independently-chosen red");
+        // Every tier's ambient sits on the SAME shared dark baseline.
+        check("atmo/ambient-shared-baseline",
+              eq3(neutral.ambient, dt_panel_bg_col()) &&
+                  eq3(caution.ambient, dt_panel_bg_col()) &&
+                  eq3(integrity.ambient, dt_panel_bg_col()),
+              "every tier's ambient must read the same shared panel colour");
+        // The three tiers are visibly distinct (T3's Done-when).
+        check("atmo/three-tiers-distinct",
+              !eqf3(neutral.front, caution.front) &&
+                  !eqf3(caution.front, integrity.front) &&
+                  !eqf3(neutral.front, integrity.front),
+              "the three tiers must map to three visibly distinct front colours");
+    }
+
+    // === 44 T5: SceneFrame.sun is a pure function of hud.t / hud.nsteps ======
+    {
+        check("sun/t0", scene_sun_from_hud(0, 100) == 0.0f, "t=0 must be 0.0");
+        check("sun/mid", scene_sun_from_hud(50, 100) == 0.5f,
+              "t=nsteps/2 must be 0.5");
+        check("sun/end", scene_sun_from_hud(100, 100) == 1.0f,
+              "t=nsteps must be 1.0");
+        check("sun/nsteps-zero-guard", scene_sun_from_hud(0, 0) == 0.5f,
+              "nsteps==0 must return the fixed noon constant, never divide by "
+              "zero");
+    }
+
+    // === 44 T5: the two Transports advance INDEPENDENTLY under Play ==========
+    // Mirrors ui/transport.h's own header-only testability: advancing
+    // SceneView::play must not move SceneView::follow_step, and vice versa —
+    // the D7/doc34 anti-fusion rule the brief's Constraints & gates section
+    // names explicitly.
+    {
+        SceneView sv;
+        sv.play.playing = true;
+        sv.play.steps_per_sec = 10.0f;
+        sv.hud.t = 0;
+        const uint64_t max_terrain = 1000;
+        const uint64_t max_follow = 1000;
+        sv.hud.t = transport_tick(sv.play, sv.hud.t, max_terrain, 1.0f);
+        check("two-clocks/play-advanced", sv.hud.t > 0,
+              "sv.play ticking a full second at 10/s must advance hud.t");
+        check("two-clocks/follow-untouched-by-play", sv.follow_step == 0,
+              "advancing sv.play must NOT move follow_step — the two clocks "
+              "must never fuse");
+
+        sv.follow_play.playing = true;
+        sv.follow_play.steps_per_sec = 5.0f;
+        const uint64_t hud_t_before = sv.hud.t;
+        sv.follow_step =
+            transport_tick(sv.follow_play, sv.follow_step, max_follow, 1.0f);
+        check("two-clocks/follow-advanced", sv.follow_step > 0,
+              "sv.follow_play ticking a full second at 5/s must advance "
+              "follow_step");
+        check("two-clocks/play-untouched-by-follow", sv.hud.t == hud_t_before,
+              "advancing sv.follow_play must NOT move hud.t");
+        // Different rates (10/s vs 5/s over the same 1s) prove they are truly
+        // two SEPARATE Transport instances, not a shared one.
+        check("two-clocks/independent-rates", sv.hud.t != sv.follow_step,
+              "two Transports at different rates must diverge");
     }
 
     if (failures) {
