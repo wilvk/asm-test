@@ -245,6 +245,25 @@ const asmspy_sym_t *asmspy_resolve(const asmspy_symtab_t *syms,
 typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
                                     const char *pf_line, const char *str);
 
+/* docs/internal/gui/45-launch-and-window-target.md T2: mark the NEXT attach
+ * this same thread makes (the very first seize_threads/seize_one call inside
+ * whichever asmspy_engine_* below runs) as already ours — `pid` is a child
+ * THIS OS thread just fork()ed and PTRACE_TRACEME'd (asmspy.c's
+ * serve_launch_target), still stopped at its post-exec trap. ptrace's tracer
+ * identity is per-thread (see IMPORTANT above), so a PTRACE_SEIZE from here
+ * would fail outright — "a tracee has exactly one tracer"
+ * (desktop/src/live/inspect.cpp's attach_verdict comment states the same
+ * rule from the desktop side). The engine installs the identical
+ * PTRACE_O_* options via PTRACE_SETOPTIONS instead and tables the one known
+ * tid, no SEIZE/INTERRUPT involved.
+ *
+ * Consumed (reset to off) by that first seize call, so callers set it fresh
+ * immediately before EACH engine invocation and never need to clear it
+ * themselves — a later SEIZE within the same call (e.g. --procs walking
+ * separate child processes) is unaffected. `on` = 0 is the normal
+ * attach-by-SEIZE path every non-launch caller already uses. */
+void asmspy_engine_mark_already_traced(int on);
+
 /* Attach to `pid` and ALL its threads (PTRACE_SEIZE every task, follow threads
  * it later spawns via PTRACE_O_TRACECLONE), stream their syscalls with decoded
  * data via `sink`, detach. When more than one thread is followed each `line` is

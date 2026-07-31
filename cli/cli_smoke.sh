@@ -2435,6 +2435,52 @@ ntids=$(printf '%s\n' "$out" | sed -n 's/^\[\([0-9][0-9]*\)\].*/\1/p' | sort -u 
 echo "distinct tids seen: $ntids"
 [ "$ntids" -ge 2 ] || fail "expected syscalls from >=2 threads, saw $ntids (thread-follow regressed)"
 
+# ---------------------------------------------------------------------------
+# --launch: fork+PTRACE_TRACEME+exec a fresh target and trace it from birth
+# (docs/internal/gui/45-launch-and-window-target.md T1/T2). No PT/IBS/debug-
+# register silicon needed — just fork/ptrace, which every CI runner has.
+# ---------------------------------------------------------------------------
+echo "--- asmspy --launch log -- syscall_victim (from-birth launch) ---"
+LAUNCH_CLI_OUT="$BUILD/launch_cli.out" # RECDIR does not exist yet this early
+set +e
+timeout 30 "$ASM" --launch log -- "$BUILD/syscall_victim" >"$LAUNCH_CLI_OUT" 2>&1
+rc=$?
+set -e
+# NEVER capture --launch through a shell pipe/command-substitution: the
+# launched target SURVIVES asmspy's exit (D9's "a tracer, not a debugger"),
+# still holding the SAME stdout fd it inherited at fork — a pipe reader
+# (`$(...)`) then blocks forever waiting for a EOF that only comes once every
+# holder of the write end closes it, which the still-running victim never
+# does. A plain file redirect has no such wait (measured: this is what turned
+# a 0.009s run into an indefinite hang under `out=$(...)`).
+[ "$rc" -eq 124 ] && fail "--launch hung"
+head -8 "$LAUNCH_CLI_OUT"
+# T2's from-birth proof: the FIRST captured syscall must be the dynamic
+# linker's own opening move (brk/mmap, well before main() or the victim's
+# write() loop) — not several calls in, which is what a detach-then-reattach
+# gap (T1's retired interim path) would show instead. The default --launch
+# log budget (20) is bounded like every other --log default, so it does not
+# necessarily reach the victim's OWN write() loop — that end-to-end shape is
+# proven separately by the wire `launch` command below, which runs on a time
+# budget instead of a count and does reach it.
+first_line=$(head -1 "$LAUNCH_CLI_OUT")
+printf '%s\n' "$first_line" | grep -qE '^(brk|mmap|arch_prctl|access)\(' \
+    || fail "--launch log: first captured syscall was '$first_line', not an early dynamic-linker call (from-birth launch regressed)"
+pkill -9 -f "$BUILD/syscall_victim" 2>/dev/null || true # the survivor from above
+
+echo "--- asmspy --launch log -- /no/such/binary (clean error, not a hang) ---"
+LAUNCH_BAD_OUT="$BUILD/launch_cli_bad.out" # RECDIR does not exist yet this early
+set +e
+timeout 15 "$ASM" --launch log -- /no/such/binary >"$LAUNCH_BAD_OUT" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--launch of a bad path HUNG instead of failing cleanly"
+[ "$rc" -eq 0 ] && fail "--launch of a bad path exited 0 (should report the exec failure)"
+grep -qi 'exec failed' "$LAUNCH_BAD_OUT" \
+    || fail "--launch of a bad path did not report a clean 'exec failed' reason: $(cat "$LAUNCH_BAD_OUT")"
+echo "  --launch: from-birth trace works; a bad path fails clean"
+rm -f "$LAUNCH_CLI_OUT" "$LAUNCH_BAD_OUT"
+
 # The instruction stream follows every thread too: single-step them all and tag
 # each line "[tid]". Same victim; expect >1 distinct tid and real disassembly.
 echo "--- asmspy --stream $TVPID 150 (follow all threads) ---"
@@ -3234,6 +3280,79 @@ rm -f "$T5_OUT" "$NS_OUT"
 kill -9 "$SRVPID" 2>/dev/null || true
 wait "$SRVPID" 2>/dev/null || true
 SRVPID=""
+
+# ---------------------------------------------------------------------------
+# --serve `launch`: the wire command (docs/internal/gui/45 T1+T2, landed
+# together) — fork+exec a fresh target INSIDE the server and trace it FROM
+# BIRTH, instead of attaching to a pid the client already has. No
+# "launch_gap"/interim-fidelity field: the child is never detached and
+# re-SEIZEd (T1's interim draft did this, and would have needed to flag the
+# resulting gap; T2's from-birth path replaced it before this landed, so the
+# session's trust tier needs no asterisk — same "exact" as any other
+# whole-process attach).
+# ---------------------------------------------------------------------------
+echo "--- asmspy --serve launch (fork+exec inside the server, from birth) ---"
+LAUNCH_OUT="$RECDIR/serve_launch.ndjson"
+set +e
+{
+    printf '{"cmd":"launch","mode":"log","argv":["%s"]}\n' "$BUILD/syscall_victim"
+    sleep 2
+    # mode log has no "max", so it runs unbounded — "stop" it explicitly
+    # before "quit" (an unbounded session survives a bare "quit" until its
+    # OWN teardown loop notices, which never happens without a stop: the
+    # same rule the earlier --serve block's log/stream sequence follows).
+    printf '{"cmd":"stop"}\n'
+    sleep 1
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 60 "$ASM" --serve >"$LAUNCH_OUT" 2>/dev/null
+lrc=$?
+set -e
+[ "$lrc" -eq 124 ] && fail "--serve launch hung"
+[ -s "$LAUNCH_OUT" ] || fail "--serve launch produced no output"
+grep -q '"k":"cmd","cmd":"launch"' "$LAUNCH_OUT" \
+    || fail "--serve launch: no ack for the launch command"
+grep -qE '"k":"session","state":"started","mode":"log","pid":[0-9]+' "$LAUNCH_OUT" \
+    || fail "--serve launch: no started event carrying a real pid"
+grep -q '"launch_gap"' "$LAUNCH_OUT" \
+    && fail "--serve launch: launch_gap present — T1's interim fidelity caveat was not retired"
+grep -q '"k":"syscall"' "$LAUNCH_OUT" \
+    || fail "--serve launch: the launched target's syscalls were never captured"
+# T2's actual proof, not just "some syscalls arrived": the FIRST recorded
+# syscall must be the dynamic linker's own opening move, not several calls
+# into main() — the same property --launch's headless test asserts above,
+# now over the full NDJSON wire protocol instead of the in-process helper.
+first_sys=$(grep -m1 '"k":"syscall"' "$LAUNCH_OUT")
+printf '%s\n' "$first_sys" | grep -qE '"line":"(brk|mmap|arch_prctl|access)\(' \
+    || fail "--serve launch: first syscall event was '$first_sys', not an early dynamic-linker call (from-birth regressed)"
+echo "  launch: ack + started(pid) + syscall events from birth (first event is the dynamic linker's own), no launch_gap"
+
+echo "--- asmspy --serve launch: a bad argv[0] refuses cleanly, no hang ---"
+BADLAUNCH_OUT="$RECDIR/serve_launch_bad.ndjson"
+set +e
+{
+    printf '{"cmd":"launch","mode":"log","argv":["/no/such/binary"]}\n'
+    sleep 2
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 30 "$ASM" --serve >"$BADLAUNCH_OUT" 2>/dev/null
+blrc=$?
+set -e
+[ "$blrc" -eq 124 ] && fail "--serve launch (bad argv) hung"
+grep '"k":"err"' "$BADLAUNCH_OUT" | grep -qi 'exec failed' \
+    || fail "--serve launch (bad argv) did not refuse with a clean 'exec failed' reason"
+grep -q '"k":"session","state":"started"' "$BADLAUNCH_OUT" \
+    && fail "--serve launch (bad argv) must not report a started session"
+echo "  launch: a bad argv[0] is refused cleanly (err), no started session, no hang"
+
+echo "--- asmspy --serve launch: mode dataflow is refused (v1 scope) ---"
+NOTDF_OUT="$RECDIR/serve_launch_dataflow.ndjson"
+printf '{"cmd":"launch","mode":"dataflow","argv":["%s"]}\n{"cmd":"quit"}\n' \
+    "$BUILD/syscall_victim" | timeout 15 "$ASM" --serve >"$NOTDF_OUT" 2>/dev/null || true
+grep '"k":"err"' "$NOTDF_OUT" | grep -q 'not supported by' \
+    || fail "--serve launch: mode dataflow should be refused with a clean reason (v1 scope)"
+echo "  launch: mode dataflow is refused with a stated reason, not attempted"
+rm -f "$LAUNCH_OUT" "$BADLAUNCH_OUT" "$NOTDF_OUT"
 
 # ---------------------------------------------------------------------------
 # --serve + codeimage: JIT-safe bytes for a region session

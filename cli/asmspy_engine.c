@@ -2142,16 +2142,41 @@ static void call_pend_sigrace_inject(pid_t tid, pid_t tgid) {
     signo = -1; /* latch: exactly one forced race per run */
 }
 
+/* docs/internal/gui/45-launch-and-window-target.md T2 side channel — see the
+ * doc comment on asmspy_engine_mark_already_traced (libasmspy.h). A plain
+ * file-scope int, not atomic: only ONE serve session runs at a time (the
+ * command loop refuses a second `start`/`launch` while `s.joinable`), and it
+ * is always set fresh by serve_run_engine on the same thread that then makes
+ * the one seize call which consumes it — no concurrent access is possible. */
+static int g_already_traced = 0;
+
+void asmspy_engine_mark_already_traced(int on) { g_already_traced = on; }
+
 /* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
  * be kicked into tracing. Re-scan /proc/<pid>/task until a full pass adds none,
  * closing the race where a not-yet-seized thread spawns another (a thread
  * spawned by an ALREADY-seized thread is auto-caught by PTRACE_O_TRACECLONE).
  * Returns 0 once the MAIN thread is seized (a secondary thread that vanished
- * meanwhile is skipped); -1 if even the main thread cannot be seized. */
+ * meanwhile is skipped); -1 if even the main thread cannot be seized.
+ *
+ * doc 45 T2: if g_already_traced is set, `pid` is already OUR tracee (a just-
+ * launched child, still stopped at its PTRACE_TRACEME exec-stop, on THIS
+ * thread) — SEIZE would fail ("a tracee has exactly one tracer"), so install
+ * the same options via PTRACE_SETOPTIONS instead and skip INTERRUPT (it is
+ * already stopped; PTRACE_INTERRUPT is meaningful only for a SEIZED tracee).
+ * Consumed here, once, for the leader only — the /proc rescan below still
+ * SEIZEs any other threads normally (there are none yet for a freshly exec'd
+ * process, but the code makes no assumption of that). */
 static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
-    if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)opts) != 0)
-        return -1;
-    ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
+    if (g_already_traced) {
+        g_already_traced = 0;
+        if (ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)opts) != 0)
+            return -1;
+    } else {
+        if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)opts) != 0)
+            return -1;
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
+    }
     if (!thr_get(tab, pid)) {
         /* OOM tabling the leader: DETACH so the target is not left seize-stopped
          * for asmspy's lifetime (the empty table means detach_threads can't). */
@@ -2191,11 +2216,18 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
 
 /* SEIZE + INTERRUPT a SINGLE thread `tid` (the --tid filter): trace exactly this
  * one task and leave the rest of its process running untraced (no TRACECLONE
- * following). Returns 0, or -1 if it cannot be seized (gone / not permitted). */
+ * following). Returns 0, or -1 if it cannot be seized (gone / not permitted).
+ * doc 45 T2: honors g_already_traced exactly like seize_threads above. */
 static int seize_one(pid_t tid, long opts, thr_tab_t *tab) {
-    if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) != 0)
-        return -1;
-    ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+    if (g_already_traced) {
+        g_already_traced = 0;
+        if (ptrace(PTRACE_SETOPTIONS, tid, NULL, (void *)opts) != 0)
+            return -1;
+    } else {
+        if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) != 0)
+            return -1;
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+    }
     if (!thr_get(tab, tid)) {
         ptrace(PTRACE_DETACH, tid, NULL,
                NULL); /* OOM: don't strand it seized */

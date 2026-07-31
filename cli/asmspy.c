@@ -33,8 +33,10 @@
 #include <string.h>
 #include <strings.h>    /* strcasecmp — the symbol picker's name sort */
 #include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
+#include <sys/ptrace.h> /* doc 45: serve_launch_target's PTRACE_TRACEME/DETACH */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <sys/un.h>
+#include <sys/wait.h> /* doc 45: serve_launch_target's waitpid for the exec-stop */
 #include <time.h>
 #include <unistd.h>
 
@@ -3144,6 +3146,11 @@ static void tracer_arm_alarm(void) {
 /* pending waitpid, join. Never a cancel, never a kill.                 */
 /* ================================================================== */
 
+/* doc 45: `launch`'s wire "argv" array — a generous, fixed bound (mirrors
+ * every other fixed-size wire field in serve_params_t) rather than a malloc'd
+ * list, since the control channel is a flat, non-recursive command grammar. */
+#define SERVE_LAUNCH_MAX_ARGV 64
+
 typedef enum {
     SM_NONE = 0,
     SM_LOG,
@@ -3204,6 +3211,16 @@ typedef struct {
     char focus[128], module[128];
     sampler_mode_t sampler;
     char func[160]; /* mode trace/dataflow: a symbol instead of base/len */
+
+    /* ---- doc 45: `launch` (never set by `start`) ---------------------- */
+    int is_launch;    /* this session's pid was forked by asmspy itself     */
+    int already_traced; /* pid is already ours via PTRACE_TRACEME on the
+                          * tracer thread — attach must SETOPTIONS, never
+                          * SEIZE again (asmspy_engine_mark_already_traced).
+                          * Set once the from-birth fork lands, serve_tracer. */
+    int launch_argc;
+    char launch_argv[SERVE_LAUNCH_MAX_ARGV][256];
+    char launch_cwd[512];
 } serve_params_t;
 
 typedef struct {
@@ -3602,6 +3619,57 @@ static int sj_bool(const char *v, int *out) {
     return -1;
 }
 
+/* doc 45 T1: `launch`'s "argv":["path","arg1",...] — the one array this
+ * protocol parses (every other field above is a scalar). Reuses sj_str's own
+ * escaping for each element. Returns 0 with *count set (1..max_n), or -1 if
+ * `v` is not an array, is malformed, holds a non-string element, exceeds
+ * max_n entries, or is empty (an empty argv cannot execvp anything). */
+static int sj_str_array(const char *v, char out[][256], int max_n,
+                        int *count) {
+    int n = 0;
+    if (!v || *v != '[')
+        return -1;
+    v++;
+    for (;;) {
+        while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r')
+            v++;
+        if (*v == ']') {
+            v++;
+            break;
+        }
+        if (*v != '"' || n >= max_n)
+            return -1;
+        const char *start = v;
+        v++;
+        while (*v && *v != '"') {
+            if (*v == '\\' && v[1])
+                v++;
+            v++;
+        }
+        if (*v != '"')
+            return -1;
+        v++;
+        if (sj_str(start, out[n], 256) != 0)
+            return -1;
+        n++;
+        while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\r')
+            v++;
+        if (*v == ',') {
+            v++;
+            continue;
+        }
+        if (*v == ']') {
+            v++;
+            break;
+        }
+        return -1;
+    }
+    if (n == 0)
+        return -1;
+    *count = n;
+    return 0;
+}
+
 /* ---- lifecycle emission ------------------------------------------- */
 
 /* One lifecycle line on the client stream, under the same mutex the event
@@ -3806,6 +3874,14 @@ static void serve_run_engine(serve_session_t *s) {
     serve_params_t *p = &s->p;
     rec_t *r = &s->rec;
 
+    /* doc 45 T2: mark (or clear) the already-traced side channel fresh for
+     * THIS session's engine call. Only a from-birth `launch` session sets
+     * already_traced, and only the very first seize call the mode below
+     * makes consumes it (asmspy_engine.c's seize_threads/seize_one) — every
+     * other session (including a launch that already detached, T1's interim
+     * gap) attaches normally. */
+    asmspy_engine_mark_already_traced(p->already_traced);
+
     switch (p->mode) {
     case SM_LOG: {
         log_rec_ctx c = {r, 0}; /* echo=0: the stream IS the recording */
@@ -3971,6 +4047,15 @@ static void serve_run_engine(serve_session_t *s) {
  * tracer tail calls it to announce a self-end (39 T5), so forward-declare it. */
 static void serve_emit_session_end(serve_session_t *s, const char *reason);
 
+/* doc 45 T2: both defined further below (serve_launch_target sits with the
+ * `launch` wire-parse code; serve_resolve_region already had one caller,
+ * the command loop's `start` handling) but serve_tracer's own launch
+ * preamble — which must run BEFORE it, forking on this exact thread — needs
+ * them first. */
+static int serve_launch_target(char *const *argv, const char *cwd,
+                               pid_t *out_pid, char *err, size_t errlen);
+static int serve_resolve_region(serve_params_t *p, const char **why);
+
 static void *serve_tracer(void *arg) {
     serve_session_t *s = arg;
     const char *backend = "ptrace-syscalls";
@@ -3982,6 +4067,80 @@ static void *serve_tracer(void *arg) {
      * INTERRUPT a blocked waitpid here, not kill the process. The command
      * thread blocks SIGALRM so the wake can only land on this one. */
     tracer_arm_alarm();
+
+    /* doc 45 T2: `launch`'s fork+PTRACE_TRACEME happens HERE, on the tracer
+     * thread itself — not in the command loop — because ptrace's tracer is a
+     * specific OS thread (cli/libasmspy.h's "ptrace is per-thread" rule):
+     * whichever thread forks the child becomes its tracer, and every later
+     * ptrace()/waitpid() on it (everything below, and inside
+     * asmspy_engine_*) must come from that same thread. The pid is therefore
+     * unknown until this runs, which is why `launch`'s ack/i386-check/
+     * "started" event all live here instead of in the command loop next to
+     * `start`'s (which already has its pid when the command arrives). */
+    if (s->p.is_launch) {
+        pid_t launched = 0;
+        char lerr[256];
+        char *cargv[SERVE_LAUNCH_MAX_ARGV + 1];
+        int k;
+        const char *why = NULL;
+
+        for (k = 0; k < s->p.launch_argc; k++)
+            cargv[k] = s->p.launch_argv[k];
+        cargv[s->p.launch_argc] = NULL;
+        if (serve_launch_target(cargv,
+                                s->p.launch_cwd[0] ? s->p.launch_cwd : NULL,
+                                &launched, lerr, sizeof lerr) != 0) {
+            serve_err(s, "launch", lerr);
+            s->end_announced = 1; /* no session ever started; nothing to end */
+            atomic_store(&s->running, 0);
+            return NULL;
+        }
+        s->p.pid = launched;
+        /* Never detached, never re-SEIZEd: the child stays traced from this
+         * exact post-exec stop onward, so the FIRST thing the picked mode's
+         * engine observes is the target's true first instruction/syscall —
+         * no T1-style gap. asmspy_engine_mark_already_traced (called from
+         * serve_run_engine, below) is what makes seize_threads/seize_one
+         * install PTRACE_O_* via SETOPTIONS instead of re-attaching. */
+        s->p.already_traced = 1;
+
+        if (s->p.mode == SM_TRACE && serve_resolve_region(&s->p, &why) != 0) {
+            serve_err(s, "launch", why);
+            ptrace(PTRACE_DETACH, s->p.pid, NULL, NULL); /* let it run free */
+            s->end_announced = 1;
+            atomic_store(&s->running, 0);
+            return NULL;
+        }
+        /* Refuse a target we cannot decode rather than decode it wrong (same
+         * rule `start` applies pre-attach, asmspy.c's i386 guard) — reachable
+         * here only if argv[0] execs into a 32-bit image, since a launched
+         * process's OWN bitness is asmspy's to control via what it just ran. */
+        if (asmspy_elf_class(s->p.pid) == 32) {
+            char e[256], esc[4 * 256];
+            asmspy_strerror(ASMSPY_ETRACEE_I386, e, sizeof e);
+            asmtrace_escape(esc, sizeof esc, e);
+            serve_emitf(s, "cmd", "\"cmd\":\"launch\",\"mode\":\"%s\"",
+                        serve_mode_name(s->p.mode));
+            serve_emitf(s, "session",
+                        "\"state\":\"skip\",\"mode\":\"%s\",\"skip\":{"
+                        "\"code\":%d,\"reason\":\"%s\"}",
+                        serve_mode_name(s->p.mode), ASMSPY_ETRACEE_I386, esc);
+            ptrace(PTRACE_DETACH, s->p.pid, NULL, NULL);
+            s->end_announced = 1;
+            atomic_store(&s->running, 0);
+            return NULL;
+        }
+        {
+            char params[2048];
+            serve_params_json(params, sizeof params, &s->p);
+            serve_emitf(s, "cmd", "\"cmd\":\"launch\",\"mode\":\"%s\"",
+                        serve_mode_name(s->p.mode));
+            serve_emitf(s, "session",
+                        "\"state\":\"started\",\"mode\":\"%s\",\"pid\":%d,"
+                        "\"params\":%s",
+                        serve_mode_name(s->p.mode), (int)s->p.pid, params);
+        }
+    }
 
     for (int i = 0; i < SERVE_NMODES; i++)
         if (SERVE_MODES[i].mode == s->p.mode) {
@@ -4379,6 +4538,262 @@ static int serve_parse_start(const char *line, serve_params_t *p,
     return 0;
 }
 
+/* Modes `launch` supports in v1 (docs/internal/gui/45, Non-goals): every
+ * whole-process mode plus the two single-region modes reachable through this
+ * file's OWN seize call sites (trace/watch — both go straight through
+ * seize_threads, asmspy_engine.c). `dataflow`/`auto` attach through a
+ * DIFFERENT subsystem (src/dataflow_ptrace.c's own SEIZE, shared with the CI
+ * fixture/parity tests) that this brief does not thread already_traced
+ * through; launching into them would either hang (T1's detach still lets
+ * them attach normally) or, once T2 lands and keeps the child TRACEME'd,
+ * outright fail the SEIZE ("a tracee has exactly one tracer") — so refuse
+ * them here with a clean error rather than let a client discover either
+ * failure mode empirically. Attach with "start" after launch instead. */
+static int serve_launch_mode_ok(serve_mode_t m, const char **why) {
+    switch (m) {
+    case SM_LOG:
+    case SM_STREAM:
+    case SM_TREE:
+    case SM_GRAPH:
+    case SM_PROCS:
+    case SM_SAMPLE:
+    case SM_WATCH:
+    case SM_TRACE:
+        return 1;
+    default:
+        *why = "mode \"dataflow\"/\"auto\" is not supported by \"launch\" "
+               "yet (attach with \"start\" once the target is running "
+               "instead)";
+        return 0;
+    }
+}
+
+/* Parse + validate a `launch`. Shares `start`'s mode grammar and per-mode
+ * optional fields it actually needs (a subset — launch has no "pid" and no
+ * "tid": there is no thread to pin before the target exists), adding the
+ * required "argv" and optional "cwd". Returns 0, or -1 with *why set. */
+static int serve_parse_launch(const char *line, serve_params_t *p,
+                              const char **why) {
+    char mode[32] = "";
+    const char *v;
+    long long n;
+    unsigned long long u;
+    int i, b;
+
+    memset(p, 0, sizeof *p);
+    p->max = -1;
+    p->ms = 200;
+    p->wlen = 8;
+    p->count = ASMSPY_COUNT_SYSCALLS;
+    p->is_launch = 1;
+
+    if (sj_str(sj_find(line, "mode"), mode, sizeof mode) != 0) {
+        *why = "launch needs a string \"mode\"";
+        return -1;
+    }
+    p->mode = SM_NONE;
+    for (i = 0; i < SERVE_NMODES; i++)
+        if (strcmp(mode, SERVE_MODES[i].name) == 0)
+            p->mode = SERVE_MODES[i].mode;
+    if (p->mode == SM_NONE) {
+        *why = "unknown mode (log|stream|trace|tree|graph|procs|sample|"
+               "watch)";
+        return -1;
+    }
+    if (!serve_launch_mode_ok(p->mode, why))
+        return -1;
+
+    if (sj_str_array(sj_find(line, "argv"), p->launch_argv,
+                     SERVE_LAUNCH_MAX_ARGV, &p->launch_argc) != 0) {
+        *why = "launch needs a non-empty array \"argv\" (argv[0] is the "
+               "path to run)";
+        return -1;
+    }
+    if ((v = sj_find(line, "cwd")) != NULL &&
+        sj_str(v, p->launch_cwd, sizeof p->launch_cwd) != 0) {
+        *why = "\"cwd\" must be a string";
+        return -1;
+    }
+
+    if ((v = sj_find(line, "follow")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"follow\" must be true or false";
+            return -1;
+        }
+        p->follow = b;
+    }
+    if ((v = sj_find(line, "max")) != NULL) {
+        if (sj_i64(v, &n) != 0) {
+            *why = "\"max\" must be an integer";
+            return -1;
+        }
+        p->max = (long)n;
+    }
+    if ((v = sj_find(line, "ms")) != NULL) {
+        if (sj_i64(v, &n) != 0 || n <= 0) {
+            *why = "\"ms\" must be a positive integer";
+            return -1;
+        }
+        p->ms = (long)n;
+        p->has_ms = 1;
+    }
+    if ((v = sj_find(line, "count")) != NULL) {
+        char c[16];
+        if (sj_str(v, c, sizeof c) != 0 ||
+            (strcmp(c, "syscalls") != 0 && strcmp(c, "calls") != 0)) {
+            *why = "\"count\" must be \"syscalls\" or \"calls\"";
+            return -1;
+        }
+        p->count = strcmp(c, "calls") == 0 ? ASMSPY_COUNT_CALLS
+                                           : ASMSPY_COUNT_SYSCALLS;
+    }
+    if ((v = sj_find(line, "depth")) != NULL) {
+        if (sj_i64(v, &n) != 0 || n < 1 || n > 1000) {
+            *why = "\"depth\" must be 1..1000 (omit it for unlimited)";
+            return -1;
+        }
+        p->depth = (int)n;
+    }
+    if ((v = sj_find(line, "focus")) != NULL &&
+        sj_str(v, p->focus, sizeof p->focus) != 0) {
+        *why = "\"focus\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "module")) != NULL &&
+        sj_str(v, p->module, sizeof p->module) != 0) {
+        *why = "\"module\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "func")) != NULL &&
+        sj_str(v, p->func, sizeof p->func) != 0) {
+        *why = "\"func\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "base")) != NULL) {
+        if (sj_u64(v, &u) != 0) {
+            *why = "\"base\" must be an integer or a 0x string";
+            return -1;
+        }
+        p->base = u;
+    }
+    if ((v = sj_find(line, "len")) != NULL) {
+        if (sj_u64(v, &u) != 0 || u == 0) {
+            *why = "\"len\" must be a positive integer or a 0x string";
+            return -1;
+        }
+        p->len = (size_t)u;
+    }
+    if ((v = sj_find(line, "addr")) != NULL) {
+        if (sj_u64(v, &u) != 0) {
+            *why = "\"addr\" must be an integer or a 0x string";
+            return -1;
+        }
+        p->addr = u;
+    }
+    if ((v = sj_find(line, "rw")) != NULL) {
+        if (sj_i64(v, &n) != 0 || (n != 0 && n != 1)) {
+            *why = "\"rw\" must be 0 (writes) or 1 (reads and writes)";
+            return -1;
+        }
+        p->rw = (int)n;
+    }
+    if (p->mode == SM_WATCH) {
+        if (!p->addr) {
+            *why = "mode \"watch\" needs \"addr\"";
+            return -1;
+        }
+        if ((v = sj_find(line, "len")) != NULL)
+            p->wlen = (int)p->len;
+        if (p->wlen != 1 && p->wlen != 2 && p->wlen != 4 && p->wlen != 8) {
+            *why = "\"len\" must be 1, 2, 4 or 8 for mode \"watch\"";
+            return -1;
+        }
+        if (p->addr % (uint64_t)p->wlen) {
+            *why = "\"addr\" must be \"len\"-aligned (an x86 hardware rule)";
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* doc 45 T1/T2: fork a child, PTRACE_TRACEME + execvp the requested command,
+ * and block for its FIRST stop. Mirrors desktop/src/live/session.cpp's
+ * existing fork/pipe/exec shape (LiveSession::start, session.cpp:80-134) minus
+ * the stdio pipe — the launched target's stdio inherits the SERVER's
+ * (`asmspy --serve`'s), not a private NDJSON channel — and the fork +
+ * PTRACE_TRACEME + waitpid handshake src/ptrace_backend.c:1062's comment
+ * documents for a different (in-process JIT stub) exec target.
+ *
+ * cli/libasmspy.h's "ptrace is per-thread" rule applies here too: whichever
+ * OS thread calls this becomes the tracee's tracer for as long as it stays
+ * traced, and every later ptrace()/waitpid() on it must come from that same
+ * thread — every caller of this function (the wire `launch` command's
+ * serve_tracer preamble; `--launch`'s cmd_launch, single-threaded so this is
+ * trivially satisfied) therefore calls it from the exact thread that then
+ * keeps tracing the result, never detaching (docs/internal/gui/45 T2 — the
+ * from-birth path; an earlier T1 draft forked from the command-loop thread
+ * and detached immediately, which this function's WNOWAIT peek below was
+ * designed to also support, but T2 replaced it everywhere before landing).
+ *
+ * IMPORTANT: the success path peeks at the post-exec stop via waitid(...,
+ * WNOWAIT) rather than reaping it with waitpid. Every seize call site this
+ * brief threads already_traced through (seize_threads/seize_one,
+ * asmspy_engine.c) — and, for the region engine, its own explicit per-thread
+ * SEIZE-drain loop — is written assuming a SEIZE+PTRACE_INTERRUPT always
+ * leaves a stop PENDING for its own next waitpid() to reap and dispatch
+ * through the engine's normal per-mode resume logic (PTRACE_SYSCALL for a
+ * syscall-stepper, single-step for an instruction-stepper, …). already_traced
+ * skips the SEIZE/INTERRUPT (it would fail — the pid is already ours), but
+ * still needs THAT SAME "a stop is waiting to be reaped" property, or the
+ * engine's first waitpid() blocks forever (measured: without WNOWAIT here,
+ * `--launch log` hung indefinitely — this function's own waitpid had already
+ * drained the only stop there was going to be, and nothing had resumed the
+ * tracee to produce another). WNOWAIT leaves it exactly as a fresh
+ * SEIZE+INTERRUPT would: reapable, undelivered, waiting for the real
+ * consumer. Returns 0 with *out_pid set (the child is still stopped, stop
+ * NOT consumed), or -1 with a human-readable `err`: a fork() failure, or the
+ * child's own _exit(127) — execvp failed (bad path, ENOENT, permission) —
+ * surfaced as a clean refusal rather than a hang or a silently-vanished
+ * session. A failure path DOES reap (nothing else ever will). */
+static int serve_launch_target(char *const *argv, const char *cwd,
+                               pid_t *out_pid, char *err, size_t errlen) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(err, errlen, "fork failed: %s", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)
+            _exit(127);
+        if (cwd && *cwd && chdir(cwd) != 0)
+            _exit(127);
+        execvp(argv[0], argv);
+        _exit(127); /* execvp failed: bad path / ENOENT / permission */
+    }
+    siginfo_t info;
+    for (;;) {
+        memset(&info, 0, sizeof info);
+        if (waitid(P_PID, pid, &info, WEXITED | WSTOPPED | WNOWAIT) == 0)
+            break;
+        if (errno == EINTR)
+            continue;
+        snprintf(err, errlen, "waitpid failed: %s", strerror(errno));
+        return -1;
+    }
+    if (info.si_code == CLD_EXITED || info.si_code == CLD_KILLED ||
+        info.si_code == CLD_DUMPED) {
+        /* exited or was signalled before the exec-stop: _exit(127) (bad
+         * argv[0]) or a fork()-adjacent failure the shell would also hit.
+         * Nothing else is ever going to reap this — do it now. */
+        int status;
+        waitpid(pid, &status, 0);
+        snprintf(err, errlen, "exec failed: %s: could not start", argv[0]);
+        return -1;
+    }
+    *out_pid = pid;
+    return 0;
+}
+
 /* Resolve mode trace/dataflow's region: either an explicit base+len, or a
  * symbol name looked up in the target's symtab. Returns 0/-1. */
 static int serve_resolve_region(serve_params_t *p, const char **why) {
@@ -4492,60 +4907,82 @@ static int serve_loop(FILE *in, FILE *out) {
                         on ? "true" : "false");
             continue;
         }
-        if (strcmp(cmd, "start") != 0) {
-            serve_err(&s, cmd, "unknown command (start|pause|stop|quit)");
-            continue;
-        }
+        {
+            int is_launch = strcmp(cmd, "launch") == 0;
+            if (!is_launch && strcmp(cmd, "start") != 0) {
+                serve_err(&s, cmd, "unknown command (start|launch|pause|"
+                                   "stop|quit)");
+                continue;
+            }
 
-        /* ---- start ---- */
-        if (s.joinable) {
-            /* D6, the concurrency budget: one ptrace jack per target tree.
-             * The desktop client blocks this first (its patch bay), so this
-             * refusal is the backstop rather than the normal path. */
-            serve_err(&s, "start",
-                      "a session is already running — one ptrace jack per "
-                      "target (send \"stop\" first)");
-            continue;
-        }
-        if (serve_parse_start(line, &s.p, &why) != 0) {
-            serve_err(&s, "start", why);
-            continue;
-        }
-        if ((s.p.mode == SM_TRACE || s.p.mode == SM_DATAFLOW) &&
-            serve_resolve_region(&s.p, &why) != 0) {
-            serve_err(&s, "start", why);
-            continue;
-        }
-        /* Refuse a target we cannot decode rather than decode it wrong: an
-         * i386 tracee's orig_rax indexes a COMPLETELY different syscall table,
-         * so every name would be confidently wrong. Pre-attach, by design. */
-        if (asmspy_elf_class(s.p.pid) == 32) {
-            char e[256];
-            asmspy_strerror(ASMSPY_ETRACEE_I386, e, sizeof e);
-            serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
-                        serve_mode_name(s.p.mode));
-            {
-                char esc[4 * 256];
-                asmtrace_escape(esc, sizeof esc, e);
-                serve_emitf(&s, "session",
+            /* ---- start / launch ---- */
+            if (s.joinable) {
+                /* D6, the concurrency budget: one ptrace jack per target
+                 * tree. The desktop client blocks this first (its patch
+                 * bay), so this refusal is the backstop rather than the
+                 * normal path. */
+                serve_err(&s, cmd,
+                          "a session is already running — one ptrace jack "
+                          "per target (send \"stop\" first)");
+                continue;
+            }
+            if (is_launch) {
+                if (serve_parse_launch(line, &s.p, &why) != 0) {
+                    serve_err(&s, "launch", why);
+                    continue;
+                }
+                /* doc 45 T2: pid is unknown until the tracer thread forks
+                 * it — ptrace's tracer-is-per-thread rule (cli/libasmspy.h)
+                 * means the fork+PTRACE_TRACEME must happen ON that thread,
+                 * not here. So unlike `start` (which already has its pid and
+                 * validates/acks/announces right below), a launch's region-
+                 * resolve + i386 check + ack + "started" event all move into
+                 * serve_tracer's own launch preamble, once the fork has
+                 * actually happened — see serve_tracer. */
+            } else {
+                if (serve_parse_start(line, &s.p, &why) != 0) {
+                    serve_err(&s, "start", why);
+                    continue;
+                }
+                if ((s.p.mode == SM_TRACE || s.p.mode == SM_DATAFLOW) &&
+                    serve_resolve_region(&s.p, &why) != 0) {
+                    serve_err(&s, "start", why);
+                    continue;
+                }
+                /* Refuse a target we cannot decode rather than decode it
+                 * wrong: an i386 tracee's orig_rax indexes a COMPLETELY
+                 * different syscall table, so every name would be
+                 * confidently wrong. Pre-attach, by design. */
+                if (asmspy_elf_class(s.p.pid) == 32) {
+                    char e[256];
+                    asmspy_strerror(ASMSPY_ETRACEE_I386, e, sizeof e);
+                    serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
+                                serve_mode_name(s.p.mode));
+                    {
+                        char esc[4 * 256];
+                        asmtrace_escape(esc, sizeof esc, e);
+                        serve_emitf(
+                            &s, "session",
                             "\"state\":\"skip\",\"mode\":\"%s\",\"skip\":{"
                             "\"code\":%d,\"reason\":\"%s\"}",
                             serve_mode_name(s.p.mode), ASMSPY_ETRACEE_I386,
                             esc);
+                    }
+                    s.p.mode = SM_NONE;
+                    continue;
+                }
+                {
+                    char params[2048];
+                    serve_params_json(params, sizeof params, &s.p);
+                    serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
+                                serve_mode_name(s.p.mode));
+                    serve_emitf(&s, "session",
+                                "\"state\":\"started\",\"mode\":\"%s\","
+                                "\"pid\":%d,\"params\":%s",
+                                serve_mode_name(s.p.mode), (int)s.p.pid,
+                                params);
+                }
             }
-            s.p.mode = SM_NONE;
-            continue;
-        }
-
-        {
-            char params[2048];
-            serve_params_json(params, sizeof params, &s.p);
-            serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
-                        serve_mode_name(s.p.mode));
-            serve_emitf(&s, "session",
-                        "\"state\":\"started\",\"mode\":\"%s\",\"pid\":%d,"
-                        "\"params\":%s",
-                        serve_mode_name(s.p.mode), (int)s.p.pid, params);
         }
         atomic_store(&s.stop, 0);
         atomic_store(&s.running, 1);
@@ -7607,6 +8044,12 @@ static int usage(const char *argv0) {
         "[--json]  hardware DATA watchpoint: who touches a field + the value, "
         "at "
         "native speed (x86-64)\n"
+        "  %s --launch <mode> -- <cmd> [args...]   fork+exec <cmd> and trace "
+        "it\n"
+        "from its first instruction (mode: log|stream|graph|tree|procs|"
+        "sample);\n"
+        "the --serve wire protocol's \"launch\" command does the same, plus "
+        "watch/trace\n"
         "  %s --serve[=<socket>]            live-session control loop: read\n"
         "NDJSON commands on stdin (or a unix socket), run ONE engine at a "
         "time\n"
@@ -7632,8 +8075,67 @@ static int usage(const char *argv0) {
         "debugger) may never reach a fixed n in batch mode; interrupt with "
         "Ctrl-C.\n",
         argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
-        argv0, argv0, argv0, argv0);
+        argv0, argv0, argv0, argv0, argv0);
     return 2;
+}
+
+/* docs/internal/gui/45-launch-and-window-target.md T1 step 5 / T2: `--launch
+ * <mode> -- <cmd> [args...]`. Forks + PTRACE_TRACEME + execvp's `cmd` (the
+ * same serve_launch_target `asmspy --serve`'s wire `launch` command uses) and
+ * hands the resulting pid straight to the SAME per-mode headless command
+ * every other flag calls — from birth, no interim gap, since main() is
+ * single-threaded: the thread that forks is trivially the same thread that
+ * then attaches (cli/libasmspy.h's "ptrace is per-thread" rule is satisfied
+ * for free here, unlike the wire protocol's command-loop/tracer-thread split
+ * T1 had to work around).
+ *
+ * Scope matches the Non-goals' "natural v1 focus": the whole-process modes
+ * (log/stream/graph/tree/procs) plus sample. watch/trace need an
+ * addr/base/len/func the size of their OWN flag grammar (`--watch`/`--trace`
+ * already own this argument vector's tail), so this flag does not attempt
+ * them — a caller who already knows the region can equally well `--serve` and
+ * send a `launch` with `"base"/"len"`/`"addr"` set, which does support them. */
+static int cmd_launch(const char *modename, char **cmdargv) {
+    pid_t pid = 0;
+    char err[256];
+    int sample = strcmp(modename, "sample") == 0;
+
+    if (serve_launch_target(cmdargv, NULL, &pid, err, sizeof err) != 0) {
+        fprintf(stderr, "launch: %s\n", err);
+        return 1;
+    }
+    if (sample)
+        /* IBS sampling reads out-of-band (perf_event_open), never ptrace —
+         * nothing else will ever resume this TRACEME'd stop, so detach it
+         * now and let it run free, same as any other --sample target. */
+        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    else
+        asmspy_engine_mark_already_traced(1);
+
+    /* Same bounded defaults `--log`/`--stream`/`--graph`/`--tree`/`--procs`
+     * (no explicit [n]) already use — unbounded-by-default here would be a
+     * silent behavior mismatch from every sibling flag, and (measured) makes
+     * a smoke test that pipes through `timeout` indistinguishable from a
+     * genuine hang. A caller wanting more just adds a --record=/pipe and lets
+     * it run; there is no separate [n] slot in this flag's own grammar
+     * (argv[0..] belongs entirely to the launched command). */
+    if (strcmp(modename, "log") == 0)
+        return cmd_log(pid, 0, 20, 0, NULL);
+    if (strcmp(modename, "stream") == 0)
+        return cmd_stream(pid, 0, 0, 20, 0, NULL);
+    if (strcmp(modename, "graph") == 0)
+        return cmd_graph(pid, 0, 0, 40, GSORT_INVOCATIONS, 0, 0, NULL);
+    if (strcmp(modename, "tree") == 0)
+        return cmd_tree(pid, 0, 0, 200, NULL, 0, 0, NULL);
+    if (strcmp(modename, "procs") == 0)
+        return cmd_procs(pid, 200, ASMSPY_COUNT_SYSCALLS, 0, 0, NULL);
+    if (sample)
+        return cmd_sample(pid, 300, 0, NULL);
+    fprintf(stderr,
+            "launch: unknown mode '%s' (want log|stream|graph|tree|procs|"
+            "sample)\n",
+            modename);
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -7654,6 +8156,23 @@ int main(int argc, char **argv) {
         if (!argv[1][8])
             return bad_arg("socket path", argv[1]);
         return cmd_serve(argv[1] + 8);
+    }
+    /* --launch <mode> -- <cmd> [args...]: doc 45 T1/T2, another mode that
+     * takes no pid on the command line — grouped with --serve for the same
+     * reason. `--` is REQUIRED (not optional) so a launched command's own
+     * flags (e.g. `-n`) can never be mistaken for asmspy's. */
+    if (strcmp(argv[1], "--launch") == 0) {
+        int i;
+        if (argc < 5)
+            return bad_arg("launch",
+                           "usage: --launch <mode> -- <cmd> [args...]");
+        for (i = 3; i < argc && strcmp(argv[i], "--") != 0; i++)
+            ;
+        if (i >= argc || i + 1 >= argc)
+            return bad_arg("launch",
+                           "usage: --launch <mode> -- <cmd> [args...] "
+                           "(missing \"--\" or a command after it)");
+        return cmd_launch(argv[2], &argv[i + 1]);
     }
     if (strcmp(argv[1], "--list") == 0) {
         asmspy_sort_t s = ASMSPY_SORT_PID;
