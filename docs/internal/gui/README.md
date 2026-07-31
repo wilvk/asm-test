@@ -494,6 +494,30 @@ change**. Phases B–E remain uncut; see [43](43-faithful-city-roadmap.md)§4 fo
 sequencing guidance before starting one. 43: roadmap only, no tasks · —. 44:
 ☐ 0/7 · *free*.
 
+[45-launch-and-window-target.md](45-launch-and-window-target.md) — **two new
+Home-rail entries** (not cut from a prior analysis doc): **launch** a fresh
+process and trace it from birth (Part A, T1–T5), and **target** an already-
+running process by dragging a crosshair onto its window (Part B, T6–T9).
+Neither exists in any form today — every headless mode and the `--serve`
+wire protocol take only a `pid` (attach), and no window→PID resolver exists
+anywhere in the tree. Part A's real cost is engine-side: the nearest
+fork+`PTRACE_TRACEME` idiom in the tree (`dataflow_ptrace.c`/`ptrace_backend.c`)
+execs an in-memory JIT stub, not an arbitrary external command, so T1 lands a
+launch primitive with an honestly-flagged interim fidelity gap (a brief
+detach/re-SEIZE window) and T2 closes it by threading "already traced" through
+each mode's `PTRACE_SEIZE` entry point in `asmspy_engine.c` instead — a real,
+named design decision, not silently assumed. A nice side effect of doing the
+fork server-side (D9): launch is ssh-transparent for free, and a launched
+child sidesteps the Yama `ptrace_scope=1` attach uncertainty entirely (it's
+asmspy's own descendant by construction, per `inspect.cpp:133-150`). Part B is
+new X11-only platform code (`desktop/src/platform/window_picker.*`, T6),
+gated off honestly on Wayland/macOS/ssh-remote capture — mirroring the
+window-icon precedent already in `main.cpp` for degrading a per-window OS
+feature that Wayland has no equivalent of — reusing GLFW's built-in
+`GLFW_CROSSHAIR_CURSOR` and, on release, the exact same
+`inspect_attach_full_detail` path a Processes-row click already uses (T7–T8).
+Authored 2026-07-31 against HEAD `5ef06e5`. ☐ 0/9 · *free*.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
