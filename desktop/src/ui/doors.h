@@ -173,6 +173,25 @@ struct InspectState {
     // whole-process modes and `auto` (which finds its own region).
     char region[256] = {0};
 
+    // docs/internal/gui/45-launch-and-window-target.md T3: the Launch pane's
+    // form — a command to fork+exec and trace from birth, instead of a pid
+    // picked from a table. Fixed buffers (not std::string) to match every
+    // other ImGui-editable text field in this struct (asmspy_path/ssh_host
+    // above, region). `launch_cmd` is argv[0] (browsable via ImGuiFileDialog,
+    // T4); `launch_args` is a single shell-like string split on whitespace
+    // into argv[1..] when the launch fires (no quoting grammar in v1 — an
+    // argument needing one is a rare enough case to not hold up the rest);
+    // `launch_cwd` is optional (empty = inherit the server's cwd).
+    char launch_cmd[512] = {0};
+    char launch_args[512] = {0};
+    char launch_cwd[512] = {0};
+    // Set by inspect_launch_full_detail when it sends `launch`: there is no
+    // pid to adopt until the `session started` reply names one, unlike an
+    // attach (inspect_attach_full_detail already knows its pid before
+    // sending). Consumed (and selected_pid adopted from LiveStatus::pid) by
+    // inspect_reconcile_self_end the frame the host confirms Running.
+    bool launch_awaiting_pid = false;
+
     // The per-step register RING (--steps, doc 26): armed for the dataflow single-
     // step engines (dataflow / auto) so the live Scrubber time-travels registers.
     // ON by default for those two modes: PTRACE_GETREGS already runs every step
@@ -216,6 +235,11 @@ struct InspectState {
     // dock node's tab bar rather than opening behind a peer (Connect / Live
     // capture). Consumed once in draw_shell; no-op in the single-window shell.
     bool want_focus_processes = false;
+    // docs/internal/gui/45 T4: the Launch mode's counterpart to
+    // want_focus_processes — brings kPaneLaunch forward instead of
+    // Processes, and (unlike Capture) with no want_autoconnect alongside it.
+    // Set by shell_select_mode, consumed once in draw_shell.
+    bool want_focus_launch = false;
     // 34 T2: the Live-capture "View in 3D overview" handoff — raised by the button
     // in draw_live_views, consumed once in draw_shell to jump the active tab to the
     // live capture and select its 3D inner tab (want_open_tab + want_view_id). Like
@@ -284,6 +308,12 @@ struct InspectState {
     // host; "" = unknown, still annotated, never a hidden refusal).
     bool perturb_pending = false;
     bool perturb_confirmed = false;
+    // docs/internal/gui/45 T3: which gate armed perturb_pending — an attach
+    // (inspect_request_start) or a launch (inspect_request_launch) — so
+    // inspect_confirm_perturb resumes through the SAME path rather than
+    // guessing; false (the default) preserves inspect_request_start's
+    // pre-45 behaviour exactly.
+    bool perturb_via_launch = false;
     std::string perturb_reason;
     std::string target_arch;
     // The picker defaults to the least-perturbing substrate the host supports
@@ -335,8 +365,15 @@ void inspect_disconnect(InspectState &s);
 // false and arms `perturb_pending` when the mode single-steps (T5), then
 // `swap_pending` when the jack is occupied.
 bool inspect_request_start(InspectState &s);
+// docs/internal/gui/45 T3: `launch`'s counterpart to inspect_request_start —
+// same tree-filter/perturb/budget gates, but sends `launch` (argv built from
+// launch_cmd/launch_args/launch_cwd) with no pid, arming launch_awaiting_pid
+// instead. A busy jack refuses cleanly (no swap offer — see doors.h). False
+// if s.launch_cmd is blank.
+bool inspect_request_launch(InspectState &s);
 // Confirm the armed perturbation: re-run the start with the consequence
-// accepted (T5). The budget/swap gate still applies afterwards.
+// accepted (T5). The budget/swap gate still applies afterwards. Resumes
+// through inspect_request_launch when perturb_via_launch armed it.
 void inspect_confirm_perturb(InspectState &s);
 // Confirm the armed swap: stop the holder, then start what was refused.
 void inspect_confirm_swap(InspectState &s);
@@ -370,11 +407,23 @@ void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st);
 // no host it selects the target and asks the shell to reveal the Connect pane.
 void inspect_attach_full_detail(InspectState &s, long pid);
 
-// The Inspect / live-capture workflow, split into three dockable panes (the
-// docked shell Begins each in its own window; draw_inspect_door stacks all three
-// for the windowed / render-only path):
+// docs/internal/gui/45-launch-and-window-target.md T3: the Launch pane's
+// "Launch & trace" — mirrors inspect_attach_full_detail's connect-then-start
+// shape, but there is no pid yet (send_launch instead of send_start), and
+// launch_awaiting_pid is armed so inspect_reconcile_self_end adopts
+// selected_pid once the `started` reply names one. `s.launch_cmd` must be
+// non-blank; a blank command is the caller's job to prevent (the Launch
+// pane greys the button on it) rather than this function's to refuse
+// silently.
+void inspect_launch_full_detail(InspectState &s);
+
+// The Inspect / live-capture workflow, split into dockable panes (the
+// docked shell Begins each in its own window; draw_inspect_door stacks them
+// all for the windowed / render-only path):
 //   Connect     — the serve-host connection (asmspy path pre-filled + ssh host).
 //   Processes   — the searchable /proc target picker (pid / comm / attach / why).
+//   Launch      — fork+exec a NEW process and trace it from birth (doc 45 T4),
+//                 the second way to arrive at a target.
 //   Live capture — the patch bay CONTROLS (mode + region + Start) and the 3D
 //                  handoff. The session log and save-to-.asmtrace are their OWN
 //                  panes (draw_session_status / draw_save_pane), the PT-replay
@@ -382,6 +431,7 @@ void inspect_attach_full_detail(InspectState &s, long pid);
 //                  the live views render in the doc-25 live-tab mirror panes.
 void draw_connect_pane(InspectState &s);
 void draw_processes_pane(InspectState &s);
+void draw_launch_pane(InspectState &s);
 void draw_capture_pane(InspectState &s);
 
 // The Log pane's session half (the colored session/refusal/skip/torn/end-cause

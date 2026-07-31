@@ -29,6 +29,19 @@ while IFS= read -r line; do
         emit '{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}'
         emit '{"k":"session","state":"stopped","mode":"log","events":2,"reason":"stop"}'
         ;;
+    *'"cmd":"launch"'*)
+        # docs/internal/gui/45-launch-and-window-target.md T3: no pid on the
+        # wire request — this host "forks" one (a fixed, DIFFERENT pid from
+        # the "start" fixture's 4242, so a test can tell the two apart) and
+        # names it only in the "started" reply, exactly like the real
+        # asmspy --serve. Echoes argv[0] into `cmd` so a test can also assert
+        # what was actually sent, not just that something was.
+        argv0=$(printf '%s' "$line" | sed -n 's/.*"argv":\["\([^"]*\)".*/\1/p')
+        emit '{"k":"cmd","cmd":"launch","mode":"log"}'
+        emit "{\"k\":\"session\",\"state\":\"started\",\"mode\":\"log\",\"pid\":9999,\"params\":{\"follow\":false,\"max\":-1},\"launch_argv0\":\"$argv0\"}"
+        emit '{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact","redacted":false},"arch":"x86_64","pid":9999,"cmd":"'"$argv0"'"}'
+        emit '{"k":"syscall","line":"brk(0x0) = 12345"}'
+        ;;
     *'"mode":"log"'*)
         emit '{"k":"cmd","cmd":"start","mode":"log"}'
         emit '{"k":"session","state":"started","mode":"log","pid":4242,"params":{"follow":false,"max":-1}}'

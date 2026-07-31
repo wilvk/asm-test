@@ -481,7 +481,82 @@ void shell_select_mode(ShellState &s, Mode m) {
     case Mode::Author:
         s.show_author = true;
         break;
+    case Mode::Launch:
+        // docs/internal/gui/45 T4: the SAME windowed-shell flag Capture sets
+        // (this is the same live-workflow posture, LayoutPreset::LiveObserver
+        // above), but a DIFFERENT one-shot pane-focus request — bring the
+        // Launch pane forward, not Processes — and no want_autoconnect:
+        // connecting before the operator has typed a command to launch is
+        // premature. inspect_launch_full_detail (T3) connects when "Launch &
+        // trace" is actually pressed. Explicitly cleared (not just left
+        // unset) because a PRIOR Capture entry may have left it true — that
+        // flag is one-shot-consumed by draw_shell, not mode-scoped, so a
+        // Capture -> Launch switch before draw_shell's next frame consumes it
+        // would otherwise carry it over.
+        s.show_inspect = true;
+        s.inspect.want_autoconnect = false;
+        s.inspect.want_focus_launch = true;
+        break;
     }
+}
+
+// docs/internal/gui/45-launch-and-window-target.md T7: the crosshair cursor
+// swap needs GLFW, which ui/shell.o must NOT require to compile under the
+// null-backend test tree — desktop-test explicitly promises "no display, no
+// GL" (mk/desktop.mk's DESKTOP_MISSING/libglfw3-dev gate covers only the
+// app/viewer builds, never desktop-test). So this TU includes glfw3.h ONLY
+// when ASMTEST_DESKTOP_HAVE_GLFW is set — a per-object compile define
+// mk/desktop.mk applies to shell.cpp for the app + render trees exclusively
+// (mirroring author_door.cpp's ASMTEST_DESKTOP_CAN_AUTHOR split, ui/scene_
+// host.h's "including it costs a backend-free TU nothing" backend-free
+// split) — and the test tree gets a truthful no-op, same posture every
+// other full-app-only feature degrades to there. void* (never a GLFWwindow*
+// in the signature) is what lets shell.h itself, included everywhere,
+// forward-declare nothing and stay GLFW-free unconditionally.
+#ifdef ASMTEST_DESKTOP_HAVE_GLFW
+#include <GLFW/glfw3.h>
+// GLFW's own standard cursor shape — no need to rasterize the FontAwesome
+// glyph into a cursor bitmap. Cached in a function-local static (created on
+// first use, not a global initializer: GLFW cursor creation needs a
+// current context, which is not yet true at static-init time).
+static void shell_set_crosshair_cursor(void *window) {
+    static GLFWcursor *crosshair =
+        glfwCreateStandardCursor(GLFW_CROSSHAIR_CURSOR);
+    if (window && crosshair)
+        glfwSetCursor(static_cast<GLFWwindow *>(window), crosshair);
+}
+static void shell_restore_cursor(void *window) {
+    if (window)
+        glfwSetCursor(static_cast<GLFWwindow *>(window), nullptr);
+}
+#else
+static void shell_set_crosshair_cursor(void *) {}
+static void shell_restore_cursor(void *) {}
+#endif
+
+// --- docs/internal/gui/45 T7/T8: the crosshair drag's state machine --------
+void shell_start_window_pick(ShellState &s) {
+    s.picking_window = true;
+    shell_set_crosshair_cursor(s.glfw_window);
+}
+
+void shell_finish_window_pick(ShellState &s, const PickedWindow &picked) {
+    s.picking_window = false;
+    shell_restore_cursor(s.glfw_window);
+    if (!picked.ok) {
+        // Never a silent no-op (T8 step 1) — the same shell_log_push
+        // mechanism shell_select_mode already uses for every task switch.
+        shell_log_push(s, picked.why_not, ToastKind::Warning);
+        return;
+    }
+    // The SAME "full detail" attach a Processes-row double-click fires
+    // (T8 step 2) — unchanged: it connects the host from saved Settings if
+    // needed, sets LiveMode::Auto, and requests a start. shell_select_mode
+    // is called AFTER, not instead of, folding in Capture's other side
+    // effects (pending_preset, pane set) without double-logging the attach
+    // itself (inspect_attach_full_detail logs nothing on its own).
+    inspect_attach_full_detail(s.inspect, picked.pid);
+    shell_select_mode(s, Mode::Capture);
 }
 
 // --- 20 T3: capture / restore the workspace as asmtrace-links -----------------
@@ -600,6 +675,68 @@ void draw_home_rail(ShellState &s) {
                               : "or:");
     cta(Mode::Capture, "attach to a running process — see why not when you "
                        "cannot");
+    // docs/internal/gui/45-launch-and-window-target.md T7/T8: a THIRD way to
+    // a target — drag this crosshair onto any window (even outside this
+    // app's own) to attach to its owning process, Spy++-style. Greyed with a
+    // STATED reason (never a hidden refusal) when unsupported: no live X11
+    // session, or window-pick targets a window on THIS machine and Capture
+    // is set to an ssh host (a local pick would name the wrong host's pid —
+    // "Constraints & gates": the gate belongs here, where ssh_host is
+    // visible, not buried in the resolver).
+    {
+        const bool supported = window_picker_supported();
+        const bool remote = s.inspect.ssh_host[0] != '\0';
+        const bool enabled = supported && !remote;
+        ImGui::BeginDisabled(!enabled);
+        ImGui::Button(ICON_FA_CROSSHAIRS "##window-pick");
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            if (!supported)
+                ImGui::SetTooltip(
+                    "window-pick needs a live X11 session (including "
+                    "XWayland) — none reachable here");
+            else if (remote)
+                ImGui::SetTooltip(
+                    "window-pick targets a window on THIS machine — Connect "
+                    "is set to ssh host \"%s\", so a local pick would name "
+                    "the wrong host's pid",
+                    s.inspect.ssh_host);
+            else
+                ImGui::SetTooltip(
+                    "drag onto any window — even outside this app — to "
+                    "attach to its process");
+        }
+        // Drag start: same idiom as the two existing IsMouseDragging sites
+        // (shell.cpp's 3D orbit, slice_view_draw.cpp's canvas pan), just not
+        // gated to inside a viewport. The !s.picking_window guard fires this
+        // (and the cursor swap it triggers) exactly once per drag, not every
+        // frame IsMouseDragging stays true.
+        if (enabled && !s.picking_window && ImGui::IsItemActive() &&
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+            shell_start_window_pick(s);
+        // Release: checked UNCONDITIONALLY (not scoped to hovering the
+        // button) — by release time the pointer can be anywhere on screen,
+        // possibly over a completely different window, which is the whole
+        // point of the affordance.
+        if (s.picking_window &&
+            ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            PickedWindow picked;
+            int gx = 0, gy = 0;
+            if (window_picker_global_pointer(&gx, &gy))
+                picked = resolve_window_at_screen_point(gx, gy);
+            else
+                picked.why_not = "lost the X11 display mid-drag";
+            shell_finish_window_pick(s, picked);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("or drag onto any window to target it by pointing");
+    }
+    // doc 45 T4: an alternate way into the SAME live workflow — start a fresh
+    // process and trace it from birth, rather than pick one already running.
+    // Placed right after Capture's CTA (same "or:" grouping above), not as a
+    // fifth unrelated task.
+    cta(Mode::Launch,
+       "start a fresh process and trace it from the first instruction");
     cta(Mode::Author, "type assembly, run it, see faults as data");
 
     ImGui::Separator();
@@ -2033,6 +2170,10 @@ static const PaneDef kManagedPanes[] = {
     {kPaneHome, true, pctx_always, ""},
     {kPaneConnect, false, pctx_always, ""},
     {kPaneProcesses, false, pctx_always, ""},
+    // doc 45 T4: no prior selection needed (pctx_always, like Connect/
+    // Processes) — the form is fillable with no host up and no target picked;
+    // "Launch & trace" connects and forks in one action (inspect_door.cpp).
+    {kPaneLaunch, false, pctx_always, ""},
     {kPaneCapture, false, pctx_capture,
      "pick a process in the Processes pane first"},
     // The Log is a persistent application + session console: open from startup and
@@ -2120,6 +2261,14 @@ static bool mode_wants_pane(Mode m, const char *name) {
     case Mode::Author:
         return std::strcmp(name, kPaneRecording) == 0 ||
                std::strcmp(name, kPaneScrubber) == 0;
+    case Mode::Launch:
+        // doc 45 T4: Launch pane instead of Processes — no table detour — but
+        // the same live-capture surroundings (Live capture / Save / PT slice)
+        // once a launch resolves into a running session.
+        return std::strcmp(name, kPaneLaunch) == 0 ||
+               std::strcmp(name, kPaneCapture) == 0 ||
+               std::strcmp(name, kPaneSave) == 0 ||
+               std::strcmp(name, kPanePtSlice) == 0;
     }
     return false;
 }
@@ -2131,7 +2280,7 @@ void shell_apply_mode_panes(ShellState &s, Mode m) {
     // re-reveal exactly the viz panes it fills (shell_apply_live_panes runs next
     // frame): clear the one-shot guard so it re-applies rather than leaving the
     // reading panes this call just closed.
-    if (m == Mode::Capture || m == Mode::Inspect)
+    if (m == Mode::Capture || m == Mode::Inspect || m == Mode::Launch)
         s.live_applied_ordinal = -1;
 }
 
@@ -2176,7 +2325,12 @@ void shell_apply_live_panes(ShellState &s) {
         s.live_applied_ordinal = -1; // reset so the NEXT capture re-applies
         return;
     }
-    if (s.mode != Mode::Capture && s.mode != Mode::Inspect)
+    // doc 45 T4: Launch lands in this SAME live-workflow posture (mode_preset,
+    // ui/mode.h) — a launched session must reveal its viz panes exactly like
+    // an attached one, or the Recording/Loom/Observer/Timeline/Scrubber tabs
+    // never open for a capture that began with "Launch & trace".
+    if (s.mode != Mode::Capture && s.mode != Mode::Inspect &&
+        s.mode != Mode::Launch)
         return;
     // A per-capture identity that survives tab-index shifts (an unrelated tab
     // close decrements live_tab) and a mirrored-completed capture (live_tab stays
@@ -2519,6 +2673,21 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGui::End();
         if (!open)
             s.pane_open[kPaneProcesses] = false;
+    }
+    // doc 45 T4: the Launch pane — a fourth way to arrive at a target,
+    // alongside Connect/Processes/Live-capture. Same want_focus_* idiom as
+    // Processes above, guarded the same way against layout_build's rebuild.
+    if (pane_shown(s, kPaneLaunch)) {
+        bool open = true;
+        if (s.inspect.want_focus_launch && !s.pending_preset) {
+            s.inspect.want_focus_launch = false;
+            ImGui::SetNextWindowFocus();
+        }
+        if (ImGui::Begin(kPaneLaunch, &open))
+            draw_launch_pane(s.inspect);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneLaunch] = false;
     }
     if (pane_shown(s, kPaneCapture)) {
         bool open = true;

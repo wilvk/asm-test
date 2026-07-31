@@ -1051,6 +1051,26 @@ int main() {
               "Capture must ask draw_shell to focus the Processes pane");
         check("20t2/capture-no-forced-connect", !es.pane_open[kPaneConnect],
               "Capture must not force the Connect pane open");
+        // docs/internal/gui/45-launch-and-window-target.md T4: Launch is a
+        // SECOND way into the same LiveObserver posture, landing on kPaneLaunch
+        // instead of kPaneProcesses — no table detour — and with NO
+        // auto-connect (connecting before a command is typed is premature;
+        // inspect_launch_full_detail connects when "Launch & trace" fires).
+        shell_select_mode(es, Mode::Launch);
+        check("45t4/launch-preset",
+              es.pending_preset.value_or(LayoutPreset::Author) ==
+                  LayoutPreset::LiveObserver,
+              "Launch mode requests the LiveObserver perspective — the SAME "
+              "live workflow as Capture, not a new one");
+        check("45t4/launch-opens-launch-pane", es.pane_open[kPaneLaunch],
+              "Launch must open the Launch pane");
+        check("45t4/launch-closes-processes", !es.pane_open[kPaneProcesses],
+              "Launch must NOT open Processes — no table detour");
+        check("45t4/launch-no-autoconnect", !es.inspect.want_autoconnect,
+              "Launch must not auto-connect: connecting before a command is "
+              "typed is premature");
+        check("45t4/launch-focuses-launch-pane", es.inspect.want_focus_launch,
+              "Launch must ask draw_shell to focus the Launch pane");
         shell_select_mode(es, Mode::Learn);
         check("20t2/learn-preset",
               es.pending_preset.value_or(LayoutPreset::LiveObserver) ==
@@ -1916,6 +1936,143 @@ int main() {
         inspect_request_start(ix);
         check("perturb/x86 no confirm", !ix.perturb_pending,
               "on x86 the perturb nuisance no longer gates Start — it starts");
+    }
+
+    // --- docs/internal/gui/45-launch-and-window-target.md T3/T4: the Launch
+    // pane's "Launch & trace" — mirrors the full-detail attach block above,
+    // but there is no pid until the host names one. ---------------------------
+    {
+        InspectState lt;
+        std::snprintf(lt.launch_cmd, sizeof lt.launch_cmd, "/bin/true");
+        inspect_launch_full_detail(lt);
+        check("launch/opens-capture", lt.want_open_capture,
+              "launch always lands on the Live-capture pane");
+        if (lt.host_started) {
+            check("launch/host-up-no-connect-reveal", !lt.want_open_connect,
+                  "a successful auto-connect does not force the Connect pane");
+        } else {
+            check("launch/no-host-reveals-connect", lt.want_open_connect,
+                  "with no host, launch reveals the Connect pane to bring one "
+                  "up");
+        }
+
+        // Drive the gate directly (send_launch is a safe no-op with no real
+        // host — LiveSession::send() guards on wfd_ < 0), so this exercises
+        // inspect_request_launch's own logic without spawning anything —
+        // exactly the pattern inspect_request_start's tests above use.
+        InspectState lg;
+        lg.host_started = true;
+        std::snprintf(lg.launch_cmd, sizeof lg.launch_cmd, "/bin/true");
+        lg.want = LiveMode::Log;
+        bool fired = inspect_request_launch(lg);
+        check("launch/fires",
+              fired && lg.active.size() == 1 && lg.active[0] == LiveMode::Log,
+              "a filled-in command with a host up must fire the launch and "
+              "occupy the jack");
+        check("launch/awaiting-pid", lg.launch_awaiting_pid,
+              "a launch has no pid yet — launch_awaiting_pid must be armed");
+        check("launch/selected-pid-unset", lg.selected_pid == 0,
+              "no pid is known until the started event names one "
+              "(inspect_reconcile_self_end adopts it, tested below)");
+
+        // A blank command refuses cleanly — the button is gated on this too,
+        // but the function must not depend on the UI gate alone (F22-style).
+        InspectState lb;
+        lb.host_started = true;
+        bool blank_fired = inspect_request_launch(lb);
+        check("launch/blank-refuses", !blank_fired && lb.active.empty(),
+              "a blank command must refuse cleanly, not fire an empty argv");
+
+        // A busy jack refuses cleanly too — but with NO swap offer (doors.h:
+        // there is no already-selected target for a launch's swap to name).
+        InspectState lbusy;
+        lbusy.host_started = true;
+        std::snprintf(lbusy.launch_cmd, sizeof lbusy.launch_cmd, "/bin/true");
+        lbusy.want = LiveMode::Log;
+        lbusy.active.push_back(LiveMode::Stream); // occupies the one ptrace jack
+        bool busy_fired = inspect_request_launch(lbusy);
+        check("launch/busy-refuses", !busy_fired && !lbusy.swap_pending,
+              "a busy jack must refuse the launch cleanly, with no swap "
+              "offer");
+
+        // The pid-adoption path (inspect_reconcile_self_end): a launch's pid
+        // is adopted from LiveStatus::pid the moment the host confirms
+        // Running — and ONLY for a launch (launch_awaiting_pid), never
+        // overwriting an attach's already-known pid.
+        InspectState lp;
+        lp.launch_awaiting_pid = true;
+        LiveStatus lst;
+        lst.state = LiveState::Running;
+        lst.pid = 424242;
+        inspect_reconcile_self_end(lp, lst);
+        check("launch/pid-adopted",
+              lp.selected_pid == 424242 && !lp.launch_awaiting_pid,
+              "a launch's pid must be adopted from the started event's "
+              "LiveStatus::pid, and the awaiting flag cleared");
+
+        InspectState la; // an attach's pid must NEVER be touched by this path
+        la.selected_pid = 111;
+        la.launch_awaiting_pid = false;
+        LiveStatus ast;
+        ast.state = LiveState::Running;
+        ast.pid = 999999;
+        inspect_reconcile_self_end(la, ast);
+        check("launch/attach-pid-untouched", la.selected_pid == 111,
+              "an attach's already-known pid (launch_awaiting_pid false) "
+              "must never be overwritten by this path");
+    }
+
+    // --- docs/internal/gui/45-launch-and-window-target.md T7/T8: the
+    // crosshair drag's STATE MACHINE — driven directly (synthetic
+    // PickedWindow/ShellState), independent of a real X11 drag or display,
+    // per T7's own "Tests." note. ---------------------------------------------
+    {
+        ShellState ps;
+        check("pick/starts-clear", !ps.picking_window,
+              "a fresh ShellState must not start mid-pick");
+        shell_start_window_pick(ps);
+        check("pick/drag-start-arms", ps.picking_window,
+              "shell_start_window_pick must set picking_window");
+
+        // A failed pick (T8 step 1): logs the stated reason, clears the flag,
+        // touches NO session state (never a silent no-op).
+        PickedWindow bad;
+        bad.ok = false;
+        bad.why_not = "no window at that point";
+        size_t log_before = ps.log.size();
+        long pid_before = ps.inspect.selected_pid;
+        Mode mode_before = ps.mode;
+        shell_finish_window_pick(ps, bad);
+        check("pick/release-clears-on-failure", !ps.picking_window,
+              "a failed pick must still clear picking_window");
+        check("pick/failure-logs-why-not",
+              ps.log.size() > log_before &&
+                  ps.log.back().text == bad.why_not,
+              "a failed pick must log the stated reason, verbatim, never "
+              "silently");
+        check("pick/failure-touches-no-session-state",
+              ps.inspect.selected_pid == pid_before && ps.mode == mode_before,
+              "a failed pick must not attach or change mode");
+
+        // A successful pick (T8 step 2): attaches exactly as a Processes-row
+        // double-click would (inspect_attach_full_detail — auto mode, the
+        // register ring armed) and lands in Mode::Capture.
+        ShellState ok_s;
+        shell_start_window_pick(ok_s);
+        PickedWindow good;
+        good.ok = true;
+        good.pid = 31415;
+        good.title = "a real window";
+        shell_finish_window_pick(ok_s, good);
+        check("pick/release-clears-on-success", !ok_s.picking_window,
+              "a successful pick must clear picking_window");
+        check("pick/success-selects-pid", ok_s.inspect.selected_pid == 31415,
+              "a successful pick must select the resolved pid");
+        check("pick/success-mode-auto", ok_s.inspect.want == LiveMode::Auto,
+              "a successful pick attaches at full detail (auto), same as a "
+              "table double-click");
+        check("pick/success-lands-capture", ok_s.mode == Mode::Capture,
+              "a successful pick must land the shell in Mode::Capture");
     }
 
     // ---- R9: selecting a task opens only that task's relevant panes ---------

@@ -330,6 +330,50 @@ static void test_process_path() {
             "what DID arrive is still kept — torn means incomplete, not void");
     }
     {
+        // docs/internal/gui/45-launch-and-window-target.md T3: `launch` sends
+        // no pid — the host (fake_serve.sh here, asmspy for real) "forks" one
+        // and names it only in the `started` reply. Proves send_launch's wire
+        // shape (the fixture greps argv[0] back out and echoes it) and that
+        // LiveStatus::pid resolves from that reply exactly like an attach's,
+        // with no separate plumbing needed in LiveSession itself.
+        LiveSession s;
+        LiveSession::Spec spec;
+        spec.asmspy_path = fake;
+        std::string err;
+        if (!s.start(spec, err)) {
+            check("proc/launch-start", false, "could not spawn: " + err);
+            return;
+        }
+        s.send_launch("log", {"/path/to/victim", "--flag"}, "");
+        bool ok = pump_until(s, [](const LiveSession &x) {
+            return x.status().state == LiveState::Running;
+        });
+        check("proc/launch-running", ok,
+              "the launch's started event should arrive");
+        check("proc/launch-pid", s.status().pid == 9999,
+              "LiveStatus::pid must resolve from the started event's \"pid\" "
+              "— the launch itself sent none");
+        ok = pump_until(s, [](const LiveSession &x) {
+            return x.growing() && x.growing()->by_kind.count("syscall");
+        });
+        check("proc/launch-events", ok,
+              "the launched target's syscalls should arrive over the pipe "
+              "exactly like an attach's");
+        // The fixture greps argv[0] back out of the launch command and echoes
+        // it into the started event's (non-schema, test-only) "launch_argv0"
+        // — proof the actual argv reached the wire, not just SOME launch
+        // command. LiveNote::body is the raw parsed JSON of a session/cmd/err
+        // line, so it is readable here without Recording growing a new field.
+        bool argv_echoed = false;
+        for (const LiveNote &n : s.notes())
+            if (n.body.value("launch_argv0", std::string()) ==
+                "/path/to/victim")
+                argv_echoed = true;
+        check("proc/launch-argv", argv_echoed,
+              "the sent argv[0] must reach the wire (fake_serve.sh's echo)");
+        s.shutdown();
+    }
+    {
         // The TREE FILTER ROUND TRIP (08-observer-views.md T5): the client
         // builds the start command, the host echoes the EFFECTIVE parameters,
         // and the view reads them back off the wire. The point is that the

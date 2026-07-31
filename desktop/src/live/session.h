@@ -99,9 +99,19 @@ class LiveSession {
     // host is gone — a caller must not have to guard every send.
     void send(const std::string &json_line);
 
-    // Convenience wrappers over the protocol's four commands.
+    // Convenience wrappers over the protocol's commands.
     void send_start(const std::string &mode, long pid,
                     const nlohmann::json &params = nlohmann::json::object());
+    // docs/internal/gui/45-launch-and-window-target.md T3: `launch` — same
+    // shape as send_start, but there is no pid yet (the host forks one); the
+    // command carries `argv` (argv[0] is the path to run) and an optional
+    // `cwd` instead. The resulting pid arrives later on the `session started`
+    // event and is readable from status().pid exactly as an attach's is —
+    // feed_line() already sets it from that event's "pid" field regardless of
+    // which command produced it, so no separate plumbing is needed here.
+    void send_launch(const std::string &mode, const std::vector<std::string> &argv,
+                     const std::string &cwd,
+                     const nlohmann::json &params = nlohmann::json::object());
     void send_pause(bool on);
     void send_stop();
 

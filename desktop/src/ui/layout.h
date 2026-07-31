@@ -87,6 +87,10 @@ extern const char *const kPaneObserver;
 extern const char *const kPaneConnect;
 extern const char *const kPaneProcesses;
 extern const char *const kPaneCapture;
+// docs/internal/gui/45 T4: a fourth way into the target-selection group — a
+// form to fork+exec a new process and trace it from birth, alongside Connect
+// (the host) and Processes (an already-running target picked from a table).
+extern const char *const kPaneLaunch;
 // The capture surface's split-out panes: the colored session Log (docked in the
 // bottom region beside the timeline), Save capture (docked beside the Live-capture
 // controls), and the PT slice — the hardware-recorded def-use slice, its OWN pane

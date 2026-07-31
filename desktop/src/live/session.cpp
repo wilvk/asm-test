@@ -177,6 +177,18 @@ void LiveSession::send_start(const std::string &mode, long pid,
     send(cmd.dump());
 }
 
+void LiveSession::send_launch(const std::string &mode,
+                              const std::vector<std::string> &argv,
+                              const std::string &cwd, const json &params) {
+    json cmd = params.is_object() ? params : json::object();
+    cmd["cmd"] = "launch";
+    cmd["mode"] = mode;
+    cmd["argv"] = argv;
+    if (!cwd.empty())
+        cmd["cwd"] = cwd;
+    send(cmd.dump());
+}
+
 void LiveSession::send_pause(bool on) {
     send(json{{"cmd", "pause"}, {"on", on}}.dump());
 }

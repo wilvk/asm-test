@@ -241,6 +241,11 @@ int main() {
 
     asmdesk::ShellState state;
     state.settings = settings;
+    // docs/internal/gui/45-launch-and-window-target.md T7: the opaque handle
+    // shell_set_crosshair_cursor/shell_restore_cursor (below) and the Home
+    // rail's crosshair drag (ui/shell.cpp) use — void* so ui/shell.h needs no
+    // GLFW include (ui/scene_host.h's split, mirrored here).
+    state.glfw_window = window;
     // Seed the Inspect door's connection buffers from the persisted Settings so
     // the "Capture a live process" auto-connect and the Connect-pane fallback both
     // start from the saved asmspy path / ssh host. Blank stays blank (the Connect

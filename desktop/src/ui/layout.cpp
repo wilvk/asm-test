@@ -17,6 +17,7 @@ const char *const kPaneObserver = "Observer";
 const char *const kPaneConnect = "Connect";
 const char *const kPaneProcesses = "Processes";
 const char *const kPaneCapture = "Live capture";
+const char *const kPaneLaunch = "Launch";
 const char *const kPaneLog = "Log";
 const char *const kPaneSave = "Save capture";
 const char *const kPanePtSlice = "PT slice";
@@ -104,6 +105,9 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     // reopen to a stable home; on-demand visibility gates whether they show.
     ImGui::DockBuilderDockWindow(kPaneConnect, L.left);
     ImGui::DockBuilderDockWindow(kPaneProcesses, L.left);
+    // doc 45 T4: Launch tabs in beside Connect/Processes — a third way to
+    // arrive at a target, same left-rail home, same on-demand visibility.
+    ImGui::DockBuilderDockWindow(kPaneLaunch, L.left);
     ImGui::DockBuilderDockWindow(kPaneCapture, L.right);
     // The split-out capture panes: the session Log tabs into the bottom row (the
     // "bottom pane" beside the timeline); Save capture tabs beside the Live-capture

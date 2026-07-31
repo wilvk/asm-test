@@ -16,14 +16,18 @@ namespace asmdesk {
 // 4). `Open` replays a file they have; `Capture` attaches to a live process;
 // `Author` writes a routine. `Inspect` is the live-capture posture `Capture`
 // lands in once a session is up — kept distinct so a view can scope itself to
-// "a live session is running" vs. "the user is about to start one".
-enum class Mode { Learn, Open, Capture, Author, Inspect };
+// "a live session is running" vs. "the user is about to start one". `Launch`
+// (docs/internal/gui/45-launch-and-window-target.md T4) is a second way INTO
+// that same live-capture posture — start a new process and trace it from its
+// first instruction, rather than pick one already running.
+enum class Mode { Learn, Open, Capture, Author, Inspect, Launch };
 
 // The dock perspective a mode leads with (T2 step 5). Learn/Open read a
-// recording (ReplayInspect), Capture/Inspect watch a live process
-// (LiveObserver), Author writes one (Author). Pure — the seam the rail sets and
-// the frame applies, and the field test_shell asserts rather than the
-// DockBuilder tree (test_layout already covers that).
+// recording (ReplayInspect), Capture/Inspect/Launch watch a live process
+// (LiveObserver — Launch is the SAME live workflow, not a new perspective),
+// Author writes one (Author). Pure — the seam the rail sets and the frame
+// applies, and the field test_shell asserts rather than the DockBuilder tree
+// (test_layout already covers that).
 inline LayoutPreset mode_preset(Mode m) {
     switch (m) {
     case Mode::Learn:
@@ -31,6 +35,7 @@ inline LayoutPreset mode_preset(Mode m) {
         return LayoutPreset::ReplayInspect;
     case Mode::Capture:
     case Mode::Inspect:
+    case Mode::Launch:
         return LayoutPreset::LiveObserver;
     case Mode::Author:
         return LayoutPreset::Author;
@@ -52,6 +57,8 @@ inline const char *mode_cta(Mode m) {
         return "Author a routine";
     case Mode::Inspect:
         return "Inspect a live session";
+    case Mode::Launch:
+        return "Launch a new process";
     }
     return "?";
 }

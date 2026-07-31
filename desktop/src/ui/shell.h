@@ -18,6 +18,7 @@
 #include "live/inspect.h" // FeedbackInputs, for the toast-transition tracker (16 T1)
 #include "loom/loom_draw.h"
 #include "nav.h"
+#include "platform/window_picker.h" // PickedWindow (doc 45 T7/T8) — X11-only, D4
 #include "scene3d/camera.h"
 #include "scene3d/hud.h"
 #include "space/converge.h"
@@ -183,6 +184,21 @@ struct ShellState {
     bool show_learn = false;
     bool show_author = false;
     bool show_inspect = false;
+    // docs/internal/gui/45-launch-and-window-target.md T6/T7: the opaque
+    // GLFWwindow* main.cpp owns, injected the same way ShellState::scene_host
+    // is (ui/scene_host.h's split) — void* so this header (and every TU that
+    // includes it, including the null-backend test tree) needs no GLFW
+    // include; null under the null backend, where the crosshair cursor swap
+    // is simply skipped (shell_set_crosshair_cursor/shell_restore_cursor,
+    // shell.cpp, both guard on it being non-null).
+    void *glfw_window = nullptr;
+    // T7: a left-drag on the Home rail's crosshair button is in flight — the
+    // OS cursor is a crosshair and each frame tracks the GLOBAL pointer
+    // (window_picker_global_pointer, not ImGui's window-relative
+    // GetMousePos, which goes stale once the pointer leaves this app's own
+    // window). Cleared on release (shell_finish_window_pick), whether or not
+    // a window was actually found there.
+    bool picking_window = false;
     // Dockable-pane visibility (the docked shell): the user's open/close state per
     // pane, keyed by the kPane* name; absent => the pane's shipped default (see
     // pane_default_open). The View ▸ Panels menu toggles these and each pane's
@@ -416,6 +432,25 @@ void shell_wire_nav(ShellState &s);
 // seam the rail CTAs and the tests both drive — a pure ShellState move, so
 // test_shell asserts the resulting mode + pending_preset without a display.
 void shell_select_mode(ShellState &s, Mode m);
+
+// --- docs/internal/gui/45-launch-and-window-target.md T7/T8: the crosshair
+// drag affordance's STATE MACHINE, split from its ImGui glue (drawn in
+// draw_home_rail) exactly so it is unit-testable without a display or a real
+// X11 drag: shell_start_window_pick / shell_finish_window_pick take
+// synthetic state, the same "drive the gate directly" pattern
+// inspect_request_start/inspect_request_launch's tests already use. ---------
+// Arm the drag: sets picking_window and swaps the OS cursor to a crosshair
+// (a no-op if s.glfw_window is null — the null-backend tests, and the
+// render-only viewer before a window exists).
+void shell_start_window_pick(ShellState &s);
+// Resolve the drag: clears picking_window, restores the OS cursor, and
+// (T8) either logs `picked.why_not` (never silent) or attaches through the
+// SAME path a Processes-row click uses (inspect_attach_full_detail) and
+// lands the shell in Mode::Capture. Takes an ALREADY-RESOLVED PickedWindow
+// rather than screen coordinates — the live X11 resolve
+// (resolve_window_at_screen_point) stays in draw_home_rail's real draw
+// path, so this function itself needs no display either.
+void shell_finish_window_pick(ShellState &s, const PickedWindow &picked);
 
 // --- 20 T3: workspace persistence --------------------------------------------
 // Capture the open set, the active position and each recording's per-pane

@@ -8,7 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Desktop GUI packaging: a Debian package and an AppImage for `asmtest-desktop`**
+- **Launch a process and trace it from birth, and target a running one by
+  window-pick** (docs/internal/gui/45-launch-and-window-target.md). Two new
+  ways onto a live target, alongside attach-by-PID:
+  - `asmspy --serve`'s wire protocol gains a `launch` command
+    (`{"cmd":"launch","mode":...,"argv":[...],"cwd":...}`) that forks the
+    target itself, `PTRACE_TRACEME`s it, and hands it straight to the
+    requested mode's engine flagged as already-traced — the recorded session
+    starts at the target's true first instruction, with no detach/reattach
+    gap. `asmspy --launch <mode> -- <cmd> [args...]` is the headless CLI
+    equivalent. Scoped to the whole-process modes plus `trace`/`watch` for
+    v1; `dataflow`/`auto` (a different, deeper seize subsystem) are refused
+    with a stated reason rather than silently degraded.
+  - The desktop Home rail gains a fifth entry, "Launch a new process": a
+    form (command/arguments/working directory/mode) landing on the same
+    live-capture workflow every attach uses (`LiveSession::send_launch`,
+    `inspect_launch_full_detail`, the `Launch` pane).
+  - A crosshair affordance next to "Capture a live process": drag it onto
+    any window on screen (even outside the app's own) to attach to that
+    window's owning process by PID, Spy++-style — X11-only
+    (`desktop/src/platform/window_picker.{h,cpp}`, new), engine-free (D4),
+    honestly unavailable under pure Wayland or over an ssh-remote capture
+    target. `libx11-dev` + `xvfb` are pinned in `Dockerfile.desktop`, and
+    `make desktop-test-xvfb` proves window resolution against a live
+    (virtual) X11 display and a real second window, not a mock.
   (`packaging/debian-desktop/`, `packaging/appimage/`). The full app links the
   GPL-2.0 Unicorn emulator and the Keystone/Capstone engines directly, none of
   which is a distro package on the pinned base images, so both artifacts vendor

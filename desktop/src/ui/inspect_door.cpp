@@ -4,6 +4,7 @@
 // the jack), which test_inspect and test_budget drive headlessly. This file is
 // the drawing and the wiring, and holds no rule of its own.
 #include <algorithm> // stable_sort — the free column sort over the /proc rows
+#include <cctype>    // isspace — doc 45 T3's launch-args splitter
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
@@ -98,6 +99,7 @@ bool inspect_request_start(InspectState &s) {
         !s.perturb_confirmed) {
         s.perturb_pending = true;
         s.perturb_reason = mode_perturb_warning(s.want, s.target_arch);
+        s.perturb_via_launch = false;
         return false;
     }
     s.perturb_pending = false;
@@ -118,6 +120,81 @@ bool inspect_request_start(InspectState &s) {
     s.active.push_back(s.want);
     s.awaiting_started = true; // 39 T5: a start is in flight until `started`
     return true;
+}
+
+// docs/internal/gui/45-launch-and-window-target.md T3: split the Launch
+// pane's free-text "arguments" field on whitespace into argv[1..] — v1 has
+// no quoting grammar (Non-goals), so a value containing a space is a rare
+// case left for a follow-up rather than a reason to hold up the rest.
+namespace {
+std::vector<std::string> split_launch_args(const char *s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (const char *p = s; *p; p++) {
+        if (std::isspace((unsigned char)*p)) {
+            if (!cur.empty()) {
+                out.push_back(cur);
+                cur.clear();
+            }
+        } else {
+            cur += *p;
+        }
+    }
+    if (!cur.empty())
+        out.push_back(cur);
+    return out;
+}
+} // namespace
+
+// docs/internal/gui/45 T3: `launch`'s counterpart to inspect_request_start —
+// same tree-filter/perturb/budget gates (a launch is still subject to the
+// one-ptrace-jack rule and the arm64 single-step hazard), but sends
+// `launch` with no pid, and arms launch_awaiting_pid instead of assuming one.
+// A busy jack refuses cleanly rather than offering a swap (unlike an attach,
+// there is no "already-selected target" a launch's swap would even name —
+// see doors.h). Returns false and does nothing to session state if
+// s.launch_cmd is blank; the Launch pane's button gates on this too.
+bool inspect_request_launch(InspectState &s) {
+    if (!s.launch_cmd[0])
+        return false;
+    if (s.want == LiveMode::Tree &&
+        !obs_tree_filter_error(s.observer.filter).empty())
+        return false;
+    if (mode_arm64_blocking_hazard(s.want, s.target_arch) &&
+        !s.perturb_confirmed) {
+        s.perturb_pending = true;
+        s.perturb_reason = mode_perturb_warning(s.want, s.target_arch);
+        s.perturb_via_launch = true;
+        return false;
+    }
+    s.perturb_pending = false;
+
+    BudgetDecision d = budget_can_start(s.want, s.active);
+    if (!d.allowed)
+        return false;
+
+    std::vector<std::string> argv;
+    argv.emplace_back(s.launch_cmd);
+    for (auto &a : split_launch_args(s.launch_args))
+        argv.push_back(a);
+    s.session.send_launch(mode_name(s.want), argv, s.launch_cwd,
+                          inspect_start_params(s));
+    s.active.push_back(s.want);
+    s.awaiting_started = true;
+    s.launch_awaiting_pid = true;
+    return true;
+}
+
+void inspect_launch_full_detail(InspectState &s) {
+    s.want_open_capture = true; // the confirm / status / views land in that pane
+    // No host yet: connect from the saved Settings, same as an attach — only
+    // if that fails do we reveal Connect, so its host_error is actionable.
+    if (!s.host_started)
+        inspect_connect(s);
+    if (s.host_started)
+        inspect_request_launch(s);
+    else
+        s.want_open_connect = true;
 }
 
 // The `start` params for the current want: a scoped region for trace/dataflow (a
@@ -180,6 +257,16 @@ void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st) {
     // freed automatically, so this is not a regression, only an unclosed edge.
     if (st.state != LiveState::Idle)
         s.awaiting_started = false;
+    // docs/internal/gui/45 T3: a `launch` sent no pid — the host forks one and
+    // names it in THIS "started" reply (LiveStatus::pid, set by
+    // LiveSession::feed_line the moment state flips to Running). An attach
+    // already knows its pid before it ever calls inspect_reconcile_self_end,
+    // so this adopts it ONLY for the launch case (launch_awaiting_pid), never
+    // overwriting an attach's selected_pid with something it did not ask for.
+    if (st.state == LiveState::Running && s.launch_awaiting_pid) {
+        s.selected_pid = st.pid;
+        s.launch_awaiting_pid = false;
+    }
     if (st.sessions_ended == s.seen_sessions_ended)
         return; // no NEW terminal event since we last reconciled
     s.seen_sessions_ended = st.sessions_ended; // consume the delta
@@ -227,9 +314,12 @@ void inspect_confirm_perturb(InspectState &s) {
     // The user accepted the page-dirty / timing / arm64-kill consequence. Re-run
     // the start through the SAME path with the one-shot confirm set, so the
     // budget/swap gate below still applies (a confirmed perturb is not a
-    // confirmed swap).
+    // confirmed swap). doc 45 T3: perturb_via_launch says which path armed it.
     s.perturb_confirmed = true;
-    inspect_request_start(s);
+    if (s.perturb_via_launch)
+        inspect_request_launch(s);
+    else
+        inspect_request_start(s);
     s.perturb_confirmed = false;
 }
 
@@ -1202,17 +1292,119 @@ void draw_capture_pane(InspectState &s) {
         "(spacetime terrain — press Play there to watch it form)");
 }
 
+// --- Launch pane: fork+exec a fresh target, traced from birth --------------
+// docs/internal/gui/45-launch-and-window-target.md T4. A command field
+// (Browse… mirrors draw_save_pane's ImGuiFileDialog use, no extension
+// filter), arguments, an optional working directory, a mode picker RESTRICTED
+// to the whole-process modes (Non-goals: "the natural v1 focus" — trace/watch
+// need a region/addr this pane does not collect; a client that already knows
+// one can still reach them over the wire `launch` command directly), and
+// "Launch & trace". Deliberately its OWN small mode picker rather than a
+// share of draw_patch_bay: that widget is a full Start/Stop/swap/perturb
+// control surface keyed on an EXISTING selected_pid, not a mode radio row —
+// forcing a shared widget over that mismatch would cost more than it saves.
+namespace {
+const LiveMode kLaunchModes[] = {LiveMode::Log,   LiveMode::Stream,
+                                 LiveMode::Graph, LiveMode::Tree,
+                                 LiveMode::Procs, LiveMode::Sample};
+bool is_launch_mode(LiveMode m) {
+    for (LiveMode k : kLaunchModes)
+        if (k == m)
+            return true;
+    return false;
+}
+} // namespace
+
+void draw_launch_pane(InspectState &s) {
+    ImGui::TextWrapped(
+        "Start a NEW process and trace it from its first instruction — "
+        "rather than pick one already running (the Processes pane). The "
+        "command runs wherever the serve host does (locally, or on the ssh "
+        "host set in Connect).");
+    ImGui::Spacing();
+
+    ImGui::InputTextWithHint("command", "path to the executable", s.launch_cmd,
+                             sizeof s.launch_cmd);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse…##launch")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog("dlg_launch_cmd",
+                                                "Choose a command to launch",
+                                                nullptr, cfg);
+    }
+    if (ImGuiFileDialog::Instance()->Display(
+            "dlg_launch_cmd", ImGuiWindowFlags_NoCollapse, ImVec2(520, 360))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string p = ImGuiFileDialog::Instance()->GetFilePathName();
+            std::snprintf(s.launch_cmd, sizeof s.launch_cmd, "%s", p.c_str());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    ImGui::InputTextWithHint("arguments", "space-separated (no quoting in v1)",
+                             s.launch_args, sizeof s.launch_args);
+    ImGui::InputTextWithHint("working directory", "blank = the server's own",
+                             s.launch_cwd, sizeof s.launch_cwd);
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("trace mode:");
+    for (LiveMode m : kLaunchModes) {
+        if (ImGui::RadioButton(mode_name(m), s.want == m))
+            s.want = m;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", mode_jack_reason(m));
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+    if (!is_launch_mode(s.want))
+        // The picker defaults to whatever budget_least_perturbing chose
+        // (T5), which can be `sample` or `log` — both in kLaunchModes — but
+        // a stale `want` from a prior Capture-mode dataflow/auto/trace/watch
+        // pick would otherwise show none of the radios above as selected.
+        s.want = LiveMode::Log;
+
+    if (!s.host_error.empty())
+        ImGui::TextColored(dt_bad_col(), "%s", s.host_error.c_str());
+
+    // The perturbation confirm (T5, F22), armed only for `stream`/`graph`/
+    // `tree` on an arm64 target — reuses the SAME InspectState fields
+    // inspect_request_start's confirm does; perturb_via_launch says this one
+    // armed it, so Confirm resumes through inspect_request_launch.
+    if (s.perturb_pending && s.perturb_via_launch) {
+        ImGui::Separator();
+        ImGui::TextColored(dt_maybe_col(), "%s", s.perturb_reason.c_str());
+        if (ImGui::Button("Launch anyway"))
+            inspect_confirm_perturb(s);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##launch-perturb"))
+            s.perturb_pending = false;
+    }
+
+    ImGui::Spacing();
+    ImGui::BeginDisabled(s.launch_cmd[0] == '\0');
+    if (ImGui::Button("Launch & trace"))
+        inspect_launch_full_detail(s);
+    ImGui::EndDisabled();
+    if (s.launch_cmd[0] == '\0') {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(enter a command first)");
+    }
+}
+
 void draw_inspect_door(InspectState &s) {
     // The single-window composition (windowed shell + render-only viewer): the
-    // three panes stacked, each under its own separator. The docked shell instead
-    // Begins draw_connect_pane / draw_processes_pane and splits the capture surface
-    // across the Live-capture / Log / Save panes; here it stays one full stack
-    // (draw_capture_full) so the non-docked path loses nothing. Poll once per frame.
+    // four panes stacked, each under its own separator. The docked shell instead
+    // Begins draw_connect_pane / draw_processes_pane / draw_launch_pane and
+    // splits the capture surface across the Live-capture / Log / Save panes;
+    // here it stays one full stack (draw_capture_full) so the non-docked path
+    // loses nothing. Poll once per frame.
     s.session.poll();
     ImGui::SeparatorText("Connect");
     draw_connect_pane(s);
     ImGui::SeparatorText("Processes");
     draw_processes_pane(s);
+    ImGui::SeparatorText("Launch");
+    draw_launch_pane(s);
     ImGui::SeparatorText("Live capture");
     draw_capture_full(s);
     // The cross-pane reveal requests are docked-shell only — here all three are
