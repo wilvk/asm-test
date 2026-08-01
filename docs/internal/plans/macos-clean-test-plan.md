@@ -9,6 +9,19 @@ Intel runner for the day-to-day signal.
 > Status legend: **done** / **written per spec, UNVALIDATED** (code exists, lane has
 > never run — first run is a shakedown) / **planned**. Update as tracks land.
 
+> **CURRENT STATUS (2026-07-23): 4 of 5 tracks done — A, B, D, E.** Only
+> **Track C (arm64 tart) remains**, and it is genuinely Apple-Silicon-gated —
+> it cannot run on this Intel dev host at all. Track D went **green** on a
+> healthy-TSC Ryzen 9 9950X Linux/KVM box (see the 2026-07-23 GREEN update
+> below); the shakedown work is tracked in
+> [macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md)
+> (◐ 3/6 — T4/T5/T6 done, **T1–T3 remain, all Apple-Silicon-gated**).
+> **Everything below this banner dated 2026-07-16 or 2026-07-21, and the
+> "ATTEMPTED — not green" update, is superseded history** — kept for the record
+> of how Track D was unblocked.
+
+> **SUPERSEDED (2026-07-16) — see the CURRENT STATUS banner above.**
+>
 > **Status (2026-07-16): 3 of 5 tracks done — A, B, E.** The hosted-CI story is
 > complete and gating: Track A (scrubbed-env smoke + resolved-path assert) over all
 > six dlopen bindings, Track B (static Mach-O checks on the Linux collector), Track E
@@ -29,13 +42,16 @@ Intel runner for the day-to-day signal.
 >   gone — see the Track D gate list below)*.
 > - **Track C (arm64 tart) is genuinely Apple-Silicon-gated** and cannot run here.
 >
-> **Update (2026-07-21):** the Tracks C/D shakedowns are now tracked in
-> [macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md) (◐ 2/6 — its T4
+> **Update (2026-07-21) — superseded; Track D's shakedown has since run green.**
+> The Tracks C/D shakedowns are now tracked in
+> [macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md) (◐ 2/6 at
+> the time of writing, ◐ 3/6 today — its T4
 > containerised `sshpass`, removing Track D's host-`sudo` gate). The plan stays **active**:
 > Track C remains Apple-Silicon-gated and Track D's shakedown is unrun.
 >
-> **Update (2026-07-23): Track D shakedown ATTEMPTED — not green; still 3 of 5
-> (A, B, E).** The first real execution (Ryzen 9 4900HS bare-metal Linux/KVM, snap
+> **Update (2026-07-23) — SUPERSEDED the same day by the GREEN result below;
+> retained because its hardening work is what made the green run possible.
+> Track D shakedown ATTEMPTED — not green on this host.** The first real execution (Ryzen 9 4900HS bare-metal Linux/KVM, snap
 > Docker) hardened the lane substantially — QEMU `-display none` (gtk default is
 > fatal in an X-less container), `-di` (a closed stdin EOFs the `-monitor stdio`
 > monitor and kills QEMU), `DOCKER_OSX_CPU`/`SMP`/`VNC`/`CPUSET` passthroughs
