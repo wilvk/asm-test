@@ -16,6 +16,44 @@ DynamoRIO-based tier is addressed here.
 
 > Status legend: **planned** unless noted. Update as phases land.
 
+> **CURRENT STATUS 2026-07-22 — M0 ✅ · M1a ✅ (native Intel) · M2 ✅ · M1b ⛔
+> Apple-Silicon-gated.** Read this banner first; **every banner below it dated
+> 2026-06-30, 2026-07-16 or 2026-07-20 is superseded history** (the recurring
+> "still NO-GO" release-asset rechecks), kept for the record of how the gate
+> moved. The plan is unblocked and mostly landed:
+>
+> - **M0 (x86-64 attach + compiled-function tracing) — GO, landed.** The gate was
+>   never hardware; it was that DynamoRIO ships no macOS release asset. That was
+>   routed around with a pinned **source fork** (`wilvk/dynamorio`, branch
+>   `asmtest/macos-fixes`, pin `b8785a5d8`) carrying **four** root-caused fixes.
+>   `make drtrace-test-macos` traces a normally-compiled `__TEXT` function end to
+>   end — 13/13, twice in a row on the Intel-mac dev host, reproduced on a fresh
+>   `macos-15-intel` CI runner.
+> - **M1a (x86-64 generated code) — PASS on native Intel**, 18/18 across three
+>   consecutive runs, on two independent macOS hosts. **The Rosetta leg is not
+>   run** (needs Apple Silicon) and stays must-verify.
+> - **M1b (arm64 generated code) — the implementable slice landed** (the
+>   `exec_alloc_platform`/`exec_copy` `MAP_JIT` arm, the entitlement + codesign
+>   step), but has only ever been **compile+link exercised**: no `MAP_JIT`
+>   allocation has executed. Acceptance is **double-gated** — Apple Silicon
+>   hardware (this dev box is Intel) *and* an arm64/universal macOS DR runtime
+>   (upstream i#5383 still open).
+> - **M2 (bindings, Makefile cleanup, CI) — landed.** Platform-correct
+>   `drtrace_env`/`DR_LOADER_PATH`, cpp/ruby/python lanes green, and the nightly
+>   `drtrace-macos` CI job. DR **signal chaining on macOS is fixed** (the fourth
+>   fork fix) — the Darwin skip that limitation forced has been removed.
+>
+> **This plan stays in `plans/` for M1b's arm64 acceptance only** — a genuine
+> hardware gate under the house rule, not an upstream one. Implementation detail
+> lives in [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md)
+> (✅ 11/11), [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
+> (✅ 4/4), and [macos-dynamorio-signal-chaining.md](../implementations/macos-dynamorio-signal-chaining.md)
+> (✅ 4/4).
+
+> **SUPERSEDED (2026-07-16) — kept as history; see the CURRENT STATUS banner
+> above. The "buying a Mac buys nothing / do not schedule M0/M1/M2" framing below
+> was overturned on 2026-07-22 by the source-fork route.**
+>
 > **STATUS 2026-07-16 — 0 of 3 phases landed. BLOCKED UPSTREAM, not on hardware.**
 >
 > **Buying a Mac does not unblock this plan.** The gate is that DynamoRIO has
@@ -48,7 +86,7 @@ DynamoRIO-based tier is addressed here.
 > **from-source macOS build of DynamoRIO** (out of scope here; "in progress"
 > upstream, with the `dr_app_*` all-thread Mach takeover historically its weakest
 > path), so M1/M2 stay **held** as the plan directs. See [Phase M0 → Step 0
-> result](#phase-m0--x86-64-attach--compiled-function-tracing-planned) below. The
+> result](#phase-m0--x86-64-attach--compiled-function-tracing-landed-2026-07-22) below. The
 > Linux Phase 1–7 tier is unaffected.
 
 > **Re-confirmed 2026-07-16 — unchanged, on a wider scan. Still NO-GO.**
@@ -272,7 +310,7 @@ that matters (blocker 4, not cosmetics).
 
 ---
 
-## Phase M0 — x86-64 attach + compiled-function tracing *(planned)*
+## Phase M0 — x86-64 attach + compiled-function tracing *(landed 2026-07-22)*
 
 **Goal.** Prove that in-process DynamoRIO attach **and** the marker/region
 mechanism work on macOS x86-64, tracing a **normally-compiled** function. No
@@ -434,7 +472,7 @@ is unaffected either way.
 
 ---
 
-## Phase M1 — Generated-code (W^X) path, x86-64 then arm64 *(planned)*
+## Phase M1 — Generated-code (W^X) path, x86-64 then arm64 *(M1a landed 2026-07-22; M1b Apple-Silicon-gated)*
 
 **Goal.** Make the generated-bytes path (`asmtest_exec_alloc`,
 `asmtest_asm_exec_native`) work on macOS, and make the existing
@@ -598,7 +636,7 @@ hardened interpreters) is documented.
 
 ---
 
-## Phase M2 — Bindings, Makefile cleanup, CI *(planned)*
+## Phase M2 — Bindings, Makefile cleanup, CI *(landed 2026-07-22)*
 
 **Goal.** Wire the host-side per-language drtrace lanes, finish Makefile cleanup,
 and add a macOS CI job — scoped to what the previous phases proved actually works.

@@ -1,10 +1,10 @@
 # Wave 0: stop the breaches — keymap fidelity, real Reset, save guard, capability positives, perturb confirm, nav history — implementation
 
 > **Sources.** Actioned from the UX restructure plan
-> ([../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md))
+> ([../archive/plans/desktop-gui-ux-restructure-plan.md](../archive/plans/desktop-gui-ux-restructure-plan.md))
 > rows **T1.1** (remainder), **T2.2**, **T2.6**, **T4.2**, **T4.5**, **T3.2** —
 > the plan's **Wave 0** — and the review findings **F1, F18, F2, F24, F19, F22,
-> F11** ([../plans/desktop-gui-ux-review.md](../plans/desktop-gui-ux-review.md)).
+> F11** ([../archive/reviews/desktop-gui-ux-review.md](../archive/reviews/desktop-gui-ux-review.md)).
 > Written 2026-07-27 against HEAD `243f092`. This doc wins over the review/plan on
 > disagreement; the CODE wins over this doc — re-verify file:line before editing.
 > Read [_conventions.md](../implementations/_conventions.md) first; D1–D11 live in

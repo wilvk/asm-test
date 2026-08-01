@@ -166,8 +166,8 @@ compile-probe.
 ### UX-restructure family (docs 18–24) — implementation briefs cut from the review
 
 These seven briefs are the implementation-ready form of the
-[UX restructuring plan](../plans/desktop-gui-ux-restructure-plan.md) (which
-follows the 24-finding [heuristic review](../plans/desktop-gui-ux-review.md)),
+[UX restructuring plan](../archive/plans/desktop-gui-ux-restructure-plan.md) (which
+follows the 24-finding [heuristic review](../archive/reviews/desktop-gui-ux-review.md)),
 one per coherent recommendation cluster, each written so a junior developer can
 open exactly one and implement it end to end. They were drafted 2026-07-27
 against HEAD `243f092` with every cited file:line re-verified against the tree
@@ -616,9 +616,13 @@ theme is that the app owns the two hardest IA pieces (one `.asmtrace` format, on
 `dt_nav_go` spine) but hides them behind single-window nested tabs, so most fixes
 are wiring on shipped substrate, not redesign.
 
-- [../plans/desktop-gui-ux-review.md](../plans/desktop-gui-ux-review.md) — the
+Both documents are **archived** (2026-08-01): all 24 findings are actioned and
+all 28 recommendations shipped as docs 18–24, so they moved out of `plans/` and
+`reviews/` per the [archive rule](../README.md).
+
+- [../archive/reviews/desktop-gui-ux-review.md](../archive/reviews/desktop-gui-ux-review.md) — the
   findings (F1–F24), method, severities, strengths, sources.
-- [../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md)
+- [../archive/plans/desktop-gui-ux-restructure-plan.md](../archive/plans/desktop-gui-ux-restructure-plan.md)
   — the roadmap: five themes, four waves, and which tracks (13/14/15/16/17) to
   redirect vs. new briefs to cut.
 

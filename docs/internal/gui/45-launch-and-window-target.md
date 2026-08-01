@@ -17,7 +17,22 @@
 > earlier survey) — if a citation disagrees with the code when you implement,
 > the code wins; re-verify, then fix this doc in the same change.
 >
-> **Status (2026-07-31) — ☐ 0/9.** Not started.
+> **Status (2026-07-31) — ✅ 9/9. COMPLETE.** T1+T2 landed as one integrated
+> change (`014e662`) — building the launch primitive surfaced that the fork must
+> run on the exact OS thread that keeps tracing the child, so T1's interim
+> detach/re-SEIZE gap was never shipped standalone and needed no retiring;
+> `already_traced` threads through every direct SEIZE site
+> (log/stream/graph/tree/procs/watch/trace), while `dataflow`/`auto` attach
+> through a separate, deeper subsystem this brief does not touch and are refused
+> with a stated wire error rather than risked. T6+T9 the X11 window→PID resolver
+> + `libx11-dev`/`xvfb` pinned in `Dockerfile.desktop` + a genuine Xvfb-backed
+> integration lane (`test_window_picker_xvfb` — a live virtual display and a real
+> second window, not a mock) (`1bd9754`). T3/T4/T7/T8 the Launch pane/CTA +
+> crosshair drag-to-attach, reusing `inspect_attach_full_detail` unchanged on
+> release (`a394881`); closed out in `3ed78d4`. Both `docker-desktop` lanes green
+> on merged main (`desktop-test`, `desktop-engine-boundary-check` — D9 stays
+> intact, the desktop process itself never calls `PTRACE_TRACEME`/`PTRACE_SEIZE`
+> — `desktop-ui-test` 28/28, `desktop-test-xvfb`); `cli-smoke` green headless.
 
 ## Why this work exists
 

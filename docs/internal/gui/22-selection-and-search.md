@@ -21,9 +21,9 @@
 > camera / gutter). The **CODE won** over the drift notes below where they differ.
 
 > **Sources.** Actioned from the UX restructure plan
-> (../plans/desktop-gui-ux-restructure-plan.md) rows **T1.2, T1.3, T1.4, T1.5**
+> (../archive/plans/desktop-gui-ux-restructure-plan.md) rows **T1.2, T1.3, T1.4, T1.5**
 > (Theme 1, "Make the spine operable"; Wave 2) and the review findings **F7, F18,
-> F17, F12** (../plans/desktop-gui-ux-review.md). Written 2026-07-27 against HEAD
+> F17, F12** (../archive/reviews/desktop-gui-ux-review.md). Written 2026-07-27 against HEAD
 > `243f092`. This doc wins over the review/plan on disagreement; the CODE wins
 > over this doc — re-verify file:line before editing.
 > Read [_conventions.md](../implementations/_conventions.md) first; D1–D11 live

@@ -17,9 +17,9 @@
 > (end_cause). All green on the host `make desktop desktop-render desktop-test`.
 
 > **Sources.** Actioned from the UX restructure plan
-> (../plans/desktop-gui-ux-restructure-plan.md) rows **T4.1, T4.3, T4.4, T4.6**
+> (../archive/plans/desktop-gui-ux-restructure-plan.md) rows **T4.1, T4.3, T4.4, T4.6**
 > and the review findings **F5, F20, F23, F21**
-> (../plans/desktop-gui-ux-review.md). Written 2026-07-27 against HEAD `243f092`.
+> (../archive/reviews/desktop-gui-ux-review.md). Written 2026-07-27 against HEAD `243f092`.
 > This doc wins over the review/plan on disagreement; the CODE wins over this doc
 > — re-verify file:line before editing. Read
 > [_conventions.md](../implementations/_conventions.md) first; D1–D11 live in

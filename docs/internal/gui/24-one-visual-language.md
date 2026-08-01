@@ -1,8 +1,8 @@
 # Wave 3: one visual language — semantic palette, CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer — implementation
 
 > **Sources.** Actioned from the UX restructure plan
-> (../plans/desktop-gui-ux-restructure-plan.md) rows **T5.1–T5.5** and the review
-> findings **F14, F15, F3, F16, F4** (../plans/desktop-gui-ux-review.md).
+> (../archive/plans/desktop-gui-ux-restructure-plan.md) rows **T5.1–T5.5** and the review
+> findings **F14, F15, F3, F16, F4** (../archive/reviews/desktop-gui-ux-review.md).
 > Written 2026-07-27 against HEAD `243f092`. This doc wins over the review/plan on
 > disagreement; the CODE wins over this doc — re-verify file:line before editing.
 > Read [_conventions.md](../implementations/_conventions.md) first; D1–D11 live in

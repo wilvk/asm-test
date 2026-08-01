@@ -1,8 +1,8 @@
 # Wave 2: expose the spine — command palette, wayfinding chrome, overview/minimap — implementation
 
 > **Sources.** Actioned from the UX restructure plan
-> (../plans/desktop-gui-ux-restructure-plan.md) rows **T3.1, T3.3, T3.4** and the
-> review findings **F8, F9** (../plans/desktop-gui-ux-review.md). Written
+> (../archive/plans/desktop-gui-ux-restructure-plan.md) rows **T3.1, T3.3, T3.4** and the
+> review findings **F8, F9** (../archive/reviews/desktop-gui-ux-review.md). Written
 > 2026-07-27 against HEAD `243f092`. This doc wins over the review/plan on
 > disagreement; the CODE wins over this doc — re-verify file:line before editing.
 > Read [_conventions.md](../implementations/_conventions.md) first; D1–D11 live

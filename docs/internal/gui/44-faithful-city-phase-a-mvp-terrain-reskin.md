@@ -21,7 +21,18 @@
 > either doc was authored — see [43§2](43-faithful-city-roadmap.md#2-two-corrections-found-while-re-verifying-2026-07-31).
 > Do not re-touch that fix here.
 >
-> **Status (2026-07-31) — ☐ 0/7.** Not started.
+> **Status (2026-07-31) — ✅ 7/7. COMPLETE.** T1 `kind_by_cell` + the zoning
+> shader and T2 `TF_UNKNOWN` fog-of-war (`dbca44c`); T3 the fidelity weather sky
+> (`scene3d/atmosphere.h`, `scene_atmosphere_for_tier()` sourced only from
+> `ui/theme.h`'s shared palette, byte-identical to the 2D banner), T4
+> `Scene::set_stat_terrain` (the ghost-district survey surface), T5 the two-clock
+> plumbing (`SceneFrame.sun` + an independent `follow_step` `Transport`), T6 the
+> followed-citizen vehicle + comet tail, T7 the `zoning`/`weather`/`ghost_fog`/
+> `vehicle` `SceneLayers` bools (`88407a8`). Re-validated on merged main
+> (`8685a2e`): `docker-desktop` green — `desktop-test` incl.
+> `test_terrain`/`test_scene_fbo`, `desktop-engine-boundary-check` (D4 intact),
+> `desktop-ui-test` 28/28. No `.asmtrace` schema touched. Full per-task detail in
+> the [README](README.md)'s faithful-city row.
 
 ## Why this work exists
 

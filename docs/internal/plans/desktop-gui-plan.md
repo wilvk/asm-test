@@ -33,6 +33,20 @@
 > trajectories, "3D to find, 2D to read") — an orientation view you drill *out
 > of* into the 2D reading views, gated on the Wave-1 `mem[]` stream for its rich
 > rung.
+>
+> **Status (2026-08-01) — all four phases have landed; the plan stays active as
+> the intake home.** Phases 1–4 (and doc 10's growth-rung companion) are complete
+> — [../gui/](../gui/README.md) docs **01–10 are all ✅/☑**, and the workstream has
+> since grown past them: the UX-restructure family (18–24), the extension family
+> (28–33), the live-feed follow-ons (34–42), and the faithful-city family (43–45)
+> have all landed too. This file is **not** archivable yet, for two reasons: the
+> **standing expansion-intake table** below is still the live contract for what
+> the GUI does as each post-v1 wave item lands, and four small **engine work
+> items** remain open (Darwin build of `libasmtest_dataflow`, the graphsort
+> comparator-context lift, Learn-ladder walkthrough content, and the optional
+> `only_tid` for the syscalls engine). The faithful city's **Phases B–E are
+> uncut** — see [43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md)§4
+> before starting one.
 
 ## Summary
 
@@ -558,13 +572,13 @@ same events.
 
 ## Phasing
 
-1. **Phase 1 — the contract.** *(Status 2026-07-24: the recording half is
-   **done** — [01-asmtrace-format.md](../gui/01-asmtrace-format.md) landed the
-   draft schema, the writer TU, `--record` on every headless mode, `--json` for
+1. **Phase 1 — the contract.** *(Status 2026-08-01: **done, both halves.**
+   [01-asmtrace-format.md](../gui/01-asmtrace-format.md) ✅ 8/8 landed the draft
+   schema, the writer TU, `--record` on every headless mode, `--json` for
    `--log`/`--stream`, the `vec512_t` row, and the committed golden corpus with
-   its low-fidelity fixtures. What remains of this phase is the reader/exporter
-   half: [02-exporters-and-readers.md](../gui/02-exporters-and-readers.md)
-   T1–T4.)*
+   its low-fidelity fixtures; the reader/exporter half
+   [02-exporters-and-readers.md](../gui/02-exporters-and-readers.md) is ✅ 6/6 —
+   `tools/asmtrace_export.c` + `scripts/test-asmtrace-export.sh`.)*
    `.asmtrace` v1 schema doc + NDJSON serializer
    sinks + record modes in [cli/asmspy.c](../../../cli/asmspy.c); JSON modes for
    `--log`/`--stream`; state descriptors (+ `vec512_t` manifest addition);
@@ -622,18 +636,18 @@ same events.
 |---|---|---|
 | ~~`.asmtrace` NDJSON serializers per sink + record mode~~ **DONE** (01-T3/T5) | [cli/asmtrace_ndjson.c](../../../cli/asmtrace_ndjson.c) + [cli/asmspy.c](../../../cli/asmspy.c) | small |
 | ~~JSON mode for `--log`/`--stream`~~ **DONE** (01-T4) | [cli/asmspy.c](../../../cli/asmspy.c) | small |
-| `--serve` control loop over stdout/unix socket | [cli/asmspy.c](../../../cli/asmspy.c) | small |
-| speedscope / Perfetto exporters | new tool or `cli/` | small |
+| ~~`--serve` control loop over stdout/unix socket~~ **DONE** (07) — plus the normative wire protocol and `libasmspy` | [cli/asmspy.c](../../../cli/asmspy.c) + [cli/libasmspy.h](../../../cli/libasmspy.h) | small |
+| ~~speedscope / Perfetto exporters~~ **DONE** (02) | [tools/asmtrace_export.c](../../../tools/asmtrace_export.c) | small |
 | ~~`vec512_t` manifest row (descriptor precondition)~~ **DONE** (01-T2) | [scripts/gen-manifest.c](../../../scripts/gen-manifest.c) | small |
-| Ship `ct_eq` as a real example | `examples/` | small |
+| ~~Ship `ct_eq` as a real example~~ **DONE** (06) | [examples/ct_eq.s](../../../examples/ct_eq.s) + `examples/test_ct_eq.c` | small |
 | Darwin build of `libasmtest_dataflow` | `mk/dataflow.mk` + binding platform maps | small–medium |
-| Per-step register-capture ring (opt-in) | [src/emu.c](../../../src/emu.c) (`UC_HOOK_CODE`) | small–medium |
+| ~~Per-step register-capture ring (opt-in)~~ **DONE** (09-T1) — `emu_step_capture`, x86-64 + arm64 | [src/emu.c](../../../src/emu.c) (`UC_HOOK_CODE`) | small–medium |
 | graphsort comparator-context lift (or serialized sorts) | [cli/asmspy_graphsort.h](../../../cli/asmspy_graphsort.h) | small |
 | ~~Payload-free `format_syscall` line variant (the redaction gate)~~ **DONE** (01-T4; the fd-backing path had to be redacted too) | [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) | small |
-| Runner record mode: per-test `.asmtrace` + failure events carrying recording path + step id | [src/asmtest.c](../../../src/asmtest.c) (riding the emulator/valtrace tiers the tests drive) | medium |
+| ~~Runner record mode: per-test `.asmtrace` + failure events carrying recording path + step id~~ **DONE** (06) — `--record-dir=DIR` / `ASMTEST_RECORD_DIR` | [src/asmtest.c](../../../src/asmtest.c) (riding the emulator/valtrace tiers the tests drive) | medium |
 | Walkthrough content for the Learn ladder (authoring, not code) | golden-recording corpus | small–medium |
-| *(opportunistic)* arm64-guest emulator L0 value producer | `src/dataflow_emu.c` guest seam | medium, demand-gated |
-| *(Phase 4+, demand-gated)* Reweave: edit-at-step-K + deterministic re-run + per-step alignment | `src/dataflow_emu.c` | medium–large |
+| ~~*(opportunistic)* arm64-guest emulator L0 value producer~~ **DONE** (32/R5) — the `df_guest` vtable + arm64 value fabric | `src/dataflow_emu.c` guest seam | medium, demand-gated |
+| ~~*(Phase 4+, demand-gated)* Reweave: edit-at-step-K + deterministic re-run + per-step alignment~~ **DONE** (30/R3 producer + 42 consumer) | [src/dataflow_resume.c](../../../src/dataflow_resume.c) | medium–large |
 | *(optional)* `only_tid` for the syscalls engine | [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) | small |
 
 ### Expansion intake (what the GUI does when each wave item lands)

@@ -1,8 +1,8 @@
 # Wave 1 keystone: real dockable panes + flatten the 3-deep tab nesting — implementation
 
 > **Sources.** Actioned from the UX restructure plan
-> (../plans/desktop-gui-ux-restructure-plan.md) row **T2.1** and the review
-> findings **F2, F4, F9** (../plans/desktop-gui-ux-review.md). Written 2026-07-27
+> (../archive/plans/desktop-gui-ux-restructure-plan.md) row **T2.1** and the review
+> findings **F2, F4, F9** (../archive/reviews/desktop-gui-ux-review.md). Written 2026-07-27
 > against HEAD `243f092`. This doc wins over the review/plan on disagreement; the
 > CODE wins over this doc — re-verify file:line before editing (the review's
 > `shell.cpp:564/586/705`, `layout.cpp:56-71` citations are from the pre-`243f092`

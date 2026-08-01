@@ -4,7 +4,7 @@
 > Observer deck streams during a capture; the Loom, Slice explorer, operand
 > Timeline and 3D overview are reachable over a live session **only** by saving
 > the capture to `.asmtrace` and reopening it as a replay
-> ([`draw_save_capture`](../../desktop/src/ui/inspect_door.cpp),
+> ([`draw_save_capture`](../../../desktop/src/ui/inspect_door.cpp),
 > "Open in Loom" → `handle_inspect_open_request` → `shell_open`). The data is
 > already there — serve `dataflow`/`auto` emit exact `df_step`; `trace`/`dataflow`/
 > `auto` emit `codeimage` — so this is a **wiring** brief, not a new subsystem:

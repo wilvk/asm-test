@@ -1,9 +1,9 @@
 # Wave 1: the workspace container — data-driven tabs, task-language entry rail, persistence + recents, perspectives, Settings/DPI — implementation
 
 > **Sources.** Actioned from the UX restructure plan
-> ([../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md))
+> ([../archive/plans/desktop-gui-ux-restructure-plan.md](../archive/plans/desktop-gui-ux-restructure-plan.md))
 > rows **T2.3, T2.4, T2.5, T2.7, T2.8** and the review findings **F4, F13, F10,
-> F2, F16, F6** ([../plans/desktop-gui-ux-review.md](../plans/desktop-gui-ux-review.md)).
+> F2, F16, F6** ([../archive/reviews/desktop-gui-ux-review.md](../archive/reviews/desktop-gui-ux-review.md)).
 > Written 2026-07-27 against HEAD `243f092`. This doc wins over the review/plan on
 > disagreement; the CODE wins over this doc — re-verify file:line before editing.
 > Read [\_conventions.md](../implementations/_conventions.md) first; D1–D11 live

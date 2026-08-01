@@ -1,10 +1,20 @@
 # Desktop GUI — UX restructuring plan
 
+> **ARCHIVED 2026-08-01 — COMPLETE.** All 28 recommendations across the five
+> themes (`T1.1`–`T5.5`, waves 0–3) shipped as
+> [../../gui/](../../gui/README.md) briefs **18–24**, every one of which is now
+> ✅ with all its tasks landed: 18 breach-stops 6/6, 19 dockable-panes keystone
+> 3/3, 20 workspace-and-settings 5/5, 21 spine-navigation 3/3, 22
+> selection-and-search 4/4, 23 graded-truth-layer 4/4, 24 one-visual-language
+> 5/5. The findings this roadmap answers are archived alongside it at
+> [../reviews/desktop-gui-ux-review.md](../reviews/desktop-gui-ux-review.md).
+> Nothing here is open work; the text below is preserved as authored.
+
 > **What this is.** The actionable roadmap that follows from the heuristic
-> evaluation in [desktop-gui-ux-review.md](desktop-gui-ux-review.md) (24 confirmed
+> evaluation in [desktop-gui-ux-review.md](../reviews/desktop-gui-ux-review.md) (24 confirmed
 > findings, F1–F24). It reframes the app around what it already is, sequences the
 > work by leverage into four waves, and maps each change onto the existing
-> implementation tracks ([../gui/](../gui/README.md) 13/14/15/16/17) so a junior
+> implementation tracks ([../gui/](../../gui/README.md) 13/14/15/16/17) so a junior
 > developer can cut a one-doc brief from any row. Every recommendation traces to a
 > finding; nothing here removes a truth — the fidelity chrome is *restructured*
 > (F5), never removed. Generated 2026-07-27 from the review's synthesis
@@ -135,18 +145,18 @@ filter/time widget · `T5.5` Loom/3D primer · `T2.7` perspectives + saved filte
 ## Briefs cut from this plan (2026-07-27)
 
 All 28 unbuilt recommendations below are now implementation-ready briefs under
-[../gui/](../gui/README.md), one per wave/theme cluster (drafting-only — no code
+[../gui/](../../gui/README.md), one per wave/theme cluster (drafting-only — no code
 yet), each tracing its tasks to the `T<theme>.<n>` IDs here:
 
 | Brief | Wave | Recommendations |
 |---|---|---|
-| [18-breach-stops.md](../gui/18-breach-stops.md) | 0 | T1.1 (remainder), T2.2, T2.6, T4.2, T4.5, T3.2 |
-| [19-dockable-panes-keystone.md](../gui/19-dockable-panes-keystone.md) | 1 | **T2.1 (keystone)** |
-| [20-workspace-and-settings.md](../gui/20-workspace-and-settings.md) | 1 | T2.3, T2.4, T2.5, T2.7, T2.8 |
-| [21-spine-navigation.md](../gui/21-spine-navigation.md) | 2 | T3.1, T3.3, T3.4 |
-| [22-selection-and-search.md](../gui/22-selection-and-search.md) | 2 | T1.2, T1.3, T1.4, T1.5 |
-| [23-graded-truth-layer.md](../gui/23-graded-truth-layer.md) | 3 | T4.1, T4.3, T4.4, T4.6 |
-| [24-one-visual-language.md](../gui/24-one-visual-language.md) | 3 | T5.1, T5.2, T5.3, T5.4, T5.5 |
+| [18-breach-stops.md](../../gui/18-breach-stops.md) | 0 | T1.1 (remainder), T2.2, T2.6, T4.2, T4.5, T3.2 |
+| [19-dockable-panes-keystone.md](../../gui/19-dockable-panes-keystone.md) | 1 | **T2.1 (keystone)** |
+| [20-workspace-and-settings.md](../../gui/20-workspace-and-settings.md) | 1 | T2.3, T2.4, T2.5, T2.7, T2.8 |
+| [21-spine-navigation.md](../../gui/21-spine-navigation.md) | 2 | T3.1, T3.3, T3.4 |
+| [22-selection-and-search.md](../../gui/22-selection-and-search.md) | 2 | T1.2, T1.3, T1.4, T1.5 |
+| [23-graded-truth-layer.md](../../gui/23-graded-truth-layer.md) | 3 | T4.1, T4.3, T4.4, T4.6 |
+| [24-one-visual-language.md](../../gui/24-one-visual-language.md) | 3 | T5.1, T5.2, T5.3, T5.4, T5.5 |
 
 T1.1's keymap *core* already landed (doc 17 T1: `handle_keymap`); doc 18 T1
 carries only the remainder (faithful overlay + convention keys).
@@ -197,6 +207,6 @@ data-driven outer tabs (`T2.3`), task-language entry rail (`T2.4`).
 
 ---
 
-*Findings and method: [desktop-gui-ux-review.md](desktop-gui-ux-review.md).
-Parent product plan: [desktop-gui-plan.md](desktop-gui-plan.md).
-Implementation briefs: [../gui/](../gui/README.md).*
+*Findings and method: [desktop-gui-ux-review.md](../reviews/desktop-gui-ux-review.md).
+Parent product plan: [desktop-gui-plan.md](../../plans/desktop-gui-plan.md).
+Implementation briefs: [../gui/](../../gui/README.md).*
