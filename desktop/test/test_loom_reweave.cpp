@@ -1,5 +1,5 @@
 // test_loom_reweave.cpp — the reweave consumption path
-// (docs/internal/gui/42-loom-reweave-consumption.md T2/T3). FULL BUILD ONLY:
+// (docs/internal/archive/gui/42-loom-reweave-consumption.md T2/T3). FULL BUILD ONLY:
 // like test_loom_forks.cpp, this binary links Unicorn (the resume seam) —
 // nothing in asmtest-viewer links any of it.
 //

@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-utfcpp.sh — utfcpp v4.0.6 (Boost Software License 1.0): the header-only
-# UTF-8 library ImGuiTextSelect (docs/internal/gui/14-quick-wins.md T6) includes
+# UTF-8 library ImGuiTextSelect (docs/internal/archive/gui/14-quick-wins.md T6) includes
 # as <utf8.h>. We keep just source/ (utf8.h + the utf8/ headers it pulls); the
 # include dir is $(UTFCPP_HOME)/source. Thin wrapper over fetch-addon.sh.
 set -eu

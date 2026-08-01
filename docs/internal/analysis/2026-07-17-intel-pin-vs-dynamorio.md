@@ -168,7 +168,7 @@ the only one that extends the core promise to code no host can run.
 > roadmap plan cited above — the SDE future-ISA lane (#1), probe-mode capture
 > validated live on Zen 5 (#3, `fd00e46`), and the libdft64 differential taint
 > oracle (#4, `d504081`); #2's XED-decoded trace tier has its own brief,
-> [pin-xed-trace-tier.md](../implementations/pin-xed-trace-tier.md).
+> [pin-xed-trace-tier.md](../archive/implementations/pin-xed-trace-tier.md).
 
 ## Sources
 

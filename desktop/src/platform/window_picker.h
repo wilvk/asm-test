@@ -1,5 +1,5 @@
 // window_picker.h — "which PID owns the window at this screen point?"
-// (docs/internal/gui/45-launch-and-window-target.md, Part B, T6).
+// (docs/internal/archive/gui/45-launch-and-window-target.md, Part B, T6).
 //
 // A small, pure-ish platform module: genuinely new platform surface (this is
 // why it lives in its own desktop/src/platform/, not ui/ or live/), X11-only,

@@ -33,14 +33,14 @@ its single hard limit (overhead, not completeness), and its portability story.
 > **Status (2026-07-21): COMPLETE — all phases (0–5) and all Phase-5 fronts are closed;
 > plan archived.** The last two fronts landed: the **AArch64 live single-step stream** was
 > validated 2026-07-20
-> ([aarch64-ptrace-single-step-validation.md](../../implementations/aarch64-ptrace-single-step-validation.md)
+> ([aarch64-ptrace-single-step-validation.md](../implementations/aarch64-ptrace-single-step-validation.md)
 > ✅ 6/6; commit `604a2b5`; gating `hwtrace-arm64` job, 205 live ok), and the **in-process
 > BTF** variant (W3) landed 2026-07-18
-> ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md) ☑ 6/6,
+> ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md) ☑ 6/6,
 > [src/ss_btf.c](../../../../src/ss_btf.c)). Residual owners: bare-metal arm64 hw-breakpoint
 > firing → [self-hosted-ci-runners.md](../../implementations/self-hosted-ci-runners.md)
 > (◐ 2/6); macOS out-of-process stepping →
-> [macos-oop-mach-stepper.md](../../implementations/macos-oop-mach-stepper.md) ✅ 7/7
+> [macos-oop-mach-stepper.md](../implementations/macos-oop-mach-stepper.md) ✅ 7/7
 > (validated on the Intel MacBook).
 
 ---
@@ -326,7 +326,7 @@ Linux/x86-64 backend.
 > CoreCLR / HotSpot × perf-map and jitdump), and — as of 2026-07-18 — the **in-process
 > BTF** variant (W3, see below): a raw-MSR pinned-envelope tier with per-trap re-arm and
 > faithful truncation
-> ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md)); the
+> ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md)); the
 > "kernel helper / uapi patch" blocker this status note previously cited was not
 > load-bearing. **All fronts now closed:**
 > - **AArch64 live single-step *stream*** — **VALIDATED 2026-07-20** on GitHub's
@@ -350,7 +350,7 @@ Linux/x86-64 backend.
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
   entitlement. Slots into the [macOS clean-test plan](../../plans/macos-clean-test-plan.md).
   **The out-of-process Mach-exception-port stepper has since LANDED** —
-  [macos-oop-mach-stepper.md](../../implementations/macos-oop-mach-stepper.md) ✅ 7/7,
+  [macos-oop-mach-stepper.md](../implementations/macos-oop-mach-stepper.md) ✅ 7/7,
   validated on the Intel MacBook.
 - **W2 — out-of-process `ptrace` single-step + foreign-process tracing.** The
   out-of-band managed-runtime path: in-process DynamoRIO cannot take over a JIT/GC
@@ -561,7 +561,7 @@ Linux/x86-64 backend.
   `DEBUGCTL.BTF` and silently degrade SINGLEBLOCK to per-instruction stepping —
   `blockstep_available()` self-skips there. **The in-process form (no ptrace child)
   has since LANDED** as the raw-MSR pinned-envelope tier
-  ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md),
+  ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md),
   `asmtest_ss_btf_available()` / `asmtest_ss_btf_trace()` in
   [src/ss_btf.c](../../../../src/ss_btf.c)): the same thread-pinned `/dev/cpu/N/msr`
   route [src/msr_lbr.c](../../../../src/msr_lbr.c) uses, with per-trap re-arm (BTF is a

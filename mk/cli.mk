@@ -472,7 +472,7 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 
 # ---------------------------------------------------------------------------
 # asmtrace_record — the Author-mode conformance-corpus recorder + the golden
-# corpus targets (docs/internal/gui/01-asmtrace-format.md T6/T7).
+# corpus targets (docs/internal/archive/gui/01-asmtrace-format.md T6/T7).
 #
 # It runs corpus routines under the DETERMINISTIC emulator L0 value producer and
 # writes one .asmtrace per routine, so the committed corpus is a byte-comparable

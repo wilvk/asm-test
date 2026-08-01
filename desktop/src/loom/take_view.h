@@ -82,7 +82,7 @@ struct loom_take_node_t {
     // skips computing alignment/cone/steps entirely — a caller (e.g. the
     // paint layer) MUST gate on this before calling loom_take_plan, or it
     // will render a fabricated "diverged at step 0" overlay for a refusal
-    // that never ran (docs/internal/gui/42-loom-reweave-consumption.md).
+    // that never ran (docs/internal/archive/gui/42-loom-reweave-consumption.md).
     bool has_fabric = false;
 };
 

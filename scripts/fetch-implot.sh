@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-implot.sh — ImPlot v1.0 (docs/internal/gui/15-plotting-and-graph-nav.md
+# fetch-implot.sh — ImPlot v1.0 (docs/internal/archive/gui/15-plotting-and-graph-nav.md
 # T1): the plotting chassis. A COMPILED addon (implot.cpp + implot_items.cpp).
 # PIN the v1.0 TAG — master is v1.1 WIP tracking ImGui 1.92, and v1.0's ImPlotSpec
 # redesign already differs from every pre-2026 example. implot.h is public-API;

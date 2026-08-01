@@ -2,7 +2,7 @@
 
 **Status (updated 2026-07-21): ALL FIVE items landed — items 2 and 3 on 2026-07-17 (same day,
 separate diff); item 1 on 2026-07-18 (DFP-CALLOUT-1 / T2); item 4 on 2026-07-18 (T5+T6); item 5
-on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
+on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../archive/implementations/dataflow-bindings-slice-codeimage.md)
 T1–T4 (commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`) — all ten bindings now share
 the def-use/slice surface.** *This header previously read "Items 4 and 5 remain OPEN", which was
 doubly stale (item 4's own section already said LANDED 2026-07-18); that staleness was the
@@ -43,7 +43,7 @@ alias's own bit slice (`dataflow.c:219` keys raw Capstone ids with no canonicali
 byte. Note F6 measured that a *blanket* barrier deletes the exit-criterion slice — precision is
 load-bearing, so this is not a one-line change.
 
-**Fixed** (`docs/internal/implementations/dataflow-producer-correctness.md` T2 /
+**Fixed** (`docs/internal/archive/implementations/dataflow-producer-correctness.md` T2 /
 DFP-CALLOUT-1): every scoped entry point (`_run`, `attach`, `attach_pid*`, `attach_jit`) now
 allocates a `dfp_riskset` and feeds it through the existing `finalize_step` hook, exactly as
 predicted above — one wiring site (`dfp_step_loop`) covers all of them. The call-out branch
@@ -158,7 +158,7 @@ from `TIER_HEADERS`). Widening to the slice half re-opens exactly the ABI-cliff 
 already bitten Ruby/Java once.
 
 **LANDED 2026-07-18**
-([dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
+([dataflow-bindings-slice-codeimage.md](../archive/implementations/dataflow-bindings-slice-codeimage.md)
 T1–T4; commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`): the seven remaining bindings
 gained the def-use/slice half — all ten bindings now share the surface. See the brief for how the
 by-value FFI-boundary concern above was handled.

@@ -83,13 +83,13 @@ The highest-risk mechanics all held up:
 
 - A region ending in a bare `call` (fall-through outside the region) reads as a return —
   mirrors existing level-0 behavior, not descent-introduced. Still standing — no task in
-  [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md)
+  [ptrace-blockstep-tracer-correctness.md](../archive/implementations/ptrace-blockstep-tracer-correctness.md)
   fixes it either.
 - ~~`/proc/<pid>/maps` re-parsed per L3 call-out (`asmtest_proc_region_by_addr`); a parsed
   snapshot would replace an O(maps) syscall+parse per call-out.~~ **Fixed** —
   `descend_maps_cache_*` in `src/ptrace_backend.c` builds the snapshot once per descent and
   reuses it across call-outs, re-parsing only on a genuine miss
-  ([ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) T5).
+  ([ptrace-blockstep-tracer-correctness.md](../archive/implementations/ptrace-blockstep-tracer-correctness.md) T5).
 - ~~Block-boundary derivation duplicated across `normalize()` / `asmtest_descent_frame_record`
   / `trace_append_block`'s dedup (three copies of the rule).~~ **Fixed** — extracted into
   `asmtest_blockseq_t` / `asmtest_blockseq_boundary()` in
@@ -102,4 +102,4 @@ The highest-risk mechanics all held up:
 - ~~Minor harness nits: `jit_trace`'s L3 `CHECK` is vacuous (frame 0 always exists);
   `node`/`java-bcl` ignore the `-descend` suffix; `test_descent_attach` leaks two mmaps on a
   skip path.~~ **Fixed** — see
-  [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) T6.
+  [ptrace-blockstep-tracer-correctness.md](../archive/implementations/ptrace-blockstep-tracer-correctness.md) T6.

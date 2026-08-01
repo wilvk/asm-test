@@ -1,5 +1,5 @@
 // author_vm.h — the Author door's pure view-model
-// (docs/internal/gui/06-doors-and-learning.md T5).
+// (docs/internal/archive/gui/06-doors-and-learning.md T5).
 //
 // The Author door is the pedagogy: type assembly, run it, and see faults as
 // DATA. Everything decidable about that lives here, so it is assertable without

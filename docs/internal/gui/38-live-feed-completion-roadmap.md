@@ -1,6 +1,6 @@
 # Live-feed completion roadmap — which visualizations still can't be driven from a live process
 
-> **A family-overview follow-on** (like [27](27-extension-roadmap.md) for its
+> **A family-overview follow-on** (like [27](../archive/gui/27-extension-roadmap.md) for its
 > extension family), from a 2026-07-29 audit of the whole desktop against the
 > question *"can this visualization be produced from a **live** process, or only
 > from a recorded/emulator golden?"* Authored after docs 36/37 anchored the live 3D
@@ -11,9 +11,9 @@
 > comprehensive: Summary, Canvas, Slice (def-use), Timeline, Loom
 > (fabric/biography/zeroization), the Scrubber (with `fpenv`), and the full Observer
 > deck plus the 3D terrain/trajectory/HUD are all fed live off a growing recording
-> ([25](25-live-model-wiring.md)/[26](26-live-regstate-producer.md) wired everything
+> ([25](../archive/gui/25-live-model-wiring.md)/[26](../archive/gui/26-live-regstate-producer.md) wired everything
 > Observer wasn't; `--mem` lights the 3D rich rung; `--steps` arms the Scrubber
-> ring; [36](36-anchor-the-3d-plane.md)/[37](37-region-tag-on-df-step.md) anchor the
+> ring; [36](../archive/gui/36-anchor-the-3d-plane.md)/[37](../archive/gui/37-region-tag-on-df-step.md) anchor the
 > live 3D plane). The remaining **closable** live-feed gaps are a short list.
 
 ## Closable gaps (priority order)
@@ -25,12 +25,12 @@ when picking one up.
 | # | Gap | Closes | Effort | Reality |
 |---|---|---|---|---|
 | L1 | live-dataflow serve leg on **arm64** (`cli/dataflow_ptrace.c` is entirely `#if __x86_64__`) — re-arm via `PTRACE_SYSCALL`-at-resume, **never** naive SINGLESTEP | Scrubber, live `df_step` 3D trajectory, value fabric, Loom/Slice/Timeline on **arm64 hosts** — a whole platform | L | **REAL, biggest unlock.** Load-bearing hazard: arm64 `PTRACE_SINGLESTEP` is detach-fatal (SPSR.SS) and qemu-user can't single-step. R5/doc 32 closed only the emulator/Author arm64 producer. |
-| L2 | `decode_streams` becomes `df_invocation`-aware (mirror the Scrubber's `build_segmented_step_index`, `analysis/stepindex.cpp`) | per-pass Slice/Loom/Timeline on a **continuous** live capture (today they flatten passes to the last/conflated one) | M | **CLOSED ([doc 40](40-segment-dataflow-by-invocation.md)).** `build_segmented_dataflow` splits the passes; `Streams::df` resolves to the LATEST (the live default, like the Scrubber), so passes never conflate; the Slice/Timeline/Loom panes carry a per-pass invocation pager to reach an earlier one. One-shot recordings stay byte-identical. |
-| L3 | the precomputed `blame` + `statediff` **KINDS** over the asmspy serve leg (R6/doc 33 landed them recorder/emulator-only) | reproducible/deep-linkable `blame`/`statediff` artifacts from a live attach | M | **CLOSED ([doc 41](41-live-blame-statediff-serve-leg.md)).** The serve leg emits both — `blame` via `dataflow_emit_blame` (backward cone over the def-use graph it already builds, penultimate seed), `statediff` via a delta of the `regstate` ring (`--statediff` self-arms it); both ride the sink ctx (no engine change) and use the SHARED body builders. As predicted this was **low value** — the backward-cone and statediff *views* already worked live client-side; this lands the precomputed *convenience* only. |
+| L2 | `decode_streams` becomes `df_invocation`-aware (mirror the Scrubber's `build_segmented_step_index`, `analysis/stepindex.cpp`) | per-pass Slice/Loom/Timeline on a **continuous** live capture (today they flatten passes to the last/conflated one) | M | **CLOSED ([doc 40](../archive/gui/40-segment-dataflow-by-invocation.md)).** `build_segmented_dataflow` splits the passes; `Streams::df` resolves to the LATEST (the live default, like the Scrubber), so passes never conflate; the Slice/Timeline/Loom panes carry a per-pass invocation pager to reach an earlier one. One-shot recordings stay byte-identical. |
+| L3 | the precomputed `blame` + `statediff` **KINDS** over the asmspy serve leg (R6/doc 33 landed them recorder/emulator-only) | reproducible/deep-linkable `blame`/`statediff` artifacts from a live attach | M | **CLOSED ([doc 41](../archive/gui/41-live-blame-statediff-serve-leg.md)).** The serve leg emits both — `blame` via `dataflow_emit_blame` (backward cone over the def-use graph it already builds, penultimate seed), `statediff` via a delta of the `regstate` ring (`--statediff` self-arms it); both ride the sink ctx (no engine change) and use the SHARED body builders. As predicted this was **low value** — the backward-cone and statediff *views* already worked live client-side; this lands the precomputed *convenience* only. |
 | L4 | build `libasmtest_dataflow` on macOS/Darwin | Author-mode value-fabric capture on macOS | M | REAL (Author mode, produced not attached). |
 | L5 | ARM32 + RISC-V run/trace in Author mode (another `df_guest` instance) | Author value fabric for ARM32/RISC-V guests | M | REAL, narrow audience. |
-| L6 | [37](37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **CLOSED (37 T4).** The serve sink (`cli/asmspy.c`'s `serve_dataflow_sink`) samples `asmtest_codeimage_now` once before each pass and stamps it on every `df_step` as an optional `when`, keyed with `rbase` (never alone — it restarts per re-armed span); the headless sink and both corpus recorders hold no codeimage timeline and omit it, so no golden churned. `DataflowStream` carries it (`insn_when`/`when_present`), the PT-replay `ptslice.cpp` populates it from the exact version it replayed against, and `observer_build` seeds the Observer Disassembly pane's manual "as of logical time" slider from it — a genuine edit still wins on every later rebuild. |
-| L7 | make `auto` reliably capture ([39](39-auto-capture-reliability.md)): a pure candidate walk (armed on BOTH samplers), empty-window retry, a settable sample window, `continuous` through a quiet region, and the session-lifecycle repairs | reliable live `auto` capture — kills the *"start + arm, it starts then stops, `refused: no session is running`"* complaint | S | **CLOSED (doc 39).** A PORTABLE fallback, not a hardware gate: the audit had recorded only the AMD-IBS *survey stream* as gated and missed that the region *pick* has a sw-clock fallback and is therefore closable. Proven by pure `test_autoregion` cases (no CI lane has AMD silicon) + serve/desktop smokes. |
+| L6 | [37](../archive/gui/37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **CLOSED (37 T4).** The serve sink (`cli/asmspy.c`'s `serve_dataflow_sink`) samples `asmtest_codeimage_now` once before each pass and stamps it on every `df_step` as an optional `when`, keyed with `rbase` (never alone — it restarts per re-armed span); the headless sink and both corpus recorders hold no codeimage timeline and omit it, so no golden churned. `DataflowStream` carries it (`insn_when`/`when_present`), the PT-replay `ptslice.cpp` populates it from the exact version it replayed against, and `observer_build` seeds the Observer Disassembly pane's manual "as of logical time" slider from it — a genuine edit still wins on every later rebuild. |
+| L7 | make `auto` reliably capture ([39](../archive/gui/39-auto-capture-reliability.md)): a pure candidate walk (armed on BOTH samplers), empty-window retry, a settable sample window, `continuous` through a quiet region, and the session-lifecycle repairs | reliable live `auto` capture — kills the *"start + arm, it starts then stops, `refused: no session is running`"* complaint | S | **CLOSED (doc 39).** A PORTABLE fallback, not a hardware gate: the audit had recorded only the AMD-IBS *survey stream* as gated and missed that the region *pick* has a sw-clock fallback and is therefore closable. Proven by pure `test_autoregion` cases (no CI lane has AMD silicon) + serve/desktop smokes. |
 
 **Corrected NOT-a-gap (audit over-claimed).** *"Carry `tid` on `df_step` to light
 live 3D convergence"* is **not closable and not real**: the live dataflow engine is
@@ -47,11 +47,11 @@ landed the live `--dataflow --mem` / serve `mem:true` producer, so a live captur
 `--mem` lights the rich-rung data spurs. Fixed in the same pass as this roadmap.
 
 **Sequencing.** L2 was the cleanest self-contained desktop win (host-testable, no
-engine change) — **done first ([doc 40](40-segment-dataflow-by-invocation.md)).**
+engine change) — **done first ([doc 40](../archive/gui/40-segment-dataflow-by-invocation.md)).**
 L1 is the largest single unlock (a whole platform) but L-effort and hazard-gated. L3 (the precomputed-kind convenience) is **done
-([doc 41](41-live-blame-statediff-serve-leg.md))** — its *views* already worked live,
+([doc 41](../archive/gui/41-live-blame-statediff-serve-leg.md))** — its *views* already worked live,
 so it was low priority but cheap. L4/L5 are Author-mode platform breadth. L6, the
-severable [37](37-region-tag-on-df-step.md) T4 tail, is **done** — the serve path
+severable [37](../archive/gui/37-region-tag-on-df-step.md) T4 tail, is **done** — the serve path
 now states `when` and the Observer disasm pane resolves against it by default.
 
 ## Permanent gates — recorded, NOT briefed
@@ -78,11 +78,11 @@ would fight physics or the design. They are marked so no one re-opens them.
 ## Not real gaps (excluded deliberately)
 
 - **Diff** and **ABI x-ray** are inherently two-recording / authored-pair artifacts;
-  a single live process is at most one leg. [25](25-live-model-wiring.md) descoped a
+  a single live process is at most one leg. [25](../archive/gui/25-live-model-wiring.md) descoped a
   live-vs-file diff on purpose.
 - **Backends** reads a committed features file, not trace data.
 - **Loom Takes / reweave** are emulator-only **forever** by design
-  ([05](05-loom-day-one.md)/[30](30-resume-from-state-and-reweave.md)) — forks never
+  ([05](../archive/gui/05-loom-day-one.md)/[30](../archive/gui/30-resume-from-state-and-reweave.md)) — forks never
   touch a live process.
 
 ## What "maximum from a live process" means after 36/37

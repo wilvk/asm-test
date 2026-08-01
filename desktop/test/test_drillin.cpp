@@ -1,5 +1,5 @@
 // test_drillin.cpp — the 3D-overview drill-in router + the two fidelity invariants
-// (docs/internal/gui/10-spacetime-3d-overview.md T6). Null harness, no display:
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T6). Null harness, no display:
 // this binary drives the pick-id RESOLUTION path (scene3d/pick.h) with no GL at
 // all — the same closure argument test_projection makes for the plane — so "every
 // pick reaches the right 2D view, and statistical/torn survive the drill" is

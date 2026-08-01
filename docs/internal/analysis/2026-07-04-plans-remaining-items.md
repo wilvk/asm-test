@@ -25,7 +25,7 @@
 > **2026-07-21 update — much of §2 has since unblocked and landed.** Intel PT
 > live AUX capture **and** the Phase-2 PT-attach-to-live-PID both landed and were
 > silicon-validated
-> ([intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)
+> ([intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md)
 > T1–T5; commits `a35f049`, `2e230f6`, `622cd98`, `7215560`; live validation
 > `c7b4ef7` + [intel-hardware-validation.md](../intel-hardware-validation.md)).
 > AArch64 live single-step + hw-breakpoint validation now runs on real arm64 CI

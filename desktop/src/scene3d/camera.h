@@ -1,5 +1,5 @@
 // camera.h — the 3D spacetime overview's orbit camera, as PURE MATH
-// (docs/internal/gui/10-spacetime-3d-overview.md T4 step 4). No GL, no ImGui, no
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T4 step 4). No GL, no ImGui, no
 // engine: just linmath.h (the pinned WTFPL single-header math lib, 10-T4 step 1),
 // so the whole camera is exercised headlessly by test_camera.cpp under the null
 // harness — the same engine-free closure the pure space/ layers make.

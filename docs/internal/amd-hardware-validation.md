@@ -142,7 +142,7 @@ loaded, kernel 6.14. Three lanes, all **exit 0, 0 `not ok`**:
   `[0,3,6,c,11]`, block partition `{0, 0x11}` matching
   single-step/PT/AMD/DynamoRIO) and the 62-insn loop fixture complete with no
   depth ceiling (`insns=62 truncated=0`) — the independent re-validation now
-  recorded on [inproc-btf-block-step](implementations/inproc-btf-block-step.md).
+  recorded on [inproc-btf-block-step](archive/implementations/inproc-btf-block-step.md).
 - Item 3's premise re-confirmed in both capability-bearing lanes: `# SKIP status
   live-EPERM lane: … (stage=4 paranoid=2 root=1)` — root-in-container keeps the
   unprivileged-EPERM branch unreachable, as recorded (noted, not run).

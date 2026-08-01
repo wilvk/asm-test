@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-imgui.sh — fetch a pinned Dear ImGui release into a local cache so the
-# desktop GUI (docs/internal/gui/03-desktop-shell.md) can compile ImGui into its
+# desktop GUI (docs/internal/archive/gui/03-desktop-shell.md) can compile ImGui into its
 # two binaries without a system-wide install. Mirrors fetch-dynamorio.sh.
 #
 # Downloads the GitHub source-archive tarball, extracts it under a cache dir, and

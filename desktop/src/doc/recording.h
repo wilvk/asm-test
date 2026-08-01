@@ -1,5 +1,5 @@
 // recording.h — the .asmtrace document model every desktop view renders from
-// (docs/internal/gui/03-desktop-shell.md T3). One NDJSON recording -> a
+// (docs/internal/archive/gui/03-desktop-shell.md T3). One NDJSON recording -> a
 // Recording: its events grouped by kind, its mandatory provenance, and the
 // fidelity facts a reader MUST surface (truncation, drops, redaction, torn).
 //

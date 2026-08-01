@@ -1,5 +1,5 @@
 // projection.h — address space -> unit plane, via a Hilbert curve over a
-// compacted address domain (docs/internal/gui/10-spacetime-3d-overview.md T1).
+// compacted address domain (docs/internal/archive/gui/10-spacetime-3d-overview.md T1).
 //
 // Pure and engine-free: this TU includes no GL, no ImGui and no engine header —
 // the standard library only — which is what lets it compile into BOTH desktop

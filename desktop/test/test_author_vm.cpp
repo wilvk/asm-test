@@ -1,5 +1,5 @@
 // test_author_vm.cpp — the Author door's three rules
-// (docs/internal/gui/06-doors-and-learning.md T5). Synthetic inputs only: no
+// (docs/internal/archive/gui/06-doors-and-learning.md T5). Synthetic inputs only: no
 // Keystone, no Unicorn, no display — so the rules are pinned on every host.
 #include <cstdio>
 #include <cstring>

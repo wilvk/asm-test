@@ -81,7 +81,7 @@ docker-nasm: docker-build
 
 # emu-test AND ct-eq-test: the constant-time suite links the same tier and its
 # CT proof is the emulator's accumulating block union
-# (docs/internal/gui/06-doors-and-learning.md T1).
+# (docs/internal/archive/gui/06-doors-and-learning.md T1).
 docker-emu: docker-build
 	$(_docker_run) sh -c 'make emu-test ct-eq-test'
 
@@ -464,7 +464,7 @@ docker-taint-native:
 # ubuntu:24.04 base. Pin + libdft64 are test/oracle-only, never shipped. Intel Pin's kit
 # is x86-64 gcc-linux, so the lane self-skips on a non-x86 target (a real hardware-shaped
 # gate — the only one here; a missing Pin/libdft checkout is fetched + pinned, never
-# skipped). See docs/internal/implementations/pin-libdft-taint-oracle.md.
+# skipped). See docs/internal/archive/implementations/pin-libdft-taint-oracle.md.
 TAINT_ORACLE_UARCH := $(if $(DOCKER_PLATFORM),$(lastword $(subst /, ,$(DOCKER_PLATFORM))),$(shell uname -m))
 .PHONY: docker-taint-oracle
 docker-taint-oracle:

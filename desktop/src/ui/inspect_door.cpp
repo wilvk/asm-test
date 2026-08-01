@@ -122,7 +122,7 @@ bool inspect_request_start(InspectState &s) {
     return true;
 }
 
-// docs/internal/gui/45-launch-and-window-target.md T3: split the Launch
+// docs/internal/archive/gui/45-launch-and-window-target.md T3: split the Launch
 // pane's free-text "arguments" field on whitespace into argv[1..] — v1 has
 // no quoting grammar (Non-goals), so a value containing a space is a rare
 // case left for a follow-up rather than a reason to hold up the rest.
@@ -1293,7 +1293,7 @@ void draw_capture_pane(InspectState &s) {
 }
 
 // --- Launch pane: fork+exec a fresh target, traced from birth --------------
-// docs/internal/gui/45-launch-and-window-target.md T4. A command field
+// docs/internal/archive/gui/45-launch-and-window-target.md T4. A command field
 // (Browse… mirrors draw_save_pane's ImGuiFileDialog use, no extension
 // filter), arguments, an optional working directory, a mode picker RESTRICTED
 // to the whole-process modes (Non-goals: "the natural v1 focus" — trace/watch

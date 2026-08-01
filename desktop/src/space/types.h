@@ -1,5 +1,5 @@
 // types.h — the shared data model for the 3D spacetime overview
-// (docs/internal/gui/10-spacetime-3d-overview.md, "Data model (shared by all
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md, "Data model (shared by all
 // tasks)"). Pure: no GL, no ImGui, no engine includes, so every layer that
 // builds on it (the projection T1, the terrain T2, the trajectory T3) links
 // into BOTH desktop binaries and the null test harness (D4). Only Projection

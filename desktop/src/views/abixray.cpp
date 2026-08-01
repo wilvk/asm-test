@@ -71,7 +71,7 @@ dt_abixray dt_abixray_seek(const StepIndex &sysv_idx,
             "the ABI x-ray needs BOTH the SysV and Win64 recordings to carry "
             "per-step register capture (record each with asmtrace_record "
             "--steps=<cap>); one of the pair has no regstate producer.";
-        x.docs = "docs/internal/gui/09-teaching-producers.md";
+        x.docs = "docs/internal/archive/gui/09-teaching-producers.md";
         return x;
     }
     x.present = true;

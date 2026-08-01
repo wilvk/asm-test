@@ -8,7 +8,7 @@
  * that exact path is REPLAYED through the Unicorn emulator to derive the values.
  * The result fills the SAME asmtest_valtrace_t every other producer fills, so the
  * shared def-use (L1) and slice (L2) analysis run over it UNCHANGED (see
- * docs/internal/implementations/dataflow-pt-replay-tier.md).
+ * docs/internal/archive/implementations/dataflow-pt-replay-tier.md).
  *
  * THE FAITHFUL BOUNDARY (inherited from F1/F2). PT gives CONTROL FLOW and BYTES,
  * never VALUES. All values come from the replay, so a region that consumes an

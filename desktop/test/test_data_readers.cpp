@@ -1,5 +1,5 @@
 // test_data_readers.cpp — the completeness data readers
-// (docs/internal/gui/02-exporters-and-readers.md T5).
+// (docs/internal/archive/gui/02-exporters-and-readers.md T5).
 //
 // The assertions that matter are the three-state ones: "not measured" must
 // survive as nullopt through both spellings the producers use (JSON null and an

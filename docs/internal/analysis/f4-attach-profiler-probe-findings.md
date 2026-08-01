@@ -173,7 +173,7 @@ accidental startup wiring.
   **S0-stamping**
   ([f4-gc-fence-freeze-probe-findings.md](f4-gc-fence-freeze-probe-findings.md)),
   and the F4 object-identity join has landed
-  ([dataflow-f4-object-identity.md](../implementations/dataflow-f4-object-identity.md)
+  ([dataflow-f4-object-identity.md](../archive/implementations/dataflow-f4-object-identity.md)
   T1–T6, commits `b80d1f9`…`9520e8a`).
 - The probe is a **throwaway research spike**, not product, and is not wired into the main CI
   gate — same posture as its sibling probes.

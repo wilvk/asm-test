@@ -22,9 +22,9 @@ no racy privileged lane ships).
 > consequently RE-ADDED to `DOCKER_APT_dotnet` (T5), with the privileged lane green
 > ×5 and the unprivileged lane still green (PT self-skips on permission, not on a
 > missing lib). The affected doc rows —
-> [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
+> [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
 > T4 (.NET inline `IntelPt` ctor) and
-> [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
+> [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
 > T5/T10/T11 — are no longer blocked on this plan; they move to `☑` here and are
 > left for an independent **validating** agent to stamp `✅`, per the implementations
 > README's implementer/validator split.
@@ -34,7 +34,7 @@ no racy privileged lane ships).
 > clean main `4cf5d17` and stamped both affected rows **✅** (see the VALIDATED note in
 > T5 and [intel-hardware-validation.md](../../intel-hardware-validation.md)). The one
 > recorded residue — T4's truthful `MethodsObserved==0` note — is closed by
-> [dotnet-pt-inwindow-jit-premise.md](../../implementations/dotnet-pt-inwindow-jit-premise.md)
+> [dotnet-pt-inwindow-jit-premise.md](../implementations/dotnet-pt-inwindow-jit-premise.md)
 > T1 (2026-07-23), which owns it now. Nothing in this plan remains open, so it moves to
 > `archive/plans/` under the done⇒archive rule.
 
@@ -363,7 +363,7 @@ runtime got round to compiling before a hardware ring closed.
 > option — "or force a guaranteed in-window JIT" — is the remaining work.
 >
 > **Closed 2026-07-23 by
-> [dotnet-pt-inwindow-jit-premise.md](../../implementations/dotnet-pt-inwindow-jit-premise.md)
+> [dotnet-pt-inwindow-jit-premise.md](../implementations/dotnet-pt-inwindow-jit-premise.md)
 > T1** (a later-addition implementation doc): the JIT was in-window all along —
 > only the EventPipe *delivery* raced the close — so the check now holds the
 > window open (bounded `AsmTrace.WaitMethodObserved`) until the map observes
@@ -376,9 +376,9 @@ runtime got round to compiling before a hardware ring closed.
   self-skips on permission, not on a missing lib) and the CI lanes are unaffected.
 - On the PT box run `make hwtrace-dotnet-test` under `--cap-add=PERFMON` ≥5×
   green, and the managed-compose PT prongs (T5/T11) live.
-- Flip [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
+- Flip [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
   to `✅` (its C substrate is already validated; this closes T4's .NET inline arm)
-  and [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
+  and [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
   T5/T10/T11 to `✅`; append the run to
   [intel-hardware-validation.md](../../intel-hardware-validation.md); CHANGELOG entry.
 - **Done when** those rows are `✅` and the dotnet image carries libipt with a
@@ -414,8 +414,8 @@ captures, PT-decoded path == single-step oracle).
 > done by the *implementing* agent, so the affected rows are moved to `☑` (code landed +
 > measured here), not `✅`. An independent agent should re-run the table above on a PT
 > box and stamp `✅` on
-> [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
-> T4 and [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
+> [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
+> T4 and [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
 > T5/T10/T11. Note T10's per-tid capture and T11's full ambient chain are now genuinely
 > exercised live (`ambient: >=2 stitched slices captured (3)` every iteration), which is
 > what those rows were waiting on.
@@ -429,8 +429,8 @@ every run), `make docker-hwtrace-dotnet-ambient-stress` (`1..576`, 25/25 iterati
 captured live), `dataflow-pt-live` ×3 (`1..29`), plain `docker-hwtrace` /
 `docker-hwtrace-dotnet` green with the transparent permission self-skip, `docker-fmt-check`
 / `docker-docs` / host `check-bindings-parity` (142×10) clean. Both README rows
-([intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md),
-[managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)) are
+([intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md),
+[managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)) are
 stamped `✅`; the run is appended to
 [intel-hardware-validation.md](../../intel-hardware-validation.md) (2026-07-23 entry).
 T5's Done-when is fully met; the one recorded residue is T4's candid note above
@@ -453,4 +453,4 @@ installable/available here, so this is not a hardware gate, only work not yet do
   (`ss_on_sigtrap` 369, arm/disarm 535/708, watchdog 325).
 - PT hop / whole-window: [src/hwtrace.c](../../../../src/hwtrace.c),
   [src/pt_backend.c](../../../../src/pt_backend.c).
-- Managed compose hazards: [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md).
+- Managed compose hazards: [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md).

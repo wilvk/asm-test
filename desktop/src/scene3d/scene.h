@@ -1,5 +1,5 @@
 // scene.h — the GL scene of the 3D spacetime overview
-// (docs/internal/gui/10-spacetime-3d-overview.md T4). Renders a Terrain slice
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T4). Renders a Terrain slice
 // (the displaced, kind-coloured height field) and a TrajectorySet (opaque exact
 // tubes vs stippled statistical residency, plus access-mark spurs) under an orbit
 // Camera, and resolves colour-ID picks back to a 04 deep-link via pick.h.

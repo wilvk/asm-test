@@ -52,7 +52,7 @@ int asmtest_dataflow_emu_run_fp(const uint8_t *code, size_t code_len,
                                 const double *fargs, int nfargs,
                                 uint64_t max_insns, asmtest_valtrace_t *vt);
 
-/* The per-guest entry (R5, docs/internal/gui/32-per-guest-value-producer.md): the
+/* The per-guest entry (R5, docs/internal/archive/gui/32-per-guest-value-producer.md): the
  * SAME producer selecting a guest by arch. asmtest_dataflow_emu_run is this pinned
  * to x86-64; the arm64 golden below runs an AArch64 routine through the arm64
  * guest, so the value fabric is no longer x86-64-only. */
@@ -224,7 +224,7 @@ static const rec_routine_t ROUTINES[] = {
 #define N_ROUTINES ((int)(sizeof ROUTINES / sizeof ROUTINES[0]))
 
 /* ------------------------------------------------------------------ */
-/* The Loom's golden fixtures (docs/internal/gui/05-loom-day-one.md T7) */
+/* The Loom's golden fixtures (docs/internal/archive/gui/05-loom-day-one.md T7) */
 /*                                                                     */
 /* Unlike the corpus routines above these are BYTE LITERALS, because    */
 /* the two walkthroughs the doc builds on are hand-derivable on paper   */
@@ -288,7 +288,7 @@ static const uint8_t FP_SCALE_ADD[] = {
 
 /* ------------------------------------------------------------------ */
 /* The 3D spacetime overview's golden SCENES                            */
-/* (docs/internal/gui/10-spacetime-3d-overview.md T7)                   */
+/* (docs/internal/archive/gui/10-spacetime-3d-overview.md T7)                   */
 /*                                                                      */
 /* A BYTE LITERAL for the same reason the Loom's fixtures are: the whole */
 /* point of a scene golden is that its terrain is hand-checkable — you   */
@@ -320,7 +320,7 @@ static const uint8_t SCENE_HOT_LOOP[] = {
 
 /* ------------------------------------------------------------------ */
 /* The AArch64 value-fabric golden                                      */
-/* (docs/internal/gui/32-per-guest-value-producer.md R5 T2)             */
+/* (docs/internal/archive/gui/32-per-guest-value-producer.md R5 T2)             */
 /*                                                                      */
 /* A BYTE LITERAL, hand-derivable on paper exactly like the Loom's      */
 /* x86-64 fixtures: the whole point of this golden is to prove the       */
@@ -348,7 +348,7 @@ static const uint8_t ARM64_DF_CHAIN[] = {
 
 /* One AArch64 per-step register snapshot as a `regstate` event, by descriptor
  * reference — the arm64 analogue of emit_regstate (R5,
- * docs/internal/gui/32-per-guest-value-producer.md, the regstate/Scrubber
+ * docs/internal/archive/gui/32-per-guest-value-producer.md, the regstate/Scrubber
  * half). `values` names the raw physical register file: x0..x30 (AAPCS64
  * gives x29/x30 their FP/LR roles, but the descriptor names the register, not
  * the role — exactly as the x86-64 descriptor names rbp/rsp by register), plus

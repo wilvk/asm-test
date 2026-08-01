@@ -1,5 +1,5 @@
 // pick.h — the colour-ID picking layer of the 3D spacetime overview
-// (docs/internal/gui/10-spacetime-3d-overview.md T4 step 5). The GL half (the
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T4 step 5). The GL half (the
 // R32UI framebuffer, the pick-pass draw and the 1x1 glReadPixels) lives in
 // scene.cpp, which owns the GL objects; THIS TU is the engine- AND GL-free half:
 // the id encoding both passes agree on, and the resolution of a read-back id to a

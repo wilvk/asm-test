@@ -29,7 +29,7 @@ typedef enum {
 
 /* Context-explicit core: a pure total order over two rows under an EXPLICIT key,
  * safe to call from any thread. Concurrent consumers — the GUI's multi-panel
- * call graph views (docs/internal/gui/03-desktop-shell.md) — call this directly
+ * call graph views (docs/internal/archive/gui/03-desktop-shell.md) — call this directly
  * (e.g. std::sort + a lambda), never the latch below. */
 static inline int gnode_cmp_key(const asmspy_gnode_t *x,
                                 const asmspy_gnode_t *y, gsort_t key) {

@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-textselect.sh — ImGuiTextSelect v1.1.6 (docs/internal/gui/14-quick-wins.md
+# fetch-textselect.sh — ImGuiTextSelect v1.1.6 (docs/internal/archive/gui/14-quick-wins.md
 # T6): text selection + copy-out for line-oriented panes. A COMPILED addon
 # (textselect.cpp) whose .cpp includes <imgui_internal.h> and <utf8.h> (see
 # scripts/fetch-utfcpp.sh for the latter). Thin wrapper over fetch-addon.sh.

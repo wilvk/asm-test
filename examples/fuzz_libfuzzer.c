@@ -2,7 +2,7 @@
  * fuzz_libfuzzer.c — drive an x86-64 guest routine under the emulator with
  * libFuzzer, feeding the emulator's basic-block coverage into libFuzzer's
  * feedback channel (Track E external-engine shim; see
- * docs/guides/fuzzing-shim.md and docs/internal/implementations/libfuzzer-afl-shim.md).
+ * docs/guides/fuzzing-shim.md and docs/internal/archive/implementations/libfuzzer-afl-shim.md).
  *
  * THE CRUX. The guest is raw machine code executed under Unicorn, so
  * `clang -fsanitize=fuzzer` never sees it — its automatic SanitizerCoverage

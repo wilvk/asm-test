@@ -1,4 +1,4 @@
-// canvas.h — the trace canvas (docs/internal/gui/04-replay-views.md T3).
+// canvas.h — the trace canvas (docs/internal/archive/gui/04-replay-views.md T3).
 //
 // Per-offset heat, block boundaries, a coverage gutter, and the recorded disasm
 // text where the producer attached it (D10 — absent degrades to bare offsets and

@@ -1,6 +1,6 @@
 #!/bin/sh
 # test-asmtrace-export.sh — the asmtrace_export golden suite
-# (docs/internal/gui/02-exporters-and-readers.md T4).
+# (docs/internal/archive/gui/02-exporters-and-readers.md T4).
 #
 # Every mode of the exporter is pinned BYTE-FOR-BYTE against a committed
 # expected file, and every genuine refusal is pinned by exit code AND by a grep

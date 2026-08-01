@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-imsearch.sh — ImSearch (docs/internal/gui/16-live-feedback-and-filtering.md
+# fetch-imsearch.sh — ImSearch (docs/internal/archive/gui/16-live-feedback-and-filtering.md
 # T2): client-side filtering that wraps existing Selectable/TreeNode draws via
 # callbacks. 3 files, C++11; imsearch.cpp includes imgui_internal.h -> the
 # compile-probe. Default branch is `main` (there is no master). Thin wrapper over

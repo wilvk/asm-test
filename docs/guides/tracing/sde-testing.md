@@ -89,4 +89,4 @@ that fidelity trustworthy:
 
 For the full design — the pinning discipline, the license posture (SDE is
 test-lane-only and never bundled), and the per-task validation — see the
-[implementation note](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/pin-sde-future-isa-lane.md).
+[implementation note](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/pin-sde-future-isa-lane.md).

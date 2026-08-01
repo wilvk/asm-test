@@ -27,7 +27,7 @@
 > ten briefs (nine core + one growth-rung companion), 70 tasks, with the binding
 > build decisions (the GUI ships under `desktop/`, integrated via
 > `mk/desktop.mk`) — lives in [docs/internal/gui/](../gui/README.md). The
-> companion, [10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md),
+> companion, [10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md),
 > reunifies the killed [Terrane and Observatory](#flagship-interaction-concept-the-loom)
 > concepts as a **3D overview surface** (memory terrain + execution
 > trajectories, "3D to find, 2D to read") — an orientation view you drill *out
@@ -83,8 +83,8 @@ and ties each growth rung to a named planned item.
   first; `--serve` is "the same events, live". *(Was "verified still greenfield"
   when this plan was written; as of 2026-07-24 the `.asmtrace` writer,
   `--record` on every headless mode, and JSON mode for `--log`/`--stream` have
-  **landed** — [01-asmtrace-format.md](../gui/01-asmtrace-format.md). `--serve`
-  is still greenfield: [07-serve-live-host.md](../gui/07-serve-live-host.md).)*
+  **landed** — [01-asmtrace-format.md](../archive/gui/01-asmtrace-format.md). `--serve`
+  is still greenfield: [07-serve-live-host.md](../archive/gui/07-serve-live-host.md).)*
 - **Dear ImGui + C ABI (Tracy model), not a webview.** The packaging manifests
   independently confirm it: of the ten bindings, **only Python ships the def-use/
   slice *wrapper module* in a published artifact** ([bindings/python/asmtest/dataflow.py](../../../bindings/python/asmtest/dataflow.py)
@@ -573,11 +573,11 @@ same events.
 ## Phasing
 
 1. **Phase 1 — the contract.** *(Status 2026-08-01: **done, both halves.**
-   [01-asmtrace-format.md](../gui/01-asmtrace-format.md) ✅ 8/8 landed the draft
+   [01-asmtrace-format.md](../archive/gui/01-asmtrace-format.md) ✅ 8/8 landed the draft
    schema, the writer TU, `--record` on every headless mode, `--json` for
    `--log`/`--stream`, the `vec512_t` row, and the committed golden corpus with
    its low-fidelity fixtures; the reader/exporter half
-   [02-exporters-and-readers.md](../gui/02-exporters-and-readers.md) is ✅ 6/6 —
+   [02-exporters-and-readers.md](../archive/gui/02-exporters-and-readers.md) is ✅ 6/6 —
    `tools/asmtrace_export.c` + `scripts/test-asmtrace-export.sh`.)*
    `.asmtrace` v1 schema doc + NDJSON serializer
    sinks + record modes in [cli/asmspy.c](../../../cli/asmspy.c); JSON modes for

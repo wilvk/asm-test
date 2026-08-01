@@ -216,7 +216,7 @@ the same livelock (~19 s, ending at detach) after the first handful of GCs succe
    the target's GC interval, and treat a suspension that opens mid-region as a signal to let go.
    Worth confirming against `src/dataflow_ptrace.c`'s actual region residency before F4 wiring.
    *(Resolved 2026-07-21 — F4 wiring has since landed:
-   [dataflow-f4-object-identity.md](../implementations/dataflow-f4-object-identity.md) T1–T6.)*
+   [dataflow-f4-object-identity.md](../archive/implementations/dataflow-f4-object-identity.md) T1–T6.)*
 4. **The unglamorous good news.** The victim survived profiler attach + managed-thread
    single-stepping + detach in every run (`rc=0`, `GCFENCE_VICTIM_END` reached, no fatal signal) —
    notably unlike the DR managed-attach route, which took SIGSEGV at takeover

@@ -4,7 +4,7 @@ Plain-language definitions of the terms and acronyms used throughout these docs.
 If a word in the documentation looks unfamiliar, it is probably explained here.
 
 This file is also the **single source** for the desktop GUI's in-app term
-registry (`docs/internal/gui/24-one-visual-language.md` T3): `scripts/gen-terms.py`
+registry (`docs/internal/archive/gui/24-one-visual-language.md` T3): `scripts/gen-terms.py`
 parses the `{glossary}` directive below into the app's hoverable tooltips and its
 searchable *Terms* pane, so the app's words and the docs' words cannot drift.
 When you add or reword a coined GUI term here, the app follows on the next build.

@@ -1,5 +1,5 @@
 // fidelity.h — the ONE graded fidelity vocabulary, decided purely
-// (docs/internal/gui/23-graded-truth-layer.md T1, F5).
+// (docs/internal/archive/gui/23-graded-truth-layer.md T1, F5).
 //
 // Before this, fidelity chrome PROLIFERATED: a redaction placard, a statistical
 // chip, a coarse-provenance chip, a bounded-window note, an identity note and a

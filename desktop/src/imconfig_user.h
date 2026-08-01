@@ -1,6 +1,6 @@
 // imconfig_user.h — injected into EVERY imgui + addon TU via -DIMGUI_USER_CONFIG
 // (mk/desktop.mk), so the digest-pinned imgui tarball is never edited
-// (docs/internal/gui/13-foundation-moves.md F2). imgui.cpp does
+// (docs/internal/archive/gui/13-foundation-moves.md F2). imgui.cpp does
 // `#ifdef IMGUI_USER_CONFIG #include IMGUI_USER_CONFIG #endif`; -Idesktop/src
 // (already in DESKTOP_CXXFLAGS) resolves this file.
 #pragma once

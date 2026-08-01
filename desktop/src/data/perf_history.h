@@ -1,5 +1,5 @@
 // perf_history.h — the per-box performance trend reader
-// (docs/internal/gui/02-exporters-and-readers.md T5).
+// (docs/internal/archive/gui/02-exporters-and-readers.md T5).
 //
 // `benchmarks/boxes/<box_id>/perf-history.jsonl` is APPEND-ONLY: one JSON line
 // per `bench-report.sh --record` run, written by a process that can be killed

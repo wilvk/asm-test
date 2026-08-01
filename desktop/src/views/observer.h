@@ -1,5 +1,5 @@
 // observer.h — the chrome every live Observer view puts on screen before it
-// renders a single row (docs/internal/gui/08-observer-views.md).
+// renders a single row (docs/internal/archive/gui/08-observer-views.md).
 //
 // The six views in 08 render different things, but they all answer the same two
 // questions first: how was this measured, and what is missing from it. That is

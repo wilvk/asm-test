@@ -457,7 +457,7 @@ size_t asmtest_gcmove_canonicalize(asmtest_valtrace_t *v,
  * AGAINST dataflow_gcmove.c for the forward canon it refines. The LIVE feed
  * (the gccanon-attach lane's EventPipe heap dumper + the post-capture
  * MovedReferences2 stamps) drives this pure transform; see
- * docs/internal/implementations/dataflow-f4-object-identity.md.
+ * docs/internal/archive/implementations/dataflow-f4-object-identity.md.
  * ------------------------------------------------------------------ */
 
 /* One heap-snapshot node — the shape of a GCBulkNode entry (Address / Size /

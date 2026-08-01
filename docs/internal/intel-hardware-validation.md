@@ -88,8 +88,8 @@ metal (no `hypervisor` flag), Docker via `--cap-add=PERFMON`. Validated at clean
 `main` `4cf5d17` (the code-image use-after-free fix,
 [dotnet-managed-pt-concurrency-plan.md](archive/plans/dotnet-managed-pt-concurrency-plan.md))
 by an agent independent of that fix's implementer — this run stamps
-[intel-pt-whole-window-substrate.md](implementations/intel-pt-whole-window-substrate.md)
-and [managed-wholewindow-compose.md](implementations/managed-wholewindow-compose.md)
+[intel-pt-whole-window-substrate.md](archive/implementations/intel-pt-whole-window-substrate.md)
+and [managed-wholewindow-compose.md](archive/implementations/managed-wholewindow-compose.md)
 `✅`, closing the 2026-07-21 entry's recorded blocker (the managed
 multi-threaded live-PT race). All runs exit 0, 0 `not ok`:
 
@@ -131,7 +131,7 @@ multi-threaded live-PT race). All runs exit 0, 0 `not ok`:
 
 The first time asmtest's Intel PT tier has run on real PT silicon. This is the
 same physical box the macOS Mach-stepper doc validated
-([macos-oop-mach-stepper.md](implementations/macos-oop-mach-stepper.md),
+([macos-oop-mach-stepper.md](archive/implementations/macos-oop-mach-stepper.md),
 `intel-macos-x86_64-de7ec54c`), now running Linux (Ubuntu 26.04, kernel
 `7.0.0-28-generic`) on Apple `MacBookPro15,2` hardware — bare metal (no
 `hypervisor` CPU flag).
@@ -196,6 +196,6 @@ Box: `intel_pt` PMU present (`type=10`, `nr_addr_filters=2`),
   so no privileged lane ships a race. Whole-window T4's .NET leg stays `◐` on that
   work, not on a missing install.
 - Not run here to green: the T5/T11 managed-compose PT prongs
-  ([managed-wholewindow-compose.md](implementations/managed-wholewindow-compose.md))
+  ([managed-wholewindow-compose.md](archive/implementations/managed-wholewindow-compose.md))
   — same dotnet-image + managed-concurrency gate as above (this box's PT hardware
   qualifies once the race + JIT-timing flake are resolved).

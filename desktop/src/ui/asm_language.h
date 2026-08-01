@@ -1,5 +1,5 @@
 // asm_language.h — assembly syntax highlighting for the Author door's editor
-// (docs/internal/gui/17-interaction-testing-and-editor.md T2, the noted follow-on).
+// (docs/internal/archive/gui/17-interaction-testing-and-editor.md T2, the noted follow-on).
 //
 // goossens ImGuiColorTextEdit ships language definitions for C/C++/Lua/SQL/… but
 // none for assembly, so the Author door rendered its source as flat text. A

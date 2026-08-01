@@ -1,5 +1,5 @@
 // terrain.h — the density height field over time of the 3D spacetime overview
-// (docs/internal/gui/10-spacetime-3d-overview.md T2). Pure and engine-free: this
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T2). Pure and engine-free: this
 // TU includes no GL, no ImGui and no engine header — only the standard library,
 // the document model (doc/), the trace canvas (views/canvas.h, whose per-offset
 // heat is reused as the coarse height source, 04-T3) and the projection

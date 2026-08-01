@@ -1,5 +1,5 @@
 // find.h — global find as SEARCH-AS-MEASUREMENT
-// (docs/internal/gui/22-selection-and-search.md T3, F17).
+// (docs/internal/archive/gui/22-selection-and-search.md T3, F17).
 //
 // Ctrl+F opens a find that highlights EVERY hit (it never hides rows — that is
 // the fidelity distinction from a filter, D7), reports the match COUNT and the

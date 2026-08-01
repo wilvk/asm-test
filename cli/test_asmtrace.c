@@ -17,7 +17,7 @@
  *               this is the reader-level half.
  *
  * Deliberately tiny and line-oriented: the full reader library belongs to
- * docs/internal/gui/02-exporters-and-readers.md. This links only
+ * docs/internal/archive/gui/02-exporters-and-readers.md. This links only
  * asmtrace_ndjson.o — no ptrace, no ncurses, no Capstone — so it runs anywhere.
  */
 #include <stdio.h>

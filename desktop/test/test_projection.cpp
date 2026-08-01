@@ -1,5 +1,5 @@
 // test_projection.cpp — the address-space Hilbert projection
-// (docs/internal/gui/10-spacetime-3d-overview.md T1). Null harness, no display:
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T1). Null harness, no display:
 // this binary links space/projection.o and NOTHING else, so its link line is the
 // proof that the render-only viewer can place a recording's regions on the
 // terrain plane with zero engine dependencies (D4) — the same argument

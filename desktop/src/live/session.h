@@ -102,7 +102,7 @@ class LiveSession {
     // Convenience wrappers over the protocol's commands.
     void send_start(const std::string &mode, long pid,
                     const nlohmann::json &params = nlohmann::json::object());
-    // docs/internal/gui/45-launch-and-window-target.md T3: `launch` — same
+    // docs/internal/archive/gui/45-launch-and-window-target.md T3: `launch` — same
     // shape as send_start, but there is no pid yet (the host forks one); the
     // command carries `argv` (argv[0] is the path to run) and an optional
     // `cwd` instead. The resulting pid arrives later on the `session started`

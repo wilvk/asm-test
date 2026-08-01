@@ -1,5 +1,5 @@
 // capability_panel.cpp — "what can this host do, and why not?"
-// (docs/internal/gui/06-doors-and-learning.md T6). Draws and PROBES ONCE; every
+// (docs/internal/archive/gui/06-doors-and-learning.md T6). Draws and PROBES ONCE; every
 // rule lives in capview.h, which test_capview drives on synthetic data.
 //
 // In the render-only viewer this file still compiles but probes nothing: a

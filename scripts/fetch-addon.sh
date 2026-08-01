@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-addon.sh — one reusable fetcher for pinned Dear ImGui *addons*, so each
-# addon (docs/internal/gui/12-addon-supply-chain.md) is a thin `fetch-<name>.sh`
+# addon (docs/internal/archive/gui/12-addon-supply-chain.md) is a thin `fetch-<name>.sh`
 # wrapper that sets a few env vars and `exec`s this, instead of a bespoke 90-line
 # script. Mirrors the two existing shapes: fetch-linmath.sh (single header at a
 # pinned commit) and fetch-imgui.sh (release tarball at a tag). Any OS.

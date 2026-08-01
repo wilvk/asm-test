@@ -1,4 +1,4 @@
-// nav.h — the deep-link router (docs/internal/gui/04-replay-views.md T2).
+// nav.h — the deep-link router (docs/internal/archive/gui/04-replay-views.md T2).
 //
 // Plan D4's navigation spine: ONE internal API for "open recording R (optionally
 // against R'), at step S / offset O, in view V". Every view here registers with

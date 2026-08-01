@@ -3125,7 +3125,7 @@ static void tracer_arm_alarm(void) {
 
 /* ================================================================== */
 /* --serve: the live-session control loop                              */
-/* (docs/internal/gui/07-serve-live-host.md T2; protocol spec:         */
+/* (docs/internal/archive/gui/07-serve-live-host.md T2; protocol spec:         */
 /*  docs/internal/gui/asmtrace-schema.md, "Serve protocol")            */
 /*                                                                     */
 /* This is a THIN WRAPPER and nothing else. It reads NDJSON commands,   */
@@ -8079,7 +8079,7 @@ static int usage(const char *argv0) {
     return 2;
 }
 
-/* docs/internal/gui/45-launch-and-window-target.md T1 step 5 / T2: `--launch
+/* docs/internal/archive/gui/45-launch-and-window-target.md T1 step 5 / T2: `--launch
  * <mode> -- <cmd> [args...]`. Forks + PTRACE_TRACEME + execvp's `cmd` (the
  * same serve_launch_target `asmspy --serve`'s wire `launch` command uses) and
  * hands the resulting pid straight to the SAME per-mode headless command

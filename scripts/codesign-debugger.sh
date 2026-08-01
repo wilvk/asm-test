@@ -2,7 +2,7 @@
 # codesign-debugger.sh <binary> — ad-hoc self-sign <binary> with the entitlements
 # task_for_pid needs, so the macOS out-of-process Mach stepper's live legs
 # (asmtest_mach_trace_call/_trace_attached/_run_to) can attach to their own forked
-# tracees. See docs/internal/implementations/macos-oop-mach-stepper.md's
+# tracees. See docs/internal/archive/implementations/macos-oop-mach-stepper.md's
 # Constraints & gates.
 #
 #   com.apple.security.cs.debugger   authorizes task_for_pid of a target carrying

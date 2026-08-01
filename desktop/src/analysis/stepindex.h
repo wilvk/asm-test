@@ -1,5 +1,5 @@
 // stepindex.h — index a recording's `regstate` events by step
-// (docs/internal/gui/09-teaching-producers.md T3).
+// (docs/internal/archive/gui/09-teaching-producers.md T3).
 //
 // The per-step register ring (09-T1) emits one `regstate` event per HELD
 // pre-state, oldest first (asmtrace-schema.md, `regstate` descriptor). This

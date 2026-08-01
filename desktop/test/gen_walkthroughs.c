@@ -1,6 +1,6 @@
 /*
  * gen_walkthroughs.c — the Learn door's bundled walkthroughs, as recordings
- * (docs/internal/gui/06-doors-and-learning.md T2/T3).
+ * (docs/internal/archive/gui/06-doors-and-learning.md T2/T3).
  *
  * A walkthrough is not a document beside a recording — it IS a recording, with
  * ordered `stop:true` notes in it. That is the whole design: the player is a

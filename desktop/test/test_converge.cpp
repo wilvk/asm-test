@@ -1,5 +1,5 @@
 // test_converge.cpp — the cross-thread convergence detector and the incremental
-// live feed (docs/internal/gui/10-spacetime-3d-overview.md T5). Null harness, no
+// live feed (docs/internal/archive/gui/10-spacetime-3d-overview.md T5). Null harness, no
 // display. Two halves, mirroring test_live_session's split:
 //
 //   1. PURE detection over hand-built per-tid trajectories (no subprocess): two

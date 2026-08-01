@@ -1,5 +1,5 @@
 // views_draw.h — the thin ImGui half of each replay view
-// (docs/internal/gui/04-replay-views.md T3-T7).
+// (docs/internal/archive/gui/04-replay-views.md T3-T7).
 //
 // Every function here takes an ALREADY-BUILT model and only draws it. The split
 // is enforced by the build: the builders live in <view>.cpp, which the view

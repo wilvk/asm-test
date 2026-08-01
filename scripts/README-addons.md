@@ -1,7 +1,7 @@
 # Adding a Dear ImGui addon — the supply-chain how-to
 
 This is the operational companion to
-[docs/internal/gui/12-addon-supply-chain.md](../docs/internal/gui/12-addon-supply-chain.md)
+[docs/internal/archive/gui/12-addon-supply-chain.md](../docs/internal/archive/gui/12-addon-supply-chain.md)
 (which amends decision **D2** with the addon-admission rule). Read the admission
 rule there first; this file is the mechanics. Every addon in docs 13–17 is added
 the same five-step way, so the per-addon cost is *one thin wrapper + one/two

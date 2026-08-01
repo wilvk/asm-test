@@ -225,7 +225,7 @@ TEST(neg, fref_model_mismatch) {
  * all-passing suite). tests/expect.sh xmllint-checks this suite's JUnit. */
 TEST(neg, xml_special_chars) { ASSERT_STREQ("a<b&c>d", "w\"x'y"); }
 
-/* Record mode (docs/internal/gui/06-doors-and-learning.md T7): a producer noted
+/* Record mode (docs/internal/archive/gui/06-doors-and-learning.md T7): a producer noted
  * a recording and a step, then the test failed. The runner must carry BOTH into
  * the TAP and JUnit failure reports. Deliberately ENGINE-FREE — nothing here
  * links an emulator, so the plumbing is tested even where no producer exists,

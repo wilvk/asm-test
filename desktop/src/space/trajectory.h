@@ -1,5 +1,5 @@
 // trajectory.h — execution trajectories over the address-space plane
-// (docs/internal/gui/10-spacetime-3d-overview.md T3). The PC weaves up through
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T3). The PC weaves up through
 // the projection (T1) over time; each memory access it makes marks a data
 // address at the same height. This TU turns a recording's events into the
 // ordered TrajPoints that path is drawn from.

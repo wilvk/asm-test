@@ -23,7 +23,7 @@
 > silicon** (commit `c7b4ef7`; [intel-hardware-validation.md](../../intel-hardware-validation.md)),
 > including the address-filter and anon-region decode-time-fallback checks §Z2 owns —
 > **§Z2-live is VALIDATED**. §Z3's live compose and §Z4's escalation landed via
-> [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md)
+> [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md)
 > ☑ 12/12: its T1 landed the live unwarmed in-process managed compose
 > (`docker-hwtrace-dotnet` 196/196), and T11/T12 landed the ambient `AsyncLocal` hop →
 > per-tid PT slice → `stitch_handles` escalation with a host-testable twin. The **only
@@ -39,10 +39,10 @@
 > (dotnet-managed-pt-concurrency-plan T1–T5 all done: the code-image use-after-free
 > fixed, `libipt-dev` back in the dotnet image) and the live managed-PT prong ran on
 > silicon: an **independent validating agent** on the bare-metal i7-8559U PT box
-> stamped [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
+> stamped [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
 > **✅ 12/12** (T10 per-tid hops + T11 full ambient chain genuinely capturing,
 > `ambient: >=2 stitched slices captured` every run, ambient-stress `1..576`) and
-> [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
+> [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
 > **✅ 5/5** at clean main `4cf5d17`, recorded in
 > [intel-hardware-validation.md](../../intel-hardware-validation.md) (2026-07-23). Every
 > phase this plan owns is landed and silicon-validated, so it moves to
@@ -106,7 +106,7 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > ~~**What still needs a live .NET 8+ runtime** is only the *live* §Z3 composition over an
 > unwarmed method whose JIT and GC run inside the window.~~ **Landed 2026-07-21 status:**
 > that live composition ships —
-> [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md) T1
+> [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md) T1
 > (`docker-hwtrace-dotnet` 196/196); only the live managed-**PT** prong on silicon remains
 > (owned by [dotnet-managed-pt-concurrency-plan.md](dotnet-managed-pt-concurrency-plan.md)). (4) **Scope is a thread window —
 > and that is the shipped DEFAULT, by decision:** `asmtest_hwtrace_end` flags `truncated` on
@@ -130,7 +130,7 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > survey, STRONG **landed + silicon-validated 2026-07-21** (`c7b4ef7`) · **§Z2** synthetic half
 > landed, live PT **VALIDATED 2026-07-21** (`make hwtrace-pt-live` 631/631 ×4 on bare-metal
 > PT silicon) · **§Z3** host-testable half landed, live compose **landed**
-> ([managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md) T1,
+> ([managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md) T1,
 > `docker-hwtrace-dotnet` 196/196) — the live managed-**PT** prong is the sole remainder,
 > owned by [dotnet-managed-pt-concurrency-plan.md](dotnet-managed-pt-concurrency-plan.md) ·
 > **§Z4** default landed **and host-tested** (`test_asynchop_flag` +
@@ -199,7 +199,7 @@ code.
 | Managed | §D0.1/§D0.2 | `MethodLoadVerbose_V2` in-proc listener → name→(addr,size,version) map feeding `asmtest_codeimage_track`; pre-arm `EnablePerfMap(JitDump)` rundown + self-recorder fallback | **shipped** (`JitMethodMap` + `DiagnosticsIpc`); only the *live* §Z3 compose over an unwarmed method still needs a runtime |
 | Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:2537](../../../../src/hwtrace.c#L2537), [asmtest_hwtrace.h:246](../../../../include/asmtest_hwtrace.h#L246)) | **both shipped** — merge core host-tested, and it now has two live producers (.NET `AsmStitchedTrace`, Node `AsyncStitchedTrace`); the seam is CI-covered by `test_stitch_hops_scripted` |
 | Managed | §D3 | Concealed out-of-process ptrace-stealth stepper (bundled `asmtest-stealth-helper`, reverse-attach) | **shipped**, including the live-JIT address channel (`asmtest_addr_channel.h`) and its .NET composition (E3, `4416071`) |
-| AMD | Part III P2/P3 | **P2** BTF block-step mode for the W2/§D3 ptrace stepper (`asmtest_ptrace_*_blockstep` — one `#DB` per **taken branch**, ~4–10× fewer stops than per-insn, rootless, every Zen incl. Zen 2); **P3** eBPF `bpf_get_branch_snapshot` boundary capture (deterministic ≤16-entry LBR window at scope entry/exit; Zen 4/5, Linux ≥ 6.10) | **shipped** — `asmtest_ptrace_trace_call_blockstep`/`_attached_blockstep` ([ptrace-blockstep-tracer-correctness.md](../../implementations/ptrace-blockstep-tracer-correctness.md) ☑ 8/8; [_positions.md #4](../../implementations/_positions.md) is binding: treat P2/P3 as available). The §Z1.1 routing consumption happened too: [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md) T8 wired `window_stop_blockstep` into the stealth helper |
+| AMD | Part III P2/P3 | **P2** BTF block-step mode for the W2/§D3 ptrace stepper (`asmtest_ptrace_*_blockstep` — one `#DB` per **taken branch**, ~4–10× fewer stops than per-insn, rootless, every Zen incl. Zen 2); **P3** eBPF `bpf_get_branch_snapshot` boundary capture (deterministic ≤16-entry LBR window at scope entry/exit; Zen 4/5, Linux ≥ 6.10) | **shipped** — `asmtest_ptrace_trace_call_blockstep`/`_attached_blockstep` ([ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) ☑ 8/8; [_positions.md #4](../../implementations/_positions.md) is binding: treat P2/P3 as available). The §Z1.1 routing consumption happened too: [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md) T8 wired `window_stop_blockstep` into the stealth helper |
 | Substrate | — | Backend auto-selection + `available()`/`skip_reason()` self-probe + the self `pid==0` code-image recorder — [codeimage.c:310](../../../../src/codeimage.c#L310), [:373](../../../../src/codeimage.c#L373) | shipped |
 
 ### Net-new — what this plan owns (surface, integration, presentation)
@@ -369,7 +369,7 @@ cycles** exhaust neither the frame stack nor the generation counter (capture #30
 exact). ~~*Not* covered by it: the lazy-arm-claims-no-slot and auto-name assertions this
 section drafted, and the handler-path no-malloc/lock assertion — those remain
 unexercised.~~ — **CLOSED (noted 2026-07-21)**:
-[zeroconfig-scoped-tracing-hardening.md](../../implementations/zeroconfig-scoped-tracing-hardening.md)
+[zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)
 ☑ 9/9 landed the lazy-arm/no-slot and no-malloc/no-lock hygiene assertions (its T5) and
 strengthened the auto-name assertion (T6).
 
@@ -486,7 +486,7 @@ handle:
   > leaf that calls into a **blocking** libc entry has nothing to step over it and nothing to
   > time it out; the tier is truthful about the result (`truncated`) but not bounded in *time*.~~
   > — **CLOSED (noted 2026-07-21)**:
-  > [zeroconfig-scoped-tracing-hardening.md](../../implementations/zeroconfig-scoped-tracing-hardening.md)
+  > [zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)
   > ☑ 9/9 ported the deny-region + instruction-budget guards (T1) and the
   > `ITIMER_REAL`/`SIGALRM` watchdog (T2) onto the in-process whole-window path, exposed the
   > guard surface (T3), and asserts the guards fire (T4) — the window is now bounded in time.
@@ -716,7 +716,7 @@ PT runner exists~~ *(done — ran green on bare metal 2026-07-21, `c7b4ef7`)* �
 
 > **Status (revised 2026-07-16): the host-testable half LANDED; only the LIVE half is
 > forward-look.** *(Update 2026-07-21: the LIVE half has since LANDED —
-> [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md)
+> [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md)
 > ☑ 12/12, whose T1 composed the seam live over an unwarmed in-process managed method
 > whose JIT and GC run inside the window, `docker-hwtrace-dotnet` 196/196. The one
 > remaining prong — the same compose over §Z2's live PT path on silicon — is blocked by
@@ -822,7 +822,7 @@ when ptrace is denied. Linux-only.
 
 > **Status: default + merge core landed AND host-tested (`test_asynchop_flag`, 2026-07-16);
 > escalation LANDED (noted 2026-07-21) —
-> [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md)
+> [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md)
 > ☑ 12/12, T11/T12: the ambient `AsyncLocal` hop → per-tid PT slice → `stitch_handles`
 > escalation, with a host-testable twin covering the seam; only its live managed-PT leg on
 > silicon remains, blocked by the race owned by
@@ -839,7 +839,7 @@ when ptrace is denied. Linux-only.
 > per-thread PT events into `stitch` — which needs a live managed runtime + bare-metal
 > Intel PT per-thread events (the §D3 single-thread ptrace stepper **cannot** exercise a
 > hop) and therefore has **no CI coverage**.~~ — **LANDED (noted 2026-07-21)**: that
-> producer ships as [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md)
+> producer ships as [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md)
 > T11/T12 — the ambient `AsyncLocal` hop → per-tid PT slice → `stitch_handles` escalation —
 > and its **host-testable twin** gives the seam CI coverage. The live managed-PT leg on
 > silicon remains gated by
@@ -987,7 +987,7 @@ chain have no CI coverage** — they need a live managed runtime + bare-metal In
 per-thread events (per-thread mode needs no privilege bump; the per-CPU alternative needs
 `CAP_PERFMON` / `perf_event_paranoid < 1`). *(Update 2026-07-21: the hook→slice→merge
 chain now HAS a host-testable twin —
-[managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md)
+[managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md)
 T11/T12 — so the seam is CI-covered; only the live managed-PT leg stays silicon-gated,
 owned by [dotnet-managed-pt-concurrency-plan.md](dotnet-managed-pt-concurrency-plan.md).)*
 **Linux-only**; self-skips on

@@ -417,7 +417,7 @@ neither user guide — real reach-extending levers a user can't discover. Implem
 audit's F47.
 
 **Work.** All substantive prose in
-[docs/guides/tracing/hardware-tracing.md](../../../../docs/guides/tracing/hardware-tracing.md)
+[docs/guides/tracing/hardware-tracing.md](../../../guides/tracing/hardware-tracing.md)
 (native-tracing.md delegates tier detail to it): (1) give `snapshot` its AMD
 deterministic-boundary meaning in the options paragraph and add a forward pointer;
 (2) insert a `### Tuning AMD LBR window reach` subsection before the scoped-tracing-primitives
@@ -426,10 +426,10 @@ truncation, the **self-similar-loop undercount** caveat — 231 vs 297 insns at 
 and `branch_filter` (drops direct-uncond-`jmp`, byte-identical, ~1.86× reach per window, the
 loop lever), both framed **fidelity-neutral by construction**. Link the internal plan via a
 full github blob URL (internal/ is outside the Sphinx tree). Add one cross-ref clause to
-[docs/guides/tracing/native-tracing.md](../../../../docs/guides/tracing/native-tracing.md). No
+[docs/guides/tracing/native-tracing.md](../../../guides/tracing/native-tracing.md). No
 `DESIGN.md` edit (its only 'AMD' hits are the System V AMD64 ABI name — no hardware-trace
 section). No `features.md` edit either: its Hardware-trace bullet
-([docs/reference/features.md:113-120](../../../../docs/reference/features.md)) does name AMD
+([docs/reference/features.md:113-120](../../../reference/features.md)) does name AMD
 LBR, but per-field tuning knobs sit below a feature catalogue's altitude — it lists no
 option knobs at all (not even `aux_size`) — and Matrix 5 is external-deps only. Do **not**
 touch the header.

@@ -1,6 +1,6 @@
 /*
  * asmtest_rec.h — record-mode producer glue for the emulator tier
- * (docs/internal/gui/06-doors-and-learning.md T7).
+ * (docs/internal/archive/gui/06-doors-and-learning.md T7).
  *
  * The runner arms recording (asmtest_record_path / asmtest_note_recording in
  * asmtest.h) but records nothing itself — it links no engine, and that is the

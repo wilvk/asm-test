@@ -1,5 +1,5 @@
 # desktop.mk — desktop GUI: full app + render-only viewer + headless tests
-# (docs/internal/gui/03-desktop-shell.md). Two binaries share one source tree:
+# (docs/internal/archive/gui/03-desktop-shell.md). Two binaries share one source tree:
 #   asmtest-desktop  the full app — links the Author-tier engines, so GPL-2.0 as
 #                    a whole (D4); imgui + GLFW/OpenGL3 backends + doc/ + ui/.
 #   asmtest-viewer   the render-only viewer — ZERO engine objects or libs, stays
@@ -706,7 +706,7 @@ DESKTOP_DISPLAY_SAY := (DISPLAY / WAYLAND_DISPLAY)
 endif
 EGL_LIBS  ?= -lEGL
 
-# X11 (docs/internal/gui/45-launch-and-window-target.md T6/T9): the window
+# X11 (docs/internal/archive/gui/45-launch-and-window-target.md T6/T9): the window
 # picker's ONLY platform dependency (D4 — no ptrace, no other engine).
 # Auto-detected exactly like CAPSTONE_DEF (Makefile:883-885): present when
 # libx11-dev is installed (Dockerfile.desktop pins it, T9), absent
@@ -1930,7 +1930,7 @@ desktop-ui-test: $(BUILD)/desktop_ui_test
 	@echo "desktop-ui-test: JUnit XML -> $(BUILD)/desktop-ui-test-results.xml"
 DESKTOP_UITEST_SAY = echo "desktop-test: the imgui_test_engine interaction lane is separate (fetches the one non-MIT, test-lane-only dep) — run 'make desktop-ui-test' or 'make docker-desktop'"
 
-# docs/internal/gui/45-launch-and-window-target.md T9: the window-picker's
+# docs/internal/archive/gui/45-launch-and-window-target.md T9: the window-picker's
 # Xvfb integration lane — a REAL (virtual) X11 display + a second real
 # window, proving window_picker.cpp's resolve_window_at_screen_point end to
 # end (test_window_picker.cpp, the null-backend binary, deliberately cannot:
@@ -1968,7 +1968,7 @@ endif
 
 # ---------------------------------------------------------------------------
 # gen_walkthroughs — the Learn door's bundled walkthroughs, as recordings
-# (docs/internal/gui/06-doors-and-learning.md T2/T3).
+# (docs/internal/archive/gui/06-doors-and-learning.md T2/T3).
 #
 # A C tool (not C++): it drives the assembler + emulator + the shared .asmtrace
 # writer, exactly like tools/asmtrace_record.c does for the golden corpus, and
@@ -2013,7 +2013,7 @@ docker-desktop: docker-bindings-base
 
 # ---------------------------------------------------------------------------
 # asmtrace_export — .asmtrace -> speedscope / Perfetto / lcov / DOT
-# (docs/internal/gui/02-exporters-and-readers.md T1-T4).
+# (docs/internal/archive/gui/02-exporters-and-readers.md T1-T4).
 #
 # One TU, libc only: no engine objects, no Capstone, no JSON library, so it
 # builds and runs on every lane and wherever a recording landed. Its suite needs

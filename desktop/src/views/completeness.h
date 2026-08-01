@@ -1,5 +1,5 @@
 // completeness.h — the backend-completeness panel's state + draw
-// (docs/internal/gui/02-exporters-and-readers.md T6). Every RULE lives in
+// (docs/internal/archive/gui/02-exporters-and-readers.md T6). Every RULE lives in
 // completeness_model.h (pure, tested); this is the panel's chrome only.
 #ifndef ASMDESK_VIEWS_COMPLETENESS_H
 #define ASMDESK_VIEWS_COMPLETENESS_H

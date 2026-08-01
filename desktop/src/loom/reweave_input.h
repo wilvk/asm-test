@@ -1,5 +1,5 @@
 // reweave_input.h — the engine-free reweave data source + identity latch
-// (docs/internal/gui/42-loom-reweave-consumption.md T1/T2).
+// (docs/internal/archive/gui/42-loom-reweave-consumption.md T1/T2).
 //
 // Reweave is intrinsically author-time: `loom_take_run_from_step` re-executes
 // the emulator from entry, so it needs the routine's raw bytes AND its entry

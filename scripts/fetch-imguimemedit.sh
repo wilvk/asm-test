@@ -1,5 +1,5 @@
 #!/bin/sh
-# fetch-imguimemedit.sh — imgui_memory_editor.h (docs/internal/gui/14-quick-wins.md
+# fetch-imguimemedit.sh — imgui_memory_editor.h (docs/internal/archive/gui/14-quick-wins.md
 # T4): the single 836-line header from ocornut's own imgui_club (MIT, PUBLIC API
 # only — no imgui_internal.h, so it is not in the repin compile-probe). Thin
 # wrapper over fetch-addon.sh (header shape). See scripts/README-addons.md.

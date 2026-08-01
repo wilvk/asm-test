@@ -1,6 +1,6 @@
 /*
  * dataflow_resume.c — the emu_t-HOSTED emulator L0 value producer (extension
- * roadmap R3, docs/internal/gui/30-resume-from-state-and-reweave.md).
+ * roadmap R3, docs/internal/archive/gui/30-resume-from-state-and-reweave.md).
  *
  * The self-contained producer (src/dataflow_emu.c) opens its own uc_engine per
  * call, so it can never reach the emu_t checkpoint/restore keystone. This TU runs

@@ -1,5 +1,5 @@
 // test_undo.cpp — the app-level command / undo stack
-// (docs/internal/gui/22-selection-and-search.md T4, F12). Null backend, model
+// (docs/internal/archive/gui/22-selection-and-search.md T4, F12). Null backend, model
 // state (D4).
 //
 // Asserts the stack mechanics the shell applies (undo_apply, ui/shell.cpp): a

@@ -1,5 +1,5 @@
 // atmosphere.h — the fidelity weather sky's pure config
-// (docs/internal/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md T3). A
+// (docs/internal/archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md T3). A
 // plain data struct: no GL, no ImGui. This lives under scene3d/ rather than
 // space/ because it is GL-ADJACENT render config (raw floats a shader reads
 // as uniforms), not a space/ data model derived from a recording — the same

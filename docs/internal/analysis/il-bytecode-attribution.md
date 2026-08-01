@@ -18,7 +18,7 @@ data-value sibling); the managed-runtime address plumbing is planned in
 
 > **Update 2026-07-21 — superseded.** This investigation has since been built:
 > see
-> [native-il-bytecode-attribution.md](../implementations/native-il-bytecode-attribution.md)
+> [native-il-bytecode-attribution.md](../archive/implementations/native-il-bytecode-attribution.md)
 > (T1–T7 landed, commits `25fd351`…`f599777`). The analysis below is preserved
 > as written; dated notes mark the determinations that are now false.
 

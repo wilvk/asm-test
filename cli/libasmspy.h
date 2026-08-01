@@ -245,7 +245,7 @@ const asmspy_sym_t *asmspy_resolve(const asmspy_symtab_t *syms,
 typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
                                     const char *pf_line, const char *str);
 
-/* docs/internal/gui/45-launch-and-window-target.md T2: mark the NEXT attach
+/* docs/internal/archive/gui/45-launch-and-window-target.md T2: mark the NEXT attach
  * this same thread makes (the very first seize_threads/seize_one call inside
  * whichever asmspy_engine_* below runs) as already ours — `pid` is a child
  * THIS OS thread just fork()ed and PTRACE_TRACEME'd (asmspy.c's

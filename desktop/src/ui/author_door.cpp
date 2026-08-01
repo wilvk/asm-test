@@ -1,5 +1,5 @@
 // author_door.cpp — the Author door: type assembly, run it, see faults as data
-// (docs/internal/gui/06-doors-and-learning.md T5).
+// (docs/internal/archive/gui/06-doors-and-learning.md T5).
 //
 // FULL BUILD ONLY (D4/D9): the engine calls — asmtest_assemble (Keystone),
 // emu_call_traced (Unicorn, x86-64), and asmtest_dataflow_emu_run_arch

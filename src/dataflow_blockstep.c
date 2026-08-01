@@ -747,7 +747,7 @@ static int dfb_shift_rotate_count(const cs_insn *in,
  * which bits does it write with a defined value? Neither set implies the other: a bit
  * outside BOTH is simply not touched by this instruction (its prior undefined-ness, if
  * any, survives). The table is the authority (see
- * docs/internal/implementations/dataflow-producer-correctness.md T4 Research notes for the
+ * docs/internal/archive/implementations/dataflow-producer-correctness.md T4 Research notes for the
  * Intel SDM Vol 1 App A / AMD APM Tab F-1 sources); Capstone's own eflags metadata is used
  * ONLY as a breadth signal for the "does this touch flags at all" default below — never to
  * decide which bit is undefined, which is exactly where that metadata is known to lie (VEX
@@ -1463,7 +1463,7 @@ static const char *scan_reason(const dfb_scan_t *s) {
  * to execute VEX/EVEX correctly — see the sentinel check (run_avx_tcg_sentinel_case) in
  * examples/test_dataflow_blockstep.c, which makes that dependency explicit and self-testing.
  * On FAILURE of that sentinel (i.e. once Unicorn ships QEMU >= 7.2 TCG), see
- * docs/internal/implementations/dataflow-producer-correctness.md T8 for the trigger condition
+ * docs/internal/archive/implementations/dataflow-producer-correctness.md T8 for the trigger condition
  * and the pin-bump playbook before relaxing anything here.
  *
  * This deliberately keys on the ENCODING rather than on Capstone's AVX metadata, which is

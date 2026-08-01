@@ -6,9 +6,9 @@ framework (`src/`, `include/`), the `asmspy` live tracer and native tooling
 (`bindings/`), build/CI/packaging (`Makefile`, `mk/`, the `Dockerfile.*` set,
 `scripts/`, `packaging/`, `.github/`), documentation (`docs/`), and the
 framework's own tests/examples (`tests/`, `examples/`). Unlike the archived
-[2026-07-01](../../archive/reviews/2026-07-01-repo-review.md) /
-[-07-02](../../archive/reviews/2026-07-02-repo-review.md) /
-[-07-04](../../archive/reviews/2026-07-04-repo-review.md) reviews, this pass is a
+[2026-07-01](2026-07-01-repo-review.md) /
+[-07-02](2026-07-02-repo-review.md) /
+[-07-04](2026-07-04-repo-review.md) reviews, this pass is a
 fresh full sweep after the Zen 2 → Zen 5 dev-box change and the 2026-07-21
 Intel-PT-on-silicon validation. It records **findings not already tracked** in
 `plans/` or `analysis/`; already-tracked items are cross-referenced in §0 and
@@ -63,7 +63,7 @@ this review is self-contained, not to re-open them:
 - **Data-flow def-use/slice half missing from 7 of 10 bindings** — noted in
   [analysis/2026-07-17-dataflow-tier-open-followups.md](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
   item 5. *Reconcile:* the implementations brief
-  [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+  [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
   reports ✅4/4 over the same area — one of the two is stale; worth settling which.
 
 ---

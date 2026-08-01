@@ -13,11 +13,11 @@ each one either **reduces perturbation**, **raises fidelity on managed targets**
 > [intel-hardware-validation.md](../../intel-hardware-validation.md) record `make dataflow-pt-live`
 > **29/29, stable ×3**, on a bare-metal Intel Core i7-8559U, with the F5 replay **byte-identical
 > to the emulator L0 at zero single-steps** on both walks — the plan's own exit criterion. The
-> brief [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
+> brief [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
 > The remaining carryovers are brief-owned: F3's arm64 live validation by
-> [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) (◐ 5/7); F7's
+> [asmspy-aarch64-support.md](../implementations/asmspy-aarch64-support.md) (◐ 5/7); F7's
 > def-use/slice + code-image carryover CLOSED by
-> [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
 > ✅ 4/4. The 2026-07-17 reconciliation below is retained for provenance.
 
 > Status *(reconciled 2026-07-17, after F1 increment 2)*: **F3 LANDED (asmspy `--watch`); F1
@@ -438,7 +438,7 @@ value) is documented as the remaining limit and detected via the real endpoints.
 
 ---
 
-## F3 — Hardware data-watchpoint targeted mode *(**LANDED 2026-07-15** — asmspy --watch; AArch64 analog LANDED since — remaining arm64 validation owned by [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) ◐ 5/7)*
+## F3 — Hardware data-watchpoint targeted mode *(**LANDED 2026-07-15** — asmspy --watch; AArch64 analog LANDED since — remaining arm64 validation owned by [asmspy-aarch64-support.md](../implementations/asmspy-aarch64-support.md) ◐ 5/7)*
 
 > **UPDATE 2026-07-15 — LANDED as `asmspy --watch`.** `asmspy --watch <pid> <addr|func+off> [--rw] [--len=N]
 > [--json]` arms an x86 data watchpoint (DR0-3; DR7 R/W=01 write / 11 r/w, LEN 1/2/4/8) via `PTRACE_POKEUSER`,
@@ -450,7 +450,7 @@ value) is documented as the remaining limit and detected via the real endpoints.
 > the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog.~~ — **LANDED since**: the analog ships at
 > [cli/asmspy_engine.c:4998-5021](../../../../cli/asmspy_engine.c#L4998) (`NT_ARM_HW_WATCH`
 > `DBGWVR`/`DBGWCR` slot-0 arming); the remaining arm64 **live validation** is owned by
-> [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) (◐ 5/7).
+> [asmspy-aarch64-support.md](../implementations/asmspy-aarch64-support.md) (◐ 5/7).
 > Increment-0 spike evidence retained below.
 
 > **SPIKE — GO, 2026-07-15.** Data watchpoints work exactly as bet: a WRITE watchpoint (`DR7=0x90001`:
@@ -655,7 +655,7 @@ control, re-validated for the live data path).
 
 ---
 
-## F5 — PT + code-image + replay: the least-perturbing ceiling *(**LANDED + SILICON-VALIDATED 2026-07-21** — decode→replay bridge CI-validated 2026-07-19; live capture validated on bare-metal Intel PT, commit `c7b4ef7`; [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) ✅ 5/5)*
+## F5 — PT + code-image + replay: the least-perturbing ceiling *(**LANDED + SILICON-VALIDATED 2026-07-21** — decode→replay bridge CI-validated 2026-07-19; live capture validated on bare-metal Intel PT, commit `c7b4ef7`; [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md) ✅ 5/5)*
 
 The conceptual minimum-perturbation path from the design doc ("stop instrumenting and start
 observing"): reconstruct the **exact executed instruction stream** out of band via Intel PT /
@@ -673,7 +673,7 @@ values** — the values come entirely from the replay, so F5 inherits F1/F2's OS
 tiering.
 
 > **STATUS 2026-07-19 (actioned as
-> [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md)).** The
+> [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md)).** The
 > decode→rebase→materialize→replay **bridge is LANDED and CI-validated with no PT
 > hardware**: `src/dataflow_pt.c` (`asmtest_dataflow_pt_replay_path` +
 > `asmtest_dataflow_pt_replay`) fills the shared `asmtest_valtrace_t` **byte-identically to
@@ -689,7 +689,7 @@ tiering.
 > **The LIVE foreign-pid half (T4) is wiring-complete but hardware-unvalidated**, gated now on
 > ONE un-installable prerequisite: bare-metal Intel PT silicon (the `intel_pt` PMU with
 > `perf_event_paranoid < 0` / `CAP_PERFMON`). Its second gate is **resolved** — the sibling
-> [intel-pt-attach-foreign-pid.md](../../implementations/intel-pt-attach-foreign-pid.md) landed
+> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) landed
 > ☑5/5, so its `asmtest_hwtrace_pt_attach_begin/track/poll/end` capture arm is in the tree, and
 > `examples/test_dataflow_pt.c`'s live case now CONSUMES it (2026-07-20): a runtime
 > `asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)` probe replaces the old never-defined
@@ -709,7 +709,7 @@ tiering.
 > invocation with **zero single-steps of the target**, the PT-decoded path equalled the
 > single-step oracle path, and the F5 replay value trace was **byte-identical to the emulator
 > L0** — the exit criterion above, met as written. The brief
-> [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
+> [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
 
 ---
 
@@ -800,13 +800,13 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > a location at risk the barrier must then decline to decide (→ `truncated`). That was a
 > **pre-existing gap in this producer's register map**, surfaced by F6, not introduced by it —
 > **CLOSED** by
-> [dataflow-producer-correctness.md T1](../../implementations/dataflow-producer-correctness.md#T1):
+> [dataflow-producer-correctness.md T1](../implementations/dataflow-producer-correctness.md#T1):
 > `gp_value` and `dfp_alias_shape` now fold R8D/R8W/R8B..R15D/R15W/R15B to their 64-bit
 > container in both the scoped producer and the blockstep tier's own copy. (4) **No vector
 > clobber across a gap** is
 > exercised: the barrier diffs XMM/YMM (one batched snapshot per gap) but no fixture makes the
 > glue clobber a vector register the survey recorded. **CLOSED** by
-> [dataflow-producer-correctness.md T3](../../implementations/dataflow-producer-correctness.md#T3):
+> [dataflow-producer-correctness.md T3](../implementations/dataflow-producer-correctness.md#T3):
 > `test_window_vec_gap` (`examples/test_dataflow_ptrace.c`) makes the glue clobber a live `xmm0`
 > the survey recorded and asserts the GAP step carries the real post-glue value out of `wide[]`,
 > and the post-gap read resolves to it rather than the stale pre-gap write. (T3 also closed a
@@ -882,7 +882,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > means the same thing everywhere. ~~The def-use/slice half stays unwrapped in them for a real
 > reason: the slice seed crosses **by value** as an `at_val_rec_t`, which Fiddle (and friends) have
 > no type for. That is a pre-existing gap, not F7's — and the natural next increment.~~ —
-> **CLOSED**: [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> **CLOSED**: [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
 > ✅ 4/4 (its T2 wraps defuse/forward/backward-slice in all seven).
 
 Wrap the new attach entry points in the dynamic-FFI bindings, the way the L0/L1/L2 ValueTrace
@@ -902,7 +902,7 @@ least the native path in their pinned toolchain images.
 > ~~Carryover: the def-use/slice surface for the seven (blocked on by-value `at_val_rec_t`
 > marshalling, not on F7), and `attach_pid_versioned`'s code-image argument, which every binding
 > passes as NULL because the code-image recorder is its own binding surface.~~ — **CLOSED** by
-> [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
 > ✅ 4/4: T2 wraps defuse/forward/backward-slice in all seven, and T4 lands the `CodeImage`
 > surface plus a real `img` argument to `attach_pid_versioned` in all ten.
 

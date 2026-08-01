@@ -708,17 +708,17 @@ line 24):
 ## Out of scope
 
 - **The AMD validation-checklist repair
-  (P1 → [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md#T2)),
+  (P1 → [amd-ibs-backend-fidelity.md#T2](../archive/implementations/amd-ibs-backend-fidelity.md#T2)),
   `IBS_MAX_RECORD`/callchain
-  (P3 → [amd-ibs-backend-fidelity.md#T3](amd-ibs-backend-fidelity.md#T3)),
+  (P3 → [amd-ibs-backend-fidelity.md#T3](../archive/implementations/amd-ibs-backend-fidelity.md#T3)),
   installing `asmtest_ibs.h`
-  (P6 → [amd-ibs-backend-fidelity.md#T7](amd-ibs-backend-fidelity.md#T7)), the
+  (P6 → [amd-ibs-backend-fidelity.md#T7](../archive/implementations/amd-ibs-backend-fidelity.md#T7)), the
   IBS caps append-order note
-  (P7 → [amd-ibs-backend-fidelity.md#T5](amd-ibs-backend-fidelity.md#T5)), and
+  (P7 → [amd-ibs-backend-fidelity.md#T5](../archive/implementations/amd-ibs-backend-fidelity.md#T5)), and
   the `sample_period`/`period_jitter` test gap
-  (P8 → [amd-ibs-backend-fidelity.md#T6](amd-ibs-backend-fidelity.md#T6))** —
+  (P8 → [amd-ibs-backend-fidelity.md#T6](../archive/implementations/amd-ibs-backend-fidelity.md#T6))** —
   all owned by
-  [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md), including
+  [amd-ibs-backend-fidelity.md](../archive/implementations/amd-ibs-backend-fidelity.md), including
   rewriting `amd-hardware-validation.md` (remember: post-5d8e0d2, a
   `truncated=0` where escalation must fire is a **regression** signal, not a
   known finding). The P-numbers are the followup plan's; the `#T<n>` anchors
@@ -727,8 +727,8 @@ line 24):
   "self-skips in hosted CI" note above:
   [self-hosted-ci-runners.md](self-hosted-ci-runners.md).
 - **The `ibs_probe` misreport** paired with P1's acceptance:
-  [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md).
+  [asmspy-cli-enhancements.md](../archive/implementations/asmspy-cli-enhancements.md).
 - **Whole-window capture ambitions on AMD** — a recorded hardware dead end
   (declined in [amd-tracing-plan.md](../plans/amd-tracing-plan.md)); the PT
   whole-window substrate is
-  [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md).
+  [intel-pt-whole-window-substrate.md](../archive/implementations/intel-pt-whole-window-substrate.md).

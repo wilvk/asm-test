@@ -1,6 +1,6 @@
 /*
  * test_ct_eq.c — the constant-time equality suite
- * (docs/internal/gui/06-doors-and-learning.md T1).
+ * (docs/internal/archive/gui/06-doors-and-learning.md T1).
  *
  * Build/run via `make ct-eq-test` (needs libunicorn); `make docker-emu` runs it
  * beside `emu-test`.

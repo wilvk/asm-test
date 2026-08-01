@@ -30,7 +30,7 @@ while IFS= read -r line; do
         emit '{"k":"session","state":"stopped","mode":"log","events":2,"reason":"stop"}'
         ;;
     *'"cmd":"launch"'*)
-        # docs/internal/gui/45-launch-and-window-target.md T3: no pid on the
+        # docs/internal/archive/gui/45-launch-and-window-target.md T3: no pid on the
         # wire request — this host "forks" one (a fixed, DIFFERENT pid from
         # the "start" fixture's 4242, so a test can tell the two apart) and
         # names it only in the "started" reply, exactly like the real

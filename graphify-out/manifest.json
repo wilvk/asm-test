@@ -5264,187 +5264,187 @@
     "ast_hash": "67bac7e379ac54396fc38c2fd87163f0",
     "semantic_hash": "67bac7e379ac54396fc38c2fd87163f0"
   },
-  "/home/will/source/asm-test/docs/internal/gui/01-asmtrace-format.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/01-asmtrace-format.md": {
     "mtime": 1785368750.1936195,
     "ast_hash": "9f6f535b449874a6728608782fe115c1",
     "semantic_hash": "9f6f535b449874a6728608782fe115c1"
   },
-  "/home/will/source/asm-test/docs/internal/gui/02-exporters-and-readers.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/02-exporters-and-readers.md": {
     "mtime": 1785370862.4597204,
     "ast_hash": "337a383a72d5c18dbbd505db7bcd0f69",
     "semantic_hash": "337a383a72d5c18dbbd505db7bcd0f69"
   },
-  "/home/will/source/asm-test/docs/internal/gui/03-desktop-shell.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/03-desktop-shell.md": {
     "mtime": 1785368845.889901,
     "ast_hash": "24e1b9099b98cb701efe6f38d890a0c3",
     "semantic_hash": "24e1b9099b98cb701efe6f38d890a0c3"
   },
-  "/home/will/source/asm-test/docs/internal/gui/04-replay-views.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/04-replay-views.md": {
     "mtime": 1785369522.8282666,
     "ast_hash": "831d5adaf58d0462faa7e7ebb6db14ab",
     "semantic_hash": "831d5adaf58d0462faa7e7ebb6db14ab"
   },
-  "/home/will/source/asm-test/docs/internal/gui/05-loom-day-one.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/05-loom-day-one.md": {
     "mtime": 1785368849.0628958,
     "ast_hash": "ae467c5e9c6bd8604a2de2bc956f7680",
     "semantic_hash": "ae467c5e9c6bd8604a2de2bc956f7680"
   },
-  "/home/will/source/asm-test/docs/internal/gui/06-doors-and-learning.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/06-doors-and-learning.md": {
     "mtime": 1785368783.4421244,
     "ast_hash": "b2bea22f03fb3a38939adb690a42abd7",
     "semantic_hash": "b2bea22f03fb3a38939adb690a42abd7"
   },
-  "/home/will/source/asm-test/docs/internal/gui/07-serve-live-host.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/07-serve-live-host.md": {
     "mtime": 1785368789.7433064,
     "ast_hash": "0d09c9180f4e7da68ac59aa5ad0ce830",
     "semantic_hash": "0d09c9180f4e7da68ac59aa5ad0ce830"
   },
-  "/home/will/source/asm-test/docs/internal/gui/08-observer-views.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/08-observer-views.md": {
     "mtime": 1785368800.8969674,
     "ast_hash": "8bb1d876677749a0128d3b5b1319526a",
     "semantic_hash": "8bb1d876677749a0128d3b5b1319526a"
   },
-  "/home/will/source/asm-test/docs/internal/gui/09-teaching-producers.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/09-teaching-producers.md": {
     "mtime": 1785368817.1819892,
     "ast_hash": "e401a576a06574978efb52eff08f87dd",
     "semantic_hash": "e401a576a06574978efb52eff08f87dd"
   },
-  "/home/will/source/asm-test/docs/internal/gui/10-spacetime-3d-overview.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/10-spacetime-3d-overview.md": {
     "mtime": 1785368843.9722228,
     "ast_hash": "b896203fbac547207b24f0623dc13d8d",
     "semantic_hash": "b896203fbac547207b24f0623dc13d8d"
   },
-  "/home/will/source/asm-test/docs/internal/gui/11-imgui-addons.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/11-imgui-addons.md": {
     "mtime": 1785368862.4982579,
     "ast_hash": "684d67cc62d73f2cb35812fed558a7f7",
     "semantic_hash": "684d67cc62d73f2cb35812fed558a7f7"
   },
-  "/home/will/source/asm-test/docs/internal/gui/12-addon-supply-chain.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/12-addon-supply-chain.md": {
     "mtime": 1785368709.748998,
     "ast_hash": "1cd44c8d258f1ad1e7abc44f2655320c",
     "semantic_hash": "1cd44c8d258f1ad1e7abc44f2655320c"
   },
-  "/home/will/source/asm-test/docs/internal/gui/13-foundation-moves.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/13-foundation-moves.md": {
     "mtime": 1785368720.820279,
     "ast_hash": "8fcedcb196bfcf275ec9208dc4df4853",
     "semantic_hash": "8fcedcb196bfcf275ec9208dc4df4853"
   },
-  "/home/will/source/asm-test/docs/internal/gui/14-quick-wins.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/14-quick-wins.md": {
     "mtime": 1785368742.870111,
     "ast_hash": "3a32c136f7f1d7759bc6fb6ee98bddf4",
     "semantic_hash": "3a32c136f7f1d7759bc6fb6ee98bddf4"
   },
-  "/home/will/source/asm-test/docs/internal/gui/15-plotting-and-graph-nav.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/15-plotting-and-graph-nav.md": {
     "mtime": 1785368756.577507,
     "ast_hash": "7db52f71d1274f41a7d81d81222cfd9b",
     "semantic_hash": "7db52f71d1274f41a7d81d81222cfd9b"
   },
-  "/home/will/source/asm-test/docs/internal/gui/16-live-feedback-and-filtering.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/16-live-feedback-and-filtering.md": {
     "mtime": 1785368782.7727973,
     "ast_hash": "111ad4bf6027962ed23cdc5e2c265f64",
     "semantic_hash": "111ad4bf6027962ed23cdc5e2c265f64"
   },
-  "/home/will/source/asm-test/docs/internal/gui/17-interaction-testing-and-editor.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/17-interaction-testing-and-editor.md": {
     "mtime": 1785368791.583097,
     "ast_hash": "a17c4f8edc465ff4359d261dcef1e1b2",
     "semantic_hash": "a17c4f8edc465ff4359d261dcef1e1b2"
   },
-  "/home/will/source/asm-test/docs/internal/gui/18-breach-stops.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/18-breach-stops.md": {
     "mtime": 1785368811.3410397,
     "ast_hash": "96e4d4622c23ae567b913851b4fb1b0e",
     "semantic_hash": "96e4d4622c23ae567b913851b4fb1b0e"
   },
-  "/home/will/source/asm-test/docs/internal/gui/19-dockable-panes-keystone.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/19-dockable-panes-keystone.md": {
     "mtime": 1785368824.1822004,
     "ast_hash": "7d45c2ecdf38ddc8f22cd424b301a6d4",
     "semantic_hash": "7d45c2ecdf38ddc8f22cd424b301a6d4"
   },
-  "/home/will/source/asm-test/docs/internal/gui/20-workspace-and-settings.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/20-workspace-and-settings.md": {
     "mtime": 1785368742.611777,
     "ast_hash": "d16460d4915738f9a0a7519443448b29",
     "semantic_hash": "d16460d4915738f9a0a7519443448b29"
   },
-  "/home/will/source/asm-test/docs/internal/gui/21-spine-navigation.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/21-spine-navigation.md": {
     "mtime": 1785368758.2996275,
     "ast_hash": "ab72978be2e892144759b16c510950e0",
     "semantic_hash": "ab72978be2e892144759b16c510950e0"
   },
-  "/home/will/source/asm-test/docs/internal/gui/22-selection-and-search.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/22-selection-and-search.md": {
     "mtime": 1785368792.2752922,
     "ast_hash": "654c085084d33ed5036f97a745ad16db",
     "semantic_hash": "654c085084d33ed5036f97a745ad16db"
   },
-  "/home/will/source/asm-test/docs/internal/gui/23-graded-truth-layer.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/23-graded-truth-layer.md": {
     "mtime": 1785368865.0067453,
     "ast_hash": "b213ff6037d869c536d843a34df9c7ab",
     "semantic_hash": "b213ff6037d869c536d843a34df9c7ab"
   },
-  "/home/will/source/asm-test/docs/internal/gui/24-one-visual-language.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/24-one-visual-language.md": {
     "mtime": 1785368933.663062,
     "ast_hash": "6adda74debc25b697dbd7347b5cb319f",
     "semantic_hash": "6adda74debc25b697dbd7347b5cb319f"
   },
-  "/home/will/source/asm-test/docs/internal/gui/25-live-model-wiring.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/25-live-model-wiring.md": {
     "mtime": 1785368818.2406344,
     "ast_hash": "6699b6a44e269d7c5546fe28714fb8de",
     "semantic_hash": "6699b6a44e269d7c5546fe28714fb8de"
   },
-  "/home/will/source/asm-test/docs/internal/gui/26-live-regstate-producer.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/26-live-regstate-producer.md": {
     "mtime": 1785368851.591216,
     "ast_hash": "073578cfa681686fae916252bb7459df",
     "semantic_hash": "073578cfa681686fae916252bb7459df"
   },
-  "/home/will/source/asm-test/docs/internal/gui/27-extension-roadmap.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/27-extension-roadmap.md": {
     "mtime": 1785368886.3007705,
     "ast_hash": "50f3f7428202fee4d532ac5c03c861cb",
     "semantic_hash": "50f3f7428202fee4d532ac5c03c861cb"
   },
-  "/home/will/source/asm-test/docs/internal/gui/28-schema-freeze-completion.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/28-schema-freeze-completion.md": {
     "mtime": 1785369047.2758856,
     "ast_hash": "b8e55644d383681b803d3d61f7c68183",
     "semantic_hash": "b8e55644d383681b803d3d61f7c68183"
   },
-  "/home/will/source/asm-test/docs/internal/gui/29-mem-address-stream.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/29-mem-address-stream.md": {
     "mtime": 1785368967.3028414,
     "ast_hash": "25cdcbac45c37379ce54e67842155130",
     "semantic_hash": "25cdcbac45c37379ce54e67842155130"
   },
-  "/home/will/source/asm-test/docs/internal/gui/30-resume-from-state-and-reweave.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/30-resume-from-state-and-reweave.md": {
     "mtime": 1785369005.50013,
     "ast_hash": "6fa84f4cf10156ff2058cfed2eada870",
     "semantic_hash": "6fa84f4cf10156ff2058cfed2eada870"
   },
-  "/home/will/source/asm-test/docs/internal/gui/31-wide-register-deck.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/31-wide-register-deck.md": {
     "mtime": 1785369046.249467,
     "ast_hash": "7dd3dab63e22563ea6ba2f5fba9bf6a3",
     "semantic_hash": "7dd3dab63e22563ea6ba2f5fba9bf6a3"
   },
-  "/home/will/source/asm-test/docs/internal/gui/32-per-guest-value-producer.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/32-per-guest-value-producer.md": {
     "mtime": 1785368888.1522598,
     "ast_hash": "e5811886c0b478717ccd469d3f8cb428",
     "semantic_hash": "e5811886c0b478717ccd469d3f8cb428"
   },
-  "/home/will/source/asm-test/docs/internal/gui/33-backward-attribution-producers.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/33-backward-attribution-producers.md": {
     "mtime": 1785368904.634445,
     "ast_hash": "f7b90039316ea056f44bbcb0ede60c0a",
     "semantic_hash": "f7b90039316ea056f44bbcb0ede60c0a"
   },
-  "/home/will/source/asm-test/docs/internal/gui/34-playhead-and-scene-reach.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/34-playhead-and-scene-reach.md": {
     "mtime": 1785368926.3890536,
     "ast_hash": "239642b5c11f8ab5b6324fe339d2497c",
     "semantic_hash": "239642b5c11f8ab5b6324fe339d2497c"
   },
-  "/home/will/source/asm-test/docs/internal/gui/35-continuous-live-dataflow.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/35-continuous-live-dataflow.md": {
     "mtime": 1785368939.3250852,
     "ast_hash": "41f525121a7d027f5b158eb0a4990f67",
     "semantic_hash": "41f525121a7d027f5b158eb0a4990f67"
   },
-  "/home/will/source/asm-test/docs/internal/gui/36-anchor-the-3d-plane.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/36-anchor-the-3d-plane.md": {
     "mtime": 1785368966.7903519,
     "ast_hash": "b6ccc77678ff4ff1f259a45195aa8ae3",
     "semantic_hash": "b6ccc77678ff4ff1f259a45195aa8ae3"
   },
-  "/home/will/source/asm-test/docs/internal/gui/37-region-tag-on-df-step.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/37-region-tag-on-df-step.md": {
     "mtime": 1785368987.1815033,
     "ast_hash": "d860b4d341f006e79733ba353ca31232",
     "semantic_hash": "d860b4d341f006e79733ba353ca31232"
@@ -5454,22 +5454,22 @@
     "ast_hash": "63da2cb7948991a5e5941ceb549450de",
     "semantic_hash": "63da2cb7948991a5e5941ceb549450de"
   },
-  "/home/will/source/asm-test/docs/internal/gui/39-auto-capture-reliability.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/39-auto-capture-reliability.md": {
     "mtime": 1785369494.05368,
     "ast_hash": "cd568b5f0cc06bf1522637711f0dc6ae",
     "semantic_hash": "cd568b5f0cc06bf1522637711f0dc6ae"
   },
-  "/home/will/source/asm-test/docs/internal/gui/40-segment-dataflow-by-invocation.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/40-segment-dataflow-by-invocation.md": {
     "mtime": 1785368991.2027998,
     "ast_hash": "f3c57ed574647226e05d12cfd0b68c10",
     "semantic_hash": "f3c57ed574647226e05d12cfd0b68c10"
   },
-  "/home/will/source/asm-test/docs/internal/gui/41-live-blame-statediff-serve-leg.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/41-live-blame-statediff-serve-leg.md": {
     "mtime": 1785369000.0008535,
     "ast_hash": "ba871aaa56df75727e1c2600bbc3720c",
     "semantic_hash": "ba871aaa56df75727e1c2600bbc3720c"
   },
-  "/home/will/source/asm-test/docs/internal/gui/42-loom-reweave-consumption.md": {
+  "/home/will/source/asm-test/docs/internal/archive/gui/42-loom-reweave-consumption.md": {
     "mtime": 1785386577.0839767,
     "ast_hash": "575280adca90bcb884a4ea222d6df3a9",
     "semantic_hash": "575280adca90bcb884a4ea222d6df3a9"
@@ -5499,12 +5499,12 @@
     "ast_hash": "1ddd11256c13bca557bfbf276612331c",
     "semantic_hash": "1ddd11256c13bca557bfbf276612331c"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/aarch64-ptrace-single-step-validation.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/aarch64-ptrace-single-step-validation.md": {
     "mtime": 1785369095.4049835,
     "ast_hash": "588351878faea7e66cd60f1e01015aac",
     "semantic_hash": "588351878faea7e66cd60f1e01015aac"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/aarch64-sve-capture.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/aarch64-sve-capture.md": {
     "mtime": 1785369160.4274054,
     "ast_hash": "c56a1fb5486d9799f405979c0e8f6cd2",
     "semantic_hash": "c56a1fb5486d9799f405979c0e8f6cd2"
@@ -5514,32 +5514,32 @@
     "ast_hash": "c305a4d1f2123902c2751bd4fd7d5390",
     "semantic_hash": "c305a4d1f2123902c2751bd4fd7d5390"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/amd-ibs-backend-fidelity.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/amd-ibs-backend-fidelity.md": {
     "mtime": 1785370840.1170652,
     "ast_hash": "7d817d17e52bc8810f873d3e334faf6a",
     "semantic_hash": "7d817d17e52bc8810f873d3e334faf6a"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/asmspy-aarch64-support.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/asmspy-aarch64-support.md": {
     "mtime": 1785369152.5593772,
     "ast_hash": "94fe0462f14eaa0e359f1226d161134c",
     "semantic_hash": "94fe0462f14eaa0e359f1226d161134c"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/asmspy-cli-enhancements.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/asmspy-cli-enhancements.md": {
     "mtime": 1785370831.149368,
     "ast_hash": "7419a6293dce744fa685f2650116d44b",
     "semantic_hash": "7419a6293dce744fa685f2650116d44b"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/assemble-silent-statement-drop.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/assemble-silent-statement-drop.md": {
     "mtime": 1785369143.6323352,
     "ast_hash": "42f5d54c966e75f1290201042ddce33f",
     "semantic_hash": "42f5d54c966e75f1290201042ddce33f"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/benchmarks-ci-followups.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/benchmarks-ci-followups.md": {
     "mtime": 1785369145.0684946,
     "ast_hash": "072d5226f92f952f1061e30a9a081134",
     "semantic_hash": "072d5226f92f952f1061e30a9a081134"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/code-review-plausible-triage.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/code-review-plausible-triage.md": {
     "mtime": 1785370798.3392658,
     "ast_hash": "e17fc86e6693b596af04adc7582dd095",
     "semantic_hash": "e17fc86e6693b596af04adc7582dd095"
@@ -5549,22 +5549,22 @@
     "ast_hash": "718b9d9bd3040c0b887c51cb2d266079",
     "semantic_hash": "718b9d9bd3040c0b887c51cb2d266079"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/dataflow-bindings-slice-codeimage.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/dataflow-bindings-slice-codeimage.md": {
     "mtime": 1784700845.2297823,
     "ast_hash": "a281058af6cecb60e6ad4813f660e011",
     "semantic_hash": "a281058af6cecb60e6ad4813f660e011"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/dataflow-f4-object-identity.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/dataflow-f4-object-identity.md": {
     "mtime": 1784700845.2297823,
     "ast_hash": "1c9e86989f553ddcc31581aceb1c644c",
     "semantic_hash": "1c9e86989f553ddcc31581aceb1c644c"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/dataflow-producer-correctness.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/dataflow-producer-correctness.md": {
     "mtime": 1785370900.253415,
     "ast_hash": "fb610ac67e052a6ef521426cbb875ab3",
     "semantic_hash": "fb610ac67e052a6ef521426cbb875ab3"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/dataflow-pt-replay-tier.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/dataflow-pt-replay-tier.md": {
     "mtime": 1785370900.254801,
     "ast_hash": "890ff919e93398fb63e4f3f157f21548",
     "semantic_hash": "890ff919e93398fb63e4f3f157f21548"
@@ -5574,27 +5574,27 @@
     "ast_hash": "82e86c4b20bd4813016cefe221d14f96",
     "semantic_hash": "82e86c4b20bd4813016cefe221d14f96"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/dotnet-pt-inwindow-jit-premise.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/dotnet-pt-inwindow-jit-premise.md": {
     "mtime": 1785369075.809133,
     "ast_hash": "8487e13b93b7971363d23341ac81afac",
     "semantic_hash": "8487e13b93b7971363d23341ac81afac"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/inproc-btf-block-step.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/inproc-btf-block-step.md": {
     "mtime": 1785370831.1502755,
     "ast_hash": "3ee5382ad67d91d58652b85b95016fef",
     "semantic_hash": "3ee5382ad67d91d58652b85b95016fef"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/intel-pt-attach-foreign-pid.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/intel-pt-attach-foreign-pid.md": {
     "mtime": 1785369155.5982234,
     "ast_hash": "013b7eb198cf506270f19102b9cdf72f",
     "semantic_hash": "013b7eb198cf506270f19102b9cdf72f"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/intel-pt-whole-window-substrate.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/intel-pt-whole-window-substrate.md": {
     "mtime": 1785369170.2423117,
     "ast_hash": "ed954cd435c983343d796cee147a58f2",
     "semantic_hash": "ed954cd435c983343d796cee147a58f2"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/libfuzzer-afl-shim.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/libfuzzer-afl-shim.md": {
     "mtime": 1784354768.1104672,
     "ast_hash": "2592bd4a22501635491ad067d85d47f4",
     "semantic_hash": "2592bd4a22501635491ad067d85d47f4"
@@ -5604,62 +5604,62 @@
     "ast_hash": "5d359830cb64f903185d43a7e04162c4",
     "semantic_hash": "5d359830cb64f903185d43a7e04162c4"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/macos-dynamorio-fork-build.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/macos-dynamorio-fork-build.md": {
     "mtime": 1784705754.769263,
     "ast_hash": "147aca4417648c313c206d26aaaf6e4e",
     "semantic_hash": "147aca4417648c313c206d26aaaf6e4e"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/macos-dynamorio-port.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/macos-dynamorio-port.md": {
     "mtime": 1785369158.7673953,
     "ast_hash": "55f3636a851b7696b2136db4f04549ab",
     "semantic_hash": "55f3636a851b7696b2136db4f04549ab"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/macos-dynamorio-signal-chaining.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/macos-dynamorio-signal-chaining.md": {
     "mtime": 1785369194.8354695,
     "ast_hash": "dfb27f713879394ce1aec3e16123efbf",
     "semantic_hash": "dfb27f713879394ce1aec3e16123efbf"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/macos-oop-mach-stepper.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/macos-oop-mach-stepper.md": {
     "mtime": 1785369162.0656927,
     "ast_hash": "cf00689a7326cb31d44094d9113081c5",
     "semantic_hash": "cf00689a7326cb31d44094d9113081c5"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/managed-wholewindow-compose.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/managed-wholewindow-compose.md": {
     "mtime": 1785369009.7158363,
     "ast_hash": "c0e7b9b357a703621130ac260e2f926e",
     "semantic_hash": "c0e7b9b357a703621130ac260e2f926e"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/native-il-bytecode-attribution.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/native-il-bytecode-attribution.md": {
     "mtime": 1785369165.5569403,
     "ast_hash": "1a28fb23fa8bb57bce616e3773633013",
     "semantic_hash": "1a28fb23fa8bb57bce616e3773633013"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/pin-libdft-taint-oracle.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/pin-libdft-taint-oracle.md": {
     "mtime": 1785369168.209226,
     "ast_hash": "a0758d0b29e890e303c580b9f22a1ed4",
     "semantic_hash": "a0758d0b29e890e303c580b9f22a1ed4"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/pin-probe-mode-capture.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/pin-probe-mode-capture.md": {
     "mtime": 1785370900.2561016,
     "ast_hash": "c48d075e5cd3031a356df81429f041e3",
     "semantic_hash": "c48d075e5cd3031a356df81429f041e3"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/pin-sde-future-isa-lane.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/pin-sde-future-isa-lane.md": {
     "mtime": 1785370900.2571633,
     "ast_hash": "9c68e870f90fe2be135d68cf6a8c69b0",
     "semantic_hash": "9c68e870f90fe2be135d68cf6a8c69b0"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/pin-xed-trace-tier.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/pin-xed-trace-tier.md": {
     "mtime": 1785369148.0586965,
     "ast_hash": "f05a625967529b6be82f78be48a172f0",
     "semantic_hash": "f05a625967529b6be82f78be48a172f0"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/ptrace-blockstep-tracer-correctness.md": {
     "mtime": 1785370831.1512089,
     "ast_hash": "253f1fb577668252d397579a5cec2100",
     "semantic_hash": "253f1fb577668252d397579a5cec2100"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/riscv-native-tier.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/riscv-native-tier.md": {
     "mtime": 1785370900.2579985,
     "ast_hash": "e391c04de49a1a9b45864258a4c9cbb0",
     "semantic_hash": "e391c04de49a1a9b45864258a4c9cbb0"
@@ -5669,7 +5669,7 @@
     "ast_hash": "1b5de9640d71351c7caa1cacd565171b",
     "semantic_hash": "1b5de9640d71351c7caa1cacd565171b"
   },
-  "/home/will/source/asm-test/docs/internal/implementations/zeroconfig-scoped-tracing-hardening.md": {
+  "/home/will/source/asm-test/docs/internal/archive/implementations/zeroconfig-scoped-tracing-hardening.md": {
     "mtime": 1785370900.2588394,
     "ast_hash": "f5c31af484ceab0255c6867d328120ec",
     "semantic_hash": "f5c31af484ceab0255c6867d328120ec"

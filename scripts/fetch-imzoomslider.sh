@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-imzoomslider.sh — the ImZoomSlider pan/zoom control
-# (docs/internal/gui/14-quick-wins.md T5): one self-contained 245-line header
+# (docs/internal/archive/gui/14-quick-wins.md T5): one self-contained 245-line header
 # from the ImGuizmo repo (MIT), vendored ALONE — no gizmo code is built. Thin
 # wrapper over fetch-addon.sh (header shape). See scripts/README-addons.md.
 #

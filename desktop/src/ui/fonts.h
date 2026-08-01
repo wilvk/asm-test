@@ -1,5 +1,5 @@
 // fonts.h — the real monospace font + merged debugger icons
-// (docs/internal/gui/13-foundation-moves.md F3).
+// (docs/internal/archive/gui/13-foundation-moves.md F3).
 #ifndef ASMDESK_UI_FONTS_H
 #define ASMDESK_UI_FONTS_H
 

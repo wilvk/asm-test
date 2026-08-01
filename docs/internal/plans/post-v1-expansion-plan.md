@@ -328,7 +328,7 @@ standing gate rather than a read log — the `test` job's arm64 leg prints the s
 facts and FAILS if the SVE line ever self-skips. Narrower gate remaining: a native VL
 other than 16 B (Graviton3 at 32 B, A64FX at 64 B); VL 48/128/256 B stay qemu-TCG. The
 implementation brief and its T1–T8 breakdown live in
-[aarch64-sve-capture.md](../implementations/aarch64-sve-capture.md).
+[aarch64-sve-capture.md](../archive/implementations/aarch64-sve-capture.md).
 
 The **emulator** wide path is the *documented self-skip* case
 (deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not execute** AVX
@@ -393,11 +393,11 @@ drives the emulator with the framework's seedable splitmix64 RNG:
 Used byte-flip mutation rather than the Keystone path (deliverable #2's stated
 alternative), keeping `fuzz.o` emulator-only with no assembler dependency. ~~The
 optional libFuzzer/AFL shim (#3) is left for concrete demand.~~ — **LANDED since
-(noted 2026-07-21)**: [libfuzzer-afl-shim.md](../implementations/libfuzzer-afl-shim.md)
+(noted 2026-07-21)**: [libfuzzer-afl-shim.md](../archive/implementations/libfuzzer-afl-shim.md)
 ✅ 5/5 — the `emu_cover_hits` seam plus libFuzzer and AFL++ harnesses, verified in a
 clang-18/afl++ image. Caveat: the 2026-07-21 repo review's **K4** records that **no CI
 workflow exercises the fuzz lane yet**
-([2026-07-21-repo-review.md](../reviews/2026-07-21-repo-review.md)). Acceptance met by
+([2026-07-21-repo-review.md](../archive/reviews/2026-07-21-repo-review.md)). Acceptance met by
 two host-independent example tests in `examples/test_emu.c`.
 
 ### Deliverables

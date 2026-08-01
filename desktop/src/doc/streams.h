@@ -1,5 +1,5 @@
 // streams.h — the DECODED streams every replay view renders from
-// (docs/internal/gui/04-replay-views.md, the "what dt_recording must expose"
+// (docs/internal/archive/gui/04-replay-views.md, the "what dt_recording must expose"
 // list). 03's Recording keeps each event as raw JSON grouped by kind, which is
 // exactly right for a loader; a view wants typed columns. This is that decode,
 // done once per recording at open, and it is additive to 03 — recording.h is

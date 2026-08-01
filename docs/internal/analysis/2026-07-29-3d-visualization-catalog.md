@@ -525,9 +525,9 @@ places 2D still wins (recorded here so they are not re-litigated).
 Generated 2026-07-29 by a 17-agent grounded-ideation workflow (8 domain ideators
 → adversarial buildability+fidelity critique → synthesis) under
 [CLAUDE.md](../../../CLAUDE.md)'s ultracode mode. Extends the existing 3D design
-([docs/internal/gui/10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md),
-[34-playhead-and-scene-reach.md](../gui/34-playhead-and-scene-reach.md)) and the
-Wave-1 `mem[]` address stream ([29-mem-address-stream.md](../gui/29-mem-address-stream.md)).
+([docs/internal/archive/gui/10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md),
+[34-playhead-and-scene-reach.md](../archive/gui/34-playhead-and-scene-reach.md)) and the
+Wave-1 `mem[]` address stream ([29-mem-address-stream.md](../archive/gui/29-mem-address-stream.md)).
 Sibling analysis docs live in [`docs/internal/analysis/`](.).
 
 ## Brief cut from this catalog (2026-07-31)
@@ -539,7 +539,7 @@ briefs should be cut from the CITY doc's phased roadmap (§5 there), not
 directly from this catalog — see
 [../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md) (the
 roadmap adoption) and
-[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
+[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
 (Phase A, the first cut). This catalog remains the more granular reference for
 per-concept fidelity rules and buildability notes when a city-doc row is too
 terse.

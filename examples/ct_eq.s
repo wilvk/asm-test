@@ -3,7 +3,7 @@
  * (portable x86-64 / AArch64).
  *
  * The pair exists so the constant-time property can be TESTED rather than
- * asserted in prose (docs/internal/gui/06-doors-and-learning.md T1). Correctness
+ * asserted in prose (docs/internal/archive/gui/06-doors-and-learning.md T1). Correctness
  * is the easy half; the property that matters is that no basic block depends on
  * the secret bytes. `test_ct_eq.c` proves it by unioning emulator block coverage
  * across secret-differing inputs — the union must not grow for `ct_eq`, and must

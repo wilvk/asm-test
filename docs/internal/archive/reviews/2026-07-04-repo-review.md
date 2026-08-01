@@ -3,8 +3,8 @@
 **Scope:** whole-repo improvement/expansion review across nine dimensions —
 core API, runner & reporting, tracing tiers, emulator & tooling, language
 bindings, build/CI, documentation, the framework's own self-tests, and
-strategic product direction. Unlike the [2026-07-01](../../archive/reviews/2026-07-01-repo-review.md)
-and [2026-07-02](../../archive/reviews/2026-07-02-repo-review.md) reviews (which tracked crashes and
+strategic product direction. Unlike the [2026-07-01](2026-07-01-repo-review.md)
+and [2026-07-02](2026-07-02-repo-review.md) reviews (which tracked crashes and
 release/packaging process), this pass looks for **small correctness defects on
 real user paths** plus **high-leverage DX and expansion opportunities** that are
 *not* already tracked.
@@ -224,13 +224,13 @@ LP64.
 and `ASM_CALL_WIN64_N` build `(long[]){__VA_ARGS__}` with **no** per-argument
 cast, so a pointer argument — the common case at exactly the >6-argument boundary
 these macros exist for — is `-Wint-conversion` on gcc 13 and a hard error on
-gcc 14+/clang. [docs/guides/abi-capture.md](../../../../docs/guides/abi-capture.md)
+gcc 14+/clang. [docs/guides/abi-capture.md](../../../guides/abi-capture.md)
 recommends `ASM_CALLN` as "the general form" without noting the requirement. A
 `FOREACH`-style cast-each macro (to a documented cap) removes the inconsistency.
 
 ### A5. `asmtest_capture_vec_f32` is exported but undeclared — Low
 [src/ffi.c:87](../../../../src/ffi.c#L87) defines and exports it, and
-[docs/reference/api-reference.md:181](../../../../docs/reference/api-reference.md#L181)
+[docs/reference/api-reference.md:181](../../../reference/api-reference.md#L181)
 lists it beside `asmtest_capture6`/`asmtest_capture_fp2` as part of the
 opaque-handle surface — but it has no prototype in `include/asmtest.h` (its peer
 `asmtest_regs_vec_f32` *is* declared, so this is an oversight). One line brings
@@ -238,7 +238,7 @@ the header in line with the documented API and removes a drift risk.
 
 ### R1. The TAP stream is not spec-conformant — Medium
 Two violations of the "consumable by any TAP harness" claim
-([docs/guides/runner.md:90](../../../../docs/guides/runner.md#L90)): (1) with
+([docs/guides/runner.md:90](../../../guides/runner.md#L90)): (1) with
 `--shuffle`, `# shuffle seed=…` prints *before* `TAP version 13`
 ([src/asmtest.c:1907](../../../../src/asmtest.c#L1907)), but the version line must be
 first; (2) the failure YAML emits `msg: <raw>`
@@ -297,12 +297,12 @@ binaries whose core objects do rebuild; exact for the shared-lib/bindings path.)
 is GAS `.macro ASM_FUNC name`, invoked paren-free
 ([examples/add.s:11](../../../../examples/add.s#L11)). Copy-pasting the README snippet
 fails to assemble; it is the *only* parenthesized usage in the repo, and it's the
-exact 5-minute onboarding path. [docs/getting-started/quickstart.md:26](../../../../docs/getting-started/quickstart.md#L26)
+exact 5-minute onboarding path. [docs/getting-started/quickstart.md:26](../../../getting-started/quickstart.md#L26)
 already shows the correct form.
 
 ### D3. Stale `1.0.0` version strings — Medium
 `VERSION` and [include/asmtest.h:44](../../../../include/asmtest.h#L44) are `1.1.0`, but
-the README, [docs/conf.py:16](../../../../docs/conf.py#L16) (so the published docs
+the README, [docs/conf.py:16](../../../conf.py#L16) (so the published docs
 banner reads "asm-test 1.0"), [SECURITY.md](../../../../SECURITY.md), and
 integration/api-reference examples still say `1.0.0`.
 [scripts/sync-version.sh](../../../../scripts/sync-version.sh) rewrites only binding
@@ -385,7 +385,7 @@ truth it claims to be and stops the 12th binding tripping over it.
   name→UC-register map already exists for `emu_guard_reg`. Either add the API or
   scale the three claims back to "preload memory and arguments."
 - **E2 — Fix the stale `emulator.md` retained-state note (docs, small).**
-  [docs/guides/emulator.md:289](../../../../docs/guides/emulator.md#L289) says register
+  [docs/guides/emulator.md:289](../../../guides/emulator.md#L289) says register
   state is *retained* across calls and prescribes a fresh-handle workaround, but
   the code now zeros GP+XMM+EFLAGS every call
   ([src/emu.c:253](../../../../src/emu.c#L253)) — the note sends guard users chasing
@@ -455,11 +455,11 @@ truth it claims to be and stops the 12th binding tripping over it.
   Its only `docs/` links are two plan files; it never links `docs/index.md` or the
   RTD site (no file states the URL), the 11 bindings / tracing guides / Win64 tier
   never appear, and a 73-line feature dump duplicates
-  [docs/reference/features.md](../../../../docs/reference/features.md). Replace with a
+  [docs/reference/features.md](../../../reference/features.md). Replace with a
   short pitch + quick start + a "Documentation" section mirroring
-  [docs/index.md](../../../../docs/index.md)'s "Where to start."
+  [docs/index.md](../../../index.md)'s "Where to start."
 - **D4 — Back-fill the API-reference index with the post-1.0 surface (docs,
-  small).** [docs/reference/api-reference.md](../../../../docs/reference/api-reference.md)
+  small).** [docs/reference/api-reference.md](../../../reference/api-reference.md)
   bills itself "a consolidated index" but omits the entire Win64 call family,
   `ASM_VCALL256/512`, `ASSERT_VEC256/512_EQ`, `asm_call_capture_vec256/512`, and
   the AVX gates — all documented in the guides.

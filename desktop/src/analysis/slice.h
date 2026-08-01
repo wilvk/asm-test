@@ -1,5 +1,5 @@
 // slice.h — client-side def-use slicing over RECORDED edges
-// (docs/internal/gui/04-replay-views.md T1).
+// (docs/internal/archive/gui/04-replay-views.md T1).
 //
 // Plan D5: replay slicing is computed in the viewer from the `df_edge` events a
 // recording carries, never by calling back into the engine. That is what lets

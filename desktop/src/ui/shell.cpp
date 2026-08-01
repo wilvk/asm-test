@@ -500,7 +500,7 @@ void shell_select_mode(ShellState &s, Mode m) {
     }
 }
 
-// docs/internal/gui/45-launch-and-window-target.md T7: the crosshair cursor
+// docs/internal/archive/gui/45-launch-and-window-target.md T7: the crosshair cursor
 // swap needs GLFW, which ui/shell.o must NOT require to compile under the
 // null-backend test tree — desktop-test explicitly promises "no display, no
 // GL" (mk/desktop.mk's DESKTOP_MISSING/libglfw3-dev gate covers only the
@@ -675,7 +675,7 @@ void draw_home_rail(ShellState &s) {
                               : "or:");
     cta(Mode::Capture, "attach to a running process — see why not when you "
                        "cannot");
-    // docs/internal/gui/45-launch-and-window-target.md T7/T8: a THIRD way to
+    // docs/internal/archive/gui/45-launch-and-window-target.md T7/T8: a THIRD way to
     // a target — drag this crosshair onto any window (even outside this
     // app's own) to attach to its owning process, Spy++-style. Greyed with a
     // STATED reason (never a hidden refusal) when unsupported: no live X11

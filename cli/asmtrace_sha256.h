@@ -1,6 +1,6 @@
 /*
  * asmtrace_sha256.h — a self-contained SHA-256, for the `.asmtrace` `code`
- * header's routine-identity hash (docs/internal/gui/28-schema-freeze-completion.md
+ * header's routine-identity hash (docs/internal/archive/gui/28-schema-freeze-completion.md
  * R1 T1).
  *
  * WHY THIS IS HERE and not a dependency. The `.asmtrace` writer TU is PURE C11 +

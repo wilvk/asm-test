@@ -1,5 +1,5 @@
 // test_selection.cpp — the ONE shared brushing-and-linking selection model
-// (docs/internal/gui/22-selection-and-search.md T1, F7). Null backend, model
+// (docs/internal/archive/gui/22-selection-and-search.md T1, F7). Null backend, model
 // state not pixels (D4).
 //
 // The payoff Wave 1's real panes unlock: a pick in ANY pane brushes the same

@@ -244,7 +244,7 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346 —
    "nested begin/end pairs on one thread compose … via a per-thread TLS range
    stack"; via
-   [zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)).
+   [zeroconfig-scoped-tracing-hardening.md](../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
    The PT and AMD-LBR backends still use the single process-global slot, so
    this qualification continues to hold for them.
 
@@ -550,7 +550,7 @@ per-thread, nesting-safe handle-keyed scope API with exactly the TLS range stack
 sketched above ("nested begin/end pairs on one thread compose … via a per-thread
 TLS range stack",
 [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346; via
-[zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)).
+[zeroconfig-scoped-tracing-hardening.md](../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
 The PT bullet remains forward-look: PT/AMD capture still sits on the
 process-global slot, so Q4 is now only half-open.
 

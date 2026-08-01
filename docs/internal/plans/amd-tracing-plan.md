@@ -1073,7 +1073,7 @@ form via `/dev/cpu/N/msr` has since landed for the pinned leaf-routine envelope
 (`asmtest_ss_btf_trace`, [src/ss_btf.c](../../../src/ss_btf.c)) — a standalone entry
 point outside the `asmtest_trace_backend_t` enum, exactly like `asmtest_amd_msr_trace`,
 not a fifth member; see
-[inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md).
+[inproc-btf-block-step.md](../archive/implementations/inproc-btf-block-step.md).
 
 **Work.**
 - Thread a `step_mode` (single-step vs block-step) through the shared bodies
@@ -1416,7 +1416,7 @@ forward-look Phase 6); self-skips without `IBS_CAPS_BRNTRGT`.
 > `src/ptrace_backend.c`) memoizes `blockstep_reconstruct`'s decode from an
 > `asmtest_ibs_normalize_blocks` covered-block set, proven byte-identical to the uncached
 > path on a differential fixture — see
-> [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md)
+> [ptrace-blockstep-tracer-correctness.md](../archive/implementations/ptrace-blockstep-tracer-correctness.md)
 > T7. The DynamoRIO half is explicitly out of scope there (DR's code cache already runs at
 > native speed and has no per-block tracer work a coverage hint could remove); T8 wires the
 > built table into `asmtest_trace_call_auto`'s block-step rung behind an opt-in policy bit.

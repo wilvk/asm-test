@@ -64,7 +64,7 @@ decoder is Apache-2.0). Unlike every other row here, the Pin kit is fetched for
 `libasmtest`/`libasmtest_emu`, ships in no package, gets no public header, and is
 **not** collected by `collect-licenses.sh` — the capture exists purely so the
 fetched kit's proprietary license terms are recorded in the tree. See
-[pin-xed-trace-tier.md](../docs/internal/implementations/pin-xed-trace-tier.md#constraints--gates)
+[pin-xed-trace-tier.md](../docs/internal/archive/implementations/pin-xed-trace-tier.md#constraints--gates)
 for the full rationale.
 
 `intel-sde-10.8.0/` is a **directory** (not a single `.txt`) captured verbatim on
@@ -82,7 +82,7 @@ under `sde64 -future`, but it is never linked into `libasmtest`/`libasmtest_emu`
 ships in no package, gets no public header, and — unlike DynamoRIO, which *can*
 be a native-trace-tier payload — never reaches a package slot, so
 `collect-licenses.sh` carries **no** entry for it at all. See
-[pin-sde-future-isa-lane.md](../docs/internal/implementations/pin-sde-future-isa-lane.md#constraints--gates)
+[pin-sde-future-isa-lane.md](../docs/internal/archive/implementations/pin-sde-future-isa-lane.md#constraints--gates)
 for the full rationale.
 
 The **Pin 3.20** kit (`docker-taint-oracle`, libdft64's only tested pin) is the same
@@ -98,7 +98,7 @@ permissive Columbia libdft BSD-3-Clause text libdft64 inherits); the engine is l
 oracle-only — linked only into the `docker-taint-oracle` Pintool, never into a shipped
 package — so it too is recorded here for provenance and not collected by
 `collect-licenses.sh`. See
-[pin-libdft-taint-oracle.md](../docs/internal/implementations/pin-libdft-taint-oracle.md#constraints--gates).
+[pin-libdft-taint-oracle.md](../docs/internal/archive/implementations/pin-libdft-taint-oracle.md#constraints--gates).
 
 The Dear ImGui Test Engine is captured on first fetch by
 [fetch-imgui-test-engine.sh](../scripts/fetch-imgui-test-engine.sh) from the pinned
@@ -108,7 +108,7 @@ alone, never into `asmtest-desktop`/`asmtest-viewer` — so, like Pin/SDE/libdft
 recorded here for provenance and NOT collected by `collect-licenses.sh`. It is the one
 admitted non-MIT dependency in the tree; the shipped desktop binaries stay MIT precisely
 because it never links into them. See
-[17-interaction-testing-and-editor.md](../docs/internal/gui/17-interaction-testing-and-editor.md).
+[17-interaction-testing-and-editor.md](../docs/internal/archive/gui/17-interaction-testing-and-editor.md).
 
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies the shipped-package
 rows above (not the test-lane-only rows: Pin, SDE, libdft64, Dear ImGui Test Engine) into each package's `THIRD-PARTY-LICENSES/` — emitting the

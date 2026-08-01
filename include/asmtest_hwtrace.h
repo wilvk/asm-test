@@ -913,7 +913,7 @@ int asmtest_amd_msr_available(void);
  * user-written BTF across a context switch, and BTF is a hardware one-shot the kernel
  * clears on every #DB, so completeness is unprovable once either happens — every such
  * case sets trace->truncated rather than presenting a partial capture as complete. See
- * docs/internal/implementations/inproc-btf-block-step.md. Returns ASMTEST_HW_OK,
+ * docs/internal/archive/implementations/inproc-btf-block-step.md. Returns ASMTEST_HW_OK,
  * ASMTEST_HW_EINVAL on bad args, ASMTEST_HW_EUNAVAIL when the substrate/privilege is
  * absent (see asmtest_ss_btf_available), ASMTEST_HW_EFULL when a capture is already
  * armed (one non-nested capture per process — DEBUGCTL is physical per-CPU state), or

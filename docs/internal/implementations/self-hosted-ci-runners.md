@@ -346,7 +346,7 @@ page, correct its stale "`macos-13`/`rosetta`" phrasing to `macos-15-intel`
   pickup timeout; the runbook records "power down ⇒ set `HW_RUNNER_AMD_ZEN=0`"
   as the operator rule.
 
-### T4 — Shrink the manual AMD checklist to what the runner cannot cover  (S, depends on: T3; coordinate with [amd-ibs-backend-fidelity.md](amd-ibs-backend-fidelity.md#T2))
+### T4 — Shrink the manual AMD checklist to what the runner cannot cover  (S, depends on: T3; coordinate with [amd-ibs-backend-fidelity.md](../archive/implementations/amd-ibs-backend-fidelity.md#T2))
 
 **Goal.** [amd-hardware-validation.md](../amd-hardware-validation.md) stops
 being "the one validation step that cannot run in CI" and becomes a short
@@ -355,7 +355,7 @@ reason and its owning doc.
 
 **Steps.**
 
-1. Coordination: [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)
+1. Coordination: [amd-ibs-backend-fidelity.md#T2](../archive/implementations/amd-ibs-backend-fidelity.md)
    owns *repairing* that checklist (retiring the stale "not yet fixed" §"OPEN
    finding", inverting the `truncated=0` guidance, un-vacuous-ing the
    `ibs_probe` gate). Land after it, or in the same PR series — do **not**
@@ -405,7 +405,7 @@ live IBS moved to the self-hosted CI lane."
 - Each residue item names: the command, the hardware/privilege gate, and (for
   Zen 3 BRS) the owning sibling doc.
 - No text in the rewrite contradicts
-  [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)'s repaired
+  [amd-ibs-backend-fidelity.md#T2](../archive/implementations/amd-ibs-backend-fidelity.md)'s repaired
   wording (read its landed diff first).
 
 ### T5 — Extend `hw.yml` with the bare-metal Intel PT lane and the CoreSight placeholder  (M, depends on: T2; **gated: bare-metal Intel PT x86-64 box; the CoreSight arm lands only as a dark, variable-guarded placeholder, its live activation deferred to [coresight-live-decode.md#T4](coresight-live-decode.md)**)
@@ -435,7 +435,7 @@ with the CoreSight variant specified and guarded off until its decoder lands.
    has a known cosmetic misreport
    ([2026-07-12-zen5-privileged-lbr-findings.md §3](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)).
    The genuine mechanism is the require-mode target
-   [intel-pt-whole-window-substrate.md#T5](intel-pt-whole-window-substrate.md)
+   [intel-pt-whole-window-substrate.md#T5](../archive/implementations/intel-pt-whole-window-substrate.md)
    builds (`hwtrace-pt-live`, `ASMTEST_REQUIRE_PT=1` — skip becomes hard
    failure). Until that lands, this job is a build-and-run gate on PT
    silicon; once it lands, add a second step running `hwtrace-pt-live` inside
@@ -474,7 +474,7 @@ sentence to name all three hardware lanes as allowed-to-be-absent.
 > settled, so the lane is stronger than specified:
 >
 > - **Step 2's "until `hwtrace-pt-live` lands, this is a build-and-run gate" is
->   obsolete** — [intel-pt-whole-window-substrate#T5](intel-pt-whole-window-substrate.md)
+>   obsolete** — [intel-pt-whole-window-substrate#T5](../archive/implementations/intel-pt-whole-window-substrate.md)
 >   shipped it (`mk/native-trace.mk`, `ASMTEST_REQUIRE_PT=1`). The job is
 >   self-skip-proof from its first run; no `# TODO` deferral was needed. New
 >   `make docker-hwtrace-pt-live` wraps it in the hwtrace image with the same
@@ -638,7 +638,7 @@ T1→T2 is the ungated critical path and one person can do both in a day.
 T3, T5, and T6 are mutually independent — three people with three different
 machines can run them concurrently; each is blocked only by its own hardware.
 T4 additionally coordinates with an out-of-doc task
-([amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md)) — landing after it
+([amd-ibs-backend-fidelity.md#T2](../archive/implementations/amd-ibs-backend-fidelity.md)) — landing after it
 or in the same PR series — on top of its in-doc dependency on T3.
 
 ## Constraints & gates
@@ -745,17 +745,17 @@ or in the same PR series — on top of its in-doc dependency on T3.
   Docker-OSX); T6 here only wires the CI jobs after those are green.
 - **Repairing the AMD validation checklist's stale claims** (the "not yet
   fixed" finding, the vacuous `ibs_probe` gate) —
-  [amd-ibs-backend-fidelity.md#T2](amd-ibs-backend-fidelity.md); T4 here only
+  [amd-ibs-backend-fidelity.md#T2](../archive/implementations/amd-ibs-backend-fidelity.md); T4 here only
   shrinks the repaired checklist's scope.
 - **Zen 3 BRS capture arm and the Zen 4 floor sweep** —
   [amd-branchsnap-lbr-docs.md#T5/#T6/#T8](amd-branchsnap-lbr-docs.md).
 - **The `hwtrace-pt-live` require-mode target and PT window substrate** —
-  [intel-pt-whole-window-substrate.md#T5](intel-pt-whole-window-substrate.md);
+  [intel-pt-whole-window-substrate.md#T5](../archive/implementations/intel-pt-whole-window-substrate.md);
   T5 here consumes it when it lands.
 - **CoreSight live decode and board bring-up** —
   [coresight-live-decode.md#T2-#T4](coresight-live-decode.md); T5's CoreSight
   job stays dark until its #T4 flips the variable.
 - **Foreign-PID PT attach** (a future consumer of the PT runner) —
-  [intel-pt-attach-foreign-pid.md](intel-pt-attach-foreign-pid.md).
+  [intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md).
 - **Benchmark lanes on these runners** — any bench-on-hw follow-up belongs to
-  [benchmarks-ci-followups.md](benchmarks-ci-followups.md).
+  [benchmarks-ci-followups.md](../archive/implementations/benchmarks-ci-followups.md).

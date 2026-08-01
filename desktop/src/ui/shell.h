@@ -216,7 +216,7 @@ struct ShellState {
     bool show_learn = false;
     bool show_author = false;
     bool show_inspect = false;
-    // docs/internal/gui/45-launch-and-window-target.md T6/T7: the opaque
+    // docs/internal/archive/gui/45-launch-and-window-target.md T6/T7: the opaque
     // GLFWwindow* main.cpp owns, injected the same way ShellState::scene_host
     // is (ui/scene_host.h's split) — void* so this header (and every TU that
     // includes it, including the null-backend test tree) needs no GLFW
@@ -465,7 +465,7 @@ void shell_wire_nav(ShellState &s);
 // test_shell asserts the resulting mode + pending_preset without a display.
 void shell_select_mode(ShellState &s, Mode m);
 
-// --- docs/internal/gui/45-launch-and-window-target.md T7/T8: the crosshair
+// --- docs/internal/archive/gui/45-launch-and-window-target.md T7/T8: the crosshair
 // drag affordance's STATE MACHINE, split from its ImGui glue (drawn in
 // draw_home_rail) exactly so it is unit-testable without a display or a real
 // X11 drag: shell_start_window_pick / shell_finish_window_pick take

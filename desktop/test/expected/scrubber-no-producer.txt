@@ -1,3 +1,3 @@
 no-producer
 message=no per-step register capture in this recording — the regstate producer was not run (record with asmtrace_record --steps=<cap>). no code bytes to re-run — the recording carries no codeimage, so a register history cannot be synthesised from it.
-docs=docs/internal/gui/09-teaching-producers.md
+docs=docs/internal/archive/gui/09-teaching-producers.md

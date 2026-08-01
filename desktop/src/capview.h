@@ -1,5 +1,5 @@
 // capview.h — the capability panel's pure view-model
-// (docs/internal/gui/06-doors-and-learning.md T6).
+// (docs/internal/archive/gui/06-doors-and-learning.md T6).
 //
 // One panel answering "what can this host do, and why not?" — built ENTIRELY
 // from the library's own status APIs. The GUI never re-probes: it calls

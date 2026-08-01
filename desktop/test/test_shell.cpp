@@ -1054,7 +1054,7 @@ int main() {
               "Capture must ask draw_shell to focus the Processes pane");
         check("20t2/capture-no-forced-connect", !es.pane_open[kPaneConnect],
               "Capture must not force the Connect pane open");
-        // docs/internal/gui/45-launch-and-window-target.md T4: Launch is a
+        // docs/internal/archive/gui/45-launch-and-window-target.md T4: Launch is a
         // SECOND way into the same LiveObserver posture, landing on kPaneLaunch
         // instead of kPaneProcesses — no table detour — and with NO
         // auto-connect (connecting before a command is typed is premature;
@@ -1941,7 +1941,7 @@ int main() {
               "on x86 the perturb nuisance no longer gates Start — it starts");
     }
 
-    // --- docs/internal/gui/45-launch-and-window-target.md T3/T4: the Launch
+    // --- docs/internal/archive/gui/45-launch-and-window-target.md T3/T4: the Launch
     // pane's "Launch & trace" — mirrors the full-detail attach block above,
     // but there is no pid until the host names one. ---------------------------
     {
@@ -2025,7 +2025,7 @@ int main() {
               "must never be overwritten by this path");
     }
 
-    // --- docs/internal/gui/45-launch-and-window-target.md T7/T8: the
+    // --- docs/internal/archive/gui/45-launch-and-window-target.md T7/T8: the
     // crosshair drag's STATE MACHINE — driven directly (synthetic
     // PickedWindow/ShellState), independent of a real X11 drag or display,
     // per T7's own "Tests." note. ---------------------------------------------

@@ -1,5 +1,5 @@
 // completeness_model.h — the backend-completeness view model
-// (docs/internal/gui/02-exporters-and-readers.md T6).
+// (docs/internal/archive/gui/02-exporters-and-readers.md T6).
 //
 // A pure header (the cli/asmspy_logview.h pattern): no ImGui, no I/O, every
 // function inline, so the model is unit-testable without linking a view.

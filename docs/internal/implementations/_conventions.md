@@ -72,7 +72,7 @@ backend is usually the point.
 
 ## Docs & changelog
 
-- User-facing docs live under [docs/](../../../docs/) (Sphinx; `make docs` /
+- User-facing docs live under [docs/](../../) (Sphinx; `make docs` /
   `make docker-docs`; the build runs `-W`, fail-on-warning).
 - **`docs/internal/**` is excluded from the published site.** Internal docs
   (including these) may use ordinary relative links to anywhere in the repo;

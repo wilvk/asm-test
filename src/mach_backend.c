@@ -1,6 +1,6 @@
 /*
  * mach_backend.c — macOS out-of-process single-step native-trace backend (W2, Darwin).
- * See asmtest_mach.h and docs/internal/implementations/macos-oop-mach-stepper.md.
+ * See asmtest_mach.h and docs/internal/archive/implementations/macos-oop-mach-stepper.md.
  *
  * XNU cripples BSD ptrace for PC/flag edits (PT_STEP/PT_CONTINUE return ENOTSUP off the
  * `addr == (caddr_t)1` sentinel, by kernel-comment design, to force use of Mach SPIs) —

@@ -668,10 +668,10 @@ Two independent streams share only the release-artifact story:
   listing is a separate maintainer action, not part of this doc.
 - **A macOS drtrace payload slot** — the DynamoRIO tier is deliberately
   linux-x86_64-only in the payloads; porting it is
-  [macos-dynamorio-port.md](macos-dynamorio-port.md).
+  [macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md).
 - **What replaces `macos-15-intel` after 2027-08** for the darwin-x86_64
   payload leg — [self-hosted-ci-runners.md](self-hosted-ci-runners.md).
 - **Publishing tiers with hardware backends more broadly** (Intel PT/IBS/
   CoreSight capture correctness) — owned by their tier docs, e.g.
-  [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md); the
+  [intel-pt-whole-window-substrate.md](../archive/implementations/intel-pt-whole-window-substrate.md); the
   payloads here only bundle what `make package-libs` already stages.

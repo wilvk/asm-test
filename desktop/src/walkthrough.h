@@ -1,5 +1,5 @@
 // walkthrough.h — the Learn door's pure view-model
-// (docs/internal/gui/06-doors-and-learning.md T4).
+// (docs/internal/archive/gui/06-doors-and-learning.md T4).
 //
 // A walkthrough is a RECORDING with ordered `stop:true` notes in it, so the
 // player is a reader of the same format every other view reads. This header is

@@ -18,7 +18,7 @@
  * the captured values are the human-readable annotation. Output is REPLAY, not
  * observation — labelled as such by the caller.
  *
- * PER-GUEST (R5, docs/internal/gui/32-per-guest-value-producer.md). The guest
+ * PER-GUEST (R5, docs/internal/archive/gui/32-per-guest-value-producer.md). The guest
  * decisions that were inline x86-64 — the Unicorn open mode, the Capstone->Unicorn
  * register map (scalar AND the wide/XMM read), the operand-enumerator arch tag, the
  * ABI argument registers (integer AND SSE-class FP), the register-file init, and the

@@ -1,5 +1,5 @@
 // selection.h — the ONE shared brushing-and-linking selection model
-// (docs/internal/gui/22-selection-and-search.md T1, F7).
+// (docs/internal/archive/gui/22-selection-and-search.md T1, F7).
 //
 // Before this, every pane held its own selection and the analyst re-found the
 // same address by hand in each one — the exact recall load recognition-over-

@@ -321,8 +321,8 @@ Generated 2026-07-30 by a 17-agent grounded-ideation workflow (8 city-system
 designers -> adversarial fidelity+buildability critique -> synthesis) under
 [CLAUDE.md](../../../CLAUDE.md)'s ultracode mode, informed by a web-research pass
 over the software-city literature. Extends the existing 3D design
-([docs/internal/gui/10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md),
-[34-playhead-and-scene-reach.md](../gui/34-playhead-and-scene-reach.md)) and the
+([docs/internal/archive/gui/10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md),
+[34-playhead-and-scene-reach.md](../archive/gui/34-playhead-and-scene-reach.md)) and the
 [3D visualization catalog](2026-07-29-3d-visualization-catalog.md). Sibling
 analysis docs live in [`docs/internal/analysis/`](.).
 
@@ -330,7 +330,7 @@ analysis docs live in [`docs/internal/analysis/`](.).
 
 [../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md) adopts
 this doc's §5 roadmap as the numbered `gui/` family;
-[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
+[../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
 is Phase A, implementation-ready. Two corrections surfaced while re-verifying
 against HEAD `d0c82b0` (see 43§2): the §8 "bug this surfaced" was already fixed
 in `55fc624` before this doc was authored, and Phase A's vehicle encoding

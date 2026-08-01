@@ -45,9 +45,9 @@ DynamoRIO-based tier is addressed here.
 >
 > **This plan stays in `plans/` for M1b's arm64 acceptance only** — a genuine
 > hardware gate under the house rule, not an upstream one. Implementation detail
-> lives in [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md)
-> (✅ 11/11), [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
-> (✅ 4/4), and [macos-dynamorio-signal-chaining.md](../implementations/macos-dynamorio-signal-chaining.md)
+> lives in [macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md)
+> (✅ 11/11), [macos-dynamorio-fork-build.md](../archive/implementations/macos-dynamorio-fork-build.md)
+> (✅ 4/4), and [macos-dynamorio-signal-chaining.md](../archive/implementations/macos-dynamorio-signal-chaining.md)
 > (✅ 4/4).
 
 > **SUPERSEDED (2026-07-16) — kept as history; see the CURRENT STATUS banner
@@ -135,7 +135,7 @@ DynamoRIO-based tier is addressed here.
 > `nasm`+`lz4`+SDK `zlib`). So there is now a runtime to attach *with*; the
 > "buying a Mac buys nothing" framing above is superseded. The from-source path —
 > previously called out-of-scope — is now the scoped avenue:
-> [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
+> [macos-dynamorio-fork-build.md](../archive/implementations/macos-dynamorio-fork-build.md)
 > (FB1 pins the fork + adds `scripts/build-dynamorio-macos.sh`; FB2 fixes the M0
 > blocker; FB3 drives T3/T4/T5; FB4 adds the nightly CI lane).
 >
@@ -153,7 +153,7 @@ DynamoRIO-based tier is addressed here.
 
 > **STATUS 2026-07-22 (later) — M0 = GO. Landed and measured on the Intel-mac
 > dev host (macOS 14.7.5).** FB1–FB3 of
-> [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
+> [macos-dynamorio-fork-build.md](../archive/implementations/macos-dynamorio-fork-build.md)
 > are done: the fork is pinned + script-built (`make dynamorio-macos`), and
 > **three** root-caused fixes in the fork (branch `asmtest/macos-fixes`, pin
 > `bbbcc40b8`) made the `dr_app_*` embedding functional — (1) the
@@ -180,7 +180,7 @@ DynamoRIO-based tier is addressed here.
 > then M1 (generated-bytes W^X path) / M2 per this plan.
 
 > **STATUS 2026-07-22 (M2 bindings,
-> [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md) T9) —
+> [macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md) T9) —
 > lanes green on macOS x86-64, with one NEW measured limitation.**
 > `drtrace_env` and the `drtrace-python-test` env block now resolve
 > platform-correct names (`shlib_dev` → `.dylib`, `$(DR_CLIENT)`, and
@@ -214,7 +214,7 @@ DynamoRIO-based tier is addressed here.
 > (was SIGILL) and `test_drgate.py::test_signal_chaining` (was wedge) both pass;
 > the Darwin skip is removed; `drtrace-test-macos` + cpp/ruby/python lanes stay
 > green. Details in
-> [macos-dynamorio-signal-chaining.md](../implementations/macos-dynamorio-signal-chaining.md).
+> [macos-dynamorio-signal-chaining.md](../archive/implementations/macos-dynamorio-signal-chaining.md).
 
 ## The dominant risk, stated first
 
@@ -497,7 +497,7 @@ run pass on native Intel macOS; the Rosetta result is recorded (pass or
 documented-unsupported).
 
 > **RESULT 2026-07-22 — native Intel: PASS.** `drtrace-test-macos` (extended by
-> [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md) T6 to
+> [macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md) T6 to
 > also build and run `test_drtrace` after the M0 harness, `DRAPP_KEYSTONE=0`)
 > is green on the macOS 14.7.5 / Intel Core i7 dev host against the fork-built
 > `libdynamorio.dylib` (`make dynamorio-macos` home): **18/18 `ok`, three
@@ -608,7 +608,7 @@ codesigning `test_drtrace`; the binding-level limitation (no generated code on
 hardened interpreters) is documented.
 
 > **RESULT 2026-07-22 — implementable slice landed
-> ([macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md)
+> ([macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md)
 > T7+T8); arm64 acceptance NOT RUN (two gates).**
 > **What ran (Intel-mac dev host):** the Problem-2 helpers
 > (`exec_alloc_platform`/`exec_copy`) landed with the arm64-macOS arm exactly

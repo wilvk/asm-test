@@ -1,7 +1,7 @@
 # The hypervisor / EPT frontier for maximum-stealth PT tracing — design record
 
 > **Status: forward-look design record, no shipping code.** This note is the
-> deliverable of [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)
+> deliverable of [intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md)
 > **T5** (HWT-HV-EPT). It records the API surface and the wiring decision for the
 > maximum-stealth Phase-2 option so a future implementor starts from verified
 > facts rather than re-researching. It ships **no source, Makefile, or Dockerfile
@@ -14,7 +14,7 @@
 
 The in-tree PT work traces a process from *inside the same OS* — the self-trace
 window pair and the foreign-pid attach
-([intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)
+([intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md)
 T1–T4) both open an `intel_pt` perf event against a pid on the host. The
 frontier here is **out-of-VM**: trace (or breakpoint) a *guest's* execution from
 the host/hypervisor, so the target cannot observe the tracer at all — no perf

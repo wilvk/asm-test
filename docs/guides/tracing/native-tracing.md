@@ -1283,7 +1283,7 @@ make dataflow-pt-live        # ASMTEST_REQUIRE_PT=1: fail-not-skip on a silently
 
 so a supposed-PT box cannot pass vacuously. Full design, gates, and the exact bare-metal
 proving command are in
-[the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-pt-replay-tier.md).
+[the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-pt-replay-tier.md).
 
 ---
 

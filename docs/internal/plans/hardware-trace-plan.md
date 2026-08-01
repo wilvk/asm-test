@@ -35,8 +35,8 @@ Throughout this plan, **native-trace Phase N** means a phase of the
 > foreign-pid capture + decode wiring — is **DONE and silicon-validated** on a
 > bare-metal i7-8559U (`make hwtrace-pt-live` 631/631 across four consecutive
 > runs; `make dataflow-pt-live` 29/29 ×3); the two owning briefs are ✅
-> ([intel-pt-whole-window-substrate.md](../implementations/intel-pt-whole-window-substrate.md),
-> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)).
+> ([intel-pt-whole-window-substrate.md](../archive/implementations/intel-pt-whole-window-substrate.md),
+> [intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md)).
 > What genuinely remains forward-look: the ARM CoreSight live OpenCSD decode tree
 > ([cs_backend.c:109](../../../src/cs_backend.c)/[:123](../../../src/cs_backend.c) —
 > `asmtest_cs_decoder_present()` returns 0, board-gated;
@@ -157,7 +157,7 @@ silicon-validated 2026-07-21 (`c7b4ef7`,
   [src/hwtrace.c](../../../src/hwtrace.c) opens a PT event on a foreign pid today.~~
   **Landed**: [hwtrace.c:2507](../../../src/hwtrace.c) §Z1.3 (`asmtest_pt_attach_*`) opens
   PT on a foreign pid, live-verified via `make dataflow-pt-live` 29/29 ×3 —
-  [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) ✅ 5/5.
+  [intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md) ✅ 5/5.
 - **Wiring** that capture to the decode: ~~`asmtest_pt_decode_window` has **no production
   caller** — the hwtrace facade never dispatches to it (its only caller is
   `test_wholewindow_decode`)~~ **Landed**: the facade dispatches to it at
@@ -474,8 +474,8 @@ dispatch of `asmtest_pt_decode_window` ([hwtrace.c:2458](../../../src/hwtrace.c)
 live-verified on a bare-metal i7-8559U — `make hwtrace-pt-live` 631/631 across four
 consecutive runs, `make dataflow-pt-live` 29/29 ×3 — per
 [intel-hardware-validation.md](../intel-hardware-validation.md) and the two ✅ briefs
-[intel-pt-whole-window-substrate.md](../implementations/intel-pt-whole-window-substrate.md) /
-[intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md). (The
+[intel-pt-whole-window-substrate.md](../archive/implementations/intel-pt-whole-window-substrate.md) /
+[intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md). (The
 2026-07-17 correction above — that the wiring was gated on the same hardware, not merely on
 the capture existing, because every facade entry refuses `INTEL_PT` at the `available()`
 gate on a non-Intel host — is retained as the record of why only silicon could close this.)

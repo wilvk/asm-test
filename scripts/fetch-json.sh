@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-json.sh — fetch the pinned nlohmann/json single header into a local cache
-# so the desktop GUI (docs/internal/gui/03-desktop-shell.md) can parse .asmtrace
+# so the desktop GUI (docs/internal/archive/gui/03-desktop-shell.md) can parse .asmtrace
 # NDJSON without a system-wide install. Mirrors fetch-dynamorio.sh / fetch-imgui.sh.
 #
 # Downloads the release asset json.hpp (one file — hashed directly, no tar step)

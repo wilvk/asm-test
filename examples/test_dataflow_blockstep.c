@@ -1981,7 +1981,7 @@ static void run_hwrec_scan_case(void) {
  * IMPLICIT dependency on Unicorn's bundled QEMU still lacking AVX TCG — this makes that
  * dependency EXPLICIT and self-testing, so the day it stops being true, a NAMED check turns
  * red instead of the repo finding out from stale memory. See
- * docs/internal/implementations/dataflow-producer-correctness.md T8 for the exact trigger
+ * docs/internal/archive/implementations/dataflow-producer-correctness.md T8 for the exact trigger
  * condition (Unicorn's qemu/VERSION >= 7.2 AND qemu/target/i386/tcg/decode-new.c.inc present —
  * NOT met as of the doc's writing) and the pin-bump playbook to follow once it fires.
  *
@@ -2044,7 +2044,7 @@ static void run_avx_tcg_sentinel_case(void) {
               e1 == UC_ERR_INSN_INVALID && open2 == UC_ERR_OK &&
               map2 == UC_ERR_OK && vvvv_dropped,
           "upstream sentinel: Unicorn still cannot run AVX — on FAILURE see "
-          "docs/internal/implementations/dataflow-producer-correctness.md T8 "
+          "docs/internal/archive/implementations/dataflow-producer-correctness.md T8 "
           "(vaddps ymm: e1=%d want=%d; vpaddd xmm vvvv_dropped=%d e2=%d)",
           (int)e1, (int)UC_ERR_INSN_INVALID, vvvv_dropped, (int)e2);
 }

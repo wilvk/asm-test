@@ -48,7 +48,7 @@ loom_take_view_t loom_run_reweave(const loom_fabric_t &base,
     // actually faulted: loom_take_run_from_step populates `result` from the
     // resume seam's emu_result_t (src/dataflow_resume.c:
     // asmtest_dataflow_emu_run_from_current's result_out), closing the gap
-    // docs/internal/gui/42-loom-reweave-consumption.md's status banner
+    // docs/internal/archive/gui/42-loom-reweave-consumption.md's status banner
     // recorded. `fault_card()` itself stays empty for a clean (non-faulting)
     // reweave — it checks result.faulted before rendering anything.
     return loom_take_view(base, take_fabric, take.edges.data(),

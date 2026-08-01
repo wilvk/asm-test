@@ -33,7 +33,7 @@
  *
  * Platform gate: x86-64 Darwin only (`#if defined(__x86_64__) && defined(__APPLE__)`).
  * Apple Silicon (arm64 macOS) is a future extension — out of scope here, see
- * docs/internal/implementations/macos-oop-mach-stepper.md's Constraints & gates.
+ * docs/internal/archive/implementations/macos-oop-mach-stepper.md's Constraints & gates.
  *
  * No external library beyond the Mach frameworks already in libSystem (part of every
  * macOS host's Xcode Command Line Tools) and the existing Capstone length-decoder used
@@ -86,7 +86,7 @@ void asmtest_mach_skip_reason(char *buf, size_t buflen);
  * overflow, never emitting a partial trace as complete. Returns ASMTEST_MACH_EPERM when
  * task_for_pid of the forked child is denied (see the header comment's entitlement /
  * root note in
- * docs/internal/implementations/macos-oop-mach-stepper.md#constraints--gates). */
+ * docs/internal/archive/implementations/macos-oop-mach-stepper.md#constraints--gates). */
 int asmtest_mach_trace_call(const void *code, size_t len, const long *args,
                             int nargs, long *result, asmtest_trace_t *trace);
 

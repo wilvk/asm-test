@@ -2142,7 +2142,7 @@ static void call_pend_sigrace_inject(pid_t tid, pid_t tgid) {
     signo = -1; /* latch: exactly one forced race per run */
 }
 
-/* docs/internal/gui/45-launch-and-window-target.md T2 side channel — see the
+/* docs/internal/archive/gui/45-launch-and-window-target.md T2 side channel — see the
  * doc comment on asmspy_engine_mark_already_traced (libasmspy.h). A plain
  * file-scope int, not atomic: only ONE serve session runs at a time (the
  * command loop refuses a second `start`/`launch` while `s.joinable`), and it

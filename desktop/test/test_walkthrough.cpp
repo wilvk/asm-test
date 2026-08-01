@@ -1,5 +1,5 @@
 // test_walkthrough.cpp — the Learn door's player model
-// (docs/internal/gui/06-doors-and-learning.md T4). Headless: no display, no GL,
+// (docs/internal/archive/gui/06-doors-and-learning.md T4). Headless: no display, no GL,
 // no engines — it reads the committed walkthrough recordings and asserts on the
 // decode.
 #include <cstdio>

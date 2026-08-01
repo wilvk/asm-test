@@ -919,7 +919,7 @@ $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
 emu-test: $(BUILD)/test_emu
 	$(BUILD)/test_emu
 
-# Record-mode producer glue (docs/internal/gui/06-doors-and-learning.md T7).
+# Record-mode producer glue (docs/internal/archive/gui/06-doors-and-learning.md T7).
 # It links the shared .asmtrace writer, so ONLY suites that already link the emu
 # tier add it — $(FRAMEWORK_OBJS) stays engine-free, which is the whole scoping
 # mechanism: everywhere else --record-dir is accepted and records nothing.
@@ -927,7 +927,7 @@ $(BUILD)/asmtrace_rec.o: src/asmtrace_rec.c include/asmtest_rec.h \
                          cli/asmtrace_ndjson.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -c $< -o $@
 
-# The constant-time equality suite (docs/internal/gui/06-doors-and-learning.md
+# The constant-time equality suite (docs/internal/archive/gui/06-doors-and-learning.md
 # T1). It links the emu tier — the CT proof is a block-coverage UNION across
 # secret-differing inputs, which only the emulator's accumulating trace can
 # take — so the Makefile:332 pattern rule cannot serve it and it carries an

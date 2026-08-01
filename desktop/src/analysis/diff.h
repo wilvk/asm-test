@@ -1,4 +1,4 @@
-// diff.h — two recordings, aligned (docs/internal/gui/04-replay-views.md T6).
+// diff.h — two recordings, aligned (docs/internal/archive/gui/04-replay-views.md T6).
 //
 // Plan D3 makes diff a PRIMITIVE, not a view feature: coverage union/delta,
 // per-offset heat delta, hot-edge delta, and the first divergence of the shared

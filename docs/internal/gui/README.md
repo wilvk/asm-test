@@ -1,12 +1,30 @@
 # Desktop GUI implementation documents — index
 
 This directory holds the **implementation-ready specifications** for
-[desktop-gui-plan.md](../plans/desktop-gui-plan.md): ten self-contained
-briefs (nine core + one growth-rung companion), each for one coherent task set,
-written so a junior developer can clone the repo, open exactly one document, and
-implement it end to end (code + tests + docs) with no other context. Format and
+[desktop-gui-plan.md](../plans/desktop-gui-plan.md). It began as ten
+self-contained briefs (nine core + one growth-rung companion) and has since
+grown to **45 numbered docs** across five families — core 01–10, addon adoption
+11–17, UX restructure 18–24, live/extension 25–42, and the faithful city 43–45.
+Each is written for one coherent task set, so a junior developer can clone the
+repo, open exactly one document, and implement it end to end (code + tests +
+docs) with no other context. Format and
 rules follow [../implementations/](../implementations/README.md) — read
 [\_conventions.md](../implementations/_conventions.md) once before starting.
+
+> **Archived 2026-08-01 — this directory now holds only the docs with open
+> work.** Per the [archive rule](../README.md), the **43 briefs whose tasks are
+> all complete** moved to [`../archive/gui/`](../archive/gui/) — that is the
+> whole numbered family 01–37, 39–42, 44 and 45, every one of them ✅/☑ with all
+> tasks landed. The tables and prose below still describe every doc, with the
+> completed ones linked into the archive, so this file remains the single
+> inventory and dependency map for the family. **Three documents stay here**,
+> because each still points at unbuilt work:
+>
+> | Doc | Why it stays |
+> |---|---|
+> | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1–L6** are still open (arm64 live-dataflow leg, `df_invocation`-aware decode, live `blame`/`statediff` kinds, the Darwin `libasmtest_dataflow` build, ARM32/RISC-V Author guests, doc-37 T4 on the serve disasm path). L7 closed as doc 39. |
+> | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
+> | [asmtrace-schema.md](asmtrace-schema.md) | the live `.asmtrace` schema reference — not a brief, and still the normative format doc. |
 
 > **Provenance.** Generated 2026-07-23/24 from the GUI plan (itself
 > cross-reviewed against HEAD `a460d40` the same day), with every cited
@@ -32,7 +50,7 @@ Every doc conforms to these; they are stated once here.
   GLFW + OpenGL3 (`libglfw3-dev` in `Dockerfile.desktop`); headless tests use
   the ImGui `example_null` pattern.
 
-  **Amended 2026-07-26 (addon-admission rule, from [11-imgui-addons.md](11-imgui-addons.md)).**
+  **Amended 2026-07-26 (addon-admission rule, from [11-imgui-addons.md](../archive/gui/11-imgui-addons.md)).**
   D2 no longer means "no dep beyond imgui + nlohmann/json"; it means every new
   third-party UI dep clears this bar, so the tree stays permissively licensed,
   reproducible, and faithful — no ad-hoc exceptions:
@@ -120,25 +138,25 @@ nothing left to claim; *free* means the row is open.
 
 | Doc | Area | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|
-| [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 | — |
-| [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 | — |
-| [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 | — |
-| [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 | — |
-| [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 | — |
-| [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 | — |
-| [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 | — |
-| [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 | — |
-| [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 | — |
-| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 | — |
-| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief**) — D2 amended (addon-admission rule, above); Track G + 2 no-dep quick wins landed | — | 01–10 (survey) | planning · G done | — |
+| [01-asmtrace-format.md](../archive/gui/01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 | — |
+| [02-exporters-and-readers.md](../archive/gui/02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 | — |
+| [03-desktop-shell.md](../archive/gui/03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 | — |
+| [04-replay-views.md](../archive/gui/04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 | — |
+| [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 | — |
+| [06-doors-and-learning.md](../archive/gui/06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 | — |
+| [07-serve-live-host.md](../archive/gui/07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 | — |
+| [08-observer-views.md](../archive/gui/08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 | — |
+| [09-teaching-producers.md](../archive/gui/09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 | — |
+| [10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 | — |
+| [11-imgui-addons.md](../archive/gui/11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief**) — D2 amended (addon-admission rule, above); Track G + 2 no-dep quick wins landed | — | 01–10 (survey) | planning · G done | — |
 
 ### Addon-adoption family (docs 12–17) — implementation briefs cut from doc 11
 
 These six briefs are the implementation-ready form of
-[11-imgui-addons.md](11-imgui-addons.md), one per track in that doc's
+[11-imgui-addons.md](../archive/gui/11-imgui-addons.md), one per track in that doc's
 *Sequencing* block, each written so a junior developer can open exactly one and
 implement it end to end. **Every one is gated on
-[12-addon-supply-chain.md](12-addon-supply-chain.md)**, which amends D2 with the
+[12-addon-supply-chain.md](../archive/gui/12-addon-supply-chain.md)**, which amends D2 with the
 addon-admission rule (above) and builds the shared fetch/pin/license/compile
 scaffolding — land 12 first, then the rest parallelise as the *Depends on* column
 shows. Status reflects committed `main`; the D2 amendment (12-T1) and the two
@@ -147,12 +165,12 @@ per the doc-11 row above.
 
 | Doc | Area | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|
-| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 | — |
-| [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 | — |
-| [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 | — |
-| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ✅ 3/3 (T1 plots ☑ + T2 canvas ☑ + T3 node-editor topo/tree/hot-edges ☑) | — |
-| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) | — |
-| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) | — |
+| [12-addon-supply-chain.md](../archive/gui/12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 | — |
+| [13-foundation-moves.md](../archive/gui/13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 | — |
+| [14-quick-wins.md](../archive/gui/14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 | — |
+| [15-plotting-and-graph-nav.md](../archive/gui/15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ✅ 3/3 (T1 plots ☑ + T2 canvas ☑ + T3 node-editor topo/tree/hot-edges ☑) | — |
+| [16-live-feedback-and-filtering.md](../archive/gui/16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) | — |
+| [17-interaction-testing-and-editor.md](../archive/gui/17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) | — |
 
 22 tasks across docs 12–17 — **all 22 landed** (the last was 15 T3,
 imgui-node-editor for topo/tree/hotedges pan-zoom + fit-graph). Sequencing (doc 11's tracks): **12 (Track G) first**,
@@ -182,15 +200,15 @@ map to the plan and review.
 
 | Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|---|
-| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap fidelity-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 | — |
-| [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 | — |
-| [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ✅ 5/5 | — |
-| [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ✅ 3/3 | — |
-| [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
-| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier fidelity chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
-| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) | — |
-| [25-live-model-wiring.md](25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber was replay-only until doc 26 landed the live `regstate` producer | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ✅ 7/7 (T6 completed 2026-07-28: the live single-step 3D overlay — `build_trajectories` weaves the `df_step` offset stream as a region-relative, per-tid path when no `trace` is present) | — |
-| [26-live-regstate-producer.md](26-live-regstate-producer.md) | 4 | live `regstate` producer on the serve/`--dataflow` single-step engine (it already `PTRACE_GETREGS` every step) → the Scrubber goes live; the last live-vs-replay gap. Consumer already done (doc 25); producer + serve opt-in + emulator parity | 5 | 25 (consumer wiring); 07 (serve); the `--dataflow` ptrace engine | ✅ 5/5 (T1–T5 landed 2026-07-28; `--dataflow --steps` + serve `steps:true` arm the `user_regs@x86_64/sysv` ring; emulator-parity green) | — |
+| [18-breach-stops.md](../archive/gui/18-breach-stops.md) | 0 | keymap fidelity-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 | — |
+| [19-dockable-panes-keystone.md](../archive/gui/19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 | — |
+| [20-workspace-and-settings.md](../archive/gui/20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ✅ 5/5 | — |
+| [21-spine-navigation.md](../archive/gui/21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ✅ 3/3 | — |
+| [22-selection-and-search.md](../archive/gui/22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
+| [23-graded-truth-layer.md](../archive/gui/23-graded-truth-layer.md) | 3 | graded 3-tier fidelity chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
+| [24-one-visual-language.md](../archive/gui/24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) | — |
+| [25-live-model-wiring.md](../archive/gui/25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber was replay-only until doc 26 landed the live `regstate` producer | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ✅ 7/7 (T6 completed 2026-07-28: the live single-step 3D overlay — `build_trajectories` weaves the `df_step` offset stream as a region-relative, per-tid path when no `trace` is present) | — |
+| [26-live-regstate-producer.md](../archive/gui/26-live-regstate-producer.md) | 4 | live `regstate` producer on the serve/`--dataflow` single-step engine (it already `PTRACE_GETREGS` every step) → the Scrubber goes live; the last live-vs-replay gap. Consumer already done (doc 25); producer + serve opt-in + emulator parity | 5 | 25 (consumer wiring); 07 (serve); the `--dataflow` ptrace engine | ✅ 5/5 (T1–T5 landed 2026-07-28; `--dataflow --steps` + serve `steps:true` arm the `user_regs@x86_64/sysv` ring; emulator-parity green) | — |
 
 30 tasks across docs 18–24. Sequencing follows the plan's four waves:
 **Wave 0 (doc 18)** stops active breaches and is mostly independent of the
@@ -209,7 +227,7 @@ removes a truth — the fidelity chrome is *restructured* (F5), never removed.
 The ~30 DEFERRED / BLOCKED / REFUSED markers across docs 01–26 and the plan's
 Acknowledged-limits / Killed-in-grounding lists collapse onto **six root
 prerequisites** — one engine or schema change apiece, each fanning out to
-several stuck views. [27-extension-roadmap.md](27-extension-roadmap.md) is the
+several stuck views. [27-extension-roadmap.md](../archive/gui/27-extension-roadmap.md) is the
 family overview (mapping + dependency graph + sequencing, like doc 11 for its
 addon family); docs 28–33 are the full per-root briefs. Authored 2026-07-28
 against HEAD `da566c9`; **not yet implemented** (planning). Excludes what already
@@ -217,13 +235,13 @@ shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
 
 | Doc | Root | Prerequisite | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|---|
-| [27-extension-roadmap.md](27-extension-roadmap.md) | — | family overview + dependency graph (**not a brief**) | — | 01–26 (survey) | overview | — |
-| [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ✅ 3/3 (T1 `5803086` + T2 `47c3280` + T3 `878de40`) | — |
-| [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ✅ 3/3 (T1 writer+schema+unit, T2 emulator projection + golden `mem-df-chain`(+torn), T3 live `--dataflow --mem`/serve `mem:true` + `test_mem_parity`) | — |
-| [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ✅ 4/4 (T1+T2 `emu_t`-hosted producer byte-identical via R5's `df_guest` seed/capture seam, `6d16cac`; T3 Reweave — `loom_take_run_from_step` fork-from-K stitched worldline, `cc4ad3b`; T4 `dt_scrubber_replayable` retires the "not a day-one feature" refusal with a synthesized+bannered register history, `8f38b81`) | — |
-| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ✅ 3/3 (T1 XMM+MXCSR deck both producers + `movq` parity; T2 `fpenv` decode + graceful degradation; T3 `run_fp` SSE args + XMM `df_step` values + `fp-scale-add` golden; 128-bit only, YMM deferred) | — |
-| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ✅ 3/3 (T1 `df_guest` vtable, byte-identical x86-64; T2 arm64 value fabric + golden `arm64-df-chain`, PLUS its `regstate`/Scrubber sub-item — `emu_arm64_t` gains its own per-step register ring mirroring `emu_x86_regs_t`'s, `2f9f071`, zero change to `emu_t`/Reweave; T3 Author-mode arm64 run — the door dispatches arm64 through the value-fabric producer with a faithful, distinct result shape + a materialised `trace`/`df_step`/`df_edge` recording + the accurate gate-flip label, `2873973`; see brief status) | — |
-| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ✅ 2/2 (T1 `blame` cone + born-untraced fidelity, T2 `statediff` delta + two-recording merge gated on R1 identity; recorder-only producers, asmspy leg deferred) | — |
+| [27-extension-roadmap.md](../archive/gui/27-extension-roadmap.md) | — | family overview + dependency graph (**not a brief**) | — | 01–26 (survey) | overview | — |
+| [28-schema-freeze-completion.md](../archive/gui/28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ✅ 3/3 (T1 `5803086` + T2 `47c3280` + T3 `878de40`) | — |
+| [29-mem-address-stream.md](../archive/gui/29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ✅ 3/3 (T1 writer+schema+unit, T2 emulator projection + golden `mem-df-chain`(+torn), T3 live `--dataflow --mem`/serve `mem:true` + `test_mem_parity`) | — |
+| [30-resume-from-state-and-reweave.md](../archive/gui/30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ✅ 4/4 (T1+T2 `emu_t`-hosted producer byte-identical via R5's `df_guest` seed/capture seam, `6d16cac`; T3 Reweave — `loom_take_run_from_step` fork-from-K stitched worldline, `cc4ad3b`; T4 `dt_scrubber_replayable` retires the "not a day-one feature" refusal with a synthesized+bannered register history, `8f38b81`) | — |
+| [31-wide-register-deck.md](../archive/gui/31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ✅ 3/3 (T1 XMM+MXCSR deck both producers + `movq` parity; T2 `fpenv` decode + graceful degradation; T3 `run_fp` SSE args + XMM `df_step` values + `fp-scale-add` golden; 128-bit only, YMM deferred) | — |
+| [32-per-guest-value-producer.md](../archive/gui/32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ✅ 3/3 (T1 `df_guest` vtable, byte-identical x86-64; T2 arm64 value fabric + golden `arm64-df-chain`, PLUS its `regstate`/Scrubber sub-item — `emu_arm64_t` gains its own per-step register ring mirroring `emu_x86_regs_t`'s, `2f9f071`, zero change to `emu_t`/Reweave; T3 Author-mode arm64 run — the door dispatches arm64 through the value-fabric producer with a faithful, distinct result shape + a materialised `trace`/`df_step`/`df_edge` recording + the accurate gate-flip label, `2873973`; see brief status) | — |
+| [33-backward-attribution-producers.md](../archive/gui/33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ✅ 2/2 (T1 `blame` cone + born-untraced fidelity, T2 `statediff` delta + two-recording merge gated on R1 identity; recorder-only producers, asmspy leg deferred) | — |
 
 18 tasks across docs 28–33. Suggested order (per the roadmap): **R1 first**
 (cheapest, no new engine, prerequisite for R4/R6, closes 04/05 fidelity gaps —
@@ -237,7 +255,7 @@ cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
 are out of scope by design — a brief there would fight the design.
 
 **Follow-on briefs (beyond the six roots).**
-[34-playhead-and-scene-reach.md](34-playhead-and-scene-reach.md) — close the three
+[34-playhead-and-scene-reach.md](../archive/gui/34-playhead-and-scene-reach.md) — close the three
 seams in the *"pick a process → watch the 3D graph change over time"* flow: put the
 register Scrubber on the shared **execution-step** brush (T1), give the 3D overview a
 `5` keyroute + a "View in 3D" handoff from the Live-capture pane (T2), add a
@@ -249,7 +267,7 @@ the null backend (D4). Authored 2026-07-28 against HEAD `326afde`; **implemented
 per-axis play/pause transports, axis labels), both docker-desktop lanes green.
 ☑ 5/5 · —.
 
-[35-continuous-live-dataflow.md](35-continuous-live-dataflow.md) — make the live
+[35-continuous-live-dataflow.md](../archive/gui/35-continuous-live-dataflow.md) — make the live
 `dataflow` / `auto` engine **re-arm and keep capturing until Stop** (today it is
 one-shot: "auto + Start starts then stops"), into one continuously growing
 recording. Mirrors the region engine's `while (!stop)` loop; the surgery is a
@@ -279,14 +297,14 @@ negligible against a pass's 10³–10⁵× single-step cost, so T2's "no per-pas
 re-SEIZE cost regression" bar is already met with no measurable regression; a cost
 optimization, not a correctness gap or a required step. ☑ 4/4 · —.
 
-[36-anchor-the-3d-plane.md](36-anchor-the-3d-plane.md) — **place a
+[36-anchor-the-3d-plane.md](../archive/gui/36-anchor-the-3d-plane.md) — **place a
 routine-relative path on the 3D plane, or say why not.** The 3D overview places
 geometry only for a `basis:"abs"` recording, and the only producer of
 `basis:"abs"` in the tree is the synthetic golden-scene generator
 (`record_scene_abs`) — every real capture (live `trace`, live `dataflow`/`auto`,
 every corpus file) is `basis:"rel"`, so its plane comes up **empty and
 unlabelled**: the "3D overview" tab opens onto nothing after a live attach, with
-no error. Three defects stack: the rel chip [25](25-live-model-wiring.md) T6
+no error. Three defects stack: the rel chip [25](../archive/gui/25-live-model-wiring.md) T6
 promised never fires (the HUD keys it on the *canvas* basis, which is empty when a
 recording carries no `trace`); nothing counts placement, so every vertex silently
 failing `Projection::project` is indistinguishable from success (`refused()` stays
@@ -315,7 +333,7 @@ T5 convergence admits an anchored rel path — four-condition bar, `!placed`
 per-vertex skip, the unanchored/statistical canaries kept). **COMPLETE — 37 next
 (land 36 in full, then 37).** · —.
 
-[37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
+[37-region-tag-on-df-step.md](../archive/gui/37-region-tag-on-df-step.md) — **the producer half of
 36**: state the region on the wire instead of deriving it. 36 anchors a
 routine-relative offset by deriving the base from the recording's single `codeimage`
 span, and must **refuse** whenever a recording carries zero or ≥2 spans — which a
@@ -367,7 +385,7 @@ timeline and omit it, so no golden churned; `DataflowStream`/`ptslice` carry it 
 default from it, a hand override still winning. · will · 2026-07-31.
 
 [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) — **the
-live-feed audit + roadmap** (a family overview like [27](27-extension-roadmap.md),
+live-feed audit + roadmap** (a family overview like [27](../archive/gui/27-extension-roadmap.md),
 not a brief). After 36/37 anchored the live 3D plane, a 2026-07-29 audit of every
 desktop visualization against *"can this be produced from a **live** process?"*
 found the live **x86-64** pipeline already close to comprehensive — Summary, Canvas,
@@ -384,7 +402,7 @@ blame/statediff *views*, which already work live client-side) and **fixed two st
 "`mem` has no producer" comments** (R2/doc 29 landed the live `--mem` producer).
 Authored 2026-07-29. overview · —.
 
-[39-auto-capture-reliability.md](39-auto-capture-reliability.md) — **make `auto`
+[39-auto-capture-reliability.md](../archive/gui/39-auto-capture-reliability.md) — **make `auto`
 reliably capture**, and stop a self-ended session wedging the pane. Cut from
 [38](38-live-feed-completion-roadmap.md) as its first per-gap brief. Two halves
 produce one complaint (*"start and arm, it starts then stops, `refused: no session
@@ -420,7 +438,7 @@ the pre-existing `test_shell` `attach/no-host reveals panes` bar was made
 environment-adaptive (it was RED on any checkout that had built `./build/asmspy`).
 Both docker lanes green (`test_ui` 28/28). · —.
 
-[40-segment-dataflow-by-invocation.md](40-segment-dataflow-by-invocation.md) —
+[40-segment-dataflow-by-invocation.md](../archive/gui/40-segment-dataflow-by-invocation.md) —
 **segment the dataflow decode by `df_invocation`** (gap **L2** from
 [38](38-live-feed-completion-roadmap.md), the cleanest self-contained desktop win).
 `decode_streams` indexed `df_step`/`df_edge` by a flat `step` space, so a continuous
@@ -439,9 +457,9 @@ the latest by default, pinnable to an earlier pass, no chrome for a one-shot. Pu
 decode + a selector: no engine, wire, or schema change. Authored 2026-07-29. ✅ 3/3
 · —.
 
-[41-live-blame-statediff-serve-leg.md](41-live-blame-statediff-serve-leg.md) — **emit
+[41-live-blame-statediff-serve-leg.md](../archive/gui/41-live-blame-statediff-serve-leg.md) — **emit
 the `blame` + `statediff` kinds from the live serve leg** (gap **L3** from
-[38](38-live-feed-completion-roadmap.md)). [R6/doc 33](33-backward-attribution-producers.md)
+[38](38-live-feed-completion-roadmap.md)). [R6/doc 33](../archive/gui/33-backward-attribution-producers.md)
 landed both producers recorder-only; the live `asmspy --dataflow`/serve leg emitted
 `df_step`/`df_edge`/`regstate`/`mem` but not those two. Both are pure projections over
 data the serve leg already has — `blame` is the backward cone (`dataflow_emit_blame`,
@@ -456,9 +474,9 @@ client-side; this is the reproducible/deep-linkable *convenience* only) but chea
 host-testable — `cli_smoke` asserts the live cone + the step-0-`computed:false` delta.
 Authored 2026-07-29. ✅ 3/3 · —.
 
-[42-loom-reweave-consumption.md](42-loom-reweave-consumption.md) — **consume the
+[42-loom-reweave-consumption.md](../archive/gui/42-loom-reweave-consumption.md) — **consume the
 Reweave request** (review #20): wires the fully-built-but-unreachable
-fork-from-step-K counterfactual ([30 R3 T3](30-resume-from-state-and-reweave.md))
+fork-from-step-K counterfactual ([30 R3 T3](../archive/gui/30-resume-from-state-and-reweave.md))
 into the Loom UI — `ReweaveSource`/`loom_reweave_available` (the `code_sha`
 identity latch), the app-only `reweave_apply.cpp` engine leg (verified via `ldd`
 to never link into `asmtest-viewer`), and a `LoomState::take_views` paint
@@ -467,7 +485,7 @@ bugs (frozen Author `args`/`nargs`, stale takes surviving a Loom tab switch, a
 refused reweave painting a fabricated alignment, `take.err` dropped on a
 faulted success path) — all fixed in the same change; see the doc's own status
 banner for detail. **This entry was missing from this table** (added
-2026-07-31 while cutting [43](43-faithful-city-roadmap.md)/[44](44-faithful-city-phase-a-mvp-terrain-reskin.md) —
+2026-07-31 while cutting [43](43-faithful-city-roadmap.md)/[44](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md) —
 a pre-existing README gap, not new drift). ✅ 5/5 · —. Follow-up: rich
 `fault_card()` for a Reweave (needed a `src/dataflow_resume.c` C-API change) —
 **CLOSED 2026-07-31** (`65b2a54`, unrelated to the city family below).
@@ -477,14 +495,14 @@ the ten core docs.** [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md)
 adopts the [computer-as-city 3D design](../analysis/2026-07-30-computer-as-city-3d.md)
 (which unifies the [3D visualization catalog](../analysis/2026-07-29-3d-visualization-catalog.md)'s
 14 layers + 12 scenes under one land/districts/buildings/traffic/weather
-metaphor) as the roadmap for future work on [doc 10](10-spacetime-3d-overview.md)'s
+metaphor) as the roadmap for future work on [doc 10](../archive/gui/10-spacetime-3d-overview.md)'s
 scene, restates its 5-phase plan (A–E) with current status, and corrects two
 stale claims found while re-verifying (the live-GL-upload-freeze bug both source
 docs cite as open was already fixed in `55fc624`, before either doc was
 authored — do not re-touch that fix).
-[44-faithful-city-phase-a-mvp-terrain-reskin.md](44-faithful-city-phase-a-mvp-terrain-reskin.md)
+[44-faithful-city-phase-a-mvp-terrain-reskin.md](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
 is the first per-phase implementation-ready brief cut from it (mirroring how
-[39](39-auto-capture-reliability.md)/[40](40-segment-dataflow-by-invocation.md)/[41](41-live-blame-statediff-serve-leg.md)
+[39](../archive/gui/39-auto-capture-reliability.md)/[40](../archive/gui/40-segment-dataflow-by-invocation.md)/[41](../archive/gui/41-live-blame-statediff-serve-leg.md)
 were cut one at a time from [38](38-live-feed-completion-roadmap.md)'s gap
 table, not landed all at once like the UX-restructure or extension families):
 a pure terrain/trajectory reskin (zoned districts, a fidelity-driven weather
@@ -510,7 +528,7 @@ merged main (`desktop-test` incl. `test_terrain`/`test_scene_fbo`,
 `desktop-engine-boundary-check` — D4 intact, `desktop-ui-test` 28/28,
 alongside doc 45's Xvfb lane); no `.asmtrace` schema touched. · —.
 
-[45-launch-and-window-target.md](45-launch-and-window-target.md) — **two new
+[45-launch-and-window-target.md](../archive/gui/45-launch-and-window-target.md) — **two new
 Home-rail entries** (not cut from a prior analysis doc): **launch** a fresh
 process and trace it from birth (Part A, T1–T5), and **target** an already-
 running process by dragging a crosshair onto its window (Part B, T6–T9).

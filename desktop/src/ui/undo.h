@@ -1,5 +1,5 @@
 // undo.h — the app-level command / undo stack
-// (docs/internal/gui/22-selection-and-search.md T4, F12).
+// (docs/internal/archive/gui/22-selection-and-search.md T4, F12).
 //
 // Ctrl+Z / Ctrl+Y over reversible VIEW-MODEL state: the filter predicate, the
 // cone/selection, and the Loom take set. It is DELIBERATELY DISTINCT from the

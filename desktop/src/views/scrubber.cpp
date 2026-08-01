@@ -81,7 +81,7 @@ dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead,
         s.absent_message =
             "no per-step register capture in this recording — the regstate "
             "producer was not run (record with asmtrace_record --steps=<cap>).";
-        s.docs = "docs/internal/gui/09-teaching-producers.md";
+        s.docs = "docs/internal/archive/gui/09-teaching-producers.md";
         if (replay.replayable) {
             s.synthesizable = true;
             s.synth_action = "synthesize register history";

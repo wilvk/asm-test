@@ -150,13 +150,13 @@ yet), each tracing its tasks to the `T<theme>.<n>` IDs here:
 
 | Brief | Wave | Recommendations |
 |---|---|---|
-| [18-breach-stops.md](../../gui/18-breach-stops.md) | 0 | T1.1 (remainder), T2.2, T2.6, T4.2, T4.5, T3.2 |
-| [19-dockable-panes-keystone.md](../../gui/19-dockable-panes-keystone.md) | 1 | **T2.1 (keystone)** |
-| [20-workspace-and-settings.md](../../gui/20-workspace-and-settings.md) | 1 | T2.3, T2.4, T2.5, T2.7, T2.8 |
-| [21-spine-navigation.md](../../gui/21-spine-navigation.md) | 2 | T3.1, T3.3, T3.4 |
-| [22-selection-and-search.md](../../gui/22-selection-and-search.md) | 2 | T1.2, T1.3, T1.4, T1.5 |
-| [23-graded-truth-layer.md](../../gui/23-graded-truth-layer.md) | 3 | T4.1, T4.3, T4.4, T4.6 |
-| [24-one-visual-language.md](../../gui/24-one-visual-language.md) | 3 | T5.1, T5.2, T5.3, T5.4, T5.5 |
+| [18-breach-stops.md](../gui/18-breach-stops.md) | 0 | T1.1 (remainder), T2.2, T2.6, T4.2, T4.5, T3.2 |
+| [19-dockable-panes-keystone.md](../gui/19-dockable-panes-keystone.md) | 1 | **T2.1 (keystone)** |
+| [20-workspace-and-settings.md](../gui/20-workspace-and-settings.md) | 1 | T2.3, T2.4, T2.5, T2.7, T2.8 |
+| [21-spine-navigation.md](../gui/21-spine-navigation.md) | 2 | T3.1, T3.3, T3.4 |
+| [22-selection-and-search.md](../gui/22-selection-and-search.md) | 2 | T1.2, T1.3, T1.4, T1.5 |
+| [23-graded-truth-layer.md](../gui/23-graded-truth-layer.md) | 3 | T4.1, T4.3, T4.4, T4.6 |
+| [24-one-visual-language.md](../gui/24-one-visual-language.md) | 3 | T5.1, T5.2, T5.3, T5.4, T5.5 |
 
 T1.1's keymap *core* already landed (doc 17 T1: `handle_keymap`); doc 18 T1
 carries only the remainder (faithful overlay + convention keys).

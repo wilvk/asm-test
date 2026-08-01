@@ -450,13 +450,13 @@ scaffold" is replaced by the shipped reality, and the change is logged.
 
 **Steps.**
 
-1. [docs/guides/tracing/native-tracing.md](../../../docs/guides/tracing/native-tracing.md)
+1. [docs/guides/tracing/native-tracing.md](../../guides/tracing/native-tracing.md)
    lines 337–339: replace "the CoreSight backend is a documented scaffold
    pending AArch64 board access (it always self-skips until completed)" with:
    implemented and board-validated (name the board from T2); self-skips
    everywhere without a `cs_etm` PMU; decode is OpenCSD (ETMv4 + ETE),
    validated on <board> with <sink>.
-2. [docs/guides/tracing/hardware-tracing.md](../../../docs/guides/tracing/hardware-tracing.md):
+2. [docs/guides/tracing/hardware-tracing.md](../../guides/tracing/hardware-tracing.md):
    the backend table row (line 39 "specific **AArch64** boards (scaffold)"),
    the callout at line 54, and the limitation bullet at line 545 — same
    correction. Keep the candid CI caveat: live capture still cannot run on
@@ -618,18 +618,18 @@ T1 (host, today) ──► T2 (board bring-up) ──► T3 (decode tree) ──
 
 - **Intel PT work of any kind** — the one PT arm (open/mmap/drain/decode,
   window begin/end, escalation ladder) is
-  [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md);
+  [intel-pt-whole-window-substrate.md](../archive/implementations/intel-pt-whole-window-substrate.md);
   foreign-pid PT attach is
-  [intel-pt-attach-foreign-pid.md](intel-pt-attach-foreign-pid.md).
+  [intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md).
 - **A self-hosted AArch64 board CI runner** (recurring lane, security
   posture) — [self-hosted-ci-runners.md](self-hosted-ci-runners.md). This doc
   only produces the board-run transcript for its own landing series.
 - **AArch64 ptrace single-step validation** (the non-CoreSight AArch64 route)
-  — [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md).
+  — [aarch64-ptrace-single-step-validation.md](../archive/implementations/aarch64-ptrace-single-step-validation.md).
 - **asmspy/CLI AArch64 support** —
-  [asmspy-aarch64-support.md](asmspy-aarch64-support.md).
+  [asmspy-aarch64-support.md](../archive/implementations/asmspy-aarch64-support.md).
 - **SVE state capture on AArch64** —
-  [aarch64-sve-capture.md](aarch64-sve-capture.md).
+  [aarch64-sve-capture.md](../archive/implementations/aarch64-sve-capture.md).
 - CoreSight **snapshot-mode** circular-ring decode (`opts.snapshot`) and
   multi-region hardware address filters: deliberate follow-ups, matching the
   PT backend's documented linear-ring-first scope (hwtrace.c lines

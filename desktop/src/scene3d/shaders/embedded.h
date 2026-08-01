@@ -1,5 +1,5 @@
 // embedded.h — the 3D-overview GLSL, embedded as string literals so the scene
-// loads NO shader file at runtime (docs/internal/gui/10-spacetime-3d-overview.md
+// loads NO shader file at runtime (docs/internal/archive/gui/10-spacetime-3d-overview.md
 // T4 step 2/3/5). The terrain pair is the brief's terrain.vert/terrain.frag; the
 // trajectory and colour-ID pick pairs are the rest of T4.
 //

@@ -2,14 +2,14 @@
 
 > **Status: draft, not frozen.** The v1 *freeze* is the named Phase-3 checkpoint
 > in [desktop-gui-plan.md](../plans/desktop-gui-plan.md), after
-> [02-exporters-and-readers.md](02-exporters-and-readers.md),
-> [03-desktop-shell.md](03-desktop-shell.md) and
-> [07-serve-live-host.md](07-serve-live-host.md) have consumed it. Until then a
+> [02-exporters-and-readers.md](../archive/gui/02-exporters-and-readers.md),
+> [03-desktop-shell.md](../archive/gui/03-desktop-shell.md) and
+> [07-serve-live-host.md](../archive/gui/07-serve-live-host.md) have consumed it. Until then a
 > field may still move — but a move must regenerate the golden corpus
 > (`make asmtrace-golden`) in the same change, because the bytes are the test.
 >
 > **Ownership (D5).** This file is created and owned by
-> [01-asmtrace-format.md](01-asmtrace-format.md); other docs **append** rows to
+> [01-asmtrace-format.md](../archive/gui/01-asmtrace-format.md); other docs **append** rows to
 > the kind registry (07's `session`/`cmd`/`err`, 08's `codeimage`) and never
 > rewrite what is here. If this file and the CODE disagree, the code wins:
 > re-verify, then fix this file in the same change.
@@ -108,7 +108,7 @@ Rules:
 
 An **optional** header object naming the recorded routine by the **SHA-256 of
 its bytes**, so a consumer can prove two recordings are — or refuse them as not —
-the same routine (28 R1 T1). `dt_diff_build` ([04-replay-views.md](04-replay-views.md)
+the same routine (28 R1 T1). `dt_diff_build` ([04-replay-views.md](../archive/gui/04-replay-views.md)
 T6) refuses a pair whose `code.sha256` differ; when either side omits `code` it
 keeps its faithful "identity not checked" caveat.
 
@@ -282,7 +282,7 @@ region base (`pc - base_ip`,
 absolute-offset producer is **out of this contract** and must not be wired to
 `df_step`.
 
-**`rbase` — the region base `off` is relative to** ([37](37-region-tag-on-df-step.md),
+**`rbase` — the region base `off` is relative to** ([37](../archive/gui/37-region-tag-on-df-step.md),
 2026-07-29). An optional u64 giving the absolute base address of the code span
 `off` is an offset within, so a reader resolves the step's PC as `rbase + off` and
 its span as the `codeimage` whose `base == rbase` — no wire-order inference, no
@@ -290,7 +290,7 @@ single-span requirement. It is **omitted entirely — never `null`, never
 0-as-unknown** — when the producer does not know a base (address 0 is never a
 mapped code span, so `base == 0` means "not known"). Resolution rule (normative):
 (1) **with `rbase`**, the PC is `rbase + off` and the span is the matching
-`codeimage`; (2) **without `rbase`**, [36](36-anchor-the-3d-plane.md)'s single-span
+`codeimage`; (2) **without `rbase`**, [36](../archive/gui/36-anchor-the-3d-plane.md)'s single-span
 anchor is the documented **permanent fallback** — exactly one `codeimage` code span
 ⇒ `base + off`, zero or ≥2 ⇒ refuse with the stated reason; (3) a reader **never**
 guesses `rbase` from wire order or the nearest preceding `codeimage` (seq order is
@@ -305,7 +305,7 @@ substring-scanning readers (the conformance `field()` and `cli_smoke.sh`) do not
 collide.
 
 **`when` — the codeimage timestamp whose bytes were live at this step**
-([37](37-region-tag-on-df-step.md) T4, 2026-07-30). `rbase` answers *which span*;
+([37](../archive/gui/37-region-tag-on-df-step.md) T4, 2026-07-30). `rbase` answers *which span*;
 it does not answer *which version's bytes*, and guessing the latest version is
 silently wrong — the exact failure mode the *`codeimage`* section's own
 resolution rule (below) already names. `when` closes that gap: an optional u64,
@@ -388,7 +388,7 @@ a `steps:0` marker to exercise the per-pass placard.
 ```
 
 One effective-address access per event, in step order — the per-access channel
-the 3D rich rung ([10-spacetime-3d-overview.md](10-spacetime-3d-overview.md))
+the 3D rich rung ([10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md))
 keys on. `step` is the executing step (index into the `trace` / `df_step`
 stream); `ea` is the resolved effective address; `size` the access width in
 bytes; `rw` is `"r"` (read) or `"w"` (write); `space` is `"abs"`
@@ -439,7 +439,7 @@ traced producer** inside the window — the backward slice reached only the sink
 because it was read from an argument, a constant, or pre-existing state. The cone
 is then the **sink alone** — never empty. This is *provenance starts at
 instrumentation*, the same worldline-fidelity the Loom's lineage carries
-([05-loom-day-one.md](05-loom-day-one.md)); a reader distinguishes it from
+([05-loom-day-one.md](../archive/gui/05-loom-day-one.md)); a reader distinguishes it from
 "nothing happened" and never invents ancestry. `blame` is a **pure derived pass**
 over the `df_edge` graph a recording already carries (`asmtest_slice_backward` —
 the same slicer the TUI and desktop cones use), **opt-in** (`--blame`), absent by
@@ -494,7 +494,7 @@ recording into a **walkthrough**: a reader plays to each stop in file order.
 
 A stop may additionally carry `title`, `expected` and `got` — all optional,
 omitted when absent, and meaningful only alongside `stop:true`
-([06-doors-and-learning.md](06-doors-and-learning.md), which owns them). `text`
+([06-doors-and-learning.md](../archive/gui/06-doors-and-learning.md), which owns them). `text`
 stays the body. The expected/got pair is what lets the Learn door frame a
 failure as *this is what should have happened, and this is what did* without a
 player inventing the comparison; a reader that does not know the fields ignores
@@ -509,7 +509,7 @@ them like any other unknown key. Field order for a stop:
 
 Mirrors [`asmtest_hwtrace_stitch_handles`](../../../include/asmtest_hwtrace.h#L641).
 **Defined in v1 with no v1 writer** — the producer arrives with
-[07-serve-live-host.md](07-serve-live-host.md). Defining it now keeps the kind
+[07-serve-live-host.md](../archive/gui/07-serve-live-host.md). Defining it now keeps the kind
 id and field names stable for readers written before the producer exists.
 
 ### `end` — the footer
@@ -543,9 +543,9 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | `fpenv` | FP/SIMD environment + wide register state | expansion wave |
 | `fuzzstats` | corpus/coverage counters from a fuzz run | expansion wave |
 | `taint` | taint labels propagated through a step | expansion wave |
-| `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](05-loom-day-one.md) |
-| `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](05-loom-day-one.md) |
-| `codeimage` | captured code bytes at a version | [08-observer-views.md](08-observer-views.md) |
+| `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) |
+| `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) |
+| `codeimage` | captured code bytes at a version | [08-observer-views.md](../archive/gui/08-observer-views.md) |
 
 `session` / `cmd` / `err` were reserved here for 07 and are now **defined** — see
 *Serve protocol* below. They are **serve-only**: they appear on a live control
@@ -676,7 +676,7 @@ A complete, minimal recording — the reference a reader is tested against
 
 ## Serve protocol
 
-> **Owned by [07-serve-live-host.md](07-serve-live-host.md)** (T1), appended
+> **Owned by [07-serve-live-host.md](../archive/gui/07-serve-live-host.md)** (T1), appended
 > under this file's D5 append-only rule; the envelope, provenance and event
 > kinds above are unchanged and remain 01's. **01 owner sign-off: the serve
 > protocol adds no field to any existing kind and no new envelope major — it
@@ -896,12 +896,12 @@ produces `err` instead, never both.
 - **Payloads are separated, not withheld.** Serve emits the same
   payload-separated `syscall` events record mode does, with
   `"redacted":false` stated faithfully in the header. Redaction is a **renderer**
-  duty ([08-observer-views.md](08-observer-views.md)); the wire never pretends
+  duty ([08-observer-views.md](../archive/gui/08-observer-views.md)); the wire never pretends
   content was withheld when it was not.
 
 ## `codeimage` — captured code bytes at a version
 
-> **Owned by [08-observer-views.md](08-observer-views.md)** (T7), appended under
+> **Owned by [08-observer-views.md](../archive/gui/08-observer-views.md)** (T7), appended under
 > this file's D5 append-only rule. It **defines the kind already reserved for 08
 > in *Reserved kinds* above** and adds no field to any existing kind and no new
 > envelope major. **01 owner sign-off: recorded 2026-07-24.**
@@ -951,7 +951,7 @@ falls back to the recorded `disasm` strings (D10) or to bare offsets.
 
 ## `regstate` descriptor — `emu_x86_regs_t@x86_64/sysv`
 
-> **Owned by [09-teaching-producers.md](09-teaching-producers.md)** (T2),
+> **Owned by [09-teaching-producers.md](../archive/gui/09-teaching-producers.md)** (T2),
 > appended under this file's D5 append-only rule. It gives the `regstate` kind
 > (defined above under *Event kinds*) its first concrete state descriptor — the
 > field list a viewer renders the deck from — and **adds no field to any existing
@@ -1005,7 +1005,7 @@ normal case.
 
 ## `regstate` descriptor — `user_regs@x86_64/sysv` (live ptrace producer)
 
-> **Owned by [26-live-regstate-producer.md](26-live-regstate-producer.md)**,
+> **Owned by [26-live-regstate-producer.md](../archive/gui/26-live-regstate-producer.md)**,
 > appended under this file's D5 append-only rule. It gives the `regstate` kind its
 > **second** concrete producer — the LIVE, single-stepped `asmspy --dataflow`
 > engine — under a distinct descriptor id, and **adds no field to any existing
@@ -1058,7 +1058,7 @@ so, distinctly from a `--steps`-less exact capture.
 
 ## `regstate` wide deck — the XMM/MXCSR extension (R4)
 
-> **Owned by [31-wide-register-deck.md](31-wide-register-deck.md)** (T1), appended
+> **Owned by [31-wide-register-deck.md](../archive/gui/31-wide-register-deck.md)** (T1), appended
 > under this file's D5 append-only rule. It **extends the `values` object** of BOTH
 > existing `regstate` descriptors (`emu_x86_regs_t@x86_64/sysv` and
 > `user_regs@x86_64/sysv`) with the wide FP/vector deck — it **adds no new kind, no
@@ -1102,7 +1102,7 @@ opt-in**: `asmtrace_record --fpregs` (the emulator ring) and `asmspy --dataflow
 
 ## `regstate` descriptor — `emu_arm64_regs_t@aarch64/aapcs64` (R5 arm64 ring)
 
-> **Owned by [32-per-guest-value-producer.md](32-per-guest-value-producer.md)**
+> **Owned by [32-per-guest-value-producer.md](../archive/gui/32-per-guest-value-producer.md)**
 > (T2, the regstate/Scrubber half), appended under this file's D5 append-only
 > rule. It gives the `regstate` kind its **third** concrete descriptor — the
 > emulator's per-step AArch64 register ring — and **adds no field to any
@@ -1148,7 +1148,7 @@ own values):
   a wide value is not a bare JSON integer; `emu_arm64_regs_t.v[32]` is not
   captured here (a further descriptor row, mirroring the x86-64 wide-deck
   extension above), exactly as the arm64 value fabric's own scope stayed
-  integer-only ([32](32-per-guest-value-producer.md) T2).
+  integer-only ([32](../archive/gui/32-per-guest-value-producer.md) T2).
 - **The reader has no arm64-specific field-order table.**
   `stepindex_reg_order()`
   ([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp))
@@ -1161,7 +1161,7 @@ own values):
   not a blocker for this one.
 - **No live (ptrace) arm64 producer exists.** This descriptor has exactly one
   producer today, the emulator ring; a live AArch64 single-step engine is a
-  separate host concern ([32](32-per-guest-value-producer.md) Non-goals).
+  separate host concern ([32](../archive/gui/32-per-guest-value-producer.md) Non-goals).
 
 **Order, dropping and truncation (D7).** Identical discipline to the x86-64
 emulator ring: held pre-states are emitted **oldest first**, each snapshotted
@@ -1175,7 +1175,7 @@ un-augmented value-fabric-only recording R5 T2 originally shipped).
 
 ## `fpenv` — the FP/SIMD environment (rounding / sticky / FTZ-DAZ)
 
-> **Owned by [31-wide-register-deck.md](31-wide-register-deck.md)** (T2), appended
+> **Owned by [31-wide-register-deck.md](../archive/gui/31-wide-register-deck.md)** (T2), appended
 > under this file's D5 append-only rule. It **promotes the reserved `fpenv` kind
 > to defined** (see *Reserved kinds*), giving it its first fields. An ordinary
 > opt-in recording event — it rides inside `[header … end]`, the footer counts it,
@@ -1211,9 +1211,9 @@ denormals-are-zero bits:
 
 ## `severity` — the derivable fidelity-chrome tier (optional)
 
-> **Owned by [01-asmtrace-format.md](01-asmtrace-format.md)**, appended under this
+> **Owned by [01-asmtrace-format.md](../archive/gui/01-asmtrace-format.md)**, appended under this
 > file's D5 append-only rule at the request of
-> [23-graded-truth-layer.md](23-graded-truth-layer.md) (T1, F5). It adds ONE
+> [23-graded-truth-layer.md](../archive/gui/23-graded-truth-layer.md) (T1, F5). It adds ONE
 > **optional** provenance field, **derivable** from fields this schema already
 > carries, and **no new envelope major** and **no field to any existing kind**.
 > The field GRADES how loud a reader renders fidelity chrome; it gates **no truth
@@ -1263,7 +1263,7 @@ pinned against the committed low-fidelity fixtures
 
 ## `df_step` region tag — the `rbase` extension (37)
 
-> **Owned by [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md)** (T1),
+> **Owned by [37-region-tag-on-df-step.md](../archive/gui/37-region-tag-on-df-step.md)** (T1),
 > appended under this file's D5 append-only rule. It **adds one optional field**
 > (`rbase`) to the existing `df_step` kind (see *`df_step`* above for the field,
 > the normative order `step, off, rbase?, disasm?, ops`, the omit-when-unknown
@@ -1280,7 +1280,7 @@ pinned against the committed low-fidelity fixtures
 
 ## `df_step` bytes-version tag — the `when` extension (37 T4)
 
-> **Owned by [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md)** (T4),
+> **Owned by [37-region-tag-on-df-step.md](../archive/gui/37-region-tag-on-df-step.md)** (T4),
 > appended under this file's D5 append-only rule. It **adds one optional field**
 > (`when`) to the existing `df_step` kind (see *`df_step`* above for the field,
 > the normative order `step, off, rbase?, when?, disasm?, ops`, the

@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-ictedit.sh — goossens ImGuiColorTextEdit + TextDiff
-# (docs/internal/gui/17-interaction-testing-and-editor.md T2): a real code editor
+# (docs/internal/archive/gui/17-interaction-testing-and-editor.md T2): a real code editor
 # for the Author door + a side-by-side diff. master f67e5bc, MIT (+ bundled dtl,
 # BSD-3). Every commit since 2025-06 needs ImGui 1.92 for 2 SDL3-IME lines;
 # doc-11's compile-verified mitigation wraps exactly those two assignments

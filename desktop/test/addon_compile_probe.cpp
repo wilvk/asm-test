@@ -1,5 +1,5 @@
 // addon_compile_probe.cpp — the imgui-repin compile gate
-// (docs/internal/gui/12-addon-supply-chain.md T3).
+// (docs/internal/archive/gui/12-addon-supply-chain.md T3).
 //
 // This TU is compiled by `make desktop-addon-compile-check` with the desktop
 // lane's EXACT flags ($(DESKTOP_CXXFLAGS)) at whatever imgui version is pinned.

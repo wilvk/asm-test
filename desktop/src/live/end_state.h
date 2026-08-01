@@ -1,5 +1,5 @@
 // end_state.h — fanning the collapsed `Ended` state into its CAUSE
-// (docs/internal/gui/23-graded-truth-layer.md T2, F20).
+// (docs/internal/archive/gui/23-graded-truth-layer.md T2, F20).
 //
 // When streaming stops the user could not tell WHY: a clean detach, a torn drop,
 // an EOF, a mid-capture crash, or the overwhelmingly common cause — a stale

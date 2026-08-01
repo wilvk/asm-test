@@ -1,5 +1,5 @@
 // test_terrain.cpp — the density height field over time
-// (docs/internal/gui/10-spacetime-3d-overview.md T2). Null harness, no display:
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T2). Null harness, no display:
 // this binary links space/terrain.o + space/projection.o + the trace canvas
 // builder + the document model and NOTHING else — the same engine-free closure
 // proof test_projection.cpp makes for the plane, now for the terrain over it

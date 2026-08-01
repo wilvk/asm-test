@@ -1,5 +1,5 @@
 // view_test.h — the shared harness for the replay-view tests
-// (docs/internal/gui/04-replay-views.md T3-T8). Header-only, so it adds no
+// (docs/internal/archive/gui/04-replay-views.md T3-T8). Header-only, so it adds no
 // object to any link line and cannot drag a dependency into a test binary.
 //
 // Two things every view test needs: check helpers in the cli/test_view.c idiom

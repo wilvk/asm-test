@@ -7,7 +7,7 @@
 > **no source, Makefile, or Dockerfile change**. The verification that replaces a
 > test is: this note cites the primary sources listed at the end and is reviewed
 > against them. It is the background for
-> [aarch64-ptrace-single-step-validation.md](../implementations/aarch64-ptrace-single-step-validation.md)
+> [aarch64-ptrace-single-step-validation.md](../archive/implementations/aarch64-ptrace-single-step-validation.md)
 > and [self-hosted-ci-runners.md](../implementations/self-hosted-ci-runners.md),
 > and it explains *why the tree already chose native arm64 CI over emulation*.
 

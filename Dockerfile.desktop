@@ -22,7 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # libfreetype-dev: the imgui freetype rasteriser (13-foundation-moves.md F3) —
 # the app + viewer build with DESKTOP_FREETYPE=1 below. The fonts themselves load
 # via stb_truetype and need none of this; freetype is the higher-quality path.
-# libx11-dev (docs/internal/gui/45-launch-and-window-target.md T6/T9): the
+# libx11-dev (docs/internal/archive/gui/45-launch-and-window-target.md T6/T9): the
 # Home rail's window-picker (desktop/src/platform/window_picker.cpp) compiles
 # against Xlib directly — GLFW already links X11 transitively at the shared-
 # library level, this adds only the development HEADERS. xvfb: T9's own

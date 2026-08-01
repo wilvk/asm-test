@@ -1,5 +1,5 @@
 // scene_host.h — the GL render-to-texture bridge for the 3D spacetime overview
-// pane (docs/internal/gui/10-spacetime-3d-overview.md — the integration surfacing
+// pane (docs/internal/archive/gui/10-spacetime-3d-overview.md — the integration surfacing
 // pass). draw_shell is backend-free: it links NO GL and is driven by ImGui's null
 // backend in tests, which is what keeps ui/shell.o out of asmtest-viewer's engine
 // closure AND drivable headlessly. So the shell reaches the GL scene ONLY through

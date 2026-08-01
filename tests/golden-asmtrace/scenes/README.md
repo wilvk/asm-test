@@ -8,7 +8,7 @@ parent, **nothing here is generated**. `make asmtrace-golden` writes only flat
 corpus leaves this directory untouched.
 
 The 3D spacetime overview
-([docs/internal/gui/10-spacetime-3d-overview.md](../../../docs/internal/gui/10-spacetime-3d-overview.md))
+([docs/internal/archive/gui/10-spacetime-3d-overview.md](../../../docs/internal/archive/gui/10-spacetime-3d-overview.md))
 has **three** golden scenes. Two of them are *generated*, live in the parent, and
 are listed here only so the set reads as one:
 

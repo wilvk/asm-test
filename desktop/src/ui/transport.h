@@ -1,5 +1,5 @@
 // transport.h — pure play/pause + playhead-projection seams
-// (docs/internal/gui/34-playhead-and-scene-reach.md T1/T3).
+// (docs/internal/archive/gui/34-playhead-and-scene-reach.md T1/T3).
 //
 // Two tiny pure functions, header-only so no TU/makefile change and so the null
 // backend drives them directly (D4):

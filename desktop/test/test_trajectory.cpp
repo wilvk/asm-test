@@ -1,5 +1,5 @@
 // test_trajectory.cpp — the execution-trajectory builder
-// (docs/internal/gui/10-spacetime-3d-overview.md T3). Null harness, no display:
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T3). Null harness, no display:
 // this binary links space/trajectory.o + space/projection.o + doc/recording.o
 // and NOTHING else — that link line is the proof the render-only viewer can
 // thread a recording's PC path over the terrain plane with zero engine

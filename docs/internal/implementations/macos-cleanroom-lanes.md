@@ -708,9 +708,9 @@ Track D:                        T4 ─┐
   [self-hosted-ci-runners.md](self-hosted-ci-runners.md).
 - **Porting the DynamoRIO tier to macOS** (the VM guests here only exercise the
   dlopen/install path, never the DBI tiers) —
-  [macos-dynamorio-port.md](macos-dynamorio-port.md).
+  [macos-dynamorio-port.md](../archive/implementations/macos-dynamorio-port.md).
 - **A macOS out-of-process stepper** (Mach APIs, unrelated to clean-room
-  install testing) — [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md).
+  install testing) — [macos-oop-mach-stepper.md](../archive/implementations/macos-oop-mach-stepper.md).
 - **Publishing/packaging changes** (what the bindings bundle, registry
   publishing) — [distribution-packaging.md](distribution-packaging.md); this
   doc only *consumes* staged packages.

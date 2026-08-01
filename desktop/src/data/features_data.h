@@ -1,5 +1,5 @@
 // features_data.h — the backend-completeness data readers
-// (docs/internal/gui/02-exporters-and-readers.md T5).
+// (docs/internal/archive/gui/02-exporters-and-readers.md T5).
 //
 // Three committed producers already emit everything the completeness view
 // needs, so this is a reader library and one table view, not new probes:

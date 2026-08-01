@@ -1,5 +1,5 @@
 // test_find.cpp — global find as search-as-measurement
-// (docs/internal/gui/22-selection-and-search.md T3, F17). Null backend, model
+// (docs/internal/archive/gui/22-selection-and-search.md T3, F17). Null backend, model
 // state (D4).
 //
 // Asserts: a query reports the match COUNT and the aggregate COST the model

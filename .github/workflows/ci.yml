@@ -823,7 +823,7 @@ jobs:
   # libdft64 are fetched + digest-gated at build time and are test/oracle-only, never bundled.
   # Pin's kit is x86-64 gcc-linux, so the lane self-skips on non-x86 — no macOS leg (the
   # retired macos-13 is never used; if an Intel-mac leg were ever wanted the id is
-  # macos-15-intel). See docs/internal/implementations/pin-libdft-taint-oracle.md.
+  # macos-15-intel). See docs/internal/archive/implementations/pin-libdft-taint-oracle.md.
   taint-oracle:
     name: taint (libdft64 differential oracle)
     runs-on: ubuntu-latest

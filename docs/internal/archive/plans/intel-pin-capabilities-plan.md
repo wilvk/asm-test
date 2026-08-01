@@ -21,10 +21,10 @@
 
 > **Status (2026-07-21): ALL FOUR TRACKS LANDED — plan complete; archived.**
 > Each track is owned by its implementations brief: PIN-1
-> [pin-sde-future-isa-lane.md](../../implementations/pin-sde-future-isa-lane.md) ☑ 8/8,
-> PIN-2 [pin-xed-trace-tier.md](../../implementations/pin-xed-trace-tier.md) ☑ 9/9,
-> PIN-3 [pin-probe-mode-capture.md](../../implementations/pin-probe-mode-capture.md)
-> ✅ 7/7, PIN-4 [pin-libdft-taint-oracle.md](../../implementations/pin-libdft-taint-oracle.md)
+> [pin-sde-future-isa-lane.md](../implementations/pin-sde-future-isa-lane.md) ☑ 8/8,
+> PIN-2 [pin-xed-trace-tier.md](../implementations/pin-xed-trace-tier.md) ☑ 9/9,
+> PIN-3 [pin-probe-mode-capture.md](../implementations/pin-probe-mode-capture.md)
+> ✅ 7/7, PIN-4 [pin-libdft-taint-oracle.md](../implementations/pin-libdft-taint-oracle.md)
 > ✅ 7/7 (PIN-3/PIN-4 live-verified on Zen 5, commit `fd00e46`). The per-track
 > headings below carry the pointers.
 
@@ -72,7 +72,7 @@ fetched-and-pinned test lanes rather than shipped tiers.
 
 ---
 
-## PIN-1 — SDE future/absent-ISA test lane *(LANDED — [pin-sde-future-isa-lane.md](../../implementations/pin-sde-future-isa-lane.md) ☑ 8/8: `Dockerfile.sde`, `scripts/fetch-sde.sh`, `mk/sde.mk`)*
+## PIN-1 — SDE future/absent-ISA test lane *(LANDED — [pin-sde-future-isa-lane.md](../implementations/pin-sde-future-isa-lane.md) ☑ 8/8: `Dockerfile.sde`, `scripts/fetch-sde.sh`, `mk/sde.mk`)*
 
 **The one to build.** Turns [CLAUDE.md](../../../../CLAUDE.md)'s "specific CPU
 generation" hardware self-skip into a runnable tier: assemble a routine using an
@@ -122,7 +122,7 @@ cleanly on aarch64; SDE is fetched, digest-verified, and its license vendored.
 
 ---
 
-## PIN-2 — XED-decoded Pin trace tier *(LANDED — [pin-xed-trace-tier.md](../../implementations/pin-xed-trace-tier.md) ☑ 9/9: `Dockerfile.pintool`, `scripts/fetch-pin.sh` pinned Pin 4.2, `mk/pintool.mk`)*
+## PIN-2 — XED-decoded Pin trace tier *(LANDED — [pin-xed-trace-tier.md](../implementations/pin-xed-trace-tier.md) ☑ 9/9: `Dockerfile.pintool`, `scripts/fetch-pin.sh` pinned Pin 4.2, `mk/pintool.mk`)*
 
 A `libasmtest_pintool` control-flow producer filling
 [asmtest_trace_t](../../../../include/asmtest_trace.h), whose reason to exist is
@@ -167,7 +167,7 @@ is launch-under-`pin` with the trace delivered over shm; zero diff under
 
 ---
 
-## PIN-3 — Pin probe-mode arg/return capture *(LANDED — [pin-probe-mode-capture.md](../../implementations/pin-probe-mode-capture.md) ✅ 7/7, live-verified on Zen 5, commit `fd00e46`)*
+## PIN-3 — Pin probe-mode arg/return capture *(LANDED — [pin-probe-mode-capture.md](../implementations/pin-probe-mode-capture.md) ✅ 7/7, live-verified on Zen 5, commit `fd00e46`)*
 
 The [capture-args-returns.md](../../analysis/capture-args-returns.md) "middle tier":
 Pin **probe mode** trampolines at function entry/exit while the app runs its
@@ -202,7 +202,7 @@ pointer is refused, not faulted on; probe-mode refusals report a reason.
 
 ---
 
-## PIN-4 — libdft64 differential oracle for the DR taint tier *(LANDED — [pin-libdft-taint-oracle.md](../../implementations/pin-libdft-taint-oracle.md) ✅ 7/7, `fd00e46`; `Dockerfile.taint-oracle`, `docker-taint-oracle`)*
+## PIN-4 — libdft64 differential oracle for the DR taint tier *(LANDED — [pin-libdft-taint-oracle.md](../implementations/pin-libdft-taint-oracle.md) ✅ 7/7, `fd00e46`; `Dockerfile.taint-oracle`, `docker-taint-oracle`)*
 
 Not a DR impossibility — an **oracle**. The DR taint client
 ([src/dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c) built

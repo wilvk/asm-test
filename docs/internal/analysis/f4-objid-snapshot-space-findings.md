@@ -1,7 +1,7 @@
 # Findings: F4 object-identity snapshot-space convention (GCBulkNode addresses are POST-move)
 
 *Status: findings / measured record (2026-07-19). Produced for
-[dataflow-f4-object-identity.md](../implementations/dataflow-f4-object-identity.md) **T4**
+[dataflow-f4-object-identity.md](../archive/implementations/dataflow-f4-object-identity.md) **T4**
 (the snapshot-space spike), which gates the T5 objid join. **Verdict: GO on the POST-move
 convention** — GCBulkNode `Address` is the object's FINAL, post-relocation address, so the dump
 GC's own move ranges **belong** in the trace-to-snapshot translation set. Measured directly on a

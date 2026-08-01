@@ -1,5 +1,5 @@
 // test_streams.cpp — decode_streams' dataflow segmentation by df_invocation
-// (docs/internal/gui/40-segment-dataflow-by-invocation.md T1). A continuous
+// (docs/internal/archive/gui/40-segment-dataflow-by-invocation.md T1). A continuous
 // capture (35 T1) appends many invocation passes, each restarting df_step at 0;
 // this asserts build_segmented_dataflow splits them so no pass aliases another,
 // that decode_streams resolves Streams::df to the LATEST pass, and that a one-shot

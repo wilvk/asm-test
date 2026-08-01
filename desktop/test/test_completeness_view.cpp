@@ -1,5 +1,5 @@
 // test_completeness_view.cpp — the backend-completeness view model
-// (docs/internal/gui/02-exporters-and-readers.md T6).
+// (docs/internal/archive/gui/02-exporters-and-readers.md T6).
 //
 // The golden compare is the D7 test with teeth: the rendered table is compared
 // BYTE for byte, so editing a skip_reason by one character fails here. That is

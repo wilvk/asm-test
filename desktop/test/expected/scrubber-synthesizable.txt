@@ -3,4 +3,4 @@ message=no per-step register capture in this recording — the regstate producer
 synthesizable=1
 action=synthesize register history
 label=re-derived by re-running the recorded code under the emulator ring — sound and exact, but NOT the bytes the original run observed; a re-derivation, not original capture (30 R3 T4)
-docs=docs/internal/gui/09-teaching-producers.md
+docs=docs/internal/archive/gui/09-teaching-producers.md

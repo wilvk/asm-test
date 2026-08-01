@@ -5,11 +5,11 @@ document model: a viewer (and, in the full build, an author/inspect host) for th
 recordings every headless asmspy mode and the Author-mode recorder produce. This
 directory holds the app skeleton — the two binaries, the build integration, the
 document model, and the reuse seam onto the asmspy view-model, implemented from
-[docs/internal/gui/03-desktop-shell.md](../docs/internal/gui/03-desktop-shell.md)
+[docs/internal/archive/gui/03-desktop-shell.md](../docs/internal/archive/gui/03-desktop-shell.md)
 — plus the **replay views** over a recording
-([04-replay-views.md](../docs/internal/gui/04-replay-views.md)) and the
+([04-replay-views.md](../docs/internal/archive/gui/04-replay-views.md)) and the
 **backend-completeness panel**
-([02-exporters-and-readers.md](../docs/internal/gui/02-exporters-and-readers.md)).
+([02-exporters-and-readers.md](../docs/internal/archive/gui/02-exporters-and-readers.md)).
 The Loom and the live observer surfaces land in the sibling docs 05–09.
 
 ## Workspace, entry rail and Settings (doc 20)
@@ -576,7 +576,7 @@ a merged two-recording graph needs the Wave-2 state-diff producer, and until it
 exists inventing one would be worse than showing nothing. The diff panel itself
 reports coverage deltas, heat deltas, hot-edge deltas under a **statistical**
 chip, and the divergence card — *patient zero*, the mechanism
-[05-loom-day-one.md](../docs/internal/gui/05-loom-day-one.md) consumes for its
+[05-loom-day-one.md](../docs/internal/archive/gui/05-loom-day-one.md) consumes for its
 fork comparison.
 
 Three diff rules are structural. A pair that cannot be aligned (different
@@ -1144,7 +1144,7 @@ a library decision this work does not make.
 
 Tracing, live observation and memory are three readings of one execution that
 share two axes — **the virtual address space** and **time**. The 3D spacetime
-overview ([10-spacetime-3d-overview.md](../docs/internal/gui/10-spacetime-3d-overview.md))
+overview ([10-spacetime-3d-overview.md](../docs/internal/archive/gui/10-spacetime-3d-overview.md))
 draws them as one scene: the address space is a horizontal **plane** (code and
 data placed by address through a locality-preserving Hilbert curve), **time is
 the vertical axis**, **access density is terrain height**, and execution is a
@@ -1412,7 +1412,7 @@ installs software Mesa + EGL and runs the whole thing.
 
 ## Live-observer overlay — N trajectories, convergence marks
 
-The same scene becomes a *live observer* when a [07](../docs/internal/gui/07-serve-live-host.md)
+The same scene becomes a *live observer* when a [07](../docs/internal/archive/gui/07-serve-live-host.md)
 `LiveSession` feeds it: each thread is one coloured `Trajectory` growing over the
 shared terrain in real time, and where two threads touch the same locality a bright
 arc marks it. There is no new capture path — the overlay **consumes the session the
@@ -1422,7 +1422,7 @@ on the growing recording each frame: as the session appends `trace` events the
 per-tid trajectories lengthen, and the terrain re-slices from `codeimage` + `survey`
 residency as those arrive. An **absolute-basis** live trace (PT) is a real
 address-space path; a **single-step** live trace is region-relative, so it stays
-`TRAJ_RELATIVE_BASIS`-**labelled** — and, since [36](../../docs/internal/gui/36-anchor-the-3d-plane.md),
+`TRAJ_RELATIVE_BASIS`-**labelled** — and, since [36](../docs/internal/archive/gui/36-anchor-the-3d-plane.md),
 **anchored** onto the plane (`TRAJ_ANCHORED`, `base+off`) when the recording pins
 the span down with a single `codeimage`, or refused *louder* (a stated reason, no
 geometry) when it does not.
@@ -1436,7 +1436,7 @@ that dwell in one cell make *one* hint, not a flood. It is **always a hint**, ne
 a proof: per-tid step indices are not a global clock, so a convergence shows
 co-location, not ordering or a proven race — the label rides in the data
 (`ConvergenceSet::kHint` / `label()`). Only individually **placed** paths take part
-([36](../../docs/internal/gui/36-anchor-the-3d-plane.md) T5's four-condition bar):
+([36](../docs/internal/archive/gui/36-anchor-the-3d-plane.md) T5's four-condition bar):
 a `TRAJ_STATISTICAL` residency layer is skipped unconditionally, and a
 `TRAJ_RELATIVE_BASIS` path is skipped **only when it was not anchored** — an
 *anchored* rel path (`TRAJ_ANCHORED`, `base+off`) is two paths on one plane and is

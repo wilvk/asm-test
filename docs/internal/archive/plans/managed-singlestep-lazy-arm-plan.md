@@ -53,7 +53,7 @@ The crash surface is removed *by construction* for covered signatures, and the
 ### B0 — D's runtime fidelity note *(landed)*
 
 Add one sentence to `HwTrace.DegradationNote()` and a caveat to
-[docs/bindings/dotnet.md](../../../../docs/bindings/dotnet.md): an in-process managed
+[docs/bindings/dotnet.md](../../../bindings/dotnet.md): an in-process managed
 window is fatal if the runtime spawns a thread in-window; pin the tiering worker or
 use the out-of-process path. Zero protection, full fidelity — lands first because it
 protects users on day one independent of the rest.

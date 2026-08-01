@@ -330,7 +330,7 @@ static void test_process_path() {
             "what DID arrive is still kept — torn means incomplete, not void");
     }
     {
-        // docs/internal/gui/45-launch-and-window-target.md T3: `launch` sends
+        // docs/internal/archive/gui/45-launch-and-window-target.md T3: `launch` sends
         // no pid — the host (fake_serve.sh here, asmspy for real) "forks" one
         // and names it only in the `started` reply. Proves send_launch's wire
         // shape (the fixture greps argv[0] back out and echoes it) and that

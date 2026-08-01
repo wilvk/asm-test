@@ -2437,7 +2437,7 @@ echo "distinct tids seen: $ntids"
 
 # ---------------------------------------------------------------------------
 # --launch: fork+PTRACE_TRACEME+exec a fresh target and trace it from birth
-# (docs/internal/gui/45-launch-and-window-target.md T1/T2). No PT/IBS/debug-
+# (docs/internal/archive/gui/45-launch-and-window-target.md T1/T2). No PT/IBS/debug-
 # register silicon needed — just fork/ptrace, which every CI runner has.
 # ---------------------------------------------------------------------------
 echo "--- asmspy --launch log -- syscall_victim (from-birth launch) ---"
@@ -3013,7 +3013,7 @@ rm -f "$SWLOG"
 
 # ---------------------------------------------------------------------------
 # .asmtrace RECORD MODE across the headless subcommands
-# (docs/internal/gui/01-asmtrace-format.md T5)
+# (docs/internal/archive/gui/01-asmtrace-format.md T5)
 # ---------------------------------------------------------------------------
 # Every headless mode can write a recording. The assertion per mode is the same
 # three facts, because they are the ones that make a file USABLE: a v1 header,

@@ -296,7 +296,7 @@ expect_exit "--shard=3/2 exits 2" 2 "$POS" --shard=3/2
 expect_exit "--repeat=0 exits 2"  2 "$POS" --repeat=0
 
 # ---- record mode: a failing test carries its recording into the report ----
-# (docs/internal/gui/06-doors-and-learning.md T7). Engine-free: neg.records_a_
+# (docs/internal/archive/gui/06-doors-and-learning.md T7). Engine-free: neg.records_a_
 # recording calls asmtest_note_recording() directly, so this pins the RUNNER's
 # plumbing on every host, with or without a producer.
 expect_fail_msg "TAP failure carries recording:" "recording: fake.asmtrace" \

@@ -167,7 +167,7 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     # Carry through every hand-pinned row this script does NOT compute above: the
     # desktop bundled deps (imgui / nlohmann-json / linmath), the oracle-only pin
     # 3.20 + libdft64, and any GUI addon pinned by hand per
-    # docs/internal/gui/12-addon-supply-chain.md. A full rewrite must never
+    # docs/internal/archive/gui/12-addon-supply-chain.md. A full rewrite must never
     # SILENTLY un-pin a bundled dependency (B5) — so preserve any prior data row
     # whose exact <name> <version> pair was not emitted above. Keyed on the pair,
     # not the name alone, so the two `pin` kits (4.2 managed, 3.20 hand) stay

@@ -1,5 +1,5 @@
 // completeness.cpp — the ImGui half of the backend-completeness panel
-// (docs/internal/gui/02-exporters-and-readers.md T6). Draws only; every rule
+// (docs/internal/archive/gui/02-exporters-and-readers.md T6). Draws only; every rule
 // lives in views/completeness_model.h and is tested there.
 //
 // The panel NEVER probes. It renders a committed box record or a features file

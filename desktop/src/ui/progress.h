@@ -1,5 +1,5 @@
 // progress.h — determinate-vs-indeterminate progress feedback, decided faithfully
-// (docs/internal/gui/14-quick-wins.md T3).
+// (docs/internal/archive/gui/14-quick-wins.md T3).
 //
 // A determinate bar (a real fraction) is shown ONLY when a REAL total exists:
 // an .asmtrace `end` footer, or a bounded live budget. A torn recording (no

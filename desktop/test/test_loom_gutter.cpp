@@ -1,5 +1,5 @@
 // test_loom_gutter.cpp — the Loom takes gutter accumulator + its reversible
-// remove / clear (docs/internal/gui/22-selection-and-search.md T4, F12). Null
+// remove / clear (docs/internal/archive/gui/22-selection-and-search.md T4, F12). Null
 // backend, model state (D4).
 //
 // F12 said "the takes gutter accumulates forks with no remove/clear", but

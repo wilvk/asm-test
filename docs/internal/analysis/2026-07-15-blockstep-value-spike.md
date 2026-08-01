@@ -172,7 +172,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    replay to instructions with fully-defined flags, since a different silicon/emulator pairing
    could diverge where this one did not.
 
-   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)
    T4): an explicit mnemonic(+count)-keyed table (`dfb_undef_flags`,
    `src/dataflow_blockstep.c`) now masks every architecturally undefined EFLAGS bit out of
    both the coherence canary and the captured EFLAGS write records, on both the oracle and
@@ -191,7 +191,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    (block-step advances the *real* process, so a syscall inside a block has already retired
    by the boundary — never emulate through it).
 
-   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)
    T7): `region_scan` now accepts an optional caller-vouched list of real instruction extents
    (`asmtest_blockstep_extent_t`, blob-absolute, sorted/non-overlapping/in-range — validated
    before any tracee is spawned) and sweeps each independently; bytes outside every extent
@@ -233,7 +233,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
   is a bounded extension of what this spike proved; none re-opens the go/no-go.
 
   **LANDED** (noted 2026-07-21;
-  [dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)):
+  [dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)):
   this recommendation shipped in full. F1 increment 1 landed exactly as specified — the
   [src/dataflow_blockstep.c](../../../src/dataflow_blockstep.c) replay producer, with its
   `dataflow-blockstep-test` lane in [mk/dataflow.mk](../../../mk/dataflow.mk); F2's

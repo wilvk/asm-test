@@ -1,5 +1,5 @@
 // converge.h — cross-thread convergence detection for the live-observer overlay
-// (docs/internal/gui/10-spacetime-3d-overview.md T5, step 2). When two DIFFERENT
+// (docs/internal/archive/gui/10-spacetime-3d-overview.md T5, step 2). When two DIFFERENT
 // tids place a recent PC vertex in the SAME projection-plane cell within a sliding
 // step window, the two threads touched the same locality at about the same logical
 // time — the "two threads on the same line" signal.

@@ -9,7 +9,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Launch a process and trace it from birth, and target a running one by
-  window-pick** (docs/internal/gui/45-launch-and-window-target.md). Two new
+  window-pick** (docs/internal/archive/gui/45-launch-and-window-target.md). Two new
   ways onto a live target, alongside attach-by-PID:
   - `asmspy --serve`'s wire protocol gains a `launch` command
     (`{"cmd":"launch","mode":...,"argv":[...],"cwd":...}`) that forks the
@@ -34,7 +34,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (virtual) X11 display and a real second window, not a mock.
 
 - **The faithful city, Phase A — the MVP terrain reskin**
-  (docs/internal/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md). The 3D
+  (docs/internal/archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md). The 3D
   spacetime overview now reads as a place, not an abstract density field: the
   terrain is zoned by memory-region kind (`Scene::set_zoning`, a new `uKind`
   R8UI texture blended into `kTerrainFrag`), an in-domain but never-touched
@@ -68,7 +68,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pack. See [installation.md](docs/getting-started/installation.md#install-the-desktop-gui-app).
 
 - **Live `blame` + `statediff` from the `asmspy` serve/dataflow leg**
-  (docs/internal/gui/41-live-blame-statediff-serve-leg.md). The backward-attribution
+  (docs/internal/archive/gui/41-live-blame-statediff-serve-leg.md). The backward-attribution
   `blame` cone and the step-to-step `statediff` register delta were producible only by
   the emulator recorder; a live attach could not emit them. Both are now emitted by the
   live single-step leg as pure projections over data it already captures — `blame` is a
@@ -81,7 +81,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   *views* already worked live client-side; this adds the reproducible, deep-linkable
   precomputed artifact.
 - **Per-invocation dataflow views over a continuous capture**
-  (docs/internal/gui/40-segment-dataflow-by-invocation.md). A continuous
+  (docs/internal/archive/gui/40-segment-dataflow-by-invocation.md). A continuous
   `dataflow`/`auto` capture appends many invocation passes into one recording, each
   restarting `df_step` at 0 (delimited by a `df_invocation` marker). The desktop's
   `decode_streams` indexed those steps in one flat space, so the passes aliased —
@@ -95,7 +95,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass. A one-shot recording stays a single pass, byte-identical to before. Pure
   desktop decode + a selector: no producer, wire, or schema change.
 - **`df_step` states its region base on the wire (`rbase`)**
-  (docs/internal/gui/37-region-tag-on-df-step.md). 36 anchors a routine-relative
+  (docs/internal/archive/gui/37-region-tag-on-df-step.md). 36 anchors a routine-relative
   `df_step` offset by *deriving* the base from a recording's single `codeimage`
   span, and must refuse whenever a recording carries zero or ≥2 spans — which a
   live `auto` candidate walk produces routinely. The producer already knows the
@@ -115,7 +115,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **`auto` reliably captures — one shot is not a policy**
-  (docs/internal/gui/39-auto-capture-reliability.md). The complaint *"start and arm
+  (docs/internal/archive/gui/39-auto-capture-reliability.md). The complaint *"start and arm
   a process, it starts then stops, and the pane says `refused: no session is
   running`"* was two independent bugs. **The region picker:** the candidate walk
   (arm a ranked pick, and on *"not seen entering"* try the next) lived inline in two
@@ -137,7 +137,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `refused:` banner no longer haunts the next healthy capture. Every policy change is
   proven by pure tests (no CI lane has AMD silicon), per CLAUDE.md.
 - **The 3D overview places a live routine-relative path, or says why not**
-  (docs/internal/gui/36-anchor-the-3d-plane.md). A live `dataflow`/`auto` capture
+  (docs/internal/archive/gui/36-anchor-the-3d-plane.md). A live `dataflow`/`auto` capture
   (`df_step` + `codeimage`, no `trace`) is `basis:"rel"`, so its 3D-overview tab
   used to open onto an **empty, unlabelled plane** — three defects stacked: the
   promised *"rel: routine-relative"* HUD chip never fired (it keyed on the empty
@@ -158,13 +158,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`scene-df-loop` golden** (docs/internal/gui/36-anchor-the-3d-plane.md T4). A
+- **`scene-df-loop` golden** (docs/internal/archive/gui/36-anchor-the-3d-plane.md T4). A
   3D-overview golden in the live dataflow shape no existing golden carried —
   absolute `codeimage` + region-relative `df_step`, no `trace` — so the anchor
   fallback and the terrain's `df_step` residency rung are exercised end to end by
   a committed artifact (`record_scene_df`, regenerated byte-stable under
   `docker-cli`).
-- **Author-mode arm64 run/trace** (docs/internal/gui/32-per-guest-value-producer.md
+- **Author-mode arm64 run/trace** (docs/internal/archive/gui/32-per-guest-value-producer.md
   R5 T3). The Author door's Run button now dispatches assembled AArch64 code
   through the per-guest emulator L0 value-fabric producer
   (`asmtest_dataflow_emu_run_arch`, `src/dataflow_emu.c`) instead of refusing
@@ -195,7 +195,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names (in a plain sorted rather than hand-curated order, a cosmetic
   follow-on).
 - **A command palette (`Ctrl+Shift+P` / `Ctrl+P`) over the `dt_nav_go` router**
-  (docs/internal/gui/21-spine-navigation.md T1). A modal fuzzy finder that makes
+  (docs/internal/archive/gui/21-spine-navigation.md T1). A modal fuzzy finder that makes
   the whole spine reachable by typing: view-switch, go-to step/offset/link,
   open-recent (the open workspace), attach-a-process, run-walkthrough,
   reset-layout, and jump-to-a-recorded-offset — every command dispatching only
@@ -206,7 +206,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   degrading to an unranked list under the null backend). No new dependency.
 - **A persistent wayfinding breadcrumb** (recording ▸ session ▸ view +
   step/filter/process scope) with same-basename disambiguation
-  (docs/internal/gui/21-spine-navigation.md T2). Sourced from `nav.current` and
+  (docs/internal/archive/gui/21-spine-navigation.md T2). Sourced from `nav.current` and
   drawn in the outer shell (the docked menu bar / the windowed top strip) so it is
   visible from every pane; two same-basename `.asmtrace` files are now
   distinguishable in both the band and the recording tab titles (basename + the
@@ -221,7 +221,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   / timeline-windowing follow-on (the `ImZoomSlider` now drives a real timeline
   window). No new dependency (ImPlot, ImZoomSlider already vendored).
 - **Keyboard camera for the 3D overview, Tab-focusable panes and 3D viewport, and
-  keyboard-operable slice cones** (docs/internal/gui/22-selection-and-search.md T2,
+  keyboard-operable slice cones** (docs/internal/archive/gui/22-selection-and-search.md T2,
   F18). The 3D spacetime overview was a mouse-only island; because Dear ImGui
   exposes no OS screen-reader tree, keyboard operability is the only accessibility
   substitute. Arrows now orbit, `+`/`-` (and `=`) dolly, `R` resets and `T` is the
@@ -233,7 +233,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cones (`b`/`f`/`Enter`) were already keyboard-operable.
 - **Global find (`Ctrl+F`): highlight-all, match count, aggregate cost, and
   Enter/Shift+Enter cycling; type-to-narrow extended to disasm and hot-edges**
-  (docs/internal/gui/22-selection-and-search.md T3, F17). Find is a *measurement*,
+  (docs/internal/archive/gui/22-selection-and-search.md T3, F17). Find is a *measurement*,
   not just a jump: it highlights EVERY hit in the timeline (with a clean seam for
   the doc-21 minimap), reports the match count AND the aggregate cost (summed
   hot-edge samples across sites — "this symbol retires N samples across M sites"),
@@ -255,7 +255,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a **clear forks** action, both reversible; clearing removes a whole take node
   with its loud refusal intact, never silently dropping a failure (D7).
 - **Derivable `severity` fidelity-chrome tier in the `.asmtrace` schema**
-  (docs/internal/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
+  (docs/internal/archive/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
   string (`neutral | caution | integrity`) names the tier a reader renders a
   recording's fidelity chrome at. It is **derivable** from the fidelity fields the
   schema already carries (torn / truncated / trust / redacted / skip / basis /
@@ -264,7 +264,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   01's append-only rule with **01-owner sign-off recorded in the schema doc** (the
   Phase-3-freeze checkpoint, D5). It grades *loudness*; it gates no truth off (D7).
 - **A uniform elapsed-time + Cancel busy signal on long operations, and a
-  degrade-to-coarse 3D scrub** (docs/internal/gui/23-graded-truth-layer.md T4).
+  degrade-to-coarse 3D scrub** (docs/internal/archive/gui/23-graded-truth-layer.md T4).
   `progress.h` grows a pure `LongOp` (elapsed clock + faithful determinate-vs-
   indeterminate mode + observable cancel flag) and a `draw_progress` half, so an op
   that can exceed a frame shows a spinner + elapsed + Cancel instead of a silent
@@ -273,12 +273,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while a full re-slice would exceed the frame budget, then swaps to the full slice
   — the coarse plane is the same labelled rung the terrain shows normally, so it
   hides nothing. The no-fabricated-total fidelity rule is unchanged.
-- **A Queue path on the live patch bay** (docs/internal/gui/23-graded-truth-layer.md
+- **A Queue path on the live patch bay** (docs/internal/archive/gui/23-graded-truth-layer.md
   T3). A blocked capture can be **queued** as a visible, cancellable chip; it starts
   automatically the moment the jack frees — and only then (never an auto-swap, so
   the one-ptrace-jack invariant is never bypassed).
 - **The desktop remembers your workspace, and a Settings pane**
-  (docs/internal/gui/20-workspace-and-settings.md T3/T4/T5). Open recordings, the
+  (docs/internal/archive/gui/20-workspace-and-settings.md T3/T4/T5). Open recordings, the
   active view and each pane's selection now restore across launches (persisted as
   `asmtrace-link`s in `build/desktop-workspace.json` beside the dock `.ini`), with
   an MRU **recents** list on the home rail and a **File ▸ Open Recent** menu — each
@@ -292,7 +292,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transparently that text-scale is the only in-app accessibility lever, because Dear
   ImGui exposes no OS screen-reader tree.
 - **In-app term registry, per-view "?" caveats, domain-term-first headings, and a
-  searchable Terms pane** (docs/internal/gui/24-one-visual-language.md T3). The
+  searchable Terms pane** (docs/internal/archive/gui/24-one-visual-language.md T3). The
   coined GUI lexicon (Loom, fabric, patch-bay, hollow span, born-untraced,
   patient-zero, hot-edges, knot, jack, worldline, Reweave, dim/hot take, terrane)
   is now defined in the ONE Sphinx glossary (`docs/project/glossary.md`) with each
@@ -307,14 +307,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   list). The registry/lookup/heading metadata are asserted headlessly against the
   same glossary the build parses (one source).
 - **First-open primer + legend on the Loom and the 3D overview**
-  (docs/internal/gui/24-one-visual-language.md T5). The two heaviest surfaces now
+  (docs/internal/archive/gui/24-one-visual-language.md T5). The two heaviest surfaces now
   open a dismissible, in-canvas primer ("what this is / how to read it" + the
   shared legend) instead of dropping a learner into a raw fabric/terrain; it shows
   once per session, never nags again, and is re-openable from the per-view "?".
   Until it is acknowledged the view holds its lean default (nothing heavier is
   front-loaded). State transitions are asserted headlessly.
 - **Convention-alignment keyboard shortcuts, accurately advertised**
-  (docs/internal/gui/18-breach-stops.md T1). `Shift+F` fits / frames the current
+  (docs/internal/archive/gui/18-breach-stops.md T1). `Shift+F` fits / frames the current
   selection, `,`/`.` step to the previous / next sibling, `F10`/`F11` are step /
   step-back aliases of `j`/`k`, `W`/`S`/`A`/`D` drive camera zoom/pan when a
   spatial pane (timeline / 3D) holds focus — a labelled context that also keeps
@@ -323,7 +323,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not-yet-mapped binding "planned" and can never again advertise a dead key as
   live. Every advertised binding has a passing `desktop-ui-test`.
 - **Back/forward navigation history over the deep-link router**
-  (docs/internal/gui/18-breach-stops.md T6): `Alt+Left`/`Alt+Right` walk a
+  (docs/internal/archive/gui/18-breach-stops.md T6): `Alt+Left`/`Alt+Right` walk a
   bounded, serialisable stack of `asmtrace-link`s and land identically to a fresh
   navigation, with a minimal breadcrumb affordance by the status line. A new jump
   clears the forward branch (browser-history discipline).
@@ -335,7 +335,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   available, else the lightest ptrace mode), and arm64 single-step modes are
   greyed and annotated with the stated hazard.
 - **Author output can be saved, and an unsaved-work marker in the tab title**
-  (docs/internal/gui/18-breach-stops.md T3): an Author run materialises into a
+  (docs/internal/archive/gui/18-breach-stops.md T3): an Author run materialises into a
   Recording and writes to a `.asmtrace` file through the same confirm-overwrite
   dialog live captures use; a dirty (authored + unsaved) tab shows a trailing `*`.
 - **Pan/zoom, fit-graph and selection for the graph views** (docs/internal/gui/15-
@@ -357,7 +357,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   settings file, click-routing and culling without pixels.
 - **The keyboard shortcuts now all work, and are tested.** The desktop help
   overlay advertised twelve keybindings but only `[`/`]` were wired; the other
-  ten are now implemented (docs/internal/gui/17-interaction-testing-and-editor.md
+  ten are now implemented (docs/internal/archive/gui/17-interaction-testing-and-editor.md
   T1): `1`/`2`/`3`/`4` switch view (canvas / timeline / slice / diff), `j`/`k`
   (and the arrows) and `PgDn`/`PgUp` step the selection, `Enter` opens the slice
   explorer at the selection, `b`/`f` light the backward / forward dependence
@@ -397,7 +397,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   syscall stream uses an order-preserving filter rather than a relevance re-rank,
   and the address-ordered disassembly keeps its existing time/range controls.)
 - **The register scrubber and the ABI x-ray are now hosted in visible shell
-  panes** (docs/internal/gui/09-teaching-producers.md T3/T4 — the integration
+  panes** (docs/internal/archive/gui/09-teaching-producers.md T3/T4 — the integration
   surfacing pass). The register time-travel scrubber is a per-recording
   **Scrubber** tab: its `regstate` seek index (`analysis/stepindex.h`) is built
   once when the recording opens, parallel to the workspace like the decoded
@@ -415,7 +415,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   present and aligned x-ray through the very calls the tab makes, and the
   per-recording parallel vectors survive a close.
 - **The 3D spacetime overview is now hosted in a visible shell pane**
-  (docs/internal/gui/10-spacetime-3d-overview.md — the integration surfacing
+  (docs/internal/archive/gui/10-spacetime-3d-overview.md — the integration surfacing
   pass). It is a per-recording **3D overview** tab. The GL boundary is a new
   abstract `SceneHost` (`desktop/src/ui/scene_host.h`): the shell weaves the
   pure, engine-free `space/` models once per recording (a `SceneView`), draws the
@@ -438,7 +438,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   completes the deliberately-outstanding integration item — all ten GUI docs'
   views are now surfaced in the shell.
 - **Golden scenes and a CI-runnable GL lane for the 3D spacetime overview**
-  (docs/internal/gui/10-spacetime-3d-overview.md T7 — the view is now complete).
+  (docs/internal/archive/gui/10-spacetime-3d-overview.md T7 — the view is now complete).
   Three committed scenes pin the whole stack end to end. Two are **generated** by
   `make asmtrace-golden` from one byte literal whose listing sits beside the bytes,
   so the terrain's heat is countable on paper:
@@ -465,7 +465,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coarse-vs-rich staging, and the "3D to find, 2D to read" rule).
 - **Drill-in router + fidelity invariants for the 3D spacetime scene — every pick
   reaches the right 2D view, and truncation/statistical survive it**
-  (docs/internal/gui/10-spacetime-3d-overview.md T6). The scene is an *overview*,
+  (docs/internal/archive/gui/10-spacetime-3d-overview.md T6). The scene is an *overview*,
   not a reading surface: `scene3d/pick.h`'s `resolve_pick` (pure, GL-free) now
   routes every pickable kind through 04's deep-link router to the flat 2D view that
   actually reads it — an exact **code cell** → the trace **canvas** at that offset
@@ -483,7 +483,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `obs-survey-{ibs,sw}` fixtures; builds into both binaries and stays
   engine-free (D4).
 - **Live-observer overlay for the 3D spacetime scene — N per-thread trajectories
-  and cross-thread convergence hints** (docs/internal/gui/10-spacetime-3d-overview.md
+  and cross-thread convergence hints** (docs/internal/archive/gui/10-spacetime-3d-overview.md
   T5). A live 07 `LiveSession` now feeds
   the 3D overview: each thread is one coloured trajectory growing over the shared
   terrain in real time, fed incrementally by re-running the trajectory builder on
@@ -504,7 +504,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   feed against a two-thread fake-serve fixture) and an added arc case in
   `test_scene_fbo`.
 - **ABI x-ray in the desktop GUI — SysV vs Win64 argument marshalling, side by
-  side** (docs/internal/gui/09-teaching-producers.md T4). The classroom
+  side** (docs/internal/archive/gui/09-teaching-producers.md T4). The classroom
   flagship: two register scrubbers (System V | Microsoft x64) LOCKED to one
   playhead, driven by an authored walkthrough (06's `note` stops). `asmtrace_record`
   grew a Win64 recording path — it now records the same corpus routine twice, once
@@ -521,7 +521,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refused not clamped. Builds into both binaries and stays engine-free (D4);
   covered by `test_abixray` (builder) and `test_abixray_draw` (the ImGui half).
 - **Save a live capture to a `.asmtrace` file from the Inspect door — and open
-  it in the Loom** (docs/internal/gui/07-serve-live-host.md). The live host kept
+  it in the Loom** (docs/internal/archive/gui/07-serve-live-host.md). The live host kept
   its recordings in memory only; the Inspect door now has a **save capture**
   section that writes the growing (or last completed) recording to disk in the
   same NDJSON a `--record` run produces, via a new model-native serializer
@@ -534,7 +534,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of sending the user to the Loom's refusal). Covered by new
   `test_recording` round-trip cases (string and file, clean and truncated).
 - **Register time-travel scrubber in the desktop GUI**
-  (docs/internal/gui/09-teaching-producers.md T3). A playhead over a recording's
+  (docs/internal/archive/gui/09-teaching-producers.md T3). A playhead over a recording's
   steps showing the full register file at each step, seeked O(1) through a new
   shared `regstate` index (`desktop/src/analysis/stepindex.h`, which the Loom's
   now-column reads too). Registers that changed vs the previous held step are
@@ -547,7 +547,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (builder: seek, diff-highlight, tear, absent message) and `test_scrubber_draw`
   (the ImGui half under the null backend).
 - **The 3D spacetime overview's GL scene — camera, terrain mesh, trajectory
-  tubes, colour-ID picking** (docs/internal/gui/10-spacetime-3d-overview.md T4).
+  tubes, colour-ID picking** (docs/internal/archive/gui/10-spacetime-3d-overview.md T4).
   The desktop now draws the address-space projection, a terrain slice and the
   execution trajectories as a 3D scene under the ImGui HUD, in the same GL context
   the shell already stands up. A `2^order × 2^order` grid VBO is displaced by a
@@ -567,7 +567,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surfaceless EGL on software Mesa. The math comes from a newly pinned single
   header, `linmath.h` (WTFPL), fetched and digest-verified like imgui/json.
 - **Opt-in per-step register-capture ring in the emulator**
-  (docs/internal/gui/09-teaching-producers.md T1). `emu_step_capture(e, cap)`
+  (docs/internal/archive/gui/09-teaching-producers.md T1). `emu_step_capture(e, cap)`
   arms one more `UC_HOOK_CODE` on the x86-64 guest that snapshots the full
   `emu_x86_regs_t` **before every executed instruction** into a bounded,
   caller-sized ring — the per-step producer a register time-travel scrubber and
@@ -579,7 +579,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and survives `emu_snapshot` / `emu_restore` (the Track F arming discipline).
 
 - **The live Observer views — seven of them, plus a `codeimage` kind and a
-  PT-replay slice** (docs/internal/gui/08-observer-views.md T1–T8). The desktop
+  PT-replay slice** (docs/internal/archive/gui/08-observer-views.md T1–T8). The desktop
   now renders what a live `asmspy --serve` session produces: the **syscall
   stream** (payloads redacted by default, revealed per row, session-wide reveal
   behind a second confirmation), the **watchpoint timeline**, the **process
@@ -634,7 +634,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `desktop-test` exercises on hosts with no Intel PT.
 
 - **`asmspy --serve[=<socket>]` — the live-session control loop**
-  (docs/internal/gui/07-serve-live-host.md T1/T2/T6). asmspy can now be driven
+  (docs/internal/archive/gui/07-serve-live-host.md T1/T2/T6). asmspy can now be driven
   as a **capture host** rather than a one-shot command: it reads NDJSON
   commands (`start` / `pause` / `stop` / `quit`) on stdin or a `unix(7)` socket
   and streams back the events of whichever engine is running. This is how the
@@ -671,7 +671,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attaches nothing. Fixed.
 
 - **`libasmspy` — the asmspy tracer engine is now a linkable library**
-  (docs/internal/gui/07-serve-live-host.md T0). The ptrace engines
+  (docs/internal/archive/gui/07-serve-live-host.md T0). The ptrace engines
   (`cli/asmspy_engine.c`) and the `/proc`/ELF/JIT resolvers
   (`cli/asmspy_proc.c`) were loose objects compiled straight into the `asmspy`
   binary with **no public header**, so anything else that wanted them — the
@@ -729,7 +729,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pick up the new dependencies; `--emu`/`--asm`/`--nasm`/`--tidy` are unchanged.
 
 - **The three doors: Learn, Author, and a capability panel — plus runner record
-  mode (desktop GUI plan, Phase 2; docs/internal/gui/06-doors-and-learning.md).**
+  mode (desktop GUI plan, Phase 2; docs/internal/archive/gui/06-doors-and-learning.md).**
   The GUI's first-run promise is "no blank IDE". The **Learn door** plays
   bundled walkthroughs, and a walkthrough is not a document beside a recording —
   it IS a recording, with ordered `stop:true` notes in it, so a story cannot
@@ -762,7 +762,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a test that then crashes still reaches the report; a child that died before
   reporting names none.
 - **The Loom — a recorded run as a spacetime fabric (desktop GUI plan, Phase 2
-  flagship; docs/internal/gui/05-loom-day-one.md).** New `desktop/src/loom/`
+  flagship; docs/internal/archive/gui/05-loom-day-one.md).** New `desktop/src/loom/`
   turns a value trace and its def-use graph into lanes, worldline spans, hops
   and knots: a register deck in the producer's own fixed order, memory
   coalesced into bands on first touch, and a pure zoom-aware draw plan (spans
@@ -790,7 +790,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pseudo-random graphs.
 - **Desktop replay views — trace canvas, operand timeline, slice explorer,
   recording diff, deep links (desktop GUI plan, Phase 2;
-  docs/internal/gui/04-replay-views.md).** The desktop app now renders what a
+  docs/internal/archive/gui/04-replay-views.md).** The desktop app now renders what a
   recording contains rather than just its summary: per-offset heat with a
   block-granular coverage gutter, the per-step operand-value timeline, the
   def-use slice explorer (click a step; see everything that produced the value
@@ -814,7 +814,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   observed within the recorded window" — never "identical". `make
   desktop-test` grew ten binaries covering all of it.
 - **Backend-completeness panel and its data readers
-  (docs/internal/gui/02-exporters-and-readers.md T5/T6).** New
+  (docs/internal/archive/gui/02-exporters-and-readers.md T5/T6).** New
   `desktop/src/data/` readers for the three shapes the existing producers emit
   (a live `asmfeatures` sweep, a committed `benchmarks/boxes/<box>/` record, a
   full `asmtest-bench-report/v1`) plus each box's append-only
@@ -830,7 +830,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   block starts cannot be recovered from an offset stream without instruction
   lengths.
 - **`.asmtrace` exporters — recordings open in speedscope, Perfetto, genhtml
-  and Graphviz (desktop GUI plan, Phase 1; docs/internal/gui/02-exporters-and-readers.md).**
+  and Graphviz (desktop GUI plan, Phase 1; docs/internal/archive/gui/02-exporters-and-readers.md).**
   New `tools/asmtrace_export.c` (`make asmtrace-export`) reads a recording and
   writes a speedscope evented profile (`--speedscope`), Chrome Trace Event JSON
   for Perfetto (`--chrome`), a block-offset lcov record (`--lcov`) or the
@@ -846,7 +846,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   committed expected files and pins each refusal by exit code *and* by the
   reason it prints.
 - **Desktop GUI skeleton — a Dear ImGui shell over the `.asmtrace` document
-  model (desktop GUI plan, Phase 2; docs/internal/gui/03-desktop-shell.md).**
+  model (desktop GUI plan, Phase 2; docs/internal/archive/gui/03-desktop-shell.md).**
   New `desktop/` tree building two binaries: `asmtest-desktop`, the full app,
   which links the Author-tier engines and so is GPL-2.0 as a whole; and
   `asmtest-viewer`, a render-only viewer with zero engine dependencies that stays
@@ -1267,7 +1267,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test-lane only. Documented in
   [the SDE testing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/sde-testing.md)
   and
-  [the implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/pin-sde-future-isa-lane.md).
+  [the implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/pin-sde-future-isa-lane.md).
 
 - **Live whole-window compose lane (.NET).** The `hwtrace-dotnet` self-suite
   gains checks proving the zero-config compose seam (`MethodLoadVerbose` →
@@ -1280,7 +1280,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   off Intel-PT silicon) the STRONG PT tier — plus a mid-window re-tier
   decode-at-version check. Runs as the named `make docker-hwtrace-dotnet-unwarmed`
   lane. Tasks T1–T5 of the
-  [managed-wholewindow-compose implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/managed-wholewindow-compose.md).
+  [managed-wholewindow-compose implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/managed-wholewindow-compose.md).
   Two re-verification findings refine the doc's original premise: (1) forcing a
   stop-the-world `GC.Collect(0)` **on the single-stepped thread inside the
   window** is intermittently fatal — the in-process EFLAGS.TF window dies
@@ -1313,7 +1313,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fail-not-skip target for a runner that claims PT. Documented in
   [the native-tracing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/native-tracing.md)
   and
-  [the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-pt-replay-tier.md).
+  [the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-pt-replay-tier.md).
 - **Whole-window in-process guards for the zero-config scope (deny regions /
   instruction budget / wall-clock watchdog).** The `using (new AsmTrace())`
   region-free whole-window scope, powered by the in-process `EFLAGS.TF`
@@ -1395,7 +1395,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-power-of-two) to flush out VL-assumption bugs before any SVE silicon is
   available; execution sign-off on real SVE hardware (Graviton3/Grace/A64FX-class)
   remains pending — see
-  [aarch64-sve-capture.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/aarch64-sve-capture.md).
+  [aarch64-sve-capture.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/aarch64-sve-capture.md).
 
 - **XED-decoded Intel Pin trace lane (`make docker-pintool` / `make
   pintool-test`).** A pinned, digest-gated Intel Pin 4.2 kit
@@ -1466,7 +1466,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make docker-riscv64` lane builds a `linux/riscv64` image and runs the core
   suites + self-tests under QEMU binfmt (`make binfmt-riscv64`, pinned
   `tonistiigi/binfmt`), wired into CI as the `test-riscv64` job. The tracing tiers
-  stay x86-64/AArch64. See [riscv-native-tier.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/riscv-native-tier.md).
+  stay x86-64/AArch64. See [riscv-native-tier.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/riscv-native-tier.md).
 
 - **Live Intel PT whole-window smoke + a `make hwtrace-pt-live` lane that FAILS rather
   than skips where PT is claimed.** `test_pt_live_selfjit` (`examples/test_hwtrace.c`)
@@ -1479,7 +1479,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into a build failure on a runner that is supposed to expose bare-metal Intel PT. The
   live capture is silicon-gated (no `intel_pt` on the reachable dev boxes); in
   `make docker-hwtrace` the test prints a clean `# SKIP pt live: …` everywhere.
-  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/intel-pt-whole-window-substrate.md).
 
 - **System-package specs for the C core — Homebrew, Debian, AUR, vcpkg and Conan —
   each built, installed and consumed in a Docker CI lane.** `packaging/` now holds a
@@ -1507,7 +1507,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carries the invariant-envelope case on any host; live capture is silicon-gated
   (`make hwtrace-pt-live` + `make hwtrace-dotnet-test` on a bare-metal Intel PT box). Only
   `HwBackend.CoreSight` keeps the forward-look self-skip.
-  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/intel-pt-whole-window-substrate.md).
 
 - **Whole-window Intel PT STRONG tier wired behind the empty-ctor scope, with a runtime
   WEAK/STRONG decode-trust ladder.** `asmtest_hwtrace_begin_window`/`_end_window`
@@ -1525,7 +1525,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capture is silicon-gated; the ladder, the runtime trust probe, and the synthetic-fixture
   decode all run in `make docker-hwtrace` (green on this AMD host — no `intel_pt` PMU, so the
   ladder resolves to WEAK and the native PT pair self-skips).
-  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/intel-pt-whole-window-substrate.md).
 
 - **Reproducible source tarball (`make package-source`) attached to every
   release.** `git archive` of HEAD piped through `gzip -n` emits
@@ -1543,28 +1543,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `accept`/`accept4`/`recvfrom` decode their OUT pointer on success (raw pointer on
   failure); `socket()`'s domain renders as `AF_INET`/`AF_UNIX`/… An unknown family prints
   `{family=N, len=M}`, never a guessed name. `make docker-cli` cli-smoke PASS.
-  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/asmspy-cli-enhancements.md).
 
 - **`ioctl` requests and `fcntl` commands are named** (asmspy `--log`). `ioctl` renders
   `TIOCGWINSZ`-style names, or a faithful `_IOC(dir, type, nr, size)` decomposition for an
   unknown request (never a guessed name); `fcntl` renders `F_GETFL`/`F_SETFD`/… with
   correct conditional arity (an arg-less command such as `F_GETFL` shows no third slot).
   `make docker-cli` cli-smoke PASS.
-  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/asmspy-cli-enhancements.md).
 
 - **`futex` operations are named** (asmspy `--log`). The op renders as
   `FUTEX_WAIT`/`FUTEX_WAKE_PRIVATE`/… with `FUTEX_PRIVATE_FLAG` and
   `FUTEX_CLOCK_REALTIME` masked off before naming and re-rendered as suffixes,
   never silently dropped; an unknown op keeps its number plus those suffixes.
   `make docker-cli` cli-smoke PASS.
-  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/asmspy-cli-enhancements.md).
 
 - **`stat`/`statx` result buffers are decoded** (asmspy `--log`).
   `fstat`/`stat`/`lstat`/`newfstatat` render `{st_mode=S_IFREG|0644, st_size=18}` on
   success (a raw pointer on failure), and `statx` renders its mask-honoring
   `{stx_mode=…, stx_size=…}` (a field the kernel did not fill is omitted, not invented).
   The path decode these calls already had is preserved. `make docker-cli` cli-smoke PASS.
-  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/asmspy-cli-enhancements.md).
 
 - **Hot-edges → data-flow drill-in** (asmspy TUI, mode 7). In the frozen hot-edges view,
   arrows select an edge and `Enter` opens a data-flow capture (mode 9) of the function
@@ -1573,7 +1573,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepts a mid-function landing (drill ≠ rank); it is unit-tested in `test_autoregion`
   (6 checks) so it is covered on every host, not just an AMD IBS box. The ncurses wiring
   is pty-driven (manual-only); the decision logic runs in CI.
-  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/asmspy-cli-enhancements.md).
 
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
@@ -1589,7 +1589,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `no_hw_record` skips arming the DR breakpoints, reproducing the pre-injection
   fail-closed truncation on demand. `make dataflow-blockstep-test` 191/191 (was 186/186,
   +5), stable across 5 consecutive runs on this Zen 2 host.
-  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-producer-correctness.md).
+  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-producer-correctness.md).
 
 - **Extents-driven block-step region scan: a caller-vouched list of real instruction
   extents lets `region_scan` skip an embedded constant-pool island instead of desyncing on
@@ -1609,7 +1609,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the negative control. `make dataflow-blockstep-test` 199/199 (was 191/191, +8), stable
   across 5 consecutive runs; `make docker-dataflow-attach` 520/520 across all 8 suites, 0
   skips; `make docker-docs` clean.
-  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-producer-correctness.md).
+  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-producer-correctness.md).
 
 - **Def-use graph and forward/backward slice surface in the Ruby, Lua, Zig,
   Rust, Go, Java and .NET data-flow bindings (previously producer-only), via a
@@ -1626,7 +1626,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `forward_slice(0)` both equal `{0,1,2,3,4}` (the store at step 1 reached
   through the load at step 2), excluding the trailing `ret`. All seven
   `docker-dataflow-<lang>` lanes green at their new 40/40 (was 36/36), 0 skips.
-  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-bindings-slice-codeimage.md).
+  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-bindings-slice-codeimage.md).
 
 - **Code-image recorder wrapper and versioned (time-correct) operand decode in
   all ten data-flow language bindings** (`asmtest_codeimage.h`'s `new`/`track`/
@@ -1643,7 +1643,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `attach_pid_versioned` capture through it (result and step-count assertions
   tied to that run's own arguments, so a stubbed capture cannot pass). All ten
   `docker-dataflow-<lang>` lanes green with the new assertions, 0 skips.
-  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-bindings-slice-codeimage.md).
+  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/dataflow-bindings-slice-codeimage.md).
 
 - **Block-step pre-cover: an IBS covered-block table that memoizes the ptrace
   block-step reconstructors' decode.** `asmtest_bs_precover_build`/`_free`
@@ -1663,7 +1663,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-identical `insns[]`/`blocks[]`/`truncated`/result while cutting branch-
   probe decode calls; `asmtest_bs_stats`/`_reset` are test hooks that count
   cumulative probe calls and cache hits. See
-  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md).
+  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/ptrace-blockstep-tracer-correctness.md).
 
 - **`ASMTEST_TRACE_IBS_PRECOVER`: an opt-in policy bit that wires the block-step
   pre-cover table above into the cross-tier auto cascade
@@ -1680,7 +1680,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   routine's basic blocks). Off AMD, or wherever the auto-cascade's fast
   in-process single-step backend already completes the capture before reaching
   block-step, the bit is a proven no-op — never a behavior change. See
-  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md).
+  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/ptrace-blockstep-tracer-correctness.md).
 
 - **In-process, branch-granular single-step (W3): `asmtest_ss_btf_available` /
   `asmtest_ss_btf_trace` (`src/ss_btf.c`), the missing third single-step form.**
@@ -1703,7 +1703,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   partition byte-for-byte, and a 20-trip loop (19 taken back-edges, past any
   16-entry LBR window) reconstructs all 62 instructions, complete, 10/10
   stable runs. See
-  [inproc-btf-block-step.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/inproc-btf-block-step.md).
+  [inproc-btf-block-step.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/inproc-btf-block-step.md).
 
 - **macOS out-of-process single-step tracer (`asmtest_mach_*`), completing the
   W2 foreign-process story on macOS.** `asmtest_mach_trace_call` /
@@ -2523,7 +2523,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Selection is now one shared brushing-and-linking model — a pick in any pane
   cross-highlights the same entity in detail/disasm/Loom/3D at once**
-  (docs/internal/gui/22-selection-and-search.md T1, F7). Every view used to hold
+  (docs/internal/archive/gui/22-selection-and-search.md T1, F7). Every view used to hold
   its own selection, so an analyst re-found the same address by hand in each pane.
   Selection is now ONE Workspace/shell-level entity (`{rec, step, offset, lane}`
   plus a bumped `epoch`), held distinctly from navigation (`nav.current` points a
@@ -2533,7 +2533,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   *nothing selected* rather than a fabricated row (D7), and cross-highlighting
   brushes in place without yanking every pane's viewport.
 - **Fidelity chrome is now a graded 3-tier system over a derivable `severity`
-  field** (docs/internal/gui/23-graded-truth-layer.md T1, F5). The proliferating
+  field** (docs/internal/archive/gui/23-graded-truth-layer.md T1, F5). The proliferating
   fidelity forms — a redaction placard, a statistical chip, a coarse chip, a
   bounded-window note and a torn banner, all equally loud and non-collapsible —
   collapse into ONE vocabulary: one banner, one inline chip, one glyph set, with
@@ -2546,7 +2546,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the fidelity layer and removes no truth — every field still renders, graded
   against the committed low-fidelity fixtures (D7).
 - **The live session-end state is now a persistent, cause-distinguished in-pane
-  placard with an inline fix** (docs/internal/gui/23-graded-truth-layer.md T2, F20).
+  placard with an inline fix** (docs/internal/archive/gui/23-graded-truth-layer.md T2, F20).
   The single collapsed "ended" is fanned into its cause — stopped-clean, torn (host
   crashed), torn (EOF), or a PROTOCOL-MISMATCH (a stale `build/asmspy` that printed
   a usage banner and exited 0) — each with the trust of the on-screen data, and the
@@ -2554,14 +2554,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Disconnect + reconnect). It persists across frames until the next Connect/Start;
   toasts (doc 16) supplement it, never replace it.
 - **"Paused" is split into an operator pause and a budget block**
-  (docs/internal/gui/23-graded-truth-layer.md T3, F23). The bare word named two
+  (docs/internal/archive/gui/23-graded-truth-layer.md T3, F23). The bare word named two
   states with disjoint recoveries; now an operator pause reads "PAUSED (you) —
   Resume" and a budget preemption reads "BLOCKED — jack held by \<session\> on
   \<target\>" with explicit **Swap** (a named two-step confirm), **Queue** (a
   cancellable chip that starts when the jack frees), and **Cancel**. No path
   auto-swaps without confirmation.
 - **Desktop view tabs are now data-driven, and first run is a task rail**
-  (docs/internal/gui/20-workspace-and-settings.md T1/T2). Only the views a
+  (docs/internal/archive/gui/20-workspace-and-settings.md T1/T2). Only the views a
   recording can actually fill are shown — a bare-log recording no longer presents
   empty Loom / ABI-x-ray / 3D / Scrubber tabs; the views it cannot fill collapse
   into ONE faithful **"unavailable views (N)"** affordance that still names each
@@ -2574,7 +2574,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   vs build-renders-4 drift (F13): there are four *task modes*, named as tasks, and
   the "door" vocabulary is retired.
 - **CVD-safe categorical palette + a second channel on every colour-coded
-  distinction** (docs/internal/gui/24-one-visual-language.md T2). Every categorical
+  distinction** (docs/internal/archive/gui/24-one-visual-language.md T2). Every categorical
   distinction now also carries a NON-colour channel so ~5% of users who cannot
   read the hue still read the axis: cone direction gains a shape glyph beside each
   node (◄ inflow / ► outflow / ● selection / · off-cone), the Loom take axis reads
@@ -2587,7 +2587,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   shared legend renders from ONE encoding table, so the legend is itself the proof
   no distinction rides on colour alone.
 - **One filter affordance + one time-position widget across the desktop views**
-  (docs/internal/gui/24-one-visual-language.md T4). A single type-to-narrow filter
+  (docs/internal/archive/gui/24-one-visual-language.md T4). A single type-to-narrow filter
   with a "showing N of M" count (`ui/filter.h`) replaces the ad-hoc client-side
   idioms, free ImGui column-sort landed on the hot-edge table (reordering the view,
   never the recorded model order), and ONE time-position widget (`ui/timepos.h`)
@@ -2597,7 +2597,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   intentional fidelity choice with its verbatim reason. The counts, sort order and
   discrete-reason registry are asserted headlessly.
 - **The capability panel leads with what the host *can* do**
-  (docs/internal/gui/18-breach-stops.md T4). It opened with a wall of red errno
+  (docs/internal/archive/gui/18-breach-stops.md T4). It opened with a wall of red errno
   rows; it now leads with a one-line positive summary (the available backends)
   and the standing "Learn and Author work here — no root, hardware, or attach
   needed" floor, and demotes the unavailable backends under an expandable "why
@@ -2605,10 +2605,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `attach_verdict` remedy (paranoid / Yama / i386 / CAP_SYS_PTRACE) where one
   applies. A bare host no longer reads as "the tool does not work here".
 - **The keyboard-help overlay marks planned-vs-wired bindings**
-  (docs/internal/gui/18-breach-stops.md T1): it is generated from a `wired` flag
+  (docs/internal/archive/gui/18-breach-stops.md T1): it is generated from a `wired` flag
   and greys any not-yet-mapped binding "planned" instead of advertising it as live.
 - **The desktop views are now real dockable panes — the docking layout manager,
-  presets and Reset act on visible windows** (docs/internal/gui/19-dockable-panes-keystone.md).
+  presets and Reset act on visible windows** (docs/internal/archive/gui/19-dockable-panes-keystone.md).
   Before this, the layout manager docked five named windows (`Home`, `Recording`,
   `Scrubber`, `Inspector`, `Timeline`) and the View menu offered Reset + three
   presets, but **no view was `Begin()`'d under any of those names** — the
@@ -2633,7 +2633,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at once, and that a preset switch moves real panes) and the tear-out → Reset
   round-trip is driven by the interaction lane (`make desktop-ui-test`).
 - **One semantic colour palette in the desktop's `theme.h`**
-  (docs/internal/gui/24-one-visual-language.md T1). The good / bad / maybe /
+  (docs/internal/archive/gui/24-one-visual-language.md T1). The good / bad / maybe /
   changed / cone (back·fwd·both·off) / selected / statistical axis was being
   re-invented inline in every draw file — three barely-distinguishable yellows
   meant three different things and two reds both meant "refused". They now live
@@ -2704,7 +2704,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caller of this internal decode entry (pass `NULL` to keep the prior offset-origin
   behavior); the facade (`asmtest_hwtrace_begin_window`/`_end_window`) and every language
   binding are unaffected.
-  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/implementations/intel-pt-whole-window-substrate.md).
 
 - **Internal plan docs reconciled against the code; four completed plans archived.** An audit
   of all 20 active plans against the source, Makefile lanes, CI, and git history found ~30
@@ -2892,7 +2892,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **"Reset layout" is a real, always-available action with auto-fallback**
-  (docs/internal/gui/18-breach-stops.md T2). It was inert — behind a View menu
+  (docs/internal/archive/gui/18-breach-stops.md T2). It was inert — behind a View menu
   that only appeared with docking on, acting through phantom windows. It now
   rebuilds the shipped default from any state, is bound to `Ctrl+Shift+R` (fires
   with or without the menu bar, in both binaries), and a corrupt or collapsed

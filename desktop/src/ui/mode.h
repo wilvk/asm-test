@@ -17,7 +17,7 @@ namespace asmdesk {
 // `Author` writes a routine. `Inspect` is the live-capture posture `Capture`
 // lands in once a session is up — kept distinct so a view can scope itself to
 // "a live session is running" vs. "the user is about to start one". `Launch`
-// (docs/internal/gui/45-launch-and-window-target.md T4) is a second way INTO
+// (docs/internal/archive/gui/45-launch-and-window-target.md T4) is a second way INTO
 // that same live-capture posture — start a new process and trace it from its
 // first instruction, rather than pick one already running.
 enum class Mode { Learn, Open, Capture, Author, Inspect, Launch };

@@ -60,11 +60,11 @@ restructuring must preserve them:
 
 - **Fidelity-as-schema-field is excellent and rare.** A fidelity loss
   (truncated/dropped/redacted/torn) is a recording field, not renderer
-  discipline ([01](../../gui/01-asmtrace-format.md), plan D7), so it is *testable*
+  discipline ([01](../gui/01-asmtrace-format.md), plan D7), so it is *testable*
   against committed deliberate low-fidelity fixtures. Refusals are first-class and
   non-collapsible (shared `draw_banner`: refusal ⇒ red full-pane, nothing else
   drawn), and toasts are specified to **supplement, never replace** banners
-  ([16](../../gui/16-live-feedback-and-filtering.md):25-27). Status fidelity is
+  ([16](../gui/16-live-feedback-and-filtering.md):25-27). Status fidelity is
   nuanced, not binary — a `skip` renders as a *successful* session with nothing
   to report ([schema](../../gui/asmtrace-schema.md):543-544), and `--auto` residency
   picks are labelled weaker-evidence than entry picks.
@@ -74,7 +74,7 @@ restructuring must preserve them:
   to the same addressable positions. This is why most nav findings are a thin
   layer away, not a rewrite.
 - **The Learn door is strong onboarding substrate** — dependency-free
-  "walkthroughs are themselves recordings" ([06](../../gui/06-doors-and-learning.md):48),
+  "walkthroughs are themselves recordings" ([06](../gui/06-doors-and-learning.md):48),
   need no root/hardware/attach, work in the render-only viewer, and double as the
   fidelity-chrome test corpus.
 - **Progressive disclosure already works in the Observer deck** — its inner tabs
@@ -86,15 +86,15 @@ restructuring must preserve them:
   it just needs extending to the full semantic axis (see F14).
 - **Error prevention by capability gating**: disabled doors/backends render their
   verbatim machine reason and never silently downgrade
-  ([06](../../gui/06-doors-and-learning.md):407-409); safe two-phase detach cannot
-  orphan/crash the target ([07](../../gui/07-serve-live-host.md):254-262).
+  ([06](../gui/06-doors-and-learning.md):407-409); safe two-phase detach cannot
+  orphan/crash the target ([07](../gui/07-serve-live-host.md):254-262).
 - **The 3D overview is a textbook-correct answer to Munzner's 3D pitfalls** —
   strictly an orientation surface routing every pick through the 2D deep-link
   router, a one-key top-down/2D fallback, height (not depth/length) encoding, a
   fixed-size 2D HUD. It avoids occlusion-of-quantity and unreadable in-scene text.
 - **Convention-faithful time model**: the axis is an ordinal "step" everywhere,
   never faked as wall-clock, because producers record no timestamps
-  ([15](../../gui/15-plotting-and-graph-nav.md):107).
+  ([15](../gui/15-plotting-and-graph-nav.md):107).
 
 ---
 
@@ -104,9 +104,9 @@ restructuring must preserve them:
 **Heuristics:** visibility of status · consistency & standards · recognition ·
 flexibility (accelerators) · help · fidelity culture (D7) · match with real world.
 **Where:** [nav.cpp](../../../../desktop/src/nav.cpp):282-296 · shell.cpp:200,705 ·
-[04-replay-views.md](../../gui/04-replay-views.md):214-220 ·
-[11-imgui-addons.md](../../gui/11-imgui-addons.md):54-56 ·
-[17-interaction-testing-and-editor.md](../../gui/17-interaction-testing-and-editor.md):93-97.
+[04-replay-views.md](../gui/04-replay-views.md):214-220 ·
+[11-imgui-addons.md](../gui/11-imgui-addons.md):54-56 ·
+[17-interaction-testing-and-editor.md](../gui/17-interaction-testing-and-editor.md):93-97.
 
 For a self-described keyboard-first tool whose core audience is RE/perf experts,
 the only shortcut-help surface advertises 12 bindings but only `[` and `]` are
@@ -126,7 +126,7 @@ step-to-adjacent-sibling) plus WASD zoom/pan entirely.
 ### F2 · Docking layout manager and per-mode presets are orphaned {#f2}
 **Heuristics:** visibility · control/freedom (reset) · error prevention ·
 flexibility/customization · Tognazzini visible navigation.
-**Where:** [13-foundation-moves.md](../../gui/13-foundation-moves.md):82-84,124-131,155-177,210-212 ·
+**Where:** [13-foundation-moves.md](../gui/13-foundation-moves.md):82-84,124-131,155-177,210-212 ·
 layout.cpp:56-71 · shell.cpp:564,578-598.
 
 Doc 13's central restructuring promise — dockable panes with per-mode
@@ -148,8 +148,8 @@ once) is unmet — scheduled but unlanded.
 
 ### F3 · No in-app glossary, tooltips, or legends for a dense coined lexicon {#f3}
 **Heuristics:** match with real world · recognition rather than recall · help.
-**Where:** [04](../../gui/04-replay-views.md):217,366 · [05](../../gui/05-loom-day-one.md):42 ·
-[08](../../gui/08-observer-views.md):243-244 · fabric_imgui.cpp:208 ·
+**Where:** [04](../gui/04-replay-views.md):217,366 · [05](../gui/05-loom-day-one.md):42 ·
+[08](../gui/08-observer-views.md):243-244 · fabric_imgui.cpp:208 ·
 `docs/project/glossary` (Sphinx, unsurfaced in-app).
 
 The tool invents a dense private lexicon — Loom, fabric, patch-bay, knot, hollow,
@@ -168,7 +168,7 @@ even define the coined GUI terms.
 **Heuristics:** aesthetic/minimalist · match with real world · help · error
 prevention · tab-overload IA · progressive disclosure · universal usability.
 **Where:** plan:302 · shell.cpp:373-508,603-607 · observer_draw.cpp ·
-[11](../../gui/11-imgui-addons.md):38.
+[11](../gui/11-imgui-addons.md):38.
 
 Every recording exposes all 12 view tabs at once (Summary, Canvas, Timeline,
 Slice, Diff, Observer, Loom, Scrubber, ABI x-ray, 3D overview, Backends, This
@@ -186,9 +186,9 @@ planned nowhere.
 ### F5 · Fidelity chrome is not a designed system — ungraded and proliferating {#f5}
 **Heuristics:** aesthetic/minimalist · consistency · status visibility ·
 fidelity-chrome-as-system.
-**Where:** [04](../../gui/04-replay-views.md):28,548 · [08](../../gui/08-observer-views.md):156 ·
+**Where:** [04](../gui/04-replay-views.md):28,548 · [08](../gui/08-observer-views.md):156 ·
 [schema](../../gui/asmtrace-schema.md):543-544 · plan D7:263-264 ·
-[10](../../gui/10-spacetime-3d-overview.md):70.
+[10](../gui/10-spacetime-3d-overview.md):70.
 
 Fidelity is load-bearing and must stay — but the fidelity layer is not a designed
 system on two axes at once. **Loudness is ungraded:** a single recording routinely
@@ -208,8 +208,8 @@ grades severity in *data* but no doc proposes a severity/tier field for the
 
 ### F6 · Fixed 15px font, no HiDPI awareness, no text-scale or settings surface {#f6}
 **Heuristics:** accessibility · flexibility & efficiency.
-**Where:** [11](../../gui/11-imgui-addons.md):50,171 ·
-[13](../../gui/13-foundation-moves.md) (fonts) · implemented survey (window
+**Where:** [11](../gui/11-imgui-addons.md):50,171 ·
+[13](../gui/13-foundation-moves.md) (fonts) · implemented survey (window
 1280×720, 15px hardcoded).
 
 The app hardcodes a 15px font and a 1280×720 window with no HiDPI awareness, no
@@ -225,8 +225,8 @@ Settings pane, persisted window size, and a light theme are unplanned anywhere.
 
 ### F7 · Selection is one-pane navigation, not shared brushing-and-linking {#f7}
 **Heuristics:** recognition rather than recall · Tognazzini anticipation.
-**Where:** [04](../../gui/04-replay-views.md) (`dt_nav_go`) · implemented survey
-(per-view selection state) · [05](../../gui/05-loom-day-one.md) (loom/canvas/
+**Where:** [04](../gui/04-replay-views.md) (`dt_nav_go`) · implemented survey
+(per-view selection state) · [05](../gui/05-loom-day-one.md) (loom/canvas/
 selected_step separate).
 
 The dataviz convention (Perfetto's linked Current Selection, speedscope's
@@ -246,8 +246,8 @@ disasm/source/lineage in the linked panes.
 
 ### F8 · No command palette or overview/minimap {#f8}
 **Heuristics:** recognition · flexibility & efficiency. **Where:**
-[16](../../gui/16-live-feedback-and-filtering.md):27-28 · [04](../../gui/04-replay-views.md):178-220 ·
-[11](../../gui/11-imgui-addons.md):46,387,455.
+[16](../gui/16-live-feedback-and-filtering.md):27-28 · [04](../gui/04-replay-views.md):178-220 ·
+[11](../gui/11-imgui-addons.md):46,387,455.
 With 12 views, doors, a live deck, recordings, and a fully addressable deep-link
 space, the expert has no one-keystroke finder to jump to a view/step/offset/
 recent-recording/PID/routine, and no overview/minimap to keep global position at
@@ -257,7 +257,7 @@ ImZoomSlider, "not yet wired"); command palette has zero design across all 20 do
 
 ### F9 · No persistent "where am I" wayfinding {#f9}
 **Heuristics:** status visibility · recognition · flexibility · Tognazzini
-visible navigation. **Where:** [04](../../gui/04-replay-views.md):194 · shell.cpp:604-607,667-668.
+visible navigation. **Where:** [04](../gui/04-replay-views.md):194 · shell.cpp:604-607,667-668.
 Deep in a nested tab the analyst cannot answer "which recording/session/step/
 filter/thread am I in, and how do I jump elsewhere" without re-hunting by eye.
 There is no persistent global context chrome; Home is itself a closeable tab
@@ -267,7 +267,7 @@ cannot coexist. **Status:** cheap given `nav.current` exists; unbuilt.
 
 ### F10 · No recents / session restore {#f10}
 **Heuristics:** recognition · flexibility (session restore). **Where:**
-[03](../../gui/03-desktop-shell.md):335-344 · [13](../../gui/13-foundation-moves.md):124-131.
+[03](../gui/03-desktop-shell.md):335-344 · [13](../gui/13-foundation-moves.md):124-131.
 The document model is "a set of recordings the analyst returns to repeatedly", yet
 nothing is remembered between launches: no MRU list, no reopen-last-workspace, no
 drag-drop. Every start forces recall-and-retype of a file path. **Status:** not
@@ -276,7 +276,7 @@ recordings.
 
 ### F11 · Deep-link nav spine is one-way — no back/forward {#f11}
 **Heuristics:** user control & freedom (emergency exit). **Where:**
-[04](../../gui/04-replay-views.md) (D4 `dt_nav_go`).
+[04](../gui/04-replay-views.md) (D4 `dt_nav_go`).
 The whole IA is "arrive at a view from a question" via chained deep links, but
 once a user follows failure→recording→step→slice→cone (or drills 3D→2D) there is
 no marked exit back — no back button, breadcrumb history, or nav stack. Each jump
@@ -286,7 +286,7 @@ action. **Status:** `nav` holds only `t.current`; not addressed. (04:218's
 
 ### F12 · Undo/redo exists only in the Author editor {#f12}
 **Heuristics:** user control & freedom (undo) · Tognazzini reversibility.
-**Where:** [17](../../gui/17-interaction-testing-and-editor.md):29 · [05](../../gui/05-loom-day-one.md):393-408.
+**Where:** [17](../gui/17-interaction-testing-and-editor.md):29 · [05](../gui/05-loom-day-one.md):393-408.
 Undo/redo protects only the Author code editor's source buffer. An analyst who
 applies an aggressive Tree filter, rearranges panes, lights the wrong cone, scrubs
 the playhead, or forks exploratory Loom "takes" has no reversal path; the takes
@@ -295,7 +295,7 @@ users toward timidity. **Status:** no app-level command/undo stack exists.
 
 ### F13 · First run is a jargon "door-chooser" with an inconsistent entry model {#f13}
 **Heuristics:** match with real world · consistency · help/onboarding ·
-progressive disclosure. **Where:** plan:302,496,14 · [06](../../gui/06-doors-and-learning.md):48 ·
+progressive disclosure. **Where:** plan:302,496,14 · [06](../gui/06-doors-and-learning.md):48 ·
 shell.cpp:170-201.
 First run hands the explicitly-courted Learner a bespoke metaphor — "choose a
 door" — and four peer options, two of which (Author, Inspect) and the caption
@@ -321,8 +321,8 @@ encode the same "bad/refused". **Status:** not addressed.
 
 ### F15 · No colour-blind-safe palette {#f15}
 **Heuristics:** accessibility · consistency. **Where:** theme.h ·
-[04](../../gui/04-replay-views.md) cone hues · [05](../../gui/05-loom-day-one.md) dim/hot ·
-[15](../../gui/15-plotting-and-graph-nav.md):218 heatmap.
+[04](../gui/04-replay-views.md) cone hues · [05](../gui/05-loom-day-one.md) dim/hot ·
+[15](../gui/15-plotting-and-graph-nav.md):218 heatmap.
 ~5% of users (mostly red-green CVD) cannot reliably distinguish back-cone from
 forward-cone, dim from hot, or a refused row's red from an ordinary one, because
 those distinctions ride on colour alone. For a teaching tool this silently
@@ -334,7 +334,7 @@ second channel) — generalise it.
 
 ### F16 · Filter, sort, and time-position controls differ across every view {#f16}
 **Heuristics:** consistency · match with real world · recognition. **Where:**
-[15](../../gui/15-plotting-and-graph-nav.md):107 · implemented survey.
+[15](../gui/15-plotting-and-graph-nav.md):107 · implemented survey.
 Filtering uses three unrelated idioms (ImSearch on Learn only, engine-side text
 inputs on Tree, a combo on Backends) while core Canvas/Timeline/Observer tables
 have no filter or sort at all despite ImGui table sort being free; and the
@@ -346,7 +346,7 @@ distinguished as such. **Status:** unified widget scheduled nowhere.
 
 ### F17 · No global find / search-as-measurement {#f17}
 **Heuristics:** help · flexibility & efficiency. **Where:**
-[16](../../gui/16-live-feedback-and-filtering.md) (ImSearch, Learn only) · [11](../../gui/11-imgui-addons.md):387.
+[16](../gui/16-live-feedback-and-filtering.md) (ImSearch, Learn only) · [11](../gui/11-imgui-addons.md):387.
 An expert cannot answer "where and how much does mnemonic/address/symbol X occur"
 without manual scrolling, and the teaching persona loses the search-as-measurement
 affordance that turns a find into a lesson about aggregate cost. Client-side
@@ -355,7 +355,7 @@ aggregate cost, or Enter/Shift+Enter cycling. **Status:** not planned.
 
 ### F18 · 3D camera and hand-rolled views are mouse-only {#f18}
 **Heuristics:** accessibility · flexibility & efficiency. **Where:**
-[10](../../gui/10-spacetime-3d-overview.md):346-348,581 · implemented survey.
+[10](../gui/10-spacetime-3d-overview.md):346-348,581 · implemented survey.
 Because ImGui exposes no OS screen-reader tree, keyboard operability is the only
 accessibility substitute — yet the 3D overview, the slice DAG, and the Loom canvas
 are mouse-only islands: the 3D camera has no keyboard scheme even designed, the
@@ -366,7 +366,7 @@ mouse-reachable). **Status:** ties to F1; unwired.
 
 ### F19 · Capability/refusal surface leads with negatives and renders verbatim errno {#f19}
 **Heuristics:** status visibility · minimalist · diagnose & recover · help.
-**Where:** [06](../../gui/06-doors-and-learning.md):53,397-409 · [07](../../gui/07-serve-live-host.md):341-345.
+**Where:** [06](../gui/06-doors-and-learning.md):53,397-409 · [07](../gui/07-serve-live-host.md):341-345.
 The fidelity is correct but the refusal surface fails twice. **Framing:** on a
 common host (`perf_event_paranoid=4`, no PT/IBS silicon) the capability panel is
 mostly red greyed rows of low-level errno text, leading with what is broken — a
@@ -380,7 +380,7 @@ panel does not reuse it.
 
 ### F20 · Live session termination causes are collapsed and end-of-stream chrome is silent {#f20}
 **Heuristics:** status visibility · diagnose & recover. **Where:**
-[07](../../gui/07-serve-live-host.md):277-278,292-293 · [16](../../gui/16-live-feedback-and-filtering.md):26-27 ·
+[07](../gui/07-serve-live-host.md):277-278,292-293 · [16](../gui/16-live-feedback-and-filtering.md):26-27 ·
 desktop/README.md:685-713.
 At the moment streaming stops the user cannot tell *why* the session ended — clean
 detach, a wrong/old `asmspy` binary (the "overwhelmingly common cause", which
@@ -393,8 +393,8 @@ schedules distinct exit toasts; the persistent in-pane placard distinction is no
 yet built.
 
 ### F21 · No uniform busy signal for long operations {#f21}
-**Heuristics:** status visibility. **Where:** [04](../../gui/04-replay-views.md):553 ·
-[10](../../gui/10-spacetime-3d-overview.md) · [14](../../gui/14-quick-wins.md):162-164.
+**Heuristics:** status visibility. **Where:** [04](../gui/04-replay-views.md):553 ·
+[10](../gui/10-spacetime-3d-overview.md) · [14](../gui/14-quick-wins.md):162-164.
 A stuck PT decode or terrain rebuild that exceeds a frame budget freezes the UI
 thread with no consistent "working" indicator: an expert cannot tell the tool
 apart from a hang and may kill it. **Status:** doc 14 T3 shipped a shared faithful
@@ -402,8 +402,8 @@ apart from a hang and may kill it. **Status:** doc 14 T3 shipped a shared faithf
 long op (PT decode, symbol/codeimage load, terrain rebuild).
 
 ### F22 · Perturbing / target-killing single-step modes have no pre-commit confirm {#f22}
-**Heuristics:** error prevention. **Where:** [08](../../gui/08-observer-views.md):29-33,177 ·
-[07](../../gui/07-serve-live-host.md).
+**Heuristics:** error prevention. **Where:** [08](../gui/08-observer-views.md):29-33,177 ·
+[07](../gui/07-serve-live-host.md).
 A user can select a perturbing single-step observer/region mode and hit Start with
 no warning that it dirties the traced page and perturbs timing, and on arm64 no
 warning that it can kill a running target blocked in a syscall — a hazard that
@@ -417,7 +417,7 @@ after you are already crawling. **Status:** a second-confirm pattern exists in-t
 
 ### F23 · "paused" is overloaded — operator pause vs budget preemption {#f23}
 **Heuristics:** status visibility · recover from unwanted state · control/freedom
-· error prevention. **Where:** [07](../../gui/07-serve-live-host.md):320-323,261 ·
+· error prevention. **Where:** [07](../gui/07-serve-live-host.md):320-323,261 ·
 [schema](../../gui/asmtrace-schema.md):476,638-640.
 The bare word "paused" names two states with disjoint recoveries: an operator
 pause (resume to continue) and a concurrency-budget preemption (another live view
@@ -428,7 +428,7 @@ in-state recovery affordances are the gap.
 
 ### F24 · Author-produced recording is ephemeral {#f24}
 **Heuristics:** error prevention (dangerous default). **Where:**
-[06](../../gui/06-doors-and-learning.md):373 · [14](../../gui/14-quick-wins.md):350 ·
+[06](../gui/06-doors-and-learning.md):373 · [14](../gui/14-quick-wins.md):350 ·
 inspect_door.cpp (`draw_save_capture`).
 A user can open the Author door, assemble and run a routine, explore the trace,
 then close the tab and lose the recording irretrievably — no "unsaved work"
@@ -445,7 +445,7 @@ already exists for live capture — reuse it.
   The premise — that `torn` is only an occludable in-scene red gash with no
   fixed-screen guarantee before drill-in — is factually wrong: the built HUD
   already carries a persistent screen-fixed torn indicator
-  ([10-spacetime-3d-overview.md](../../gui/10-spacetime-3d-overview.md)). The fidelity
+  ([10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md)). The fidelity
   invariant holds in 3D.
 
 ---

@@ -173,7 +173,7 @@ struct InspectState {
     // whole-process modes and `auto` (which finds its own region).
     char region[256] = {0};
 
-    // docs/internal/gui/45-launch-and-window-target.md T3: the Launch pane's
+    // docs/internal/archive/gui/45-launch-and-window-target.md T3: the Launch pane's
     // form — a command to fork+exec and trace from birth, instead of a pid
     // picked from a table. Fixed buffers (not std::string) to match every
     // other ImGui-editable text field in this struct (asmspy_path/ssh_host
@@ -407,7 +407,7 @@ void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st);
 // no host it selects the target and asks the shell to reveal the Connect pane.
 void inspect_attach_full_detail(InspectState &s, long pid);
 
-// docs/internal/gui/45-launch-and-window-target.md T3: the Launch pane's
+// docs/internal/archive/gui/45-launch-and-window-target.md T3: the Launch pane's
 // "Launch & trace" — mirrors inspect_attach_full_detail's connect-then-start
 // shape, but there is no pid yet (send_launch instead of send_start), and
 // launch_awaiting_pid is armed so inspect_reconcile_self_end adopts

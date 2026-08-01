@@ -1,5 +1,5 @@
 // test_capview.cpp — the capability panel's two UI laws
-// (docs/internal/gui/06-doors-and-learning.md T6).
+// (docs/internal/archive/gui/06-doors-and-learning.md T6).
 //
 // Every input is SYNTHETIC, which is the point: the panel's rules must be
 // assertable on a host with no Intel PT, no CoreSight, no AMD silicon and no
