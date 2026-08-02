@@ -29,8 +29,8 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1, L4** are still open (arm64 live-dataflow leg, the Darwin `libasmtest_dataflow` build). L2/L3/L6/L7 closed as docs 40/41/37-T4/39; L5 cut as doc 60. |
 > | [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ✅ **3/3 landed** (ARM32 T1/T2, RISC-V T3 via a pinned-commit Keystone bump); doc complete, stays here only until the next archive sweep. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
-> | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48, 50 and 52 landed 2026-08-02, 51 ☐ not started. |
-> | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
+> | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52 — **all six landed** 2026-08-02 (51 last); the roadmap stays as the family's gap table and its cross-axis-brushing decision. |
+> | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ✅ **4/4 landed** 2026-08-02; doc complete, stays here only until the next archive sweep. |
 > | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; 55 ◐ 4/6 and 56 ✅ 5/5 landed the same day, 57–59 ☐ not started. |
 > | [55-scene-render-quality.md](55-scene-render-quality.md) | ◐ 4/6 — eye-dome lighting, screen-space-constant contour bands, dithered translucency and MSAA landed 2026-08-02; depth-dependent halos and portable line width (quad expansion) remain, the latter blocking the former — see the doc's own status note. |
 > | [57-causal-layers.md](57-causal-layers.md) | ☐ 0/5 — one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge. |
@@ -575,7 +575,7 @@ the catalog nor the city doc acted on.
 | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ✅ 5/5 | — |
 | [49-one-time-truth-in-the-scene.md](../archive/gui/49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ✅ 4/4 | — |
 | [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☑ 4/4 | — |
-| [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | G11–G12: per-tid/region/kind focus, thread ghosting, camera-distance entity budget | 4 | 48 (landmarks, else free) | ☐ 0/4 | will · T1–T4 · 2026-08-02 |
+| [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | G11–G12: per-tid/region/kind focus, thread ghosting, camera-distance entity budget | 4 | 48 (landmarks, else free) | ✅ 4/4 (T1 `scene3d/focus.{h,cpp}` — `SceneFocus` + `focus_line_alpha()` **ghosts, never hides**, returning the literal `1.0f` when nothing is focused so an unfocused render stays byte-identical; `thread_roster()` replays `set_trajectories`' own admission test so the roster can never claim a path the scene does not draw; `tid_palette()` lifted out of `scene.cpp`'s anonymous namespace so the HUD swatch and the drawn worldline are ONE table, not a synced copy; the statistical residency line is never focusable and never dimmed, `ec3a39a`; T2 `space::region_cells()` walks the region's compacted-domain range through the same Hilbert mapping `project()` uses — exact by construction, O(cells owned), never a bbox — feeding an R8UI focus mask + `kTerrainFrag`'s `uKindMask`, `810fd89`+`e98e4ba`+`6e293ed`; T3 desaturation runs **before** every `TF_*` branch and flattens toward a 0.12 grey floor, never black, so a filtered cell cannot read as the near-black `TF_UNKNOWN` pit — a *filtered* torn cell is still red, `676de2b`; T4 `scene3d/lod.h`, pure and header-only, applied from `shell.cpp` so `scene.cpp` needed no LOD change at all, with the structural invariant pinned that no tier may keep the statistical stipple while dropping the exact paths, `a28f6b7`) | — |
 | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | G13: a GL-free 2D terrain surface — the no-GL branches gain a real view, the GL path gains a reading mode | 4 | none | ✅ 4/4 (T1 `cell_paint()` mirrors kTerrainFrag's branch chain via `space::region_style()`, cited back from embedded.h as the C++ mirror; T2 `build_scene2d_plan()` folds a slice into down-sampled blocks — max height, OR'd flags, never dropping a fidelity bit to binning — breaks trajectory strips at unplaced vertices and dims points past the terrain-time playhead (49's rule); T3 the three degraded branches (`scene_host==nullptr`, `!ready()`, no texture) draw the surface beside their placard, a `flat_view` toggle swaps it in on the GL path, and `scene2d_pick_cell` + `resolve_pick`/`resolve_pick_hint` give it the SAME pick router the 3D view uses, parity proven in `test_scene2d.cpp`; T4 region-transition boundaries + compacted-domain-edge marking, hover readout via `resolve_pick_hint`, and the scale strip via `height_scale_note` all landed alongside T2/T3) | — |
 
 **Depiction — the 3D catalog as a build plan (docs 53–59).** Which quantities the
@@ -592,10 +592,10 @@ catalog's own 26-graph inventory and its five-phase build order.
 | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 (landed) | ☐ 0/6 | will · T1–T6 · 2026-08-02 |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | will · T1–T5 · 2026-08-02 |
 
-67 tasks across the three families (45 landed — 7 in representation via 44, 22
-in instrument via 47/48/49/50/52, 16 in depiction via 54, 55 (T1/T3/T4/T5) and
-56 (all 5) — and 22 still open: 4 in instrument (51), 18 in depiction (55's
-remaining T2 and T6 step 1, 57–59)). Sequencing across
+67 tasks across the three families (49 landed — 7 in representation via 44, **all
+26 in instrument** via 47/48/49/50/51/52, 16 in depiction via 54, 55
+(T1/T3/T4/T5) and 56 (all 5) — and 18 still open, all in depiction: 55's
+remaining T2 and T6 step 1, plus 57–59). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
 the families do not block each other — with three overlaps that must be
@@ -695,8 +695,9 @@ from the same three analysis docs 43 read — but from the half none of them
 acted on.** [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) is the
 roadmap; [47](47-scene-inspect-and-pickable-overlays.md)–[52](52-flat-terrain-surface.md)
 are its six implementation-ready briefs, cut all ☐ not started and all
-unclaimed — five have since landed (47, 48, 49, 50, 52); only 51 is still
-☐ 0/4, *free*.
+unclaimed — **all six have since landed** (47, 48, 49, 50, 52, then 51), so the
+instrument axis is complete and 46 remains only as the family's gap table and
+the home of its cross-axis-brushing decision.
 Where [43](43-faithful-city-roadmap.md) is the **representation** axis (what the
 scene depicts — zoning, weather, districts, towers), this family is the
 **instrument** axis (what a person can do with it). That split is not
