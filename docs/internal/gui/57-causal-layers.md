@@ -18,7 +18,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 3/5 landed 2026-08-03.**
+> **Status — ◐ 4/5 landed 2026-08-03.**
 > T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
 > [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
 > (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
@@ -89,6 +89,26 @@
 > is the same claim. Depth is a HUE and never a height: giving the def-use
 > generation the vertical would make two quantities share one axis (46 G8) and
 > would silently fuse two clocks 34 left unfused.
+>
+> **T4** landed as `space/blameforest.{h,cpp}` + geometry in
+> `scene3d/causal.cpp`. Weight is keyed by STEP, not by cell, and two distinct
+> steps that project into the same cell keep SEPARATE weights — summing them
+> would manufacture a convergence that no single step has, which is the one
+> arithmetic mistake here that would look right. A renderer wanting a per-cell
+> brightness takes the MAX over a cell's entries, and the header says so.
+> The beacon rides on its own channel (point size + brightness at plane
+> level), never on terrain height, per step 3 and 46 G8.
+>
+> **A `cone[]` entry is a `{step, off, kind}` OBJECT, not a bare integer** —
+> `doc/streams.cpp`'s decoder reads `c["step"]`, matching the schema's own
+> `blame` example. A fixture that wrote bare integers silently decoded every
+> cone entry as step 0, which is worth recording because it produces a
+> *plausible* forest (one huge spike at step 0) rather than an obvious
+> failure.
+>
+> **Step 4's drill-in** is data-only in this landing, on the same terms as
+> T2's: every producer carries its `step` and every sink its `step`/`off`, but
+> the pick-pass wiring is deferred (see T2's note).
 
 ## Why this work exists
 
@@ -316,7 +336,7 @@ out-of-range origin) state a reason and emit no geometry. `test_slice.cpp`'s own
 **Done when.** The front shows distance, marks escapes, and distinguishes "did not
 spread here" from "not recorded".
 
-### T4 — Blame convergence forest (M)
+### T4 — ☑ Blame convergence forest (M)
 
 **Goal.** Across all attribution cones in a recording, which producing step is the
 shared root cause many sinks trace back to.
@@ -349,6 +369,12 @@ than new wording. Exact blame only.
 every other step weight 1; a `born_untraced` cone contributes only its sink and
 never raises another cell's weight; an unplaceable `off` is counted by T1's placer
 and emits no beacon; a single-cone recording produces no spike above the baseline.
+
+Landed as `desktop/test/test_blameforest.cpp` with all four, plus: a step
+repeated WITHIN one cone counts once (weight counts distinct CONES, not cone
+entries), the `born_untraced` check is adversarial — the fixture's untraced cone
+deliberately names another cone's step and must still not raise it — and
+truncation rides as a stated lower bound.
 
 **Done when.** Shared root causes are visible, and a convergence is always a real
 set overlap.

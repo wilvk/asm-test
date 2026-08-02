@@ -183,6 +183,14 @@ struct Scene::CausalGL {
     Prim taint_hollow;              // GL_LINES: value observed, value unknown
     Prim taint_escape;              // GL_LINES: a recorded region-kind change
     Prim taint_unknown;             // GL_LINES: the front runs into a gap
+
+    // T4: the blame convergence forest. Beacons are POINTS on their OWN
+    // channel (size + brightness), never terrain height: height already
+    // encodes access density, and overloading it would make two quantities
+    // share one axis (46 G8's complaint about the vertical).
+    std::vector<Prim> blame_beacons;  // GL_POINTS, one per weight band
+    Prim blame_sinks;                 // GL_LINES: sink rings
+    Prim blame_untraced;              // GL_LINES: the born-untraced verdict
 };
 
 // Each set_* below replaces ONLY its own layer's geometry, so the four
@@ -206,6 +214,10 @@ void Scene::free_causal() {
     free_prim(causal_->taint_hollow);
     free_prim(causal_->taint_escape);
     free_prim(causal_->taint_unknown);
+    for (Prim &p : causal_->blame_beacons)
+        free_prim(p);
+    free_prim(causal_->blame_sinks);
+    free_prim(causal_->blame_untraced);
     delete causal_;
     causal_ = nullptr;
 }
@@ -414,6 +426,91 @@ void Scene::set_taint_front(const space::TaintFront &front) {
     }
 }
 
+// T4 (57-causal-layers): the blame convergence forest.
+//
+// **CONVERGENCE RIDES ON ITS OWN CHANNEL, NOT ON HEIGHT.** The terrain's
+// vertical already encodes access density; putting a set-overlap count there
+// too would make two unrelated quantities share one axis, which is exactly
+// 46 G8's complaint. So a beacon is a POINT whose SIZE and BRIGHTNESS scale
+// with weight, at plane level.
+//
+// **DEGRADE HONESTLY.** A single-cone recording (BlameForest::single_cone)
+// has nothing to converge, so its beacons are drawn at the faint baseline and
+// look like one bundle rather than like a finding. A born-untraced cone gets
+// its own separate mark and CANNOT be part of a beacon, because its weight
+// contribution is zero by construction in the builder.
+void Scene::set_blame_forest(const space::BlameForest &forest) {
+    ensure_causal();
+    for (Prim &p : causal_->blame_beacons)
+        free_prim(p);
+    causal_->blame_beacons.clear();
+    free_prim(causal_->blame_sinks);
+    free_prim(causal_->blame_untraced);
+    if (!forest.enabled)
+        return;
+
+    // Weight bands: 1 (the baseline) plus up to five above it. A convergence
+    // of 2 and a convergence of 20 must look different; a recording with no
+    // convergence at all must sit flat at the baseline.
+    constexpr int kBands = 6;
+    std::vector<float> band[kBands];
+    const float top = forest.max_weight > 1
+                          ? static_cast<float>(forest.max_weight - 1)
+                          : 1.0f;
+    for (const space::BlameConvergence &c : forest.producers) {
+        int b = 0;
+        if (c.weight > 1) {
+            const float t = static_cast<float>(c.weight - 1) / top;
+            b = 1 + static_cast<int>(t * (kBands - 2) + 0.5f);
+            if (b >= kBands)
+                b = kBands - 1;
+        }
+        band[b].insert(band[b].end(), {c.u, 0.006f, c.v});
+    }
+    for (int b = 0; b < kBands; b++) {
+        if (band[b].empty())
+            continue;
+        const float t = static_cast<float>(b) / (kBands - 1);
+        // The baseline (b == 0, weight 1) is deliberately faint: a step that
+        // exactly one cone blames is not a shared root cause.
+        const float rgba[4] = {0.55f + 0.45f * t, 0.60f + 0.35f * t,
+                               0.95f - 0.35f * t, 0.35f + 0.60f * t};
+        causal_->blame_beacons.push_back(
+            upload(band[b], GL_POINTS, rgba, 3.0f + 9.0f * t));
+    }
+
+    std::vector<float> sinks, untraced;
+    for (const space::BlameSink &sk : forest.sinks) {
+        // An unplaceable sink has no cell and was counted by the placer; it
+        // must emit nothing at all, not a ring at the plane origin.
+        if (sk.u == 0.0f && sk.v == 0.0f && sk.cell == 0)
+            continue;
+        const float c[3] = {sk.u, 0.006f, sk.v};
+        if (sk.born_untraced) {
+            // Its OWN idiom — a bracket, not a ring — because "no traced
+            // producer" is a verdict about provenance, not a weaker version
+            // of a sink.
+            const float r = 0.010f;
+            const float a1[3] = {c[0] - r, c[1], c[2] - r};
+            const float b1[3] = {c[0] - r, c[1], c[2] + r};
+            const float a2[3] = {c[0] + r, c[1], c[2] - r};
+            const float b2[3] = {c[0] + r, c[1], c[2] + r};
+            push_seg(untraced, a1, b1);
+            push_seg(untraced, a2, b2);
+        } else {
+            push_ring(sinks, c, 0.008f);
+        }
+    }
+    if (!sinks.empty()) {
+        const float rgba[4] = {0.95f, 0.95f, 0.75f, 0.85f};
+        causal_->blame_sinks = upload(sinks, GL_LINES, rgba);
+    }
+    if (!untraced.empty()) {
+        const float rgba[4] = {0.75f, 0.55f, 0.35f, 0.9f};
+        causal_->blame_untraced = upload(untraced, GL_LINES, rgba);
+    }
+}
+
 void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
     if (!causal_ || !prog_traj_)
         return;
@@ -425,7 +522,11 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
         layers.taint &&
         (!causal_->taint_solid.empty() || causal_->taint_hollow.count > 0 ||
          causal_->taint_escape.count > 0 || causal_->taint_unknown.count > 0);
-    if (!any_crossing && !any_taint)
+    const bool any_blame =
+        layers.blame &&
+        (!causal_->blame_beacons.empty() || causal_->blame_sinks.count > 0 ||
+         causal_->blame_untraced.count > 0);
+    if (!any_crossing && !any_taint && !any_blame)
         return;
 
     glUseProgram(prog_traj_);
@@ -468,6 +569,12 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
         draw(causal_->taint_hollow);
         draw(causal_->taint_escape);
         draw(causal_->taint_unknown);
+    }
+    if (any_blame) {
+        for (const Prim &p : causal_->blame_beacons)
+            draw(p);
+        draw(causal_->blame_sinks);
+        draw(causal_->blame_untraced);
     }
 
     glBindVertexArray(0);

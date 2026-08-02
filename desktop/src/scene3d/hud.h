@@ -273,6 +273,18 @@ struct HudState {
     uint32_t taint_off_relative_writes = 0;
     uint32_t taint_unknown_steps = 0;
     uint32_t taint_off_plane = 0;
+
+    // T4: the blame convergence forest. `blame_single_cone` is what makes
+    // "degrade honestly" visible: a recording that blames one sink has
+    // nothing to converge, and the HUD says so rather than letting a faint
+    // baseline read as a weak finding.
+    std::string blame_disabled_reason;
+    bool blame_single_cone = false;
+    bool blame_truncated = false;
+    uint32_t blame_cones = 0;
+    uint32_t blame_born_untraced = 0;
+    uint32_t blame_max_weight = 0;
+    std::string blame_off_plane_note;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

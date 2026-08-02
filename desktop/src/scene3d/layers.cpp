@@ -51,6 +51,11 @@ const std::vector<LayerDesc> &scene_layers_all() {
          "how far did a chosen value spread, and did it escape into a "
          "different kind of region?",
          G::Activity, LayerGrade::Derived, &SceneLayers::taint},
+        // T4: Derived — every cone is a recorded fact, but the WEIGHT is a
+        // set-overlap count this layer computes across cones.
+        {"blame", "blame",
+         "which producing step do many sinks trace back to?", G::Activity,
+         LayerGrade::Derived, &SceneLayers::blame},
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},

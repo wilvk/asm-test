@@ -69,7 +69,7 @@ int main() {
         &SceneLayers::edl,          &SceneLayers::confidence,
         &SceneLayers::canopy,       &SceneLayers::opcode,
         &SceneLayers::mispred,      &SceneLayers::crossings,
-        &SceneLayers::taint,
+        &SceneLayers::taint,        &SceneLayers::blame,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

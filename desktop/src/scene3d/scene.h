@@ -24,6 +24,7 @@
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
 #include "space/crossing.h" // T2 (57): CrossingLayer, set_crossing_layer
+#include "space/blameforest.h" // T4 (57): BlameForest, set_blame_forest
 #include "space/taint.h"    // T3 (57): TaintFront, set_taint_front
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
@@ -94,6 +95,10 @@ struct SceneLayers {
     // the DEF-USE generation axis (never the terrain playhead). Self-gates to
     // nothing when the recording names no origin.
     bool taint = true;
+    // T4 (57): the blame convergence forest — which producing step many sinks
+    // trace back to. A SET OVERLAP of recorded cones, never a synthesised
+    // link (see space/blameforest.h).
+    bool blame = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -210,6 +215,8 @@ class Scene {
     // T3: the taint isochrone. Independent of set_crossing_layer — each
     // set_*_ below replaces ONLY its own layer's geometry.
     void set_taint_front(const space::TaintFront &front);
+    // T4: the blame convergence forest.
+    void set_blame_forest(const space::BlameForest &forest);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);

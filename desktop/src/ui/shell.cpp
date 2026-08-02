@@ -964,6 +964,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // recording, so nothing about this layer moves with the playhead.
         sv.crossings = build_crossing_layer(obs_syscalls_build(r), r,
                                             sv.terr.proj);
+        // 57 T4: the blame convergence forest. A set overlap over every
+        // recorded cone — a whole-recording fact, so it is woven here too.
+        sv.blame = space::build_blame_forest(a.blame, a.df, sv.terr.proj,
+                                             r.truncated());
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
         sv.opcode_cells = space::build_opcode_terrain(
@@ -1080,6 +1084,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.taint_off_relative_writes = sv.taint.off_relative_writes;
     sv.hud.taint_unknown_steps = sv.taint.unknown_steps;
     sv.hud.taint_off_plane = sv.taint.off_plane;
+    // 57 T4: the forest's own honesty channel.
+    sv.hud.blame_disabled_reason =
+        sv.blame.enabled ? std::string() : sv.blame.disabled_reason;
+    sv.hud.blame_single_cone = sv.blame.single_cone;
+    sv.hud.blame_truncated = sv.blame.truncated;
+    sv.hud.blame_cones = sv.blame.cones;
+    sv.hud.blame_born_untraced = sv.blame.born_untraced;
+    sv.hud.blame_max_weight = sv.blame.max_weight;
+    sv.hud.blame_off_plane_note = sv.blame.off_plane_note;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1298,6 +1311,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.mispred = &sv.mispred;           // 56 T5
     f.crossings = &sv.crossings;       // 57 T2
     f.taint = &sv.taint;               // 57 T3
+    f.blame = &sv.blame;               // 57 T4
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

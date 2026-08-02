@@ -721,6 +721,40 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                    s.taint_off_plane);
         }
     }
+    // T4 (57): the blame convergence forest. The SET-OVERLAP disclaimer is
+    // unconditional while the layer is on: a bright spike shared by several
+    // cones is exactly the shape a reader will otherwise read as a link.
+    if (s.layers.blame) {
+        if (!s.blame_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "blame: %s",
+                               s.blame_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "blame: %s",
+                               space::BlameForest::label());
+            if (s.blame_single_cone)
+                ImGui::TextColored(
+                    kWarn,
+                    "blame: this recording attributes ONE sink — there is "
+                    "nothing to converge, so the layer is a single faint "
+                    "bundle, not a finding");
+            else
+                ImGui::TextColored(kDim,
+                                   "blame: %u cone(s), peak overlap %u",
+                                   s.blame_cones, s.blame_max_weight);
+            if (s.blame_born_untraced > 0)
+                ImGui::TextColored(kWarn, "%u cone(s) %s",
+                                   s.blame_born_untraced,
+                                   space::BlameForest::born_untraced_label());
+            if (s.blame_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "blame: the recording is truncated — every cone is a "
+                    "lower bound, and a missing convergence is NOT SEEN");
+            if (!s.blame_off_plane_note.empty())
+                ImGui::TextColored(kWarn, "blame: %s",
+                                   s.blame_off_plane_note.c_str());
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

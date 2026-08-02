@@ -27,6 +27,7 @@
 #include "space/converge.h"
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
+#include "space/blameforest.h" // BlameForest (57 T4): SceneView::blame
 #include "space/taint.h"    // TaintFront (57 T3): SceneView::taint
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
@@ -189,6 +190,9 @@ struct SceneView {
     uint32_t taint_origin = 0;
     uint64_t taint_epoch = UINT64_MAX;
     uint64_t taint_gen = UINT64_MAX;
+    // T4: the blame convergence forest — a whole-recording set overlap, so
+    // woven once with terr/traj/conv above.
+    space::BlameForest blame;
 };
 
 struct ShellState {
