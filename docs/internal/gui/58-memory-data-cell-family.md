@@ -11,7 +11,7 @@
 > **Prerequisites.** T2–T5 all need [54](54-3d-catalog-phase0-plumbing.md) **T1**
 > (the observed-data-span projection); T2 and T3 additionally need **T2** (the
 > read/write prefix-sum split). T6 has no prerequisite and can be built first.
-> Layer registration assumes [56](56-fidelity-and-module-layers.md) T1.
+> Layer registration assumes [56](../archive/gui/56-fidelity-and-module-layers.md) T1.
 > [55](55-scene-render-quality.md) should land before this brief — see *Effort and
 > risk*.
 >

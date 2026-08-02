@@ -16,7 +16,44 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Status — ✅ 5/5, landed 2026-08-02** (T1 `dc3f918`; T2 `028aea3`; T3
+> `ce9475e`; T4 `d9cc9a1`; T5 `cb09c1e`). T1: `scene3d/layers.{h,cpp}` — a pure
+> `LayerDesc` table (id/label/question/grade/flag) covering every SceneLayers
+> bool, grouped by fidelity/structure/activity/survey; hud.cpp's hand-listed
+> checkbox block now builds from it (pointer-to-member, keyed by id, never
+> position); `test_layers.cpp` pins exhaustiveness. T2: `kTerrainFrag` gains a
+> `uConfidence`-gated re-tint (default off) plus two new `TerrainFlag` bits
+> (`TF_INWINDOW_EMPTY`/`TF_OUTWINDOW`) set by `views/hotedges.cpp`'s
+> `apply_coverage_window` (a no-op unless a window was actually stated).
+> Scoped deviation: height stays density-driven (no geometric re-lift, noted
+> in the shader), and drill-in keeps the existing canvas routing for an
+> unknown cell rather than `dt_view::region` — that view is the region-
+> capture-mode invocation pager (`views/region.h`), not a generic per-address
+> lookup, so routing there would open a mismatched pane. T3:
+> `space/canopy.{h,cpp}`'s `build_module_canopies` sums each region's t-gated
+> hit counts (raw, summed BEFORE log-scaling — the anti-regression bar) into
+> one exact canopy per region plus a separate statistical one wherever the
+> survey layer has residency; rendered as translucent bounding-box quads
+> (plain alpha blend, a scoped simplification vs. 55's dithered-discard
+> idiom). T4: `space/opcode_terrain.{h,cpp}` classifies each cell's DISTINCT
+> offsets via `mnemonic_class` over the recording's own recorded disasm text
+> (D10, no re-disassembly); tints via a new per-cell `tex_opclass_` R8UI
+> through `kTerrainFrag`'s `uOpcode` toggle (purity/runner-up ticks not
+> rendered, a scoped simplification). T5: `space/mispred.h` (split from
+> `views/hotedges.h` so scene3d/ keeps depending on space/ only, D4) plus
+> `build_mispred_layer` project each hot edge onto the plane — an unplaceable
+> endpoint is counted (`off_plane`), never dropped; rendered by reusing
+> `prog_traj_` (no new shader) as bezier arcs + sheath/core site columns.
+> Deferred in both T3 and T5, stated rather than silently skipped:
+> interactive pick/drill-in for the new canopy/arc/column geometry needs a
+> new `PickBands` band, not implemented — clicking currently falls through
+> to whatever is beneath. `docker-desktop`'s full chain (desktop +
+> desktop-render + desktop-test, desktop-engine-boundary-check,
+> desktop-ui-test 28/28, desktop-test-xvfb) reproduced green on this host;
+> `test_scene_fbo`'s one pre-existing "contour bands" GL failure (doc 55 T3,
+> a software-renderer fixture sensitivity) was confirmed unrelated by
+> reproducing it on a clean checkout with none of this doc's commits
+> applied.
 
 ## Why this work exists
 

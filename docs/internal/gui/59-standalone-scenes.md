@@ -20,7 +20,7 @@
 
 ## Why this work exists
 
-Every layer in [56](56-fidelity-and-module-layers.md), [57](57-causal-layers.md)
+Every layer in [56](../archive/gui/56-fidelity-and-module-layers.md), [57](57-causal-layers.md)
 and [58](58-memory-data-cell-family.md) shares one substrate: the Hilbert address
 plane with a vertical time axis. That is not a limitation to be worked around —
 it is what makes the layers compose, because their X and Y stay registered.
@@ -88,7 +88,7 @@ leaking back.
    put the per-kind model pointers in a union-like set of optional members rather
    than overloading `terr`/`traj`. **Keep the `Plane` path byte-identical**: the
    default kind is `Plane` and every existing field keeps its meaning, so nothing in
-   [56](56-fidelity-and-module-layers.md)–[58](58-memory-data-cell-family.md) has to
+   [56](../archive/gui/56-fidelity-and-module-layers.md)–[58](58-memory-data-cell-family.md) has to
    change.
 2. `scene3d/scene.{h,cpp}`: factor the shared machinery out of the plane-specific
    code. Three things are genuinely shared and three are not:

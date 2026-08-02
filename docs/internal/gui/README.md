@@ -13,15 +13,16 @@ rules follow [../implementations/](../implementations/README.md) — read
 [\_conventions.md](../implementations/_conventions.md) once before starting.
 
 > **Archived 2026-08-01 — this directory now holds only the docs with open
-> work.** Per the [archive rule](../README.md), the **43 briefs whose tasks are
+> work.** Per the [archive rule](../README.md), the **44 briefs whose tasks are
 > all complete** moved to [`../archive/gui/`](../archive/gui/) — that is the
-> whole numbered family 01–37, 39–42, 44, 45, 49 and 54, every one of them ✅/☑
+> whole numbered family 01–37, 39–42, 44, 45, 49, 54 and 56, every one of them ✅/☑
 > with all tasks landed. The tables and prose below still describe every doc, with
 > the completed ones linked into the archive, so this file remains the single
 > inventory and dependency map for the family. **The documents below stay here**,
 > because each still points at unbuilt work (updated 2026-08-02 with the
-> instrument family 46–52 and the depiction family 53–59; 49 and 54 landed the
-> same day and moved to the archive):
+> instrument family 46–52 and the depiction family 53–59; 49 and 54 landed
+> earlier that day, 56 landed later the same day, each moved to the archive on
+> landing):
 >
 > | Doc | Why it stays |
 > |---|---|
@@ -30,9 +31,8 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48, 50 and 52 landed 2026-08-02, 51 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
-> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; 55 ◐ 4/6 landed the same day, 56–59 ☐ not started. |
+> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; 55 ◐ 4/6 and 56 ✅ 5/5 landed the same day, 57–59 ☐ not started. |
 > | [55-scene-render-quality.md](55-scene-render-quality.md) | ◐ 4/6 — eye-dome lighting, screen-space-constant contour bands, dithered translucency and MSAA landed 2026-08-02; depth-dependent halos and portable line width (quad expansion) remain, the latter blocking the former — see the doc's own status note. |
-> | [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | ☐ 0/5 — the layer registry, confidence terrain, per-module skyline, opcode-class terrain, misprediction survey layer. |
 > | [57-causal-layers.md](57-causal-layers.md) | ☐ 0/5 — one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge. |
 > | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | ☐ 0/6 — read/write twin relief, working-set tide, observed-lifetime pillars, data-access ribbon, residency sediment columns. |
 > | [59-standalone-scenes.md](59-standalone-scenes.md) | ☐ 0/5 — a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism. |
@@ -587,15 +587,15 @@ catalog's own 26-graph inventory and its five-phase build order.
 | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 26-graph inventory with each gate re-verified, the GL-effects survey and its baseline gate, the city-phase mapping, and what a Phase-4/5 cut would contain (**roadmap, not a brief**) | — | 10, 43, 46 | roadmap · cuts 54–59 | — |
 | [54-3d-catalog-phase0-plumbing.md](../archive/gui/54-3d-catalog-phase0-plumbing.md) | observed-data-span projection (**makes the terrain's data half reachable at all**), read/write prefix-sum split, `Event::seq` on `SyscallRow`, engine-free `mnemonic_class`, BFS-depth dataflow walk, `dt_link` invocation field, the `HotEdge` sourcing decision | 7 | none | ✅ 7/7 | — |
 | [55-scene-render-quality.md](55-scene-render-quality.md) | eye-dome lighting, depth-dependent halos, `fwidth` contour bands + height key, order-independent translucency (WBOIT + dithered fallback), MSAA, portable line width + the GLSL-version question | 6 | none | ◐ 4/6 (T1 EDL `dec808a`; T3 contours `acbf5ae`; T4 dithered translucency `1ebdb69`; T5 MSAA `dec808a`; T6 step 2 only `ada0cb3` — step 1 quad-expansion and T2 halos remain, see the doc's own status note for why) | *free* |
-| [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | L1–L4: the layer registry, confidence terrain + coverage-window mask, per-module residency skyline, opcode-class code terrain, misprediction survey layer | 5 | 54 T4 (T4), 54 T7 (T5) | ☐ 0/5 | will · T1–T5 · 2026-08-02 |
-| [57-causal-layers.md](57-causal-layers.md) | L5, L6, L11, L14: one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge | 5 | 54 T3 (T2), 54 T5 (T3); 56 T1 | ☐ 0/5 | *free* |
-| [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 | ☐ 0/6 | *free* |
+| [56-fidelity-and-module-layers.md](../archive/gui/56-fidelity-and-module-layers.md) | L1–L4: the layer registry, confidence terrain + coverage-window mask, per-module residency skyline, opcode-class code terrain, misprediction survey layer | 5 | 54 T4 (T4), 54 T7 (T5) | ✅ 5/5 | — |
+| [57-causal-layers.md](57-causal-layers.md) | L5, L6, L11, L14: one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge | 5 | 54 T3 (T2), 54 T5 (T3); 56 T1 (landed) | ☐ 0/5 | *free* |
+| [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 (landed) | ☐ 0/6 | *free* |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | *free* |
 
-67 tasks across the three families (40 landed — 7 in representation via 44, 22
-in instrument via 47/48/49/50/52, 11 in depiction via 54 and 55 (T1/T3/T4/T5)
-— and 27 still open: 4 in instrument (51), 23 in depiction (55's remaining T2
-and T6 step 1, 56–59)). Sequencing across
+67 tasks across the three families (45 landed — 7 in representation via 44, 22
+in instrument via 47/48/49/50/52, 16 in depiction via 54, 55 (T1/T3/T4/T5) and
+56 (all 5) — and 22 still open: 4 in instrument (51), 18 in depiction (55's
+remaining T2 and T6 step 1, 57–59)). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
 the families do not block each other — with three overlaps that must be
@@ -785,7 +785,13 @@ fix (quad expansion) and the version question (**verify-first on Darwin**,
 still unconfirmed since this tree has no macOS desktop lane) remain open.
 Sequencing in 53§8: 54 and 55 are independent and
 both land first; then 56 (whose T1 builds the layer registry 57–58 register into),
-57 and 59 in parallel; 58 last, after 54 T1+T2 and 55. The catalog's Phase 4/5 —
+57 and 59 in parallel; 58 last, after 54 T1+T2 and 55. **56 landed in full
+2026-08-02** — the layer registry (T1: `scene3d/layers.{h,cpp}`, a pure
+`LayerDesc` table every later layer registers a row into) plus all four
+catalog layers (T2 confidence re-lift + coverage-window mask, T3 the
+per-module canopy skyline, T4 opcode-class tinting, T5 the misprediction
+arcs/columns) — so 57 and 58's own "56 T1" prerequisite is now satisfied;
+57/58/59 remain uncut-to-implemented (☐ 0, *free*). The catalog's Phase 4/5 —
 seven large scenes — is deliberately uncut, with 53§7 stating exactly what each
 would contain and what unblocks it.
 

@@ -15,7 +15,7 @@
 >
 > **Status — roadmap only, no tasks of its own.** It cuts six briefs:
 > [54](54-3d-catalog-phase0-plumbing.md), [55](55-scene-render-quality.md),
-> [56](56-fidelity-and-module-layers.md), [57](57-causal-layers.md),
+> [56](../archive/gui/56-fidelity-and-module-layers.md), [57](57-causal-layers.md),
 > [58](58-memory-data-cell-family.md) and [59](59-standalone-scenes.md). All six
 > are cut and unclaimed. §7 states exactly what a Phase-4/5 cut would contain and
 > what unblocks it.
@@ -128,10 +128,10 @@ what must land first, verified against `b657876`.
 
 | # | Layer | Value/effort | Gate today | Brief |
 |---|---|---|---|---|
-| L1 | Confidence terrain + coverage-window mask | high / med | none — `TF_STAT/TORN/CHURN/UNKNOWN` all exist ([terrain.h:49-62](../../../desktop/src/space/terrain.h#L49)) | [56](56-fidelity-and-module-layers.md) T2 |
-| L2 | Per-module residency skyline | high / med | none — `CodeCell::full_heat` ([terrain.h:117](../../../desktop/src/space/terrain.h#L117)) + `Projection::regions` | [56](56-fidelity-and-module-layers.md) T3 |
-| L3 | Opcode-class code terrain | high / med | [54](54-3d-catalog-phase0-plumbing.md) T4 (`mnemonic_class`) | [56](56-fidelity-and-module-layers.md) T4 |
-| L4 | Misprediction survey layer (arcs + site columns) | high / med | [54](54-3d-catalog-phase0-plumbing.md) T7 (`HotEdge` sourcing) | [56](56-fidelity-and-module-layers.md) T5 |
+| L1 | Confidence terrain + coverage-window mask | high / med | none — `TF_STAT/TORN/CHURN/UNKNOWN` all exist ([terrain.h:49-62](../../../desktop/src/space/terrain.h#L49)) | [56](../archive/gui/56-fidelity-and-module-layers.md) T2 |
+| L2 | Per-module residency skyline | high / med | none — `CodeCell::full_heat` ([terrain.h:117](../../../desktop/src/space/terrain.h#L117)) + `Projection::regions` | [56](../archive/gui/56-fidelity-and-module-layers.md) T3 |
+| L3 | Opcode-class code terrain | high / med | [54](54-3d-catalog-phase0-plumbing.md) T4 (`mnemonic_class`) | [56](../archive/gui/56-fidelity-and-module-layers.md) T4 |
+| L4 | Misprediction survey layer (arcs + site columns) | high / med | [54](54-3d-catalog-phase0-plumbing.md) T7 (`HotEdge` sourcing) | [56](../archive/gui/56-fidelity-and-module-layers.md) T5 |
 | L5 | Crossing spurs on the worldline | high / med | [54](54-3d-catalog-phase0-plumbing.md) T3 (`Event::seq`) | [57](57-causal-layers.md) T2 |
 | L6 | Taint isochrone (forward-spread front) | high / med | [54](54-3d-catalog-phase0-plumbing.md) T5 (BFS-depth walk) | [57](57-causal-layers.md) T3 |
 | L7 | Read/write twin relief | high / med | [54](54-3d-catalog-phase0-plumbing.md) T1 **+** T2 | [58](58-memory-data-cell-family.md) T2 |
@@ -221,7 +221,7 @@ already verified here.
 | [54](54-3d-catalog-phase0-plumbing.md) T3 (`Event::seq`) | **B** — district commutes; **D** — City Hall syscall spurs |
 | [54](54-3d-catalog-phase0-plumbing.md) T7 (`HotEdge`) | **B** — survey roads with blackspots |
 | [55](55-scene-render-quality.md) | **C** — skyline LOD / entity budget (the legibility half) |
-| [56](56-fidelity-and-module-layers.md) | **A** (weather, landed) → **D** — module towers |
+| [56](../archive/gui/56-fidelity-and-module-layers.md) | **A** (weather, landed) → **D** — module towers |
 | [57](57-causal-layers.md) | **B** — errands & deliveries; **D** — City Hall |
 | [58](58-memory-data-cell-family.md) | **C** — lit windows, sediment & patina |
 | [59](59-standalone-scenes.md) | **D**/**E** — the boundary swimlane, the citizens roster |

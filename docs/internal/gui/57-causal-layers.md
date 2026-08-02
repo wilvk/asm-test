@@ -11,7 +11,7 @@
 > (`Event::seq` on `SyscallRow`); T3 needs [54](54-3d-catalog-phase0-plumbing.md)
 > **T5** (`dt_walk_depth`). T4 and T5 have no prerequisite. T1 is shared by all
 > four and is the first task for that reason. Layer registration assumes
-> [56](56-fidelity-and-module-layers.md) T1 has landed; if it has not, register the
+> [56](../archive/gui/56-fidelity-and-module-layers.md) T1 has landed; if it has not, register the
 > bools the old way and migrate.
 >
 > Authored 2026-08-02 against HEAD `b657876`. If a cited file:line disagrees with
@@ -22,7 +22,7 @@
 
 ## Why this work exists
 
-[56](56-fidelity-and-module-layers.md)'s four layers describe *state*: how much a
+[56](../archive/gui/56-fidelity-and-module-layers.md)'s four layers describe *state*: how much a
 place is trusted, how hot it is, what kind of work it does. These four describe
 *cause* — where control left the process, where a value went, what a value came
 from, and which way a fork usually goes. They share one mechanic and one hazard.
