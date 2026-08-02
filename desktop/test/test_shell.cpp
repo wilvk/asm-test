@@ -946,6 +946,20 @@ int main() {
         check("vertical axes note: non-empty",
               scene3d::vertical_axes_note()[0] != '\0', "note text is empty");
 
+        // 55 T4 step 5: the HUD states WHICH compositing mode the stacked
+        // translucent surfaces use. The whole point is that two users on two
+        // machines are never silently comparing two different algorithms, so
+        // the note must name the mode ("dithered") AND grade it
+        // ("approximate") — a note that merely said "translucency: on" would
+        // satisfy a non-empty check while defeating the purpose.
+        {
+            const std::string tm = scene3d::translucency_mode_note();
+            check("translucency mode note: names the mode (dithered)",
+                  tm.find("dithered") != std::string::npos, tm.c_str());
+            check("translucency mode note: grades it (approximate)",
+                  tm.find("approximate") != std::string::npos, tm.c_str());
+        }
+
         // T4: ticks span exactly [0, nsteps], and the ruler is skipped
         // entirely (empty ticks) when there is no time axis to ruler.
         {

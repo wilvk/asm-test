@@ -159,6 +159,12 @@ std::string height_scale_note(uint64_t max_full_heat) {
     return buf;
 }
 
+const char *translucency_mode_note() {
+    return "layered translucency: dithered (approximate) — a surviving "
+           "pixel is fully opaque, translucency is spent as coverage, not "
+           "blend";
+}
+
 const char *confidence_layer_note() {
     return "confidence: darker unknown = never described; amber hatch = "
            "in-window, below-rate; black hatch = outside the stated window";
@@ -458,6 +464,12 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::TextColored(kDim, "EDL: strength %.1f, radius %.0fpx",
                        static_cast<double>(kEdlStrengthDefault),
                        static_cast<double>(kEdlRadiusPxDefault));
+    // T4 (55) step 5: the compositing mode two users' screenshots might
+    // otherwise silently disagree about. Stated UNCONDITIONALLY (not gated on
+    // a layer toggle like confidence/opcode's notes below): it describes how
+    // every translucent surface on this plane composites, whichever of them
+    // happen to be switched on right now.
+    ImGui::TextColored(kDim, "%s", translucency_mode_note());
 
     // --- camera presets ----------------------------------------------------
     // 48 T4: two buttons, two honest meanings — "reset view" frames the

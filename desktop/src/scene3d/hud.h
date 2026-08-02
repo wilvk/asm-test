@@ -94,6 +94,15 @@ const char *inspect_hint_note();
 // wording is testable without an ImGui frame.
 std::string height_scale_note(uint64_t max_full_heat);
 
+// T4 (55-scene-render-quality) step 5: which compositing mode the stacked
+// translucent surfaces (the ghost-fog terrain, a statistical trajectory) use
+// — always "dithered" today (kStatFrag/kTrajFrag's Interleaved Gradient
+// Noise discard); weighted-blended OIT is deferred (see that doc's own status
+// note), so there is no "exact" branch to report yet. Stated unconditionally
+// rather than silently, so two users comparing screenshots are never
+// comparing two undisclosed algorithms.
+const char *translucency_mode_note();
+
 // T2 (56-fidelity-and-module-layers): the confidence layer's own legend line
 // — never merged into terrain_encoding_swatches() above, because the two
 // coverage-window hatches it names (space::TF_INWINDOW_EMPTY/TF_OUTWINDOW)

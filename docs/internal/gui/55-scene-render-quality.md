@@ -39,9 +39,19 @@
 > fragment is fully opaque, so compositing is an ordinary z-test with no
 > blend state and no draw-order dependency — the doc's own pre-authorized
 > capacity-constrained landing (step 1 depth-write fix + step 4 dithered
-> fallback + step 5 HUD-states-the-mode, step 2 WBOIT and its step-3
+> fallback, step 2 WBOIT and its step-3
 > extension probe deferred as dead code with no consumer until a future pass
-> adds the "exact" branch) (`1ebdb69`). T6 step 2 (query
+> adds the "exact" branch) (`1ebdb69`).
+> **Correction, 2026-08-02:** this banner previously also credited **step 5**
+> (the HUD stating the compositing mode) to `1ebdb69`. It was not in that
+> commit, nor anywhere on `main` — the code had been written but left
+> uncommitted in the shared working tree, so the claim was an over-claim for
+> roughly a day. `translucency_mode_note()` (declared in `scene3d/hud.h`,
+> drawn unconditionally beside the EDL disclosure in `draw_scene_hud`) landed
+> separately, with `test_shell` pinning that the wording both NAMES the mode
+> ("dithered") and GRADES it ("approximate") — a non-empty check alone would
+> have passed a note like "translucency: on" that defeats the step's whole
+> purpose. **T4 is complete only as of that landing.** T6 step 2 (query
 > `GL_ALIASED_LINE_WIDTH_RANGE` at `init_gl`) landed alongside (`ada0cb3`);
 > step 1 (vertex-shader quad expansion, the actual portable-width fix) and
 > step 3 (the GLSL-130-on-Apple-core-profile verify-first question) did not.
