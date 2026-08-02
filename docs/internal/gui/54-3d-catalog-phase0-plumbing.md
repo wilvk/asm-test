@@ -15,7 +15,9 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/7, not started.**
+> **Status — ◐ 1/7.** T3 landed. T4–T7 next (claimed, in progress); T1–T2
+> (terrain-touching) deliberately left open — see the brief's own T1/T2 vs.
+> T3–T7 split and the [README](README.md) claim row.
 
 ## Why this work exists
 

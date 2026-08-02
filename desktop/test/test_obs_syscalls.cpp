@@ -33,6 +33,39 @@ int main() {
               v.rows[0].line.find("<path>") != std::string::npos,
               "the schema's payload-free rendering is what `line` carries");
 
+    // --- 54 T3: Event::seq, not `index` -----------------------------------
+    // The fixture's first event is "session started" (seq 0), so the four
+    // syscalls land at seq 1..4 — ascending, matching the source events, and
+    // NOT 0-based like `index`, which is exactly the point of carrying seq
+    // separately.
+    vt::check("seq present", v.seq_present,
+              "a recording with real stream positions read as seq_present=false");
+    vt::eq("seq[0] follows the session-started event", v.rows[0].seq,
+           uint64_t{1});
+    vt::eq("seq[1]", v.rows[1].seq, uint64_t{2});
+    vt::eq("seq[2]", v.rows[2].seq, uint64_t{3});
+    vt::eq("seq[3]", v.rows[3].seq, uint64_t{4});
+
+    // A recording whose only syscall is the very first event in the stream
+    // (seq 0) is indistinguishable, row-by-row, from one that never carried a
+    // meaningful seq at all — seq_present is what tells the two apart.
+    {
+        Recording zero;
+        zero.arch = "x86_64";
+        Event e;
+        e.kind = "syscall";
+        e.body["line"] = "close(3) = 0";
+        e.seq = 0;
+        zero.by_kind["syscall"].push_back(e);
+        SyscallView zv = obs_syscalls_build(zero);
+        vt::eq("all-zero-seq rows", zv.rows.size(), size_t{1});
+        vt::eq("all-zero-seq row carries seq 0", zv.rows[0].seq, uint64_t{0});
+        vt::check("all-zero-seq recording sets seq_present=false",
+                  !zv.seq_present,
+                  "a single seq-0 syscall must not read as a real stream "
+                  "position");
+    }
+
     // --- default state: nothing revealed ---------------------------------
     std::string dump = obs_syscalls_dump(v);
     vt::check("no payload bytes by default", !leaks(dump, kSecret1),

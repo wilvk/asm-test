@@ -42,6 +42,13 @@ struct SyscallRow {
     bool has_payload = false; // a `payload` field was on the wire
     std::string payload;      // the content. NEVER rendered unless revealed.
     long tid = -1;            // v1 writers omit `tid`; -1 = absent
+    // 54 T3: Event::seq (recording.h) — the row's position in the STREAM,
+    // counted across every kind. NOT `index` above, which is this view's own
+    // row number: the two are both integers and both look like an order, but
+    // only seq lets a syscall be placed on a worldline (in situ) rather than
+    // read off a flat list. Orders a syscall against a trace instruction; does
+    // NOT measure kernel dwell — no consumer may present it as a duration.
+    uint64_t seq = 0;
 };
 
 struct SyscallView {
@@ -52,6 +59,12 @@ struct SyscallView {
     // content is not in this file at all. Materially different from "hidden by
     // this renderer", and the cell text must not blur the two.
     bool record_redacted = false;
+
+    // 54 T3: false when every row's seq is 0 (a recording predating this field,
+    // or a producer that never set it) — distinguishable from a recording
+    // genuinely at seq 0, so a consumer (e.g. L5's spurs) does not anchor
+    // everything to the first instruction by mistake.
+    bool seq_present = false;
 
     // Parallel to `rows`. Reveal state is per row and lives here, not in the
     // document — nothing about looking at a payload changes the recording.

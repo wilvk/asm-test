@@ -23,6 +23,9 @@ SyscallView obs_syscalls_build(const Recording &r, const ObsLifecycle *lc) {
             }
             if (e.body.contains("tid") && e.body["tid"].is_number_integer())
                 row.tid = e.body["tid"].get<long>();
+            row.seq = e.seq;
+            if (e.seq != 0)
+                v.seq_present = true;
             v.rows.push_back(std::move(row));
         }
     }
