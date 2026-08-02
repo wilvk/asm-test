@@ -16,7 +16,9 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Status — ✅ 5/5, landed 2026-08-02.** T1+T2 `3b7ebf1`, T3 `ee82b9a`,
+> T4 `90f3296`, T5 `c64c495`. See the family table in
+> [README.md](README.md) for the per-task summary.
 
 ## Why this work exists
 

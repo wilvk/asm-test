@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Inspect before you leap: hover readout and pickable overlays in the 3D
+  scene** (docs/internal/gui/47-scene-inspect-and-pickable-overlays.md). The 3D
+  pane now answers "what is this, and where would a click send me?" before any
+  navigation happens:
+  - A throttled hover pick (`SceneHost::pick`, at most once per actual
+    mouse-move pixel, zero readbacks during a drag/orbit/pan) resolves to a
+    `PickHint` via the new `resolve_pick_hint`, which shares one
+    classification helper with `resolve_pick` so the preview can never
+    disagree with what a click does.
+  - Convergence arcs and access spurs — previously undrawn in the pick pass —
+    are now pickable via new id bands past the vertex band, decoded through an
+    explicit `PickBands` so band sizes are never inferred; a convergence arc
+    resolves to whichever tid is nearer the current playhead and states which
+    side was chosen.
+  - A hover tooltip shows identity/location/quantity/fidelity and the click
+    destination (or "click → nothing here"); the HUD legend gains swatches for
+    both overlay classes, a `convergence` layer toggle, and a persistent
+    "hover to inspect, click to open the flat reader" hint.
 - **Launch a process and trace it from birth, and target a running one by
   window-pick** (docs/internal/archive/gui/45-launch-and-window-target.md). Two new
   ways onto a live target, alongside attach-by-PID:
