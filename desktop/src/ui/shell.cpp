@@ -1155,6 +1155,23 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         }
     }
 
+    // 52 T2/T3: the GL-free flat surface. Offered in EACH of the three
+    // degraded branches below, IN ADDITION to their existing placard, never
+    // instead of it (the placard states WHY there is no 3D; that reason is
+    // still true — D7/F5's restructure-never-remove rule) — and swappable in
+    // on the real GL path via the "flat" toggle just below (T3 step 2), the
+    // pane's own "3D to find, 2D to read" rule finally having a surface to
+    // happen on. Built lazily, only where it is actually drawn.
+    auto draw_flat_surface = [&] {
+        Scene2dPlan plan =
+            build_scene2d_plan(sv.terr, sv.slice, sv.traj, sv.conv, sv.hud.t);
+        draw_scene2d(plan, sv.terr, sv.traj, sv.conv, a.id, sv.hud.t,
+                    sv.follow_step, &a.df, [&s](const dt_link &l) {
+                        if (!dt_nav_go(s.nav, l))
+                            s.status = s.nav.last_error;
+                    });
+    };
+
     // The GL scene is drawn by the host threaded in from main.cpp. It is absent
     // under the null test backend (and any run with no GL context): the models +
     // HUD above are the whole pane there, with this placard in place of the
@@ -1164,6 +1181,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "3D viewport unavailable — no GL context in this build/run "
             "(headless test, or a viewer with no display). The scene's models, "
             "provenance and legend above are fully woven.");
+        draw_flat_surface();
         // The Tab-reachable focus target + keyboard camera exist here too (22 T2):
         // this is precisely the null-backend path, where moving the pure Camera
         // with no GL is what makes the keyboard camera headlessly testable.
@@ -1174,6 +1192,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     if (!s.scene_host->ready()) {
         ImGui::TextDisabled("3D scene did not initialise: %s",
                             s.scene_host->error());
+        draw_flat_surface();
         sv.viewport_focus =
             scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
@@ -1211,6 +1230,21 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     ImTextureID tex = s.scene_host->render(f);
     if (!tex) {
         ImGui::TextDisabled("3D scene produced no frame on this driver");
+        draw_flat_surface();
+        sv.viewport_focus =
+            scene_viewport_target(ImGui::GetContentRegionAvail());
+        return;
+    }
+
+    // T3 step 2: the flat toggle swaps the reading surface in for the
+    // viewport itself — "3D to find, 2D to read" (the primer's own words)
+    // finally has a surface to happen on, on a driver where the GL path
+    // works fine. Drawn here (not the separate HUD window) so it sits right
+    // beside what it toggles. Own picking, own hover when checked; none of
+    // the GL orbit/dolly/pick code below applies while it is showing.
+    ImGui::Checkbox("flat surface (2D reading mode)", &sv.flat_view);
+    if (sv.flat_view) {
+        draw_flat_surface();
         sv.viewport_focus =
             scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
