@@ -114,7 +114,8 @@ building system at all.
 The two are one brief because they are one lever: knowing what the user is
 interested in is what lets you drop the rest without lying about it.
 
-## What already exists (verified 2026-08-02 against `f110150`)
+## What already exists (verified 2026-08-02 against `f110150`; file:line
+re-verified 2026-08-03 against the tree after this brief landed)
 
 - **The degrade idiom is proven and labelled.** `coarse_slice()`
   ([terrain.h:199](../../../desktop/src/space/terrain.h#L199)) is a flat plane
