@@ -602,6 +602,7 @@ desktop_app_objs = \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
+  $(BUILD)/desktop/$(1)/sp/mnemonic.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/pf/window_picker.o
@@ -1096,6 +1097,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_perspectives \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_asm_language \
+                 $(BUILD)/desktop_test_mnemonic \
                  $(BUILD)/desktop_test_theme \
                  $(BUILD)/desktop_test_fidelity \
                  $(BUILD)/desktop_test_progress \
@@ -1562,6 +1564,18 @@ $(BUILD)/desktop_test_ictedit: $(BUILD)/desktop/test/t/test_ictedit.o \
 # IterateIdentifiers, so this pins behaviour rather than table contents alone.
 $(BUILD)/desktop/test/t/test_asm_language.o: | $(ICTEDIT_HOME)/TextEditor.h
 $(BUILD)/desktop_test_asm_language: $(BUILD)/desktop/test/t/test_asm_language.o \
+    $(BUILD)/desktop/test/ui/asm_language.o \
+    $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The engine-free instruction classifier (54-3d-catalog-phase0-plumbing.md T4):
+# mnemonic.o (space/, pure) + the SAME asm_language.o/TextEditor.o the test
+# above links, read back through the public dt_asm_language API for the
+# anti-drift walk over the real keyword lists. mnemonic.o itself still links
+# into asmtest-viewer with none of this — see the shared object list above.
+$(BUILD)/desktop/test/t/test_mnemonic.o: | $(ICTEDIT_HOME)/TextEditor.h
+$(BUILD)/desktop_test_mnemonic: $(BUILD)/desktop/test/t/test_mnemonic.o \
+    $(BUILD)/desktop/test/sp/mnemonic.o \
     $(BUILD)/desktop/test/ui/asm_language.o \
     $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
