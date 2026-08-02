@@ -29,6 +29,7 @@
 #include "space/dataribbon.h" // DataRibbon (58 T5): SceneView::ribbon
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
+#include "space/sediment.h" // SedimentColumns (58 T6): SceneView::sediment
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
@@ -88,6 +89,11 @@ struct SceneView {
     // 58 T5: the data-access order ribbon — also a whole-recording aggregate
     // (every recorded access, in step order), woven once with the models above.
     space::DataRibbon ribbon;
+    // 58 T6: the residency sediment columns — whole-recording (the layer's
+    // point is to be readable with the playhead STATIONARY), so woven once
+    // alongside the models above, and built against the SAME scrub cell budget
+    // rather than a throttle of its own.
+    space::SedimentColumns sediment;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

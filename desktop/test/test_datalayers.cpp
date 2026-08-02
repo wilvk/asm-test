@@ -24,6 +24,7 @@
 #include "space/datacell.h"
 #include "space/dataribbon.h"
 #include "space/projection.h"
+#include "space/sediment.h"
 #include "space/terrain.h"
 
 using namespace asmdesk;
@@ -873,12 +874,228 @@ static void t5_access_ribbon() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T6 — residency sediment columns
+// ---------------------------------------------------------------------------
+static const SedimentColumn *col_at(const SedimentColumns &C,
+                                    const Projection &p, uint32_t w, uint32_t h,
+                                    uint64_t addr) {
+    return find_at(C.exact, p, w, h, addr);
+}
+
+static void t6_sediment_columns() {
+    // kEarly is hit only in the first decile; kEven throughout. 100 trace
+    // steps, so a 10-band split maps one band per decile exactly.
+    const uint64_t kEarly = 0x200000, kEven = 0x200040;
+    std::string nd = kHeader + trace_steps(100);
+    for (int i = 0; i < 5; i++)
+        nd += mem_ev(static_cast<uint64_t>(i), kEarly, 8, "r");
+    for (int i = 0; i < 10; i++)
+        nd += mem_ev(static_cast<uint64_t>(i * 10 + 3), kEven, 8, "r");
+    nd += kEnd;
+    Recording r = mk_rec(nd);
+    TerrainModel m = weave(r);
+    SedimentColumns C = build_sediment_columns(m, 10, 0);
+    check("T6: the requested band count is honoured with no budget",
+          C.bands == 10 && !C.degraded, "got " + std::to_string(C.bands));
+
+    const SedimentColumn *early = col_at(C, m.proj, m.w, m.h, kEarly);
+    const SedimentColumn *even = col_at(C, m.proj, m.w, m.h, kEven);
+    check("T6: both hit cells produce a column", early && even,
+          "a hit cell produced no column");
+    if (!(early && even))
+        return;
+
+    check("T6: a cell hit only in the first decile produces bands ONLY there",
+          early->bands.size() == 1 && early->bands[0].index == 0,
+          "got " + std::to_string(early->bands.size()) + " bands");
+    check("T6: a uniformly hit cell produces even bands",
+          even->bands.size() == 10,
+          "got " + std::to_string(even->bands.size()));
+    check("T6: each of the even cell's bands carries exactly one hit",
+          [&] {
+              for (const SedimentBand &b : even->bands)
+                  if (b.hits != 1)
+                      return false;
+              return true;
+          }(),
+          "the even fixture's bands are not even");
+
+    // THE CONSERVATION ASSERTION: the band counts sum to the cell's total hit
+    // count, for EVERY column and for several band counts. This is what proves
+    // no binning step silently drops a measurement (D7).
+    {
+        bool ok = true;
+        for (uint32_t bands : {1u, 2u, 3u, 7u, 10u, 16u, 64u}) {
+            SedimentColumns X = build_sediment_columns(m, bands, 0);
+            for (const SedimentColumn &c : X.exact) {
+                uint64_t sum = 0;
+                for (const SedimentBand &b : c.bands)
+                    sum += b.hits;
+                if (sum != c.total_hits)
+                    ok = false;
+            }
+        }
+        check("T6: band counts CONSERVE the cell's total hit count, at every "
+              "band count probed",
+              ok, "a binning step dropped a hit");
+    }
+
+    // A never-hit cell places NO column — not a zero nub, which would read as
+    // a measurement. Asserted over the whole plane: every emitted column has
+    // real hits and real bands.
+    {
+        bool ok = true;
+        for (const SedimentColumn &c : C.exact)
+            if (c.total_hits == 0 || c.bands.empty())
+                ok = false;
+        check("T6: every emitted column has hits and bands (a never-hit cell "
+              "places NOTHING)",
+              ok, "a zero-hit column appeared");
+        check("T6: the plane has far more cells than columns (test setup)",
+              static_cast<uint64_t>(m.w) * m.h > C.exact.size(),
+              "the fixture does not exercise the absence rule");
+    }
+
+    // THE FRAME-BUDGET PATH, wired to the SAME should_degrade budget the 3D
+    // scrub uses. Coarsen the BANDS, never the cell set.
+    {
+        const uint64_t touched = C.exact.size();
+        check("T6: the fixture has columns to budget (test setup)", touched > 0,
+              "no columns");
+        // A budget that admits only ONE band per column.
+        SedimentColumns D = build_sediment_columns(m, 16, touched);
+        check("T6: an over-budget request COARSENS the band count",
+              D.degraded && D.bands < D.bands_requested && D.bands >= 1,
+              "got " + std::to_string(D.bands) + " of " +
+                  std::to_string(D.bands_requested));
+        check("T6: NO CELL IS DROPPED by the degrade — only resolution",
+              D.exact.size() == C.exact.size(),
+              "the budget deleted measurements instead of merging windows: " +
+                  std::to_string(D.exact.size()) + " vs " +
+                  std::to_string(C.exact.size()));
+        check("T6: the degraded columns still conserve their hit counts",
+              [&] {
+                  for (const SedimentColumn &c : D.exact) {
+                      uint64_t sum = 0;
+                      for (const SedimentBand &b : c.bands)
+                          sum += b.hits;
+                      if (sum != c.total_hits)
+                          return false;
+                  }
+                  return true;
+              }(),
+              "coarsening lost a hit");
+        check("T6: the note STATES the band count and that it was coarsened",
+              sediment_note(D).find("COARSENED") != std::string::npos &&
+                  sediment_note(D).find(std::to_string(D.bands)) !=
+                      std::string::npos,
+              "a coarsened column is indistinguishable from a sparse one");
+        // A generous budget must NOT degrade.
+        SedimentColumns E = build_sediment_columns(m, 16, 1000000);
+        check("T6: a generous budget leaves the request intact",
+              !E.degraded && E.bands == 16, "degraded under a large budget");
+    }
+
+    // A TF_STAT cell's bands land in the STAT buffer, never in the exact one.
+    // Built from the committed survey fixture, which carries real `survey`
+    // edges and therefore a real TerrainModel::stat layer.
+    {
+        std::string sv =
+            std::string(kHeader) +
+            "{\"k\":\"survey\",\"sampler\":\"ibs-op\",\"edges\":[{\"from_"
+            "addr\":1048576,\"to_addr\":1048580,\"count\":7,\"mispred\":0,"
+            "\"is_return\":0}],\"samples\":100,\"lost\":0}\n" +
+            trace_steps(8) + mem_ev(1, 0x200000, 8, "r") + kEnd;
+        Recording sr = mk_rec(sv);
+        TerrainModel sm = weave(sr);
+        check("T6: the survey fixture built a stat layer (test setup)",
+              sm.has_stat, "no stat terrain");
+        SedimentColumns SC = build_sediment_columns(sm, 8, 0);
+        check("T6: a TF_STAT cell's bands land in the STAT buffer",
+              !SC.stat.empty(), "the survey produced no statistical column");
+        // The isolation invariant is about the two POPULATIONS, not about the
+        // cell sets: a cell can legitimately carry both exact residency and
+        // survey residency (this fixture's survey edge lands on a traced code
+        // cell precisely so the overlap is exercised). What must never happen
+        // is the survey magnitude being SUMMED into the exact column — so the
+        // check is that every exact column's hit total still equals the real
+        // step count of its own CodeCell/DataCell, survey or no survey.
+        check("T6: a survey magnitude is NEVER summed into an exact column",
+              [&] {
+                  for (const SedimentColumn &e : SC.exact) {
+                      uint64_t real = 0;
+                      if (const auto *cc = sm.code_at(e.cell))
+                          real = cc->steps.size();
+                      if (const auto *dc = sm.data_at(e.cell))
+                          real = dc->steps.size();
+                      if (e.total_hits != real)
+                          return false;
+                  }
+                  return true;
+              }(),
+              "an exact column's hit count was inflated by survey residency");
+        check("T6: the survey overlaps a traced cell here (test setup)",
+              [&] {
+                  for (const SedimentColumn &c : SC.stat)
+                      for (const SedimentColumn &e : SC.exact)
+                          if (c.cell == e.cell)
+                              return true;
+                  return false;
+              }(),
+              "the fixture does not exercise the overlap the invariant guards");
+        check("T6: a survey column carries NO phase (one unattributed band)",
+              SC.stat_has_no_phase && !SC.stat.empty() &&
+                  SC.stat[0].bands.size() == 1,
+              "the survey was given a fabricated temporal distribution");
+        check("T6: the note states the survey's no-phase caveat",
+              sediment_note(SC).find("NO phase") != std::string::npos,
+              "a reader could take the survey column as a phase measurement");
+    }
+
+    // TORN caps the column and the note says so.
+    {
+        std::string tn = kHeader + trace_steps(20) + mem_ev(2, kEarly, 8, "r");
+        Recording trr = mk_rec(tn); // no `end` footer => torn
+        TerrainModel tm = weave(trr);
+        SedimentColumns TC = build_sediment_columns(tm, 8, 0);
+        bool all = !TC.exact.empty();
+        for (const SedimentColumn &c : TC.exact)
+            if (!c.torn_capped)
+                all = false;
+        check("T6: TORN caps every column", TC.torn && all,
+              "a torn column was presented as complete");
+        check("T6: the note says the top band is a floor",
+              sediment_note(TC).find("floor") != std::string::npos,
+              "the truncation is invisible");
+    }
+
+    // The layer covers CODE cells too, not only data — T6 has no `mem`
+    // prerequisite and must work on a coarse recording.
+    {
+        std::string coarse = kHeader + trace_steps(40) + kEnd;
+        Recording cr = mk_rec(coarse);
+        TerrainModel cm = weave(cr);
+        SedimentColumns CC = build_sediment_columns(cm, 8, 0);
+        check("T6: a `mem`-less recording still produces CODE columns",
+              !CC.exact.empty(),
+              "the layer needs no `mem` and must not be empty without it");
+        bool any_code = false;
+        for (const SedimentColumn &c : CC.exact)
+            if (!c.is_data)
+                any_code = true;
+        check("T6: those columns are code columns", any_code,
+              "no code column was emitted");
+    }
+}
+
 int main() {
     t1_hud_contract();
     t2_twin_relief();
     t3_working_set_tide();
     t4_lifetime_pillars();
     t5_access_ribbon();
+    t6_sediment_columns();
 
     if (failures) {
         std::fprintf(stderr, "%d data-layer check(s) failed\n", failures);

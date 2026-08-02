@@ -28,6 +28,7 @@
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
+#include "space/sediment.h" // T6 (58): SedimentColumns, set_sediment_columns
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -99,6 +100,11 @@ struct SceneLayers {
     // polyline, and it must never be mistaken for the access-mark spurs that
     // are on by default (`access_marks`), so it opts in deliberately.
     bool data_ribbon = false;
+    // T6 (58-memory-data-cell-family): the residency sediment columns. Default
+    // OFF, and for a stronger reason than the rest of the family: N cells x B
+    // bands is the densest geometry here, so it is opted into deliberately and
+    // its band count is stated in the HUD.
+    bool sediment = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -234,6 +240,12 @@ class Scene {
     // GAP emits no segment at all, which is the only honest representation of
     // an access sequence that was not recorded.
     void set_data_ribbon(const space::DataRibbon &ribbon);
+    // T6 (58): the residency sediment columns. EXACT and STATISTICAL go into
+    // separate batches — the isolation invariant made geometry, so no draw
+    // path can merge a survey column into the exact buffer. A whole-recording
+    // aggregate (its whole point is to be readable with the playhead
+    // stationary), so it uploads on the weave gate.
+    void set_sediment_columns(const space::SedimentColumns &cols);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -395,6 +407,7 @@ class Scene {
     DataLineBatch tide_live_, tide_watermark_; // T3
     DataLineBatch pillars_, pillars_open_;     // T4
     DataLineBatch ribbon_read_, ribbon_write_, ribbon_leap_; // T5
+    DataLineBatch sediment_exact_, sediment_stat_;           // T6
     void free_data_layers();
     // Upload `verts` (3 floats per vertex) into `b`, replacing whatever it
     // held. Defined in data_layers_gl.cpp with the rest of the family.

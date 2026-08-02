@@ -70,7 +70,7 @@ int main() {
         &SceneLayers::canopy,       &SceneLayers::opcode,
         &SceneLayers::mispred,      &SceneLayers::data_relief,
         &SceneLayers::working_set, &SceneLayers::lifetime,
-        &SceneLayers::data_ribbon,
+        &SceneLayers::data_ribbon, &SceneLayers::sediment,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

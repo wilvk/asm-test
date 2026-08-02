@@ -19,7 +19,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change. Line numbers below were re-verified 2026-08-03 while implementing.
 >
-> **Status — ☑ 5/6 (T1–T5 landed 2026-08-03).**
+> **Status — ✅ 6/6, landed 2026-08-03.**
 
 ## Why this work exists
 
@@ -361,7 +361,7 @@ and colour and the note calls them **GENUINE** non-locality, so a reader never
 blames the compaction. The HUD adds one more line when `access order` and `access`
 are both on, naming them as two different layers.
 
-### T6 — Residency sediment columns (M)
+### ☑ T6 — Residency sediment columns (M)
 
 **Goal.** Whether each cell is touched early, late, or throughout — the phase the
 moving terrain slice only reveals by scrubbing, stood up with the playhead paused.
@@ -395,6 +395,41 @@ total hit count (the conservation assertion); a never-hit cell produces no colum
 
 **Done when.** Temporal phase is readable with the playhead stationary, and the band
 counts conserve.
+
+**Landed.** `space/sediment.{h,cpp}` — one binary search per band over the ascending
+`CodeCell::steps` / `DataCell::steps`, no rescan. Whole-recording (the layer's point
+is to be readable with the playhead **stationary**), covering **code and data**
+cells: T6 has no `mem` prerequisite and a test asserts a `mem`-less recording still
+produces code columns.
+
+**Built against the degrade path from the start**, as the brief instructed. The
+shell's scrub budget was a function-local `kScrubCellBudget` inside the re-slice
+block; it is now file-scope `kSceneCellBudget` and the sediment builder takes **that
+same number**. Two throttles that could drift apart would not be "wired to the
+existing degrade path". When `touched_cells × bands` would exceed it, the **band
+count** halves until it fits (floor 1) — **never the cell set**: dropping cells
+would silently delete measurements, while merging adjacent time windows costs
+temporal resolution and nothing else. `degraded` + `bands_requested` state it, and
+`sediment_note()` puts the band count in the HUD (T6 step 6), because a coarsened
+column looks exactly like a sparsely-hit one otherwise. A test asserts the degraded
+build has the **same number of columns** as the ungraded one.
+
+**Conservation** is asserted over every column at seven different band counts
+(1, 2, 3, 7, 10, 16, 64), including after coarsening. The band edges tile the axis
+by integer proportion with the top band closed, and the axis is extended to
+`max(nsteps, last_step+1)` — a `mem` stream can outrun the trace's step count, and
+clamping the data instead of the axis would have broken conservation silently.
+
+**One thing the brief could not have known.** `TF_STAT` cells have no per-step
+attribution to band: `TerrainModel::stat` is a height field with no step list,
+because a survey states *where* residency landed and never *when*. Fabricating
+per-band counts for it would be precisely the invented temporal claim this layer
+must not make. So a survey column carries its magnitude as **one unattributed band**
+over the whole axis, `stat_has_no_phase` says so, and the note says so. It lives in
+its own `stat` vector, never in `exact`. The isolation test is sharper than
+"different cells": the fixture deliberately puts a survey edge on a **traced** cell,
+and asserts the exact column's hit total still equals that cell's real step count —
+i.e. the survey magnitude was never summed in.
 
 ## Fidelity notes (D7)
 

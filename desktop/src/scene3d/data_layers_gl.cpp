@@ -81,7 +81,8 @@ void Scene::upload_data_batch(DataLineBatch &b, const std::vector<float> &verts)
 void Scene::free_data_layers() {
     DataLineBatch *all[] = {&relief_read_, &relief_write_, &tide_live_,
                             &tide_watermark_, &pillars_,     &pillars_open_,
-                            &ribbon_read_,    &ribbon_write_, &ribbon_leap_};
+                            &ribbon_read_,    &ribbon_write_, &ribbon_leap_,
+                            &sediment_exact_, &sediment_stat_};
     for (DataLineBatch *b : all) {
         if (b->vbo)
             glDeleteBuffers(1, &b->vbo);
@@ -271,6 +272,45 @@ void Scene::set_data_ribbon(const space::DataRibbon &ribbon) {
     ribbon_leap_.line_width = 2.0f;
 }
 
+// T6 (58): the residency sediment columns. Each band is one segment on the
+// TRACE-TIME axis (traj_scale_), so a column reads as stacked strata with gaps
+// where the cell was not touched — the temporal phase the moving slice only
+// reveals by scrubbing, stood up with the playhead paused.
+//
+// EXACT and STATISTICAL are separate batches: the isolation invariant made
+// geometry, so no draw path can merge a survey column into the exact buffer,
+// and the survey half is drawn thinner and dimmer (it carries magnitude but
+// NO phase — one unattributed band over the whole axis).
+//
+// This is the densest layer in the family, which is why the MODEL already
+// coarsened its band count against the caller's scene budget before we get
+// here. This file draws what it was given and adds no throttle of its own.
+void Scene::set_sediment_columns(const space::SedimentColumns &cols) {
+    std::vector<float> exact, stat;
+    for (const space::SedimentColumn &c : cols.exact)
+        for (const space::SedimentBand &b : c.bands)
+            seg(exact, c.u, static_cast<float>(b.lo_step) * traj_scale_, c.v,
+                c.u, static_cast<float>(b.hi_step) * traj_scale_, c.v);
+    for (const space::SedimentColumn &c : cols.stat)
+        for (const space::SedimentBand &b : c.bands)
+            seg(stat, c.u, static_cast<float>(b.lo_step) * traj_scale_, c.v,
+                c.u, static_cast<float>(b.hi_step) * traj_scale_, c.v);
+    upload_data_batch(sediment_exact_, exact);
+    upload_data_batch(sediment_stat_, stat);
+    sediment_exact_.color[0] = 0.80f;
+    sediment_exact_.color[1] = 0.75f;
+    sediment_exact_.color[2] = 0.55f;
+    sediment_exact_.color[3] = 0.65f;
+    sediment_exact_.line_width = 3.0f;
+    // The survey half: the desaturated grey the ghost-fog terrain already uses
+    // for sampled residency, thinner and fainter — never the exact palette.
+    sediment_stat_.color[0] = 0.55f;
+    sediment_stat_.color[1] = 0.55f;
+    sediment_stat_.color[2] = 0.60f;
+    sediment_stat_.color[3] = 0.25f;
+    sediment_stat_.line_width = 1.0f;
+}
+
 void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (!prog_traj_)
         return;
@@ -287,6 +327,10 @@ void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
         batches.push_back(&ribbon_read_);
         batches.push_back(&ribbon_write_);
         batches.push_back(&ribbon_leap_);
+    }
+    if (layers.sediment) {
+        batches.push_back(&sediment_exact_);
+        batches.push_back(&sediment_stat_);
     }
     if (layers.working_set) {
         // Watermark first, live second: the faded decay sits behind the mass

@@ -27,6 +27,7 @@
 #include "space/dataribbon.h" // T5 (58): DataRibbon, SceneFrame::ribbon
 #include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
+#include "space/sediment.h" // T6 (58): SedimentColumns, SceneFrame::sediment
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -77,6 +78,9 @@ struct SceneFrame {
     // T5 (58-memory-data-cell-family): the data-access order ribbon — a
     // whole-recording aggregate on the same weave/growth gate as `lifetime`.
     const space::DataRibbon *ribbon = nullptr;
+    // T6 (58-memory-data-cell-family): the residency sediment columns — a
+    // whole-recording aggregate on the same weave/growth gate.
+    const space::SedimentColumns *sediment = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

@@ -895,6 +895,14 @@ scene3d::Atmosphere scene_atmosphere_for_tier(FidelityTier tier) {
     return a;
 }
 
+// The 3D pane's ONE cell budget (23-graded-truth-layer.md T4). It was a
+// function-local constant of the re-slice block until 58 T6, which needed the
+// SAME number: T6's own instruction is to wire the sediment layer's band count
+// to the existing degrade path rather than to a new throttle, and two throttles
+// that could drift apart would not be that. Generous — a golden-sized terrain
+// never degrades on either.
+static const uint64_t kSceneCellBudget = 200000;
+
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (s.active_tab < 0 || i >= s.scenes.size())
@@ -966,6 +974,13 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 58 T5: the access-order ribbon, likewise a whole-recording aggregate
         // (every recorded access in step order), so it is woven here too.
         sv.ribbon = space::build_data_ribbon(r, sv.terr.proj);
+        // 58 T6: the sediment columns, built against the SAME cell budget the
+        // 3D scrub already degrades on (kScrubCellBudget, below) rather than a
+        // new throttle — the brief's own instruction. N cells x B bands is the
+        // densest geometry in this family, so the budget coarsens the BAND
+        // COUNT (never the cell set) and the HUD states which it drew.
+        sv.sediment = space::build_sediment_columns(
+            sv.terr, space::kSedimentBandsDefault, kSceneCellBudget);
         sv.opcode_cells = space::build_opcode_terrain(
             sv.terr, r, space::opcode_guest_from_arch(a.arch));
         sv.hud.nsteps = sv.terr.nsteps;
@@ -1040,6 +1055,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 58 T5: the ribbon's legend comes from the MODEL, so the source
     // population, the gap rule and the leap rule are stated once.
     sv.hud.ribbon_legend = space::data_ribbon_note(sv.ribbon);
+    // 58 T6: the band count (and whether the budget coarsened it) is stated,
+    // because a coarsened column looks exactly like a sparsely-hit one.
+    sv.hud.sediment_legend = space::sediment_note(sv.sediment);
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1116,10 +1134,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // showing progress, then lands the full slice next frame. The coarse plane is
     // the same labelled rung the terrain shows normally, so this hides nothing
     // (D7). The budget is generous — a golden-sized terrain never degrades.
-    static const uint64_t kScrubCellBudget = 200000;
     if (sv.slice_t != sv.hud.t) {
         const uint64_t cells = sv.terr.code.size() + sv.terr.data.size();
-        if (!sv.scrub_pending && should_degrade(cells, kScrubCellBudget)) {
+        if (!sv.scrub_pending && should_degrade(cells, kSceneCellBudget)) {
             sv.slice = sv.terr.coarse_slice(); // cheap, labelled coarse
             sv.scrub_pending = true; // finish the full slice next frame
         } else {
@@ -1286,6 +1303,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.tide_gen = sv.tide_window;
     f.lifetime = &sv.lifetime;         // 58 T4
     f.ribbon = &sv.ribbon;             // 58 T5
+    f.sediment = &sv.sediment;         // 58 T6
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

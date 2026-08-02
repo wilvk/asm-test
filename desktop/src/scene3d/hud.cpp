@@ -809,6 +809,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                "ORDER data was touched in, the spurs are which "
                                "instruction touched which datum");
     }
+    // T6 (58): the sediment layer's note, which STATES THE BAND COUNT — the
+    // brief's own requirement, because a coarsened column looks exactly like a
+    // sparsely-hit one unless the reader is told which they are seeing.
+    if (s.layers.sediment && !s.sediment_legend.empty())
+        ImGui::TextColored(kDim, "%s", s.sediment_legend.c_str());
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

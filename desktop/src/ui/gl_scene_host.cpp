@@ -105,6 +105,9 @@ class GlSceneHost : public SceneHost {
             // T5 (58): the access-order ribbon is whole-recording too.
             static const space::DataRibbon kNoRibbon;
             scene_.set_data_ribbon(f.ribbon ? *f.ribbon : kNoRibbon);
+            // T6 (58): the sediment columns are whole-recording too.
+            static const space::SedimentColumns kNoSediment;
+            scene_.set_sediment_columns(f.sediment ? *f.sediment : kNoSediment);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

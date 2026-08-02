@@ -294,6 +294,12 @@ struct HudState {
     // the same set of accesses), the gap rule and the leap rule. Shown only
     // while SceneLayers::data_ribbon is on.
     std::string ribbon_legend;
+
+    // T6 (58-memory-data-cell-family): the sediment layer's own legend line,
+    // built by the caller from space::sediment_note(cols) — it STATES THE BAND
+    // COUNT (T6 step 6's own requirement) and whether the scene budget
+    // coarsened it. Shown only while SceneLayers::sediment is on.
+    std::string sediment_legend;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

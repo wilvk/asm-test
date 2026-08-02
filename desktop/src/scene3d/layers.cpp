@@ -54,6 +54,13 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"access order", "access order",
          "is the access pattern streaming, strided, or pointer-chasing?",
          G::Activity, LayerGrade::Exact, &SceneLayers::data_ribbon},
+        // 58 T6: Derived — a band is a COUNT of recorded hits in a window, an
+        // aggregate of exact data rather than a raw recorded field. (The
+        // SURVEY half of this layer is drawn from the separate stat buffer and
+        // labelled statistical in its own note, not by this row's grade.)
+        {"sediment", "sediment",
+         "is this cell touched early, late, or throughout?", G::Activity,
+         LayerGrade::Derived, &SceneLayers::sediment},
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},
