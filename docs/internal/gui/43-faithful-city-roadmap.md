@@ -41,6 +41,21 @@ the city doc) and the same verified substrate (Hilbert `space/projection.cpp` +
 `space/terrain.cpp` + `space/trajectory.cpp`), so adopting the city framing loses
 nothing the catalog stated — it is the catalog's own sequencing answer.
 
+> **Amended 2026-08-02 — this instruction is now scoped.** It was right for Phase
+> A (a pure reskin of existing geometry) and stays right for the city's own
+> inventions (signage, canals, cranes, seasons), which have no catalog row at all.
+> It is the wrong instrument for the rest, because the city phases are grouped by
+> *metaphor* while the work is gated by *data* — Phase B mixes pure-render signage
+> with `is_return` plumbing, Phase C mixes lit windows (which need a projection
+> extension that does not exist) with LOD, so a brief cut along a city phase
+> always carries one item that blocks the other four.
+> [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) cuts the
+> catalog's *content* along its own data seams (§1 there states the argument in
+> full) and maps every brief back to the city phase it feeds (§6 there), so this
+> doc stays the representation frame and neither family re-derives the other's
+> work. **Phases B–E are still uncut as city phases** — when one is, take 53's
+> already-verified rows as its content and add the metaphor.
+
 **Going forward, cut per-phase implementation-ready briefs from the city doc's
 Roadmap (§5: Phase A–E), not directly from the raw catalog.** A catalog item not
 yet named in a phase (the catalog's "Phase 5 — remaining medium layers", e.g. JIT

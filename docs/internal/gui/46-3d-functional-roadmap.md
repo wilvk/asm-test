@@ -140,7 +140,12 @@ Extends [10-spacetime-3d-overview.md](../archive/gui/10-spacetime-3d-overview.md
 (the two-axes rule 49 and 50 both hold to) and
 [44-faithful-city-phase-a-mvp-terrain-reskin.md](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
 (the zoning/weather/vehicle substrate 47–51 read). Sibling roadmaps:
-[43](43-faithful-city-roadmap.md) (representation) and
-[38](38-live-feed-completion-roadmap.md) (the live feed). Fidelity chrome D7 /
+[43](43-faithful-city-roadmap.md) (representation),
+[53](53-3d-catalog-build-roadmap.md) (depiction — which quantities the scene draws)
+and [38](38-live-feed-completion-roadmap.md) (the live feed). Three mechanisms are
+shared with 53's family and must be adopted rather than duplicated by whichever
+brief lands second: the pick-id bands (47 T3 / 59 T1), the address-first
+step→place resolver (50 / 57 T1) and the movable camera target (48 / 59 T5).
+Fidelity chrome D7 /
 [23](../archive/gui/23-graded-truth-layer.md); wording D7 /
 [24](../archive/gui/24-one-visual-language.md).

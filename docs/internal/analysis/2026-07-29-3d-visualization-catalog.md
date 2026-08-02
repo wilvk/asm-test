@@ -530,13 +530,36 @@ Generated 2026-07-29 by a 17-agent grounded-ideation workflow (8 domain ideators
 Wave-1 `mem[]` address stream ([29-mem-address-stream.md](../archive/gui/29-mem-address-stream.md)).
 Sibling analysis docs live in [`docs/internal/analysis/`](.).
 
-## Brief cut from this catalog (2026-07-31)
+## Briefs cut from this catalog
+
+### 2026-08-02 — the depiction family (gui 53–59), cut directly from here
+
+[../gui/53-3d-catalog-build-roadmap.md](../gui/53-3d-catalog-build-roadmap.md)
+takes this catalog's own build roadmap (§7 above) as a schedule and cuts six
+implementation-ready briefs from it: **54** the seven Phase-0 prerequisites (§4),
+**55** render quality (from §9's occlusion limit plus an online survey of what
+clears this app's GL 3.0 / GLSL 130 baseline), **56** layers 1–4, **57** layers 5,
+6, 11, 14, **58** the memory data-cell family (layers 7–9, 12, 13) and **59**
+scenes 1–4. Nineteen of the 26 graphs are cut; 53§7 states what a Phase-4/5 cut
+would contain and what unblocks each.
+
+Two things 53 records that supersede text above. **§9's "single largest unknown"
+is understated**: the shell builds its projection from code regions only
+(`shell.cpp:921`), so `TerrainModel::data` is empty for every recording in the
+shipped app — the observed-data-span extension does not merely unblock four graphs,
+it makes the terrain's data half reachable at all. And **the §4 mnemonic-classifier
+note is understated too**: `ui/asm_language.h` includes `TextEditor.h` *and*
+`asmtest_assemble.h`, so it is excluded from the render-only viewer twice over.
+
+### 2026-07-31 — the city framing
 
 This catalog's 33 concepts are now unified under one metaphor by
 [2026-07-30-computer-as-city-3d.md](2026-07-30-computer-as-city-3d.md), which
-states outright that it "absorbs" this catalog. Future implementation-ready
-briefs should be cut from the CITY doc's phased roadmap (§5 there), not
-directly from this catalog — see
+states outright that it "absorbs" this catalog. Briefs for the *representation*
+work — what the scene depicts — are cut from the CITY doc's phased roadmap (§5
+there); briefs for this catalog's *content* are cut from
+[../gui/53-3d-catalog-build-roadmap.md](../gui/53-3d-catalog-build-roadmap.md)
+along this catalog's own data seams, per the amendment above. See
 [../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md) (the
 roadmap adoption) and
 [../gui/44-faithful-city-phase-a-mvp-terrain-reskin.md](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
