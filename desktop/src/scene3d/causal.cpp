@@ -676,13 +676,25 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
     // edit that reaches for glLineWidth has to delete this line first.
     glLineWidth(1.0f);
 
+    // gl_PointSize is only honoured with GL_PROGRAM_POINT_SIZE enabled on a
+    // core profile — kTrajVert writes it, but without this the driver clamps
+    // every point to 1px and the two magnitude channels this file uses
+    // (T2's payload size, T4's convergence weight) silently vanish. Enabled
+    // per point draw and disabled straight after, exactly as scene.cpp's own
+    // head/front/pick point draws do; leaving it on would change how the
+    // trajectory pass below renders its own points.
     auto draw = [&](const Prim &p) {
         if (p.count == 0)
             return;
         glUniform4fv(uColor, 1, p.color);
-        if (p.mode == GL_POINTS)
-            glUniform1f(uPointSize, p.point_size);
         glBindVertexArray(p.vao);
+        if (p.mode == GL_POINTS) {
+            glUniform1f(uPointSize, p.point_size);
+            glEnable(GL_PROGRAM_POINT_SIZE);
+            glDrawArrays(p.mode, 0, p.count);
+            glDisable(GL_PROGRAM_POINT_SIZE);
+            return;
+        }
         glDrawArrays(p.mode, 0, p.count);
     };
 
