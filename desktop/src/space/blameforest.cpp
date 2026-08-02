@@ -47,14 +47,16 @@ BlameForest build_blame_forest(const std::vector<BlameAttr> &blame,
             sink.off = b.off;
             sink.born_untraced = b.born_untraced;
             if (sp.placed) {
+                sink.placed = true;
                 sink.cell = sp.cell;
                 sink.u = sp.u;
                 sink.v = sp.v;
-                out.sinks.push_back(sink);
-            } else {
-                // Counted by the placer (off_plane below); no beacon.
-                out.sinks.push_back(sink); // kept so the cone is still stated
             }
+            // An unplaced sink keeps `placed == false` and no coordinates; it
+            // is counted by the placer (off_plane below) and draws nothing.
+            // The row is still pushed: the cone is a fact worth stating even
+            // when it has no place on this plane.
+            out.sinks.push_back(sink);
             sink_steps.insert(b.step);
         }
         if (b.born_untraced) {

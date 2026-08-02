@@ -50,6 +50,13 @@ struct BlameConvergence {
 struct BlameSink {
     uint32_t step = 0;
     uint64_t off = 0;
+    // FALSE when T1's placer refused this sink. An explicit flag, not a
+    // renderer inferring "u == 0 && v == 0 && cell == 0": cell 0 is a real
+    // cell, and inferring placement from default-valued coordinates is the
+    // same class of mistake as returning cell 0 for an unplaced step. The
+    // ROW still exists (the cone is a fact worth stating) — only its geometry
+    // does not.
+    bool placed = false;
     uint32_t cell = 0;
     float u = 0, v = 0;
     // The recording's explicit verdict: this value has NO traced producer.

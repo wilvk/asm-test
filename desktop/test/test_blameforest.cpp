@@ -196,6 +196,27 @@ int main() {
               f.off_plane_note == "2 step(s) off-plane", f.off_plane_note);
         check("off-plane: the cone is still stated (the sink row survives)",
               f.sinks.size() == 1, "");
+        check("off-plane: and the sink row SAYS it has no place",
+              f.sinks.size() == 1 && !f.sinks[0].placed,
+              "an unplaced sink must carry an explicit flag — a renderer "
+              "inferring it from u/v/cell defaults would be the same mistake "
+              "as returning cell 0 for an unplaced step");
+    }
+
+    // === a PLACED sink says so ==============================================
+    {
+        Recording rec = mk_rec(
+            std::string(kHdr) + kCodeimage + step(0, 0) + step(1, 16) +
+            "{\"k\":\"blame\",\"step\":1,\"off\":16,\"cone\":[{\"step\":0,"
+            "\"off\":0,\"kind\":\"insn\"},{\"step\":1,\"off\":16,\"kind\":"
+            "\"insn\"}]}\n" +
+            kEnd);
+        Projection p = build_projection(regions_from_codeimage(rec));
+        Streams s = decode_streams(rec);
+        BlameForest f = build_blame_forest(s.blame, s.df, p);
+        check("placed-sink: the flag is set", f.sinks.size() == 1 &&
+                                                  f.sinks[0].placed,
+              "a resolvable sink must be marked placed");
     }
 
     // === a single-cone recording produces no spike above the baseline =======

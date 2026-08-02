@@ -131,14 +131,10 @@ PathRidge build_path_ridge(const TraceStream &trace, const Projection &proj,
         if (entered.count(b) == 0)
             out.blocks_unvisited++;
 
-    if (counts.empty()) {
-        out.enabled = true;
-        // Not a refusal: the recording is real and simply never left a block
-        // (a single-block trace). The cap below still states the unknown
-        // continuation.
-    } else {
-        out.enabled = true;
-    }
+    // Enabled even when no transition was observed: a single-block trace is a
+    // real recording that simply never left its block, and the cap below
+    // states the unknown continuation. That is a finding, not a refusal.
+    out.enabled = true;
 
     // --- the modal successor per block --------------------------------------
     std::map<uint64_t, uint64_t> best;

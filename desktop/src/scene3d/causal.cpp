@@ -496,9 +496,10 @@ void Scene::set_blame_forest(const space::BlameForest &forest) {
 
     std::vector<float> sinks, untraced;
     for (const space::BlameSink &sk : forest.sinks) {
-        // An unplaceable sink has no cell and was counted by the placer; it
-        // must emit nothing at all, not a ring at the plane origin.
-        if (sk.u == 0.0f && sk.v == 0.0f && sk.cell == 0)
+        // An unplaceable sink was counted by the placer and must emit
+        // nothing at all — not a ring at the plane origin. Keyed on the
+        // model's own flag, never on default-valued coordinates.
+        if (!sk.placed)
             continue;
         const float c[3] = {sk.u, 0.006f, sk.v};
         if (sk.born_untraced) {
