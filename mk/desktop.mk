@@ -1127,6 +1127,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
+                 $(BUILD)/desktop_test_coverage_window \
                  $(BUILD)/desktop_test_scene2d \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
@@ -1397,6 +1398,20 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The confidence layer's coverage-window mask (56-fidelity-and-module-layers.md
+# T2 step 2): the terrain closure (terrain.o/projection.o/canvas.o/diff.o/
+# slice.o, as test_terrain links) plus hotedges.o/observer.o for
+# obs_hotedges_build/obs_hotedges_for_scene, which supply the window from a
+# real recording's provenance — the same two builders shell.cpp weaves from.
+$(BUILD)/desktop_test_coverage_window: \
+    $(BUILD)/desktop/test/t/test_coverage_window.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o \
+    $(BUILD)/desktop/test/vw/hotedges.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The flat terrain surface (52-flat-terrain-surface.md T1/T2/T3): the pure

@@ -66,7 +66,7 @@ int main() {
         &SceneLayers::convergence,   &SceneLayers::zoning,
         &SceneLayers::weather,       &SceneLayers::ghost_fog,
         &SceneLayers::vehicle,       &SceneLayers::contours,
-        &SceneLayers::edl,
+        &SceneLayers::edl,          &SceneLayers::confidence,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

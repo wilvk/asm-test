@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "doc/recording.h"
+#include "space/terrain.h" // 56 T2: apply_coverage_window's Terrain/TerrainModel
 #include "views/observer.h"
 
 namespace asmdesk {
@@ -142,6 +143,17 @@ struct HotEdgeSceneView {
     uint64_t window_base = 0, window_len = 0;
 };
 HotEdgeSceneView obs_hotedges_for_scene(const HotEdgeView &v);
+
+// 56 T2 (fidelity-and-module-layers): the confidence layer's coverage-window
+// mask — mutates `slice.flags` in place, adding space::TF_INWINDOW_EMPTY /
+// TF_OUTWINDOW over `model`'s in-domain cells (kind_by_cell != kKindByCellNone)
+// against `hv`'s stated window. A no-op — touches NOT ONE flag — when
+// `hv.have_window` is false: "whole-process assumed" is the common case (the
+// catalog's own §9 note) and must be the graceful one, never a fabricated
+// mask. An in-window cell with `slice.height > 0` needs neither bit; it
+// already renders as a mound.
+void apply_coverage_window(space::Terrain &slice, const space::TerrainModel &model,
+                           const HotEdgeSceneView &hv);
 
 std::string obs_hotedges_dump(const HotEdgeView &v);
 

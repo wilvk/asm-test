@@ -159,6 +159,11 @@ std::string height_scale_note(uint64_t max_full_heat) {
     return buf;
 }
 
+const char *confidence_layer_note() {
+    return "confidence: darker unknown = never described; amber hatch = "
+           "in-window, below-rate; black hatch = outside the stated window";
+}
+
 std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
     std::vector<uint64_t> out;
     if (nsteps == 0)
@@ -582,6 +587,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::SameLine();
         ImGui::TextUnformatted(sw.label.c_str());
     }
+    // T2 (56): the confidence layer's own idiom, shown only while it is on —
+    // it never advertises a hatch the plane is not currently drawing.
+    if (s.layers.confidence)
+        ImGui::TextColored(kDim, "%s", confidence_layer_note());
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

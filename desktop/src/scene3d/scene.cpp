@@ -758,7 +758,7 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
 }
 
 void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
-                                float contour_levels) {
+                                float contour_levels, bool confidence) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex_height_);
@@ -794,6 +794,11 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     GLint uhc = glGetUniformLocation(prog, "uHighlightCell");
     if (uhc >= 0)
         glUniform1i(uhc, highlight_cell);
+    // T2 (56-fidelity-and-module-layers): absent from the pick shader and
+    // prog_stat_ (loc -1, harmless) — only kTerrainFrag declares it.
+    GLint uconf = glGetUniformLocation(prog, "uConfidence");
+    if (uconf >= 0)
+        glUniform1i(uconf, confidence ? 1 : 0);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
@@ -929,7 +934,8 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
 
     if (layers.terrain)
         draw_terrain_common(prog_terrain_, mvp, layers.zoning,
-                            layers.contours ? kContourLevels : 0.0f);
+                            layers.contours ? kContourLevels : 0.0f,
+                            layers.confidence);
 
     // T4 (44, depth-write fixed by 55's dithering): the ghost-fog terrain,
     // after the exact terrain. kStatFrag now composites by DISCARD (T4, 55)

@@ -14,6 +14,39 @@ std::string hex(uint64_t v) {
 }
 } // namespace
 
+void apply_coverage_window(space::Terrain &slice,
+                           const space::TerrainModel &model,
+                           const HotEdgeSceneView &hv) {
+    if (!hv.have_window)
+        return; // "whole-process assumed" — no mask at all, never fabricated
+    const uint32_t n = model.w;
+    if (n == 0 || slice.w != n || slice.h != model.h)
+        return; // a slice from a different plane than `model` — nothing to key
+    for (uint32_t y = 0; y < model.h; ++y) {
+        for (uint32_t x = 0; x < n; ++x) {
+            const size_t cell = static_cast<size_t>(y) * n + x;
+            if (cell >= model.kind_by_cell.size() ||
+                model.kind_by_cell[cell] == space::kKindByCellNone)
+                continue; // off-domain: not this layer's mask to draw
+            const float u = (x + 0.5f) / static_cast<float>(n);
+            const float v = (y + 0.5f) / static_cast<float>(model.h);
+            uint64_t addr = 0;
+            const space::Region *reg = nullptr;
+            if (!model.proj.unproject(u, v, &addr, &reg))
+                continue;
+            const bool in_window =
+                addr >= hv.window_base && addr < hv.window_base + hv.window_len;
+            if (!in_window) {
+                slice.flags[cell] |= space::TF_OUTWINDOW;
+            } else if (slice.height[cell] <= 0.0f) {
+                slice.flags[cell] |= space::TF_INWINDOW_EMPTY;
+            }
+            // in-window and credited (height > 0): no bit — it already reads
+            // as a mound, per this function's own contract.
+        }
+    }
+}
+
 HotEdgeView obs_hotedges_build(const Recording &r, const ObsLifecycle *lc) {
     HotEdgeView v;
     v.chrome = obs_chrome(r);

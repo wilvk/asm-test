@@ -58,11 +58,22 @@ uniform float uContourLevels; // T3 (49): band count; <=0 disables banding
 uniform float uN;             // 50 T2: cell grid size, to find THIS fragment's cell
 uniform int uHighlightCell;   // 50 T2: the flat views' selection, located onto
                               // this plane by its ADDRESS; -1 = no highlight
+// T2 (56-fidelity-and-module-layers): SceneLayers::confidence — 1 re-lifts the
+// ink toward "how much do I trust this" instead of density (uHeight/vHeight
+// themselves are UNCHANGED: this brief re-tints the existing geometry rather
+// than re-deriving the mesh, see the doc's own status note on this scoping).
+uniform int uConfidence;
 out vec4 frag;
 const uint TORN = 1u;     // rubble: a KNOWN lower bound (capture truncated/torn)
 const uint STAT = 2u;
 const uint CHURN = 4u;    // scaffold: a codeimage version changed within [0,t]
 const uint UNKNOWN = 32u; // T2: fog-of-war — in-domain, no content at all
+// T2 (56): the coverage-window mask bits (space::TF_INWINDOW_EMPTY / TF_OUTWINDOW),
+// set ONLY when a HotEdgeSceneView stated a window (views/hotedges.cpp's
+// apply_coverage_window) — mirrored here exactly like TORN/STAT/CHURN/UNKNOWN
+// already mirror space::TerrainFlag.
+const uint INWINDOW_EMPTY = 64u;
+const uint OUTWINDOW = 128u;
 const vec3 kindHue[6] = vec3[6](
   vec3(0.90,0.55,0.15), // Code
   vec3(0.35,0.75,0.95), // Stack
@@ -85,6 +96,25 @@ void main(){
   if ((f & STAT)  != 0u) base *= 0.6;           // statistical layer is dimmer
   if ((f & UNKNOWN) != 0u)
     base = mix(base, vec3(0.02,0.02,0.03), 0.85); // sunken fog-of-war pit
+  // T2 (56-fidelity-and-module-layers): confidence mode amplifies the SAME
+  // per-flag facts into a trust reading rather than deriving a new one —
+  // unknown reads as a harder void, and the coverage-window bits (set only by
+  // hotedges.cpp's apply_coverage_window, so a hatch never appears unless a
+  // window was actually stated) get their own idiom, distinct from the
+  // contour bands below.
+  if (uConfidence == 1) {
+    if ((f & UNKNOWN) != 0u)
+      base = mix(base, vec3(0.0, 0.0, 0.0), 0.5);
+    if ((f & (INWINDOW_EMPTY | OUTWINDOW)) != 0u) {
+      // A screen-space diagonal hatch: cheap, orientation-stable at any zoom.
+      float hatch = fract((gl_FragCoord.x + gl_FragCoord.y) * 0.15);
+      float line = step(0.5, hatch);
+      vec3 hue = (f & OUTWINDOW) != 0u
+                     ? vec3(0.05, 0.05, 0.07)  // never-looked: near-black
+                     : vec3(0.45, 0.35, 0.10); // below-rate: dim amber
+      base = mix(base, hue, 0.55 * line);
+    }
+  }
   float torn = ((f & TORN) != 0u) ? 1.0 : 0.0;
   vec3 col = mix(base, vec3(1.0,0.15,0.15), torn*0.7); // rubble = red gash
   // T3 (49, refined 55): iso-density contour bands re-encode vHeight — never

@@ -93,6 +93,14 @@ const char *inspect_hint_note();
 // wording is testable without an ImGui frame.
 std::string height_scale_note(uint64_t max_full_heat);
 
+// T2 (56-fidelity-and-module-layers): the confidence layer's own legend line
+// — never merged into terrain_encoding_swatches() above, because the two
+// coverage-window hatches it names (space::TF_INWINDOW_EMPTY/TF_OUTWINDOW)
+// render ONLY when SceneLayers::confidence is on, unlike that legend's four
+// always-visible branches. Drawn only while confidence is enabled, so it
+// never advertises an idiom the plane is not currently showing.
+const char *confidence_layer_note();
+
 // 49 T4: tick values for the trajectory-time ruler, `0..nsteps` inclusive at
 // a step no finer than `nsteps / max_ticks` — pure so the tick set is
 // golden-testable without a camera-projected draw. Empty when nsteps == 0

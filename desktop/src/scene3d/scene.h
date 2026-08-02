@@ -53,6 +53,13 @@ struct SceneLayers {
     // means the pass does not run at all — never a pass that runs and does
     // nothing (T1's own fidelity bar: EDL is a depth cue, never an encoding).
     bool edl = true;
+    // T2 (56-fidelity-and-module-layers): re-lift the terrain by FIDELITY
+    // CLASS instead of density — "how much do I trust this cell right now".
+    // Default OFF: unlike the compositing layers above (which draw an
+    // ADDITIONAL surface), this changes the READING of the one exact terrain
+    // already on screen, so a session does not silently start in the
+    // trust-lens view instead of the density view it has always opened to.
+    bool confidence = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -357,7 +364,8 @@ class Scene {
     // SceneLayers::zoning off changes only the tint, never the pick pass
     // (which does not declare uZoning at all).
     void draw_terrain_common(unsigned prog, const float mvp[16],
-                             bool zoning = true, float contour_levels = 0.0f);
+                             bool zoning = true, float contour_levels = 0.0f,
+                             bool confidence = false);
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
     // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)

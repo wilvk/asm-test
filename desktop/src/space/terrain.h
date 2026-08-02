@@ -59,6 +59,15 @@ enum TerrainFlag : uint32_t {
     // cell (never drawn as land at all) and from TF_TORN (a KNOWN lower
     // bound) — TF_UNKNOWN means "no content", not "a floor on real content".
     TF_UNKNOWN = 1u << 5,
+    // T2 (56-fidelity-and-module-layers): the coverage-window mask — set only
+    // when a HotEdgeSceneView states a window (views/hotedges.h's
+    // apply_coverage_window), never inferred from an absent window. An
+    // in-window cell with real height needs neither bit (it already renders as
+    // a mound); these two grade the other two cases the confidence layer must
+    // not conflate.
+    TF_INWINDOW_EMPTY = 1u << 6, // in the stated window, credited nothing
+                                 // (below-rate, not confidently cold)
+    TF_OUTWINDOW = 1u << 7,      // outside the stated window (never looked)
 };
 
 // T1 (44-faithful-city-phase-a): the kind_by_cell sentinel for an off-domain /

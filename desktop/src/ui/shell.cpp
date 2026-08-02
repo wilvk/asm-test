@@ -951,6 +951,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // first precisely so it is available here).
         sv.traj = space::build_trajectories(r, sv.terr.proj);
         sv.conv = space::detect_convergences(sv.traj, sv.terr.proj);
+        // 56 T2/T5: the survey aggregate does not change with the playhead,
+        // so it is woven once here, like terr/traj/conv above.
+        sv.hotedges_scene = obs_hotedges_for_scene(obs_hotedges_build(r));
         sv.hud.nsteps = sv.terr.nsteps;
         sv.hud.t = sv.terr.nsteps; // show the whole trace by default
         // 48 T4: the landmark, computed ONCE per weave alongside the models
@@ -1087,6 +1090,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             sv.scrub_pending = true; // finish the full slice next frame
         } else {
             sv.slice = sv.terr.slice(sv.hud.t); // the full slice lands
+            // 56 T2: the confidence layer's coverage-window mask — a no-op
+            // when the survey stated no window (the common case).
+            apply_coverage_window(sv.slice, sv.terr, sv.hotedges_scene);
             sv.slice_t = sv.hud.t;
             sv.scrub_pending = false;
         }

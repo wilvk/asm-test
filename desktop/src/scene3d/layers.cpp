@@ -33,6 +33,9 @@ const std::vector<LayerDesc> &scene_layers_all() {
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},
+        {"confidence", "confidence",
+         "how much do I trust each region right now?", G::Fidelity,
+         LayerGrade::Derived, &SceneLayers::confidence},
         // --- survey: statistical-only layers, never merged into the exact ---
         {"statistical", "statistical",
          "where does sampled residency suggest activity landed?", G::Survey,

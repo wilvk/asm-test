@@ -39,6 +39,7 @@
 #include "ui/undo.h"      // app-level command/undo stack (22 T4)
 #include "ui/view_presence.h" // ViewId — the want_view_id tab intent (34 T2)
 #include "views/completeness.h"
+#include "views/hotedges.h" // HotEdgeSceneView (56 T2/T5): SceneView::hotedges_scene
 #include "views/observer_draw.h"
 #include "views/timeline.h" // dt_timeline — shell_timeline_model's return type
 #include "walkthrough.h"
@@ -150,6 +151,14 @@ struct SceneView {
     // image; the three degraded branches draw the surface unconditionally,
     // regardless of this flag.
     bool flat_view = false;
+
+    // 56 T2/T5 (fidelity-and-module-layers): the survey's scene-facing extract
+    // — woven once per recording alongside terr/traj/conv above (a survey
+    // aggregate does not change with the playhead), shared by T2's
+    // coverage-window mask and T5's misprediction layer so both read the
+    // SAME `have_window`/`window_base`/`window_len` fidelity fields rather
+    // than building two HotEdgeViews that could disagree.
+    HotEdgeSceneView hotedges_scene;
 };
 
 struct ShellState {
