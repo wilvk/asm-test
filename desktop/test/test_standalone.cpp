@@ -457,6 +457,144 @@ int main() {
         }
     }
 
+    // =====================================================================
+    // T5 — SIMD lane prism
+    // =====================================================================
+    {
+        // A recorded shuffle: the same four bytes, permuted. Colour continuity
+        // is what shows the permutation, so each byte must keep its hue.
+        std::string nd = kHdr;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"movdqa "
+              "xmm0, xmmword ptr [rsp]\",\"ops\":[{\"space\":\"reg\",\"reg\":"
+              "17,\"size\":16,\"write\":true,\"value_valid\":true,\"wide\":"
+              "true,\"bytes\":\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"disasm\":\"pshufb "
+              "xmm0, xmm1\",\"ops\":[{\"space\":\"reg\",\"reg\":17,\"size\":16,"
+              "\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":"
+              "\"0f0e0d0c0b0a09080706050403020100\"}]}\n";
+        nd += "{\"k\":\"end\",\"events\":2,\"truncated\":false}\n";
+        const Streams st = decode_streams(mk_rec(nd));
+        const std::vector<uint32_t> regs = lane_prism_registers(st.df);
+        check("T5: the wide register is offered", regs.size() == 1 &&
+                                                      regs[0] == 17,
+              "lane_prism_registers did not find the wide writes");
+        const LanePrismScene p = build_lane_prism(st.df, 17, "x86");
+        check("T5: two stacked writes", p.writes.size() == 2,
+              "writes=" + std::to_string(p.writes.size()));
+        check("T5: Z is the stacked-write index, oldest first",
+              p.writes[0].z == 0 && p.writes[1].z == 1 &&
+                  p.writes[0].step == 0 && p.writes[1].step == 1,
+              "the write stacking order is not ascending by step");
+        // The permutation reveals itself through colour continuity.
+        check("T5/shuffle: a recorded byte keeps its hue across a lane move",
+              p.writes[0].bytes.size() == 16 && p.writes[1].bytes.size() == 16 &&
+                  p.writes[0].bytes[0].hue == p.writes[1].bytes[15].hue &&
+                  p.writes[0].bytes[3].hue == p.writes[1].bytes[12].hue,
+              "byte 0x00 changed hue when the shuffle moved it to lane 15");
+        check("T5/shuffle: different byte values get different hues",
+              p.writes[0].bytes[0].hue != p.writes[0].bytes[1].hue,
+              "two distinct byte values share a hue");
+        check("T5/hue: the hash is stable across calls",
+              prism_byte_hue(0x41) == prism_byte_hue(0x41),
+              "prism_byte_hue is not a pure function");
+        // Element width: pshufb/movdqa are NOT in the unambiguous table, so
+        // both default and the note is present.
+        check("T5/width: the default is used", !p.writes[0].lane_width_recorded &&
+                                                   p.writes[0].lane_bytes ==
+                                                       kPrismDefaultLaneBytes,
+              "an unlisted mnemonic invented an element width");
+        check("T5/width: 16 byte-lanes by default",
+              p.writes[0].bytes.size() / p.writes[0].lane_bytes == 16,
+              "the default is not 16 byte-lanes");
+        check("T5/width: the label is present whenever the default is used",
+              !p.width_note.empty() &&
+                  p.width_note.find("element width not recorded") !=
+                      std::string::npos,
+              "'" + p.width_note + "'");
+
+        // An UNAMBIGUOUS mnemonic subdivides; an ambiguous one does not.
+        {
+            std::string d = kHdr;
+            d += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"paddd "
+                 "xmm0, xmm1\",\"ops\":[{\"space\":\"reg\",\"reg\":17,\"size\":"
+                 "16,\"write\":true,\"value_valid\":true,\"wide\":true,"
+                 "\"bytes\":\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+            d += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"disasm\":\"movq "
+                 "xmm0, rax\",\"ops\":[{\"space\":\"reg\",\"reg\":17,\"size\":"
+                 "16,\"write\":true,\"value_valid\":true,\"wide\":true,"
+                 "\"bytes\":\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+            const Streams ds = decode_streams(mk_rec(d));
+            const LanePrismScene q = build_lane_prism(ds.df, 17, "x86");
+            check("T5/width: paddd subdivides to 32-bit lanes",
+                  q.writes.size() == 2 && q.writes[0].lane_width_recorded &&
+                      q.writes[0].lane_bytes == 4,
+                  "paddd did not resolve to dword lanes");
+            check("T5/width: an AMBIGUOUS mnemonic does not subdivide",
+                  !q.writes[1].lane_width_recorded &&
+                      q.writes[1].lane_bytes == kPrismDefaultLaneBytes,
+                  "movq (a GPR<->vector move, flagged ambiguous by 54 T4) "
+                  "invented an element width");
+            check("T5/width: the note still rides the default write",
+                  !q.width_note.empty(), "a defaulted write was unlabelled");
+        }
+
+        // Absent bytes -> a [wide] WIREFRAME, never zero bars.
+        {
+            std::string w = kHdr;
+            w += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"movdqa "
+                 "xmm0, xmm1\",\"ops\":[{\"space\":\"reg\",\"reg\":17,\"size\":"
+                 "16,\"write\":true,\"value_valid\":true,\"wide\":true}]}\n";
+            w += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"disasm\":\"movdqa "
+                 "xmm0, xmm2\",\"ops\":[{\"space\":\"reg\",\"reg\":17,\"size\":"
+                 "16,\"write\":true,\"value_valid\":false,\"wide\":true,"
+                 "\"bytes\":\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+            const Streams ws = decode_streams(mk_rec(w));
+            const LanePrismScene q = build_lane_prism(ws.df, 17, "x86");
+            check("T5/wireframe: absent bytes render a wireframe",
+                  q.writes.size() == 2 && q.writes[0].wireframe &&
+                      q.writes[0].bytes.empty(),
+                  "an uncaptured buffer produced byte bars");
+            check("T5/wireframe: never zero bars",
+                  [&] {
+                      for (const LaneByte &b : q.writes[0].bytes)
+                          if (b.value == 0)
+                              return false;
+                      return true;
+                  }(),
+                  "the wireframe write carries fabricated zero bytes");
+            check("T5/wireframe: counted", q.wireframes == 1,
+                  "wireframes=" + std::to_string(q.wireframes));
+            check("T5/hollow: value_valid == false renders hollow",
+                  !q.writes[1].value_valid && q.hollow == 1,
+                  "an uncaptured value was not marked hollow");
+            check("T5/wireframe: nothing in a wireframe is pickable",
+                  [&] {
+                      for (const PrismElem &e : prism_pick_order(q))
+                          if (e.write == 0)
+                              return false;
+                      return true;
+                  }(),
+                  "a wireframe byte was pickable — there is nothing there");
+        }
+
+        // The drill-in goes to the timeline at that step, carrying insn_off.
+        check("T5/drill-in: opens the timeline at the write's step", [&] {
+            const auto l = prism_pick_link(p, "r.asmtrace", 16);
+            return l && l->view == dt_view::timeline && l->step &&
+                   *l->step == 1 && l->off && *l->off == 4;
+        }(), "the byte drill-in lost its step or insn offset");
+        check("T5/drill-in: refuses an index past the geometry",
+              !prism_pick_link(p, "r.asmtrace", prism_pick_order(p).size()),
+              "an out-of-range byte resolved to a link");
+        // No wide writes at all: a stated reason, not an empty prism.
+        {
+            const LanePrismScene none = build_lane_prism(DataflowStream{}, 0,
+                                                         "x86");
+            check("T5/empty: states its reason", !none.note.empty(),
+                  "an empty prism is silent");
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d standalone-scene check(s) failed\n", failures);
         return 1;
