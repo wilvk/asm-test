@@ -41,6 +41,13 @@ class GlSceneHost : public SceneHost {
         // the GL backend). A shader that will not build on this driver leaves
         // ready_ false and error() set, and the pane shows the reason.
         ready_ = scene_.init_gl(&err_);
+        // T5 (55-scene-render-quality): MSAA defaults OFF on Scene itself (so
+        // golden/headless renders stay bit-exact); the interactive app is the
+        // one caller that wants smoothed lines, so it is the one that opts
+        // in. ensure_compose_targets degrades to non-multisampled on a driver
+        // that cannot complete this — never a black pane.
+        if (ready_)
+            scene_.msaa_samples = 4;
     }
 
     void shutdown() override {

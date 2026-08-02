@@ -49,7 +49,20 @@ struct SceneLayers {
     // re-encoding of vHeight (D7: adds no claim), so a HUD toggle can turn it
     // off without hiding data. Default on.
     bool contours = true;
+    // T1 (55-scene-render-quality): the Eye-Dome Lighting depth-cue pass. Off
+    // means the pass does not run at all — never a pass that runs and does
+    // nothing (T1's own fidelity bar: EDL is a depth cue, never an encoding).
+    bool edl = true;
 };
+
+// T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
+// read-only display (hud.cpp) and Scene's own member-initializer share one
+// source of truth rather than two literals that could drift apart. Chosen by
+// eye against the golden scenes (a worldline crossing another reads
+// unambiguously nearer/farther without the terrain's own contour bands
+// disappearing into false shading).
+inline constexpr float kEdlStrengthDefault = 1.2f;
+inline constexpr float kEdlRadiusPxDefault = 2.0f;
 
 class Scene {
   public:
@@ -134,6 +147,30 @@ class Scene {
     // per-frame-set, no-upload state.
     uint64_t follow_step = 0;
 
+    // T1 (55-scene-render-quality): Eye-Dome Lighting tuning, HUD-exposed like
+    // y_scale above. Strength is a unitless exponent multiplier (chosen
+    // against the golden scenes, see kEdlFrag); radius is SCREEN-SPACE pixels
+    // so the effect stays visually stable as the camera dollies in and out.
+    float edl_strength = kEdlStrengthDefault;
+    float edl_radius_px = kEdlRadiusPxDefault;
+
+    // T5 (55-scene-render-quality): requested MSAA sample count for the
+    // internal draw target: 0 or 1 disables it (the default — see below).
+    // Scene clamps this to GL_MAX_SAMPLES and degrades to non-multisampled
+    // (never a black pane) if the multisample target does not complete on
+    // this driver — see ensure_compose_targets()'s own comment.
+    //
+    // Defaults OFF, opted into by the interactive app (ui/gl_scene_host.cpp's
+    // GlSceneHost::init()) rather than defaulting on here, because MSAA
+    // smooths a PRIMITIVE'S EDGES — including the edges of a discard-based
+    // stipple pattern (kTrajFrag/kStatFrag's fidelity-grade dash test) — so a
+    // test that asserts an EXACT discrete pixel pattern (test_scene_fbo.cpp's
+    // "the sampled mark is STIPPLED, not solid", which counts fully-empty
+    // 8-phase buckets) would otherwise see partially-covered edge pixels blur
+    // across phase boundaries. Golden/CLI/headless renders stay bit-exact by
+    // construction; only the human-facing GL window opts in.
+    uint32_t msaa_samples = 0;
+
     // 50 T2 (two-way-brushing): the flat views' selection, located onto this
     // plane by its ADDRESS — a draw-time uniform like follow_step above, no
     // upload. -1 = no highlight this frame (nothing selected in this
@@ -144,6 +181,12 @@ class Scene {
     int32_t highlight_cell = -1;
 
     // Draw the lit scene into the currently-bound framebuffer (viewport fbw*fbh).
+    // T1/T5 (55-scene-render-quality): internally multi-pass now — the raw
+    // geometry is drawn into Scene's OWN offscreen target (possibly
+    // multisampled), resolved to single-sample colour+depth TEXTURES (so EDL
+    // can sample depth), then composited into whatever was bound at entry.
+    // The external contract is unchanged: the caller's framebuffer holds the
+    // final image when render() returns, exactly as before this brief.
     void render(const Camera &cam, int fbw, int fbh, const SceneLayers &layers);
 
     // Pick pass: render ids into the internal R32UI FBO (sized fbw*fbh) and read
@@ -258,9 +301,39 @@ class Scene {
     unsigned fbo_pick_ = 0, tex_pick_ = 0, rbo_pick_depth_ = 0;
     int pick_w_ = 0, pick_h_ = 0;
 
+    // T1/T5 (55-scene-render-quality): the internal multi-pass compose
+    // target — COMPLETELY SEPARATE from fbo_pick_ above (the pick pass is
+    // sacred, D7's own bar here: it must never be multisampled or post-
+    // processed). fbo_draw_ is where the raw geometry lands (renderbuffers,
+    // multisampled when compose_samples_ >= 2); fbo_resolve_ holds the
+    // single-sample colour+depth TEXTURES a shader can actually sample (a
+    // multisample renderbuffer cannot be read by a plain sampler2D). Both are
+    // sized/resampled lazily by ensure_compose_targets, and freed by
+    // shutdown()'s free_compose_targets().
+    unsigned fbo_draw_ = 0, rbo_draw_color_ = 0, rbo_draw_depth_ = 0;
+    unsigned fbo_resolve_ = 0, tex_resolve_color_ = 0, tex_resolve_depth_ = 0;
+    int compose_w_ = 0, compose_h_ = 0;
+    int compose_samples_ = -1; // -1 forces the first ensure_compose_targets to build
+    bool compose_ready_ = false; // false => render() falls back to drawing
+                                 // straight into the caller's framebuffer,
+                                 // exactly as it did before this brief (T5
+                                 // step 4: degrade rather than fail)
+    unsigned prog_edl_ = 0;      // T1: the fullscreen EDL pass
+
     void build_grid(uint32_t n);
     void build_sky_quad();
     void ensure_pick_fbo(int w, int h);
+    // T1/T5: (re)build fbo_draw_/fbo_resolve_ for this size, retrying once at
+    // 0 samples if the multisampled target does not complete, and leaving
+    // compose_ready_ false (not a crash, not a black pane) if even that
+    // fails. A no-op when the size and the ALREADY-EFFECTIVE sample count
+    // both already match.
+    void ensure_compose_targets(int w, int h);
+    void free_compose_targets();
+    // T1: sample fbo_resolve_'s colour+depth and write the shaded result into
+    // whichever framebuffer is currently bound (the caller's, per render()'s
+    // own restore-before-composite step).
+    void draw_edl_pass(const Camera &cam, int fbw, int fbh);
     void free_traj();
     void free_conv();
     // `zoning` gates T1's kind tint (uZoning uniform) — false renders the

@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -542,6 +543,31 @@ static size_t pixels_differ(const std::vector<unsigned char> &a,
         if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2])
             n++;
     return n;
+}
+
+// T5 (55): the most common RGB triple in a capture — background, for any
+// reasonably-framed scene, since the plane's silhouette occupies less area
+// than the space around it. Used instead of a hardcoded clear-colour byte
+// value (rounding is a driver detail, not this test's concern) or a fixed
+// pixel index (not guaranteed background for every camera/fixture pairing).
+static void mode_color(const std::vector<unsigned char> &px,
+                       unsigned char out[3]) {
+    std::map<uint32_t, size_t> counts;
+    for (size_t i = 0; i + 3 < px.size(); i += 4) {
+        uint32_t key = (static_cast<uint32_t>(px[i]) << 16) |
+                      (static_cast<uint32_t>(px[i + 1]) << 8) | px[i + 2];
+        counts[key]++;
+    }
+    uint32_t best_key = 0;
+    size_t best_n = 0;
+    for (const auto &kv : counts)
+        if (kv.second > best_n) {
+            best_n = kv.second;
+            best_key = kv.first;
+        }
+    out[0] = static_cast<unsigned char>((best_key >> 16) & 0xff);
+    out[1] = static_cast<unsigned char>((best_key >> 8) & 0xff);
+    out[2] = static_cast<unsigned char>(best_key & 0xff);
 }
 
 // Upload one scene model (terrain slice + trajectories), clearing any
@@ -1314,10 +1340,30 @@ int main() {
         // render pixel-identically to an exact tube with the whole suite still
         // green. So look at the marked pixels themselves, the way (d) reads the
         // arc's colour rather than merely toggling it.
+        //
+        // 55 T1: computed from an EDL-OFF pair, not px/off_px above. EDL is a
+        // depth cue with its own sampling radius (kEdlFrag), so it darkens
+        // BACKGROUND pixels NEAR the line too — pixels the line's OWN fragment
+        // shader never touched — which is correct EDL behaviour but would
+        // otherwise fill in the discard pattern's "empty" phases with a faint,
+        // orthogonal difference and break this specific isolation. The base
+        // stipple/translucency technique this section verifies is itself
+        // independent of EDL (a later, separate pass), so it is verified with
+        // EDL isolated out, exactly like every other single-variable toggle in
+        // this test.
+        SceneLayers stat_no_edl;
+        stat_no_edl.edl = false;
+        SceneLayers no_stat_no_edl = no_stat;
+        no_stat_no_edl.edl = false;
+        std::vector<unsigned char> px_no_edl =
+            capture(scene, gcam, gcf, stat_no_edl);
+        std::vector<unsigned char> off_px_no_edl =
+            capture(scene, gcam, gcf, no_stat_no_edl);
         std::vector<size_t> marked; // pixel indices the statistical layer drew
-        for (size_t i = 0, p = 0; i < px.size(); i += 4, p++)
-            if (px[i] != off_px[i] || px[i + 1] != off_px[i + 1] ||
-                px[i + 2] != off_px[i + 2])
+        for (size_t i = 0, p = 0; i < px_no_edl.size(); i += 4, p++)
+            if (px_no_edl[i] != off_px_no_edl[i] ||
+                px_no_edl[i + 1] != off_px_no_edl[i + 1] ||
+                px_no_edl[i + 2] != off_px_no_edl[i + 2])
                 marked.push_back(p);
 
         // STIPPLED: the shader discards a band of `(x+y) mod 8`, so the drawn
@@ -1340,11 +1386,14 @@ int main() {
 
         // TRANSLUCENT: the line blends at alpha < 1 over a dark background, so
         // no marked pixel reaches the raw per-tid palette brightness an exact
-        // tube paints (palette entry 0 is {0.95,0.85,0.25} -> red 242).
+        // tube paints (palette entry 0 is {0.95,0.85,0.25} -> red 242). Reads
+        // px_no_edl (not px) for the same reason `marked` does above — EDL
+        // only ever darkens further, so this stays the tighter, more direct
+        // check of the base technique's own brightness ceiling.
         int brightest = 0;
         for (size_t p : marked)
-            if (px[p * 4] > brightest)
-                brightest = px[p * 4];
+            if (px_no_edl[p * 4] > brightest)
+                brightest = px_no_edl[p * 4];
         check("golden stat scene: the sampled mark is TRANSLUCENT, not opaque",
               !marked.empty() && brightest < 200,
               "a residency pixel reached full palette brightness — it drew as "
@@ -1371,6 +1420,120 @@ int main() {
         check("synthetic mem scene: no access-mark spur is drawn",
               pixels_differ(px, capture(scene, gcam, gcf, no_marks)) == 0,
               "a spur to a data cell that no region holds");
+    }
+
+    // --- (i) T1 (55): Eye-Dome Lighting darkens a depth discontinuity, and
+    //     never touches the pick pass ----------------------------------------
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_hotcold()))),
+            load(ndjson_hotcold()));
+        space::TrajectorySet traj =
+            space::build_trajectories(load(ndjson_hotcold()));
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+
+        SceneLayers edl_on;
+        SceneLayers edl_off;
+        edl_off.edl = false;
+        std::vector<unsigned char> px_edl_on = capture(scene, cam, cf, edl_on);
+        std::vector<unsigned char> px_edl_off =
+            capture(scene, cam, cf, edl_off);
+
+        check("T1 GL: EDL visibly changes the render",
+              pixels_differ(px_edl_on, px_edl_off) > 0,
+              "EDL on/off produced pixel-identical frames");
+
+        // A pixel deep inside a large flat run of background (no depth
+        // discontinuity anywhere within the tap radius) must read the SAME
+        // under EDL on and off — T1's own fidelity bar: EDL adds a cue only
+        // where there is something to cue, never a global tint. The mode
+        // colour (not a fixed index) is background for any reasonably-framed
+        // scene, since the plane's silhouette covers less area than the
+        // space around it.
+        unsigned char bg_on[3], bg_off[3];
+        mode_color(px_edl_on, bg_on);
+        mode_color(px_edl_off, bg_off);
+        check("T1 GL: a pure-background pixel is unchanged by EDL",
+              bg_on[0] == bg_off[0] && bg_on[1] == bg_off[1] &&
+                  bg_on[2] == bg_off[2],
+              "the background colour changed with EDL on");
+
+        // The pick pass is sacred (D7): EDL runs on the colour path only.
+        std::vector<uint32_t> ids_edl_on, ids_edl_off;
+        scene.render_pick_buffer(cam, W, H, ids_edl_on);
+        scene.render_pick_buffer(cam, W, H, ids_edl_off);
+        check("T1 GL: the pick buffer is byte-identical with EDL on and off",
+              ids_edl_on == ids_edl_off,
+              "EDL leaked into the colour-ID pick pass");
+    }
+
+    // --- (j) T5 (55): MSAA smooths an aliased edge, and never touches the
+    //     pick pass -----------------------------------------------------------
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_hotcold()))),
+            load(ndjson_hotcold()));
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(space::TrajectorySet{}, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+        SceneLayers terrain_only;
+        terrain_only.access_marks = terrain_only.convergence = false;
+        terrain_only.weather = false; // the sky quad covers 100% of the
+                                      // background, which would hide the
+                                      // clear-colour edge this test reads
+
+        scene.msaa_samples = 0;
+        std::vector<unsigned char> px_msaa_off =
+            capture(scene, cam, cf, terrain_only);
+        scene.msaa_samples = 4;
+        std::vector<unsigned char> px_msaa_on =
+            capture(scene, cam, cf, terrain_only);
+
+        check("T5 GL: MSAA visibly changes the render",
+              pixels_differ(px_msaa_on, px_msaa_off) > 0,
+              "MSAA on/off produced pixel-identical frames (no aliased edge "
+              "in this fixture, or MSAA silently degraded to off)");
+
+        // The background colour (the mode, not a fixed index or a hardcoded
+        // byte value — see mode_color's own comment). Single-sample
+        // rasterization has NO partial coverage (a pixel centre is either
+        // inside the terrain or it is not), so every background pixel with
+        // MSAA off is EXACTLY this colour. MSAA blends the 4 sub-samples of a
+        // pixel straddling the terrain's silhouette, so a pixel that
+        // rasterized as pure background under single-sampling can become a
+        // partial blend once ANY of its sub-samples lands on the terrain —
+        // the "intermediate value" the brief's own test asks for, without
+        // needing to know in advance which pixel is on the edge.
+        unsigned char clear[3];
+        mode_color(px_msaa_off, clear);
+        auto is_clear = [&clear](const unsigned char *p) {
+            return p[0] == clear[0] && p[1] == clear[1] && p[2] == clear[2];
+        };
+        int revealed = 0;
+        for (size_t i = 0; i + 3 < px_msaa_off.size(); i += 4)
+            if (is_clear(&px_msaa_off[i]) && !is_clear(&px_msaa_on[i]))
+                revealed++;
+        check("T5 GL: MSAA reveals partial coverage at an aliased silhouette "
+              "edge",
+              revealed > 0,
+              "no background pixel gained a blended value under MSAA");
+
+        scene.msaa_samples = 0;
+        std::vector<uint32_t> ids_msaa_off;
+        scene.render_pick_buffer(cam, W, H, ids_msaa_off);
+        scene.msaa_samples = 4;
+        std::vector<uint32_t> ids_msaa_on;
+        scene.render_pick_buffer(cam, W, H, ids_msaa_on);
+        check("T5 GL: the pick buffer is byte-identical with MSAA on and off",
+              ids_msaa_on == ids_msaa_off,
+              "MSAA leaked into the colour-ID pick pass");
+        scene.msaa_samples = 0; // restore Scene's own conservative default
     }
 
     scene.shutdown();

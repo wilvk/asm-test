@@ -253,5 +253,67 @@ void main(){
 }
 )GLSL";
 
+// --- T1 (55-scene-render-quality): Eye-Dome Lighting, a fullscreen pass that
+//     darkens a pixel by how much nearer its screen-space neighbours are —
+//     the depth cue that makes which mark is in front legible with no
+//     lighting model. Reuses kSkyVert's NDC-quad geometry (vao_sky_) rather
+//     than a second quad VAO. Runs on the COLOUR path only; the pick pass
+//     never binds this program (see scene.cpp's render()/draw_edl_pass split).
+inline const char *kEdlVert = R"GLSL(#version 130
+in vec2 pos; // NDC quad corners, [-1,1] -- the same geometry as the sky quad
+out vec2 vUV;
+void main(){
+  vUV = pos * 0.5 + 0.5;
+  gl_Position = vec4(pos, 0.0, 1.0);
+}
+)GLSL";
+
+inline const char *kEdlFrag = R"GLSL(#version 130
+in vec2 vUV;
+uniform sampler2D uColor;
+uniform sampler2D uDepth;
+uniform vec2 uTexel;        // 1/resolution, in texels -- the neighbour step unit
+uniform float uEdlStrength; // T1 step 3: HUD-exposed
+uniform float uEdlRadiusPx; // T1 step 3: HUD-exposed, in PIXELS (screen-space
+                            // stable across dolly, never a world-space radius)
+uniform float uNear;
+uniform float uFar;
+out vec4 frag;
+// Perspective depth -> linear eye-space distance (T1 step 2: EDL must read the
+// LINEARISED depth or the response is all cliff near the near plane and flat
+// everywhere else, since the raw buffer value is non-linear in eye distance).
+float linearize(float d) {
+  float ndc = d * 2.0 - 1.0;
+  return (2.0 * uNear * uFar) / (uFar + uNear - ndc * (uFar - uNear));
+}
+void main(){
+  vec3 baseColor = texture(uColor, vUV).rgb;
+  float d0 = texture(uDepth, vUV).r;
+  // The cleared far value: nothing drawn here (sky/background), so there is no
+  // depth discontinuity to shade -- an EDL response here would darken the sky
+  // itself, which is not a depth cue, it is a lighting change to nothing.
+  if (d0 >= 1.0) { frag = vec4(baseColor, 1.0); return; }
+  float z0 = linearize(d0);
+  const int NTAPS = 8;
+  vec2 dirs[8] = vec2[8](
+    vec2(1.0,0.0), vec2(-1.0,0.0), vec2(0.0,1.0), vec2(0.0,-1.0),
+    vec2(0.7071,0.7071), vec2(-0.7071,0.7071), vec2(0.7071,-0.7071), vec2(-0.7071,-0.7071)
+  );
+  float response = 0.0;
+  for (int i = 0; i < NTAPS; i++) {
+    vec2 uv = vUV + dirs[i] * uTexel * uEdlRadiusPx;
+    float dn = texture(uDepth, uv).r;
+    float zn = (dn >= 1.0) ? z0 : linearize(dn); // an off-scene neighbour adds no cue
+    response += max(0.0, log2(z0) - log2(zn));
+  }
+  response /= float(NTAPS);
+  // A uniform multiplier on luminance ONLY (D7, this brief's own fidelity
+  // note): EDL is a depth cue, never an encoding, so it must never touch hue
+  // and must apply identically regardless of fidelity class or region kind.
+  float shade = exp(-uEdlStrength * response);
+  frag = vec4(baseColor * shade, 1.0);
+}
+)GLSL";
+
 } // namespace asmdesk::scene3d::shaders
 #endif // ASMDESK_SCENE3D_SHADERS_EMBEDDED_H

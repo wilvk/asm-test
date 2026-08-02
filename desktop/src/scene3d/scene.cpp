@@ -140,7 +140,13 @@ bool Scene::init_gl(std::string *err) {
     if (prog_stat_)
         prog_sky_ =
             link_program(shaders::kSkyVert, shaders::kSkyFrag, false, false, e);
-    if (!prog_sky_) {
+    // T1 (55): the EDL fullscreen pass — joins the same required chain as
+    // every other program here (a driver that cannot build it fails ready()
+    // loudly, like every shader above, rather than silently disabling EDL).
+    if (prog_sky_)
+        prog_edl_ =
+            link_program(shaders::kEdlVert, shaders::kEdlFrag, false, false, e);
+    if (!prog_edl_) {
         err_ = e;
         if (err)
             *err = e;
@@ -165,6 +171,157 @@ void Scene::build_sky_quad() {
     glEnableVertexAttribArray(kAttrPos);
     glVertexAttribPointer(kAttrPos, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
     glBindVertexArray(0);
+}
+
+// T1/T5 (55-scene-render-quality): create (or resize/resample) fbo_draw_ +
+// fbo_resolve_. Idempotent — a no-op once the size AND the effective sample
+// count already match, so render() can call this every frame for free.
+void Scene::ensure_compose_targets(int w, int h) {
+    int samples = static_cast<int>(msaa_samples);
+    if (samples > 1) {
+        GLint max_samples = 0;
+        glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
+        if (samples > max_samples)
+            samples = max_samples;
+    } else {
+        samples = 0;
+    }
+    if (fbo_draw_ && fbo_resolve_ && compose_w_ == w && compose_h_ == h &&
+        compose_samples_ == samples)
+        return;
+
+    free_compose_targets();
+    compose_w_ = w;
+    compose_h_ = h;
+
+    // The resolve target: single-sample colour + depth as TEXTURES (never
+    // renderbuffers) — the EDL pass and the plain-blit fallback both need to
+    // SAMPLE these, which a renderbuffer cannot offer a plain sampler2D.
+    glGenTextures(1, &tex_resolve_color_);
+    glBindTexture(GL_TEXTURE_2D, tex_resolve_color_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                nullptr);
+    glGenTextures(1, &tex_resolve_depth_);
+    glBindTexture(GL_TEXTURE_2D, tex_resolve_depth_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
+                GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenFramebuffers(1, &fbo_resolve_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_resolve_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           tex_resolve_color_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                           tex_resolve_depth_, 0);
+    const bool resolve_ok =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // The draw target: renderbuffers, multisampled when samples >= 2. Tried at
+    // the clamped sample count first; T5 step 4 (degrade rather than fail): a
+    // driver that refuses THIS multisample renderbuffer is not a driver that
+    // cannot do offscreen rendering at all, so on failure retry once at 0
+    // samples before giving up.
+    bool draw_ok = false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (attempt == 1) {
+            if (samples == 0)
+                break; // already tried 0 samples once; nothing left to retry
+            if (rbo_draw_color_)
+                glDeleteRenderbuffers(1, &rbo_draw_color_);
+            if (rbo_draw_depth_)
+                glDeleteRenderbuffers(1, &rbo_draw_depth_);
+            if (fbo_draw_)
+                glDeleteFramebuffers(1, &fbo_draw_);
+            rbo_draw_color_ = rbo_draw_depth_ = fbo_draw_ = 0;
+            samples = 0;
+        }
+        glGenRenderbuffers(1, &rbo_draw_color_);
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo_draw_color_);
+        if (samples >= 2)
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples,
+                                             GL_RGBA8, w, h);
+        else
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h);
+        glGenRenderbuffers(1, &rbo_draw_depth_);
+        glBindRenderbuffer(GL_RENDERBUFFER, rbo_draw_depth_);
+        if (samples >= 2)
+            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples,
+                                             GL_DEPTH_COMPONENT24, w, h);
+        else
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+        glGenFramebuffers(1, &fbo_draw_);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo_draw_);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, rbo_draw_color_);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                  GL_RENDERBUFFER, rbo_draw_depth_);
+        draw_ok =
+            glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (draw_ok)
+            break;
+    }
+
+    compose_samples_ = samples;
+    compose_ready_ = draw_ok && resolve_ok;
+}
+
+void Scene::free_compose_targets() {
+    if (rbo_draw_color_)
+        glDeleteRenderbuffers(1, &rbo_draw_color_);
+    if (rbo_draw_depth_)
+        glDeleteRenderbuffers(1, &rbo_draw_depth_);
+    if (fbo_draw_)
+        glDeleteFramebuffers(1, &fbo_draw_);
+    if (tex_resolve_color_)
+        glDeleteTextures(1, &tex_resolve_color_);
+    if (tex_resolve_depth_)
+        glDeleteTextures(1, &tex_resolve_depth_);
+    if (fbo_resolve_)
+        glDeleteFramebuffers(1, &fbo_resolve_);
+    rbo_draw_color_ = rbo_draw_depth_ = fbo_draw_ = 0;
+    tex_resolve_color_ = tex_resolve_depth_ = fbo_resolve_ = 0;
+    compose_w_ = compose_h_ = 0;
+    compose_samples_ = -1;
+    compose_ready_ = false;
+}
+
+// T1 (55): the fullscreen EDL composite — reads fbo_resolve_'s colour+depth,
+// writes the shaded result into whichever framebuffer is CURRENTLY bound
+// (render() binds the caller's framebuffer immediately before calling this).
+void Scene::draw_edl_pass(const Camera &cam, int fbw, int fbh) {
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glUseProgram(prog_edl_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex_resolve_color_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tex_resolve_depth_);
+    GLint uColorLoc = glGetUniformLocation(prog_edl_, "uColor");
+    if (uColorLoc >= 0)
+        glUniform1i(uColorLoc, 0);
+    GLint uDepthLoc = glGetUniformLocation(prog_edl_, "uDepth");
+    if (uDepthLoc >= 0)
+        glUniform1i(uDepthLoc, 1);
+    glUniform2f(glGetUniformLocation(prog_edl_, "uTexel"),
+               fbw > 0 ? 1.0f / fbw : 0.0f, fbh > 0 ? 1.0f / fbh : 0.0f);
+    glUniform1f(glGetUniformLocation(prog_edl_, "uEdlStrength"), edl_strength);
+    glUniform1f(glGetUniformLocation(prog_edl_, "uEdlRadiusPx"),
+               edl_radius_px);
+    glUniform1f(glGetUniformLocation(prog_edl_, "uNear"), cam.znear);
+    glUniform1f(glGetUniformLocation(prog_edl_, "uFar"), cam.zfar);
+    glBindVertexArray(vao_sky_); // reuse the sky quad's NDC-quad geometry
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0);
 }
 
 void Scene::build_grid(uint32_t n) {
@@ -739,6 +896,26 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     float mvp[16];
     cam.mvp(mvp, fbh > 0 ? static_cast<float>(fbw) / fbh : 1.0f);
 
+    // T1/T5 (55): render the raw geometry into Scene's OWN target (so a depth
+    // TEXTURE is always available for EDL, and so the target can be
+    // multisampled) rather than directly into whatever the caller bound.
+    // compose_ready_ == false (T5 step 4: this driver would not complete
+    // EITHER target even at 0 samples) falls all the way back to the
+    // pre-55 behaviour — draw straight into the caller's already-bound,
+    // already-cleared framebuffer — never a black pane.
+    GLint caller_fbo = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &caller_fbo);
+    ensure_compose_targets(fbw, fbh);
+    const bool compose = compose_ready_;
+    if (compose) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo_draw_);
+        glViewport(0, 0, fbw, fbh);
+        // The same clear the callers (gl_scene_host.cpp / test_scene_fbo.cpp)
+        // used to apply to the framebuffer THEY bound — now applied here,
+        // since render() no longer draws into that framebuffer directly.
+        glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
     glViewport(0, 0, fbw, fbh);
 
     // T3: the sky, first, before anything depth-tested.
@@ -902,6 +1079,32 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     }
 
     glDisable(GL_BLEND);
+
+    // T1/T5 (55): resolve (blit, always — a plain copy when compose_samples_
+    // is 0, an MSAA resolve when it is >= 2, ONE code path either way) into
+    // the single-sample colour+depth textures, then composite into the
+    // framebuffer the CALLER had bound at entry — restoring render()'s
+    // external contract (the caller's framebuffer holds the final image).
+    if (compose) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_draw_);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_resolve_);
+        glBlitFramebuffer(0, 0, fbw, fbh, 0, 0, fbw, fbh,
+                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                          GL_NEAREST);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(caller_fbo));
+        glViewport(0, 0, fbw, fbh);
+        if (layers.edl && prog_edl_) {
+            draw_edl_pass(cam, fbw, fbh);
+        } else {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_resolve_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              static_cast<GLuint>(caller_fbo));
+            glBlitFramebuffer(0, 0, fbw, fbh, 0, 0, fbw, fbh,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(caller_fbo));
+        }
+    }
 }
 
 void Scene::ensure_pick_fbo(int w, int h) {
@@ -1056,8 +1259,9 @@ void Scene::shutdown() {
         glDeleteRenderbuffers(1, &rbo_pick_depth_);
     if (fbo_pick_)
         glDeleteFramebuffers(1, &fbo_pick_);
+    free_compose_targets(); // T1/T5 (55)
     for (unsigned p : {prog_terrain_, prog_traj_, prog_pick_terrain_,
-                       prog_pick_pt_, prog_stat_, prog_sky_})
+                       prog_pick_pt_, prog_stat_, prog_sky_, prog_edl_})
         if (p)
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
@@ -1067,7 +1271,7 @@ void Scene::shutdown() {
     has_stat_terrain_ = false;
     tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
-    prog_stat_ = prog_sky_ = 0;
+    prog_stat_ = prog_sky_ = prog_edl_ = 0;
     ready_ = false;
     n_ = 0;
 }

@@ -125,6 +125,14 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 #endif
+    // T5 (55-scene-render-quality): the 3D scene itself renders fully
+    // offscreen (ui/gl_scene_host.cpp's FBO, resolved inside Scene::render()
+    // — see scene.cpp's ensure_compose_targets), so this hint's only direct
+    // effect is on the default framebuffer ImGui itself draws into; it is set
+    // here anyway, beside the other context hints, for the same reason the
+    // brief asks for it: harmless if unused, and correct if any future path
+    // ever presents straight to the window's own framebuffer.
+    glfwWindowHint(GLFW_SAMPLES, 4);
 
 #ifdef ASMTEST_DESKTOP_RENDER_ONLY
     const char *title = "asmtest viewer (render-only)";
