@@ -18,7 +18,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 4/6 landed 2026-08-02, T6 half-landed, T2 not started.**
+> **Status — ◐ 5/6 landed, T6 step 1 landed 2026-08-03, T2 in flight.**
 > T1 (Eye-Dome Lighting), T3 (contour bands), T4 (dithered translucency) and
 > T5 (MSAA) are fully landed, each via one internal multi-pass refactor of
 > `Scene::render()`: the raw geometry now always draws into Scene's OWN
@@ -56,28 +56,45 @@
 > step 1 (vertex-shader quad expansion, the actual portable-width fix) and
 > step 3 (the GLSL-130-on-Apple-core-profile verify-first question) did not.
 >
-> **What's still open, and why.** T6 step 1 would replace every
-> `glLineWidth(>1.0)` call (trajectories at 2px, convergence arcs at 3px, and
-> the pick pass's own 5–6px click-target widening) with per-segment quad
-> geometry — but the pick pass currently REUSES the colour pass's position
-> buffer for all three line categories (`vao_conv_pick_`/`vao_spur_pick_`
-> binding `conv_arcs_.vbo`/`access_spurs_.vbo` directly, adding only a
-> parallel id array; see scene.h's own comments on that sharing). Quad
-> expansion changes the position buffer's own layout (pos + the segment's
-> other endpoint + a side attribute, not a bare vec3), so this reuse breaks
-> and the pick geometry needs its own, separately-reasoned design — a larger
-> and differently-shaped change than this session's other four tasks, and
-> one this tree cannot confidently verify without visual inspection (unlike
-> T1/T3/T4/T5, which reduce to pixel/coverage/pick-identity assertions this
-> session could and did write). T2 (depth-dependent halos) explicitly
-> reuses T6 step 1's quad expansion for its own width, so it is blocked on
-> the same work. Both are left for whoever picks this brief back up, with
-> the reasoning above so the next session does not have to re-derive it.
+> **T6 step 1 landed 2026-08-03.** Every line the COLOUR pass draws —
+> trajectories, access spurs, convergence arcs, and doc 56's misprediction
+> arcs and site columns — is now expanded into per-segment quads in the vertex
+> shader (`kLineVert`) and widened in SCREEN PIXELS, so not one
+> `glLineWidth(>1.0)` remains on any path a viewer sees. The previous
+> session's blocker — that the pick pass REUSES the colour pass's position
+> buffer, so changing that buffer's layout breaks the sharing — was resolved
+> by *not* changing it: the bare-vec3 line VBOs stay exactly as they were and
+> the quad geometry is a SECOND buffer built from the same upload, so the
+> pick pass's wide-line draw is untouched, call for call. That route stays
+> the default wherever `GL_ALIASED_LINE_WIDTH_RANGE` really covers the 5–6px
+> click targets, and `Scene::pick_widening` falls to a quad-expanded pick
+> pass (the same `kLineVert`, against `kPickPointFrag`, over the same
+> per-mark ids) only where the driver would clamp — the core-profile case
+> that would otherwise shrink every arc/spur click target to one pixel. The
+> quad pick route is not left untested on the lane that does not need it:
+> `Lines`/`Quads` force either route, and `test_scene_fbo` asserts the two
+> resolve exactly the same overlay ids and the same width. The CPU half of
+> the expansion is a pure header (`scene3d/linequad.h`) so `test_camera`
+> covers its maths — including the sign inversion at the far endpoint that
+> would otherwise fold each quad into a bowtie — with no GL context at all.
+> Byte-identity of the pick buffer across the whole change was checked
+> directly, not merely argued: an FNV-1a digest of the entire id buffer over
+> a fixture exercising all four pick bands at three camera distances is
+> `de7e5750c73fcbc9` both at the merge base and after (llvmpipe, EGL
+> surfaceless).
+>
+> **What's still open, and why.** T2 (depth-dependent halos) is the remaining
+> task; it reuses T6 step 1's quad expansion for its own width, which is now
+> in place. T6 **step 3** (the GLSL-130-on-Apple-core-profile question)
+> remains open and deliberately untouched: it is a verify-first item, this
+> tree still has no macOS desktop lane, and nothing in this session could
+> answer it — changing the version directive on the strength of the document
+> alone is exactly what the task forbids.
 > Verified throughout via targeted docker builds of
-> `test_scene_fbo`/`test_camera`/`test_goto` (all green) rather than the
-> full `docker-desktop` suite, which was blocked across this whole landing
-> window by unrelated, independently-in-flight failures elsewhere in this
-> shared tree (`test_author_vm`, then a RISC-V Capstone API mismatch in
+> `test_scene_fbo`/`test_camera`/`test_goto`/`test_layers` plus the full
+> `docker-desktop` lane; earlier sessions saw that lane red on unrelated,
+> independently-in-flight failures elsewhere in this shared tree
+> (`test_author_vm`, then a RISC-V Capstone API mismatch in
 > `dataflow_operands.c` — both doc 60, neither touched here).
 
 ## Why this work exists
@@ -121,10 +138,12 @@ that do, plus the two portability defects the survey turned up.
   blended with depth-write off ([scene.cpp:634-639](../../../desktop/src/scene3d/scene.cpp#L634));
   the trajectory pass enables blending and leaves depth-write **on**
   ([scene.cpp:655-656](../../../desktop/src/scene3d/scene.cpp#L655)).
-- **Wide lines are used**: `glLineWidth(2.0f)` for trajectories
-  ([scene.cpp:664](../../../desktop/src/scene3d/scene.cpp#L664)), `1.0f` for
-  spurs, `3.0f` for convergence arcs
-  ([scene.cpp:695](../../../desktop/src/scene3d/scene.cpp#L695)).
+- ~~**Wide lines are used**: `glLineWidth(2.0f)` for trajectories, `1.0f` for
+  spurs, `3.0f` for convergence arcs.~~ **Closed by T6 step 1 (2026-08-03):**
+  the colour pass calls `glLineWidth` nowhere; widths are quad geometry in
+  pixels (`kLineVert`). The only calls left are the pick pass's own
+  click-target route, which the driver's queried
+  `GL_ALIASED_LINE_WIDTH_RANGE` selects — see T6.
 - **The pick pass is a separate FBO render** (`render_pick_into_fbo`,
   [scene.cpp:761-795](../../../desktop/src/scene3d/scene.cpp#L761)) with blending
   disabled — so **no task here may alter it**. A post-process that changed pick
@@ -370,20 +389,41 @@ extremes with it off.
 claims to run on.
 
 **Steps.**
-1. **Wide lines are not portable.** Core profiles deprecated them; a core
-   implementation may report a `GL_ALIASED_LINE_WIDTH_RANGE` maximum of 1.0, and
-   `glLineWidth` above the supported maximum sets `GL_INVALID_VALUE`. The tree
-   calls `glLineWidth(2.0f)` and `(3.0f)`
-   ([scene.cpp:664](../../../desktop/src/scene3d/scene.cpp#L664),
-   [:695](../../../desktop/src/scene3d/scene.cpp#L695)) on a context that is
-   **core and forward-compatible on Apple** ([main.cpp:117-120](../../../desktop/src/main.cpp#L117)).
-   Replace them with vertex-shader quad expansion: per-segment triangles with a
-   side attribute and a width uniform in pixels. This also gives T2 its halo pass
-   and gives every future ribbon/tube layer a width channel, so it is the enabling
-   change for the family, not just a fix.
-2. Query and log `GL_ALIASED_LINE_WIDTH_RANGE` once at `init_gl` so the next
-   person to wonder has the answer in the error/diagnostic string.
-3. **The GLSL version question — verify before changing anything.** Every scene
+1. ✅ **Wide lines are not portable** (landed 2026-08-03). Core profiles
+   deprecated them; a core implementation may report a
+   `GL_ALIASED_LINE_WIDTH_RANGE` maximum of 1.0, and `glLineWidth` above the
+   supported maximum sets `GL_INVALID_VALUE`. The tree called
+   `glLineWidth(2.0f)` and `(3.0f)` on a context that is **core and
+   forward-compatible on Apple**
+   ([main.cpp:117-120](../../../desktop/src/main.cpp#L117)).
+   Every one of those calls is now vertex-shader quad expansion: two triangles
+   per segment carrying `pos` + the segment's `other` endpoint + a ±1 `side`
+   ([linequad.h](../../../desktop/src/scene3d/linequad.h) builds them;
+   [`kLineVert`](../../../desktop/src/scene3d/shaders/embedded.h) widens them),
+   with the width a uniform in pixels — `kSpurWidthPx` 1.5, `kTrajWidthPx` 2,
+   `kConvWidthPx` 3 ([scene.h](../../../desktop/src/scene3d/scene.h)). Two
+   details worth stating because they are not free:
+   - The spurs' nominal width rose from 1.0 to 1.5. A screen-space quad thinner
+     than about a pixel can fall entirely between pixel centres and vanish,
+     where GL's own line rasterizer guarantees a connected 1px chain. The same
+     `kMinLineWidthPx` floor is what T2's depth attenuation is bounded by.
+   - Each segment carries a square cap of half a width, so a polyline's joins
+     close. Without it a per-segment expansion leaves a wedge at every turn —
+     harmless at 2px on its own, but a hole in T2's halo, which exists
+     precisely to stop an occluded line leaking through.
+
+   The pick pass keeps its wide-line click-target draw unchanged (same buffers,
+   same call, same 6px/5px) and gains a quad route selected by
+   `Scene::pick_widening` from the queried range — see the status note above
+   for why that split, and for the byte-identity check that backs it.
+2. ✅ Query and log `GL_ALIASED_LINE_WIDTH_RANGE` once at `init_gl` so the next
+   person to wonder has the answer in the error/diagnostic string. (Landed
+   2026-08-02; step 1 now also *uses* it, to choose the pick pass's widening
+   route. On this tree's Mesa/llvmpipe lane it reads `[1, 255]`, so that lane
+   takes the wide-line route and the quad route is exercised by forcing it.)
+3. ☐ **The GLSL version question — verify before changing anything.** *(Still
+   open as of 2026-08-03: no macOS desktop lane exists in this tree, so no
+   session here has been able to answer it. Do not "fix" it blind.)* Every scene
    shader is `#version 130` ([embedded.h](../../../desktop/src/scene3d/shaders/embedded.h)),
    while `main.cpp` selects GL 3.2 **core** on Apple and hands ImGui
    `#version 150` for that same context. Apple's core profile documents GLSL 1.50
@@ -404,14 +444,26 @@ spurs 1, paths 2, convergences 3). If any future layer maps width to a quantity,
 it must be documented at that layer — this task must not quietly turn a class
 marker into a magnitude.
 
-**Tests.** `test_scene_fbo.cpp`: a line drawn at width 3 covers ~3× the pixels of
-one at width 1, on the lane that runs GL; the quad-expanded geometry is picked at
-the same ids the line geometry was (if T3 of [47](47-scene-inspect-and-pickable-overlays.md)
-has landed, the id bands must be unaffected). `test_camera.cpp` covers the pure
-maths of the expansion if it is factored out (it should be).
+**Tests.** ✅ `test_camera.cpp` covers the pure expansion
+([linequad.h](../../../desktop/src/scene3d/linequad.h)): segment counts for
+strip vs pairs, every corner naming its partner endpoint, half the width either
+side of the centreline, the square cap, the side-sign inversion at the far
+endpoint (the bowtie guard), and a degenerate zero-length segment staying
+finite. ✅ `test_scene_fbo.cpp` (GL): the same arc drawn at 6px and at 3px comes
+out exactly twice as thick (measured as the mean scanline run length of the
+rendered band — a pixel COUNT is confounded by terrain occlusion, so the fixture
+also flattens `y_scale` for the measurement); the width does not move across a
+3× camera dolly (screen-space, not world-space); the quad pick route resolves
+*exactly* the same overlay ids as the wide-line route and reproduces its width;
+a click on the arc returns the same id either way. ✅ A source scan in the pure
+half pins the "Done when": every surviving `glLineWidth` argument is `1.0f` or
+one of the two named pick-route constants, so a future layer cannot quietly
+re-introduce a wide line on the colour path.
 
-**Done when.** No `glLineWidth` call above 1.0 remains, and the version question
-has an answer recorded either way.
+**Done when.** ◐ No `glLineWidth` call above 1.0 remains on any path a viewer
+sees, and the two that remain are the pick pass's own route-selected click
+targets, pinned by test. The version question (step 3) still has no answer and
+still needs a Darwin machine.
 
 ## Fidelity notes (D7)
 

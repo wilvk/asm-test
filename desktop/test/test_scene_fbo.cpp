@@ -33,7 +33,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -52,6 +55,9 @@
 #endif
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
+#endif
+#ifndef ASMTEST_DESKTOP_SRC_DIR
+#error "ASMTEST_DESKTOP_SRC_DIR must be defined by the build (mk/desktop.mk)"
 #endif
 
 using namespace asmdesk;
@@ -412,6 +418,54 @@ static void pure_scene_checks() {
     }
 }
 
+// ---- T6 (55) step 1: no wide glLineWidth survives on the colour path --------
+// The brief's own "Done when" is "No `glLineWidth` call above 1.0 remains".
+// Two DO remain, deliberately and visibly: the pick pass keeps its pre-T6
+// wide-line click-target route (byte-for-byte the draw it always made) and
+// selects between that and the quad expansion at run time — see
+// Scene::pick_widening. So the property that is actually true, and the one
+// worth pinning, is narrower and stronger than a grep for the call: every
+// glLineWidth argument left in the scene is either 1.0 or one of the two named
+// pick-route constants. A future layer that quietly adds glLineWidth(4.0) to
+// the colour path — the exact regression T6 exists to prevent, and one no
+// pixel assertion would catch on a driver that happens to support it — fails
+// here. Source-scanning follows test_theme.cpp's existing idiom
+// (ASMTEST_DESKTOP_SRC_DIR).
+static void pure_line_width_checks() {
+    const std::string path =
+        std::string(ASMTEST_DESKTOP_SRC_DIR) + "/scene3d/scene.cpp";
+    std::ifstream in(path);
+    check("T6: scene.cpp is readable for the line-width scan", in.good(),
+          path.c_str());
+    std::string line;
+    int seen = 0;
+    while (std::getline(in, line)) {
+        const size_t at = line.find("glLineWidth(");
+        if (at == std::string::npos)
+            continue;
+        const size_t open = at + std::strlen("glLineWidth(");
+        const size_t close = line.find(')', open);
+        if (close == std::string::npos)
+            continue;
+        const std::string arg = line.substr(open, close - open);
+        seen++;
+        const bool allowed = arg == "1.0f" || arg == "kPickConvWidthPx" ||
+                             arg == "kPickSpurWidthPx";
+        check(("T6: glLineWidth argument is 1.0 or a named pick-route "
+               "constant, got <" +
+               arg + ">")
+                  .c_str(),
+              allowed,
+              "a wide glLineWidth on the colour path is exactly what T6 step 1 "
+              "removed: it is silently clamped (or GL_INVALID_VALUE) on a core "
+              "profile, so the mark class it separates disappears there");
+    }
+    check("T6: the line-width scan actually found the pick pass's own calls",
+          seen >= 2,
+          "no glLineWidth call was found at all — the scan is looking at the "
+          "wrong file and would pass vacuously");
+}
+
 // ---- the GL half ------------------------------------------------------------
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -605,6 +659,7 @@ int main() {
     // ===== 1. the pure half — always runs ====================================
     pure_pick_checks();
     pure_scene_checks();
+    pure_line_width_checks(); // T6 (55) step 1
 
     // ===== 2. the GL smoke — self-skips where no GL is reachable =============
     EGLDisplay dpy = EGL_NO_DISPLAY;
@@ -1668,6 +1723,229 @@ int main() {
                   "band width scaled with camera distance — looks world-"
                   "space-fixed, not screen-space-fixed (fwidth)");
         }
+    }
+
+    // --- (l) T6 (55) step 1: the portable line width ------------------------
+    // The colour pass now widens every line in the vertex shader (kLineVert)
+    // instead of asking glLineWidth for a width a core profile may refuse.
+    // Three things have to hold, and none of them is "it still draws":
+    //   1. the pick pass's two routes resolve the SAME overlay ids, so the
+    //      quad route a core profile takes cannot change a drill-in;
+    //   2. the quad route reproduces the width GL's own wide-line rasterizer
+    //      produces for the same request — which is the only independent
+    //      reference for "6 pixels" this lane has;
+    //   3. the width is SCREEN-space: it does not scale with camera distance,
+    //      which is exactly what a world-space expansion would do.
+    {
+        Recording rec = load(ndjson_threads());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        space::ConvergenceSet conv =
+            space::detect_convergences(traj, terr.proj);
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        // Flatten the terrain for this block ONLY. The arcs bow above the
+        // plane, so with the usual relief they are mostly buried in it — and
+        // every measurement below is of a rendered WIDTH, which an occluding
+        // hill silently truncates. A flat plane leaves the whole arc visible,
+        // so what is measured is the expansion and nothing else. Restored at
+        // the end of the block.
+        const float saved_y_scale = scene.y_scale;
+        scene.y_scale = 0.0f;
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(conv, terr.proj);
+
+        const scene3d::PickBands bands = scene.pick_bands();
+        const uint32_t arc_id = pick_id_conv(terr.w, bands.npts, /*i=*/0);
+        // Which route Auto takes HERE is a fact about this driver, not about
+        // the code — print it so a failure on some other lane is readable.
+        std::printf("test_scene_fbo: GL_ALIASED_LINE_WIDTH_RANGE = [%g, %g], "
+                    "pick route = %s\n",
+                    static_cast<double>(scene.aliased_line_width_range[0]),
+                    static_cast<double>(scene.aliased_line_width_range[1]),
+                    scene.pick_uses_quads() ? "quads" : "wide lines");
+
+        auto pick_ids_via = [&](Scene::PickWidening route, const Camera &c) {
+            scene.pick_widening = route;
+            std::vector<uint32_t> ids;
+            scene.render_pick_buffer(c, W, H, ids);
+            scene.pick_widening = Scene::PickWidening::Auto;
+            return ids;
+        };
+        // The width of a rendered band, measured as the mean length of its
+        // contiguous runs along a scanline. That is a LOCAL measure — it is
+        // the band's thickness divided by the sine of its screen angle — so
+        // unlike a raw pixel count it does not move when part of the mark is
+        // occluded by the terrain, which for these arcs is most of it.
+        auto mean_run = [](const std::vector<bool> &hit) {
+            double total = 0.0;
+            int runs = 0, run = 0;
+            for (int y = 0; y < H; y++) {
+                for (int x = 0; x < W; x++) {
+                    if (hit[static_cast<size_t>(y) * W + x]) {
+                        run++;
+                    } else if (run > 0) {
+                        total += run;
+                        runs++;
+                        run = 0;
+                    }
+                }
+                if (run > 0) {
+                    total += run;
+                    runs++;
+                    run = 0;
+                }
+            }
+            return runs > 0 ? total / runs : 0.0;
+        };
+        auto id_hits = [](const std::vector<uint32_t> &ids, uint32_t want) {
+            std::vector<bool> hit(ids.size(), false);
+            for (size_t i = 0; i < ids.size(); i++)
+                hit[i] = (ids[i] == want);
+            return hit;
+        };
+
+        std::vector<uint32_t> ids_lines =
+            pick_ids_via(Scene::PickWidening::Lines, cam);
+        std::vector<uint32_t> ids_quads =
+            pick_ids_via(Scene::PickWidening::Quads, cam);
+
+        // (1) the same OVERLAY ids, both ways. Terrain-cell ids at the very
+        // margin of a widened overlay legitimately differ between the two
+        // rasterizations (a wider mark covers one more cell, a narrower one
+        // uncovers it), so the comparison is over the arc/spur bands — the
+        // ids this change could actually have broken.
+        auto overlay_ids = [&](const std::vector<uint32_t> &ids) {
+            std::set<uint32_t> out;
+            for (uint32_t id : ids) {
+                if (!id)
+                    continue;
+                Pick d = decode_pick(id, terr.w, bands);
+                if (d.kind == Pick::Conv || d.kind == Pick::Spur)
+                    out.insert(id);
+            }
+            return out;
+        };
+        std::set<uint32_t> ov_lines = overlay_ids(ids_lines);
+        std::set<uint32_t> ov_quads = overlay_ids(ids_quads);
+        check("T6 GL: the fixture actually puts overlay ids in the pick "
+              "buffer (test setup)",
+              !ov_lines.empty(), "no arc/spur id was pickable at all");
+        check("T6 GL: the quad pick route resolves exactly the same overlay "
+              "ids as the wide-line route",
+              ov_lines == ov_quads,
+              "the quad-expanded click targets gained or lost a pickable "
+              "arc/spur — a drill-in would land somewhere else on a core "
+              "profile than it does here");
+
+        // (2) and the same click-target WIDTH. GL's own wide-line rasterizer
+        // is the only independent reference for "6 pixels" this lane has, so
+        // the quad expansion is calibrated against it. The two are not
+        // expected to agree exactly: GL offsets a wide line along the MINOR
+        // AXIS by w/2, where the quad offsets along the true perpendicular,
+        // so a diagonal quad is legitimately up to ~1/cos(45 deg) wider — and
+        // the quad also carries square caps GL's line does not. Anything
+        // outside this band is a real width error, not a rasterization
+        // difference.
+        double run_lines = mean_run(id_hits(ids_lines, arc_id));
+        double run_quads = mean_run(id_hits(ids_quads, arc_id));
+        check("T6 GL: the convergence arc is pickable on BOTH routes",
+              run_lines > 0.0 && run_quads > 0.0,
+              "one of the two click-target routes drew no arc at all");
+        if (run_lines > 0.0 && run_quads > 0.0) {
+            const double ratio = run_quads / run_lines;
+            check("T6 GL: the quad route reproduces the wide-line route's "
+                  "click-target width",
+                  ratio > 0.7 && ratio < 2.0,
+                  "the quad-expanded 6px arc is a very different width from "
+                  "GL's own 6px line — the screen-space width is wrong, not "
+                  "merely differently rasterized");
+        }
+
+        // ...and the width the code asks for is the width it gets: the SAME
+        // arc geometry is drawn by the colour pass at kConvWidthPx (3) and by
+        // the pick pass's quad route at kPickConvWidthPx (6), through the same
+        // expansion, under the same camera and the same terrain occlusion. Its
+        // rendered thickness must double. This is the brief's own "a line
+        // drawn at width 3 covers ~3x the pixels of one at width 1", in the
+        // form this scene can state without inventing a knob that exists only
+        // for the test.
+        {
+            SceneLayers arcs_only;
+            arcs_only.terrain = true; // depth: the arc must occlude the same
+            arcs_only.exact = arcs_only.statistical = false;
+            arcs_only.access_marks = arcs_only.vehicle = false;
+            arcs_only.canopy = arcs_only.mispred = false;
+            arcs_only.weather = false; // the sky would fill the background
+            arcs_only.edl = false;     // EDL darkens; the hue test is exact
+            std::vector<unsigned char> px = capture(scene, cam, cf, arcs_only);
+            std::vector<bool> magenta(static_cast<size_t>(W) * H, false);
+            for (size_t i = 0; i + 3 < px.size(); i += 4)
+                magenta[i / 4] = px[i] > 178 && px[i + 2] > 153 &&
+                                 px[i + 1] < 127; // the arc's own colour
+            const double run_colour = mean_run(magenta);
+            check("T6 GL: the colour pass draws the arc (test setup)",
+                  run_colour > 0.0, "no arc pixel in the colour render");
+            if (run_colour > 0.0 && run_quads > 0.0) {
+                const double ratio = run_quads / run_colour;
+                check("T6 GL: doubling the requested width doubles the "
+                      "rendered width",
+                      ratio > 1.4 && ratio < 2.8,
+                      "the same arc drawn at 6px and at 3px did not come out "
+                      "twice as thick — the width uniform is not reaching the "
+                      "geometry in pixels");
+            }
+        }
+
+        // The drill-in itself: a pixel that picked the arc still picks the
+        // arc, and picks the SAME id, on the other route.
+        int arc_px = -1;
+        for (size_t i = 0; i < ids_lines.size(); i++)
+            if (ids_lines[i] == arc_id) {
+                arc_px = static_cast<int>(i);
+                break;
+            }
+        if (arc_px >= 0) {
+            const int px_x = arc_px % W;
+            const int y_top = H - 1 - arc_px / W;
+            scene.pick_widening = Scene::PickWidening::Quads;
+            uint32_t got_q = scene.pick(cam, W, H, px_x, y_top);
+            scene.pick_widening = Scene::PickWidening::Lines;
+            uint32_t got_l = scene.pick(cam, W, H, px_x, y_top);
+            scene.pick_widening = Scene::PickWidening::Auto;
+            check("T6 GL: a click on the arc resolves to the same id on both "
+                  "widening routes",
+                  got_l == arc_id && got_q == arc_id,
+                  "the same screen pixel resolved to two different ids");
+        }
+
+        // (3) screen-space, not world-space. Measure the arc band's scanline
+        // run lengths in the PICK buffer (exact per-pixel membership, no
+        // colour threshold) at two camera distances 3x apart: a width in
+        // PIXELS is distance-invariant, a width baked in world units is not.
+        auto run_at = [&](float radius) {
+            Camera c;
+            c.frame(
+                0.5f, 0.5f,
+                Camera::clampf(radius, Camera::kMinRadius, Camera::kMaxRadius));
+            return mean_run(
+                id_hits(pick_ids_via(Scene::PickWidening::Quads, c), arc_id));
+        };
+        double near_w = run_at(1.2f), far_w = run_at(3.6f);
+        check("T6 GL: the arc is on screen at both camera distances (test "
+              "setup)",
+              near_w > 0.0 && far_w > 0.0,
+              "the arc left the frame at one of the two radii");
+        if (near_w > 0.0 && far_w > 0.0) {
+            double ratio = near_w > far_w ? near_w / far_w : far_w / near_w;
+            check("T6 GL: quad-expanded line width is constant in SCREEN "
+                  "pixels across a 3x camera-distance change",
+                  ratio < 2.0,
+                  "the band thickened as the camera dollied in — the width "
+                  "is being applied in world units, not pixels");
+        }
+        scene.y_scale = saved_y_scale;
     }
 
     scene.shutdown();

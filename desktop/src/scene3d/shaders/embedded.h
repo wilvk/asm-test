@@ -217,6 +217,79 @@ void main(){
 }
 )GLSL";
 
+// --- T6 (55-scene-render-quality) step 1: the PORTABLE line width. Wide lines
+//     (`glLineWidth` above 1.0) are deprecated in a core profile and a core
+//     implementation may report GL_ALIASED_LINE_WIDTH_RANGE = [1,1] and either
+//     clamp or raise GL_INVALID_VALUE — which is exactly the context this app's
+//     own Apple path requests (main.cpp: 3.2 core + forward-compatible). This
+//     shader replaces every such call: each SEGMENT arrives as two triangles
+//     (6 vertices) carrying its own endpoint, the segment's OTHER endpoint, and
+//     a ±1 side, and the width is applied in SCREEN SPACE here, in pixels.
+//
+// It serves BOTH the colour pass (linked against kTrajFrag, which reads vY) and
+// — where the pick pass takes its quad route — the id pass (linked against
+// kPickPointFrag, which reads fId). One vertex shader, two programs: the
+// colour program simply never enables the `vid` attribute, and a vertex output
+// no fragment shader reads is legal. That is what keeps the two passes' widened
+// geometry provably the SAME expansion rather than two implementations that
+// could drift.
+//
+// Fidelity (D7, this brief's own note): width here separates mark CLASSES
+// (spurs, paths, convergences) and — under uDepthCue — carries DEPTH. Neither
+// is a magnitude. No layer may map uWidthPx to a quantity without saying so at
+// that layer.
+inline const char *kLineVert = R"GLSL(#version 130
+in vec3 pos;    // this vertex's own endpoint
+in vec3 other;  // the segment's OTHER endpoint
+in float side;  // -1 / +1: which side of the centreline this corner sits on
+in uint vid;    // pick id (id pass only; the colour VAO leaves it disabled)
+uniform mat4 uMVP;
+uniform vec2 uViewportPx;   // (width, height) in pixels
+uniform float uWidthPx;     // the mark class's nominal width, IN PIXELS
+uniform float uMinWidthPx;  // the floor -- see uDepthCue
+uniform int uDepthCue;      // T2 (55): 1 = attenuate width with eye distance
+uniform float uDepthCueRef; // the eye distance at which the width is nominal
+out float vY;
+flat out uint fId;
+void main(){
+  vY = pos.y;
+  fId = vid;
+  vec4 cp = uMVP * vec4(pos, 1.0);
+  vec4 co = uMVP * vec4(other, 1.0);
+  // A vertex at or behind the eye plane has no screen position to widen in;
+  // emit the un-widened clip position (the segment is being clipped anyway)
+  // rather than dividing by a non-positive w and scattering garbage.
+  if (cp.w <= 0.0 || co.w <= 0.0) { gl_Position = cp; return; }
+  vec2 half_vp = uViewportPx * 0.5;
+  vec2 sp = (cp.xy / cp.w) * half_vp;   // this endpoint, in pixels
+  vec2 so = (co.xy / co.w) * half_vp;   // the other endpoint, in pixels
+  vec2 d = so - sp;
+  float len = length(d);
+  // A degenerate (zero-length) segment has no direction; pick one rather than
+  // normalizing a zero vector (undefined) -- it collapses to a square dot.
+  vec2 dir = (len > 1e-6) ? d / len : vec2(1.0, 0.0);
+  vec2 perp = vec2(-dir.y, dir.x);
+  float w = uWidthPx;
+  if (uDepthCue == 1) {
+    // T2 step 3: depth-cued attenuation -- a farther line is thinner, which is
+    // a DEPTH cue and never a magnitude (D7). cp.w is eye distance for this
+    // projection. Bounded below by uMinWidthPx: a distant bundle that thinned
+    // to nothing would be an unknown rendered as an absence (invariant 3).
+    w *= clamp(uDepthCueRef / max(cp.w, 1e-4), 0.0, 1.0);
+  }
+  w = max(w, uMinWidthPx);
+  float hw = w * 0.5;
+  // Half-width across the centreline, plus a square cap of the same half-width
+  // along it (away from the partner endpoint): the cap closes the gap a
+  // per-segment expansion would otherwise leave at a polyline's joins, which
+  // matters most for T2's halo (a gap there would let an occluded line leak
+  // through the halo that is supposed to cut it).
+  vec2 offs = perp * (hw * side) - dir * hw;
+  cp.xy += (offs / half_vp) * cp.w;
+  gl_Position = cp;
+}
+)GLSL";
+
 // T1 (49-one-time-truth): uTimeCutY/uHasTimeCut clip the path to the terrain
 // playhead — DIM past the cut, never discard (the vertices beyond it are real
 // recorded data; hiding them would claim the recording ends there). Applied
