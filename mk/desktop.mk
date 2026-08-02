@@ -1133,6 +1133,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
+                 $(BUILD)/desktop_test_datalayers \
                  $(BUILD)/desktop_test_coverage_window \
                  $(BUILD)/desktop_test_canopy \
                  $(BUILD)/desktop_test_opcode_terrain \
@@ -1407,6 +1408,24 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The memory data-cell family (58-memory-data-cell-family.md, all six tasks):
+# the SAME terrain closure test_terrain links, plus the family's own pure
+# models (datacell/dataribbon/sediment) and scene3d/hud.o for T1's placement
+# chips. hud.o is ImGui (never GL), so the imgui core objects ride the link the
+# way test_shell already links them — this stays a null-backend binary with no
+# display and no engine (D4).
+$(BUILD)/desktop_test_datalayers: $(BUILD)/desktop/test/t/test_datalayers.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(BUILD)/desktop/test/s3/hud.o $(BUILD)/desktop/test/s3/layers.o \
+    $(BUILD)/desktop/test/s3/goto.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/ui/timepos.o \
+    $(DESKTOP_TEST_IG) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The confidence layer's coverage-window mask (56-fidelity-and-module-layers.md

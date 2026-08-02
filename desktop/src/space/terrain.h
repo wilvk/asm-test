@@ -111,6 +111,18 @@ struct TerrainModel {
     std::string mem_note; // "coarse: no per-access memory stream" when absent
     bool churn_present = false; // some code region churned within the recording
 
+    // T1 (58-memory-data-cell-family): the data rung's own placement census.
+    // The `mem` scan used to `continue` past an access no region mapped, in
+    // silence — which is exactly how the whole data half stayed empty for
+    // every shipped recording until 54 T1 (the observed-data-span projection)
+    // landed, with nothing on screen saying so. These two counters make that
+    // failure mode STATABLE: after 54 T1 `mem_dropped` should be near zero,
+    // and if it is not, the span clustering is wrong and this is how anyone
+    // finds out. Both stay 0 when `mem` is absent (there was nothing to place)
+    // or when the terrain refused on `basis_error` before the scan.
+    uint64_t mem_accesses = 0; // `mem` events the scan considered
+    uint64_t mem_dropped = 0;  // of those, how many no region mapped (dropped)
+
     // The SEPARATE statistical layer (survey residency), distinct from every
     // exact slice() and never merged into one (the T6 isolation invariant).
     bool has_stat = false;

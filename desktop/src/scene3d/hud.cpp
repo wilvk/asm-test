@@ -99,6 +99,66 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
             out.push_back({PlacementChip::Warn, label});
         }
     }
+
+    // T1 (58-memory-data-cell-family): the DATA rung's own contract. Four
+    // facts, always stated, so an empty memory layer is never mistaken for an
+    // empty program:
+    //   1. which rung is feeding the data half at all (`mem` present or not);
+    //   2. how many observed-data spans the projection carries, and at what
+    //      gap threshold, since those spans are what makes a heap/stack
+    //      address placeable at all (54 T1);
+    //   3. how many `mem` accesses failed to place, which used to be a silent
+    //      `continue` in terrain.cpp;
+    //   4. nothing invented for the absent case — the coarse wording is
+    //      TerrainModel::mem_note's own, verbatim (D7 / 24-one-visual-language).
+    if (terr.mem_present) {
+        out.push_back({PlacementChip::Ok, "rich: per-access memory"});
+    } else if (!terr.mem_note.empty()) {
+        out.push_back({PlacementChip::Warn, terr.mem_note});
+    }
+    {
+        size_t spans = 0;
+        for (const space::Region &r : terr.proj.regions)
+            if (r.label == space::kObservedDataLabel)
+                spans++;
+        char buf[144];
+        if (spans > 0) {
+            std::snprintf(buf, sizeof buf,
+                          "data spans: %zu observed (%llu-byte gap threshold)",
+                          spans,
+                          (unsigned long long)space::kObservedSpanGap);
+            out.push_back({PlacementChip::Warn, buf});
+        } else if (terr.mem_present) {
+            // `mem` fed the rung but no span was derived: every access landed
+            // inside an already-known region (fine), or none placed (T1's own
+            // drop chip below then says so). Either way, say which.
+            out.push_back(
+                {PlacementChip::Warn,
+                 "data spans: none derived — every observed address fell "
+                 "inside an existing region, or none placed"});
+        }
+    }
+    if (terr.mem_accesses > 0) {
+        char buf[160];
+        if (terr.mem_dropped == 0) {
+            std::snprintf(buf, sizeof buf,
+                          "%llu of %llu memory accesses placed",
+                          (unsigned long long)terr.mem_accesses,
+                          (unsigned long long)terr.mem_accesses);
+            out.push_back({PlacementChip::Ok, buf});
+        } else {
+            std::snprintf(
+                buf, sizeof buf,
+                "%llu of %llu memory accesses OFF-PLANE (no region maps "
+                "them)",
+                (unsigned long long)terr.mem_dropped,
+                (unsigned long long)terr.mem_accesses);
+            out.push_back({terr.mem_dropped == terr.mem_accesses
+                               ? PlacementChip::Bad
+                               : PlacementChip::Warn,
+                           buf});
+        }
+    }
     return out;
 }
 
@@ -370,11 +430,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // 36 T4: the placement chrome — nothing about anchoring is silent.
     for (const PlacementChip &pc : placement_chips(terr, traj))
         chip(sev_col(pc.sev), pc.text.c_str(), first);
-    // coarse-vs-rich
-    chip(terr.mem_present ? kOk : kWarn,
-         terr.mem_present ? "rich: per-access memory"
-                          : "coarse: no memory stream",
-         first);
+    // T1 (58): the coarse-vs-rich chip USED to be drawn inline here, a second
+    // spelling of the same fact ("coarse: no memory stream") that no test could
+    // reach. placement_chips now owns both branches (and grades them with the
+    // span/drop census beside them), so this loop draws it once — one source of
+    // truth for the data rung, testable without an ImGui frame.
     // exact-vs-statistical
     if (terr.has_stat)
         chip(kWarn, "statistical residency present (separate layer)", first);

@@ -404,8 +404,15 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
             std::string rw = e.body.value("rw", std::string("r"));
             bool ok = false;
             uint32_t c = cell_of(proj, m.w, m.h, ea, &ok);
-            if (!ok)
+            // T1 (58): count what this scan considers and what it drops. The
+            // `continue` below is the original silent drop — it is still the
+            // right thing to DO (an address no region maps has no cell), but
+            // it is no longer the right thing to do QUIETLY.
+            m.mem_accesses++;
+            if (!ok) {
+                m.mem_dropped++;
                 continue;
+            }
             uint32_t rwbit = (rw == "w") ? TF_WRITE : TF_READ;
             uint8_t dir = (rw == "w")   ? kDirWrite
                           : (rw == "r") ? kDirRead

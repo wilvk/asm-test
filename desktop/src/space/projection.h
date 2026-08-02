@@ -68,6 +68,11 @@ inline constexpr uint64_t kObservedSpanGap = 4096;
 // would produce more, the nearest neighbours are merged (never dropped) and
 // data_span_note says so.
 inline constexpr size_t kObservedSpanCap = 4096;
+// 54 T1 / 58 T1: the Region::label every observed-data span carries. Named
+// rather than repeated as a literal, because the HUD now COUNTS these spans to
+// state the data rung's provenance (58 T1) — a second spelling of the string
+// would silently report zero spans forever.
+inline constexpr const char *kObservedDataLabel = "observed data";
 
 // Cluster the addresses a recording OBSERVED touching into compacted spans, so
 // an access that no codeimage region maps still places on the plane. Every span

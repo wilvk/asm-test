@@ -411,12 +411,24 @@ int main() {
             check("scene/canopies woven", !sv.canopies.empty(),
                   "a placed abs recording must produce module canopies");
 
-            // 36 T4: the abs golden is fully placed — no placement chip fires
-            // for it (all its chip branches are for rel/df/unplaced recordings).
+            // 36 T4: the abs golden is fully placed — no PLACEMENT chip fires
+            // for it (all its chip branches are for rel/df/unplaced
+            // recordings). 58 T1 added the DATA-rung census to the same
+            // vector (the coarse/rich chip and, when `mem` is present, the
+            // span + drop counts), which this golden does raise: it carries
+            // no `mem`, so it states the coarse rung. Assert the placement
+            // half is silent by naming what may legitimately appear, rather
+            // than by an emptiness that now means two different things.
             auto abs_chips = scene3d::placement_chips(sv.terr, sv.traj);
-            check("scene/abs draws no placement chip (fully placed abs path)",
-                  abs_chips.empty(),
-                  "an abs recording raised a placement chip");
+            for (const auto &c : abs_chips)
+                check("scene/abs draws no placement chip (fully placed abs "
+                      "path)",
+                      c.text == sv.terr.mem_note,
+                      ("an abs recording raised a placement chip: " + c.text)
+                          .c_str());
+            check("scene/abs still states its data rung (58 T1)",
+                  abs_chips.size() == 1 && !sv.terr.mem_note.empty(),
+                  "the coarse data rung must be stated, never silent");
 
             // 54 T1: this golden carries no `mem` and no abs df values, so
             // observed_data_spans() must add nothing — the projection this
