@@ -27,7 +27,10 @@ sde_ver=$(read_ver scripts/fetch-sde.sh      'SDE_VERSION="\$\{SDE_VERSION:-([0-
 # assemblers), not a fetch-*.sh — read them there.
 binutils_ver=$(read_ver Dockerfile.sde       'ARG BINUTILS_VERSION=([0-9][0-9.]*)')
 nasm_ver=$(read_ver Dockerfile.sde           'ARG NASM_VERSION=([0-9][0-9.]*)')
-ks_ver=$(read_ver scripts/build-keystone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
+# keystone: a short-SHA commit pin since 60-arm32-riscv-author-mode.md T3
+# (RISC-V never shipped in a tagged release), so the version token is hex,
+# not the numeric-dot tag shape every other read_ver line here expects.
+ks_ver=$(read_ver scripts/build-keystone.sh  'VERSION="\$\{1:-([0-9a-f][0-9a-f.]*)\}"')
 cs_ver=$(read_ver scripts/build-capstone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
 zig_ver=$(read_ver mk/docker.mk              'ZIG_VERSION \?= ([0-9][0-9.]*)')
 # unicorn pin lives as an ARG in Dockerfile.win64 (the Windows/mingw benchmark
@@ -54,6 +57,19 @@ drfork_commit() { # <short-sha>
     c=$(curl -fsSL "https://api.github.com/repos/wilvk/dynamorio/commits/$1" | jq -r '.sha')
     [ -n "$c" ] && [ "$c" != "null" ] || { echo "refresh: cannot resolve wilvk/dynamorio@$1" >&2; exit 1; }
     case "$c" in "$1"*) ;; *) echo "refresh: wilvk/dynamorio@$1 resolved to non-prefix $c" >&2; exit 1;; esac
+    echo "$c"
+}
+
+# keystone: expand the short-sha manifest key to the full immutable commit and
+# confirm it exists on keystone-engine/keystone — drfork_commit's exact shape,
+# because keystone (60-arm32-riscv-author-mode.md T3) is the SAME situation:
+# there is no tag to resolve (RISC-V support never shipped in one), the
+# commit itself is the pin, and a vanished commit must fail loudly here
+# rather than silently falling back to something else.
+ks_commit_resolve() { # <short-sha>
+    c=$(curl -fsSL "https://api.github.com/repos/keystone-engine/keystone/commits/$1" | jq -r '.sha')
+    [ -n "$c" ] && [ "$c" != "null" ] || { echo "refresh: cannot resolve keystone-engine/keystone@$1" >&2; exit 1; }
+    case "$c" in "$1"*) ;; *) echo "refresh: keystone-engine/keystone@$1 resolved to non-prefix $c" >&2; exit 1;; esac
     echo "$c"
 }
 
@@ -132,7 +148,7 @@ zig_digest() { # <version> <arch>
     echo "$d"
 }
 
-ks_commit=$(tag_commit keystone-engine/keystone "$ks_ver")
+ks_commit=$(ks_commit_resolve "$ks_ver")
 cs_commit=$(tag_commit capstone-engine/capstone "$cs_ver")
 drfork_sha=$(drfork_commit "$drfork_ver")
 dr_sha=$(dr_digest "$dr_ver")
@@ -159,7 +175,14 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     echo "# source fork at this pinned commit instead (scripts/build-dynamorio-macos.sh;"
     echo "# macos-dynamorio-fork-build.md). Branch-independent commit pin, libdft64-style."
     printf 'git-commit      dynamorio-fork  %s  commit:%s\n' "$drfork_ver" "$drfork_sha"
-    printf 'git-commit      keystone   %s        commit:%s\n' "$ks_ver" "$ks_commit"
+    echo "# keystone: git-commit-pinned since 60-arm32-riscv-author-mode.md T3, NOT a"
+    echo "# tag — upstream's newest tag (0.9.2) has no RISC-V backend at all; this is"
+    echo "# the natural \"RISC-V support landed, tree also fixes CMake4/GCC15\" upstream"
+    echo "# milestone the T3 spike found on the default branch (master HEAD at pin"
+    echo "# time). The \"version\" key is the commit's 12-char short form, the same"
+    echo "# short-sha-as-manifest-key scheme dynamorio-fork/libdft64 already use for"
+    echo "# their own untagged git-commit pins."
+    printf 'git-commit      keystone   %s  commit:%s\n' "$ks_ver" "$ks_commit"
     printf 'git-commit      capstone   %s        commit:%s\n' "$cs_ver" "$cs_commit"
     printf 'tarball-sha256  zig-linux-x86_64   %s  %s\n' "$zig_ver" "$zig_x86_64_sha"
     printf 'tarball-sha256  zig-linux-aarch64  %s  %s\n' "$zig_ver" "$zig_aarch64_sha"

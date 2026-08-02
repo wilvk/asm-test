@@ -5,24 +5,29 @@
 # redistributes, at the exact versions shipped, so a release can attach it
 # (satisfying GPL-2.0 section 3) and back the written offer in every package's
 # THIRD-PARTY-LICENSES/NOTICE. Keystone and Capstone are pinned (the build scripts
-# clone these tags); Unicorn is a distro/brew binary whose version is recorded
-# per-package, so the release job passes the actual version(s) shipped.
+# clone these — Capstone a tag, Keystone a raw commit since 60-arm32-riscv-
+# author-mode.md T3, see build-keystone.sh); Unicorn is a distro/brew binary
+# whose version is recorded per-package, so the release job passes the actual
+# version(s) shipped.
 #
 # Usage: scripts/fetch-corresponding-source.sh <outdir>
-#   env: KEYSTONE_VERSION (0.9.2), CAPSTONE_VERSION (5.0.1),
-#        UNICORN_VERSIONS (space-separated; default 2.1.4)
+#   env: KEYSTONE_VERSION (0d9567f08c0c, a commit — see build-keystone.sh),
+#        CAPSTONE_VERSION (5.0.1), UNICORN_VERSIONS (space-separated; default 2.1.4)
 set -eu
 
 prog=$(basename "$0")
 out="${1:?usage: $prog <outdir>}"
-KEYSTONE_VERSION="${KEYSTONE_VERSION:-0.9.2}"
+KEYSTONE_VERSION="${KEYSTONE_VERSION:-0d9567f08c0c}"
 CAPSTONE_VERSION="${CAPSTONE_VERSION:-5.0.1}"
 UNICORN_VERSIONS="${UNICORN_VERSIONS:-2.1.4}"
 
 mkdir -p "$out"
 
-fetch() { # fetch <name> <github-repo> <tag>
-    url="https://github.com/$2/archive/refs/tags/$3.tar.gz"
+# fetch <name> <github-repo> <ref> — <ref> may be a tag OR a commit SHA (GitHub's
+# archive endpoint resolves either identically without a "refs/tags/" prefix;
+# keystone's own ref is a commit as of T3, capstone's/unicorn's stay tags).
+fetch() {
+    url="https://github.com/$2/archive/$3.tar.gz"
     f="$out/corresponding-source-$1-$3.tar.gz"
     echo "$prog: $1 $3 -> $(basename "$f")"
     curl -fsSL "$url" -o "$f"
@@ -59,7 +64,8 @@ fi
     echo "Corresponding source (GPL-2.0 section 3) for the native dependencies the"
     echo "asm-test packages redistribute, at the versions shipped:"
     echo
-    echo "  keystone $KEYSTONE_VERSION  (GPL-2.0-only)"
+    echo "  keystone $KEYSTONE_VERSION  (GPL-2.0-only; a pinned commit, not a"
+    echo "    tagged release — see build-keystone.sh for why)"
     echo "  capstone $CAPSTONE_VERSION  (BSD-3-Clause)"
     for v in $UNICORN_VERSIONS; do echo "  unicorn  $v  (GPL-2.0-only)"; done
     if [ "$lgpl_source" = 1 ]; then
@@ -75,8 +81,10 @@ fi
         echo "  before publishing."
     fi
     echo
-    echo "Each archive is the upstream release tagged with that version. asm-test's"
-    echo "own source (MIT) is the tagged repository at github.com/wilvk/asm-test."
+    echo "Each archive is the upstream source at that version — a tagged release"
+    echo "for every dependency above except keystone, which is a pinned commit"
+    echo "(no tagged Keystone release has RISC-V support). asm-test's own source"
+    echo "(MIT) is the tagged repository at github.com/wilvk/asm-test."
 } > "$out/SOURCES.txt"
 
 echo "$prog: wrote $out (see SOURCES.txt)"

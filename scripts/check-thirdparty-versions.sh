@@ -69,10 +69,12 @@ check_group "manylinux_2_28" \
     '.github/workflows/release.yml|MANYLINUX_TAG=([0-9][0-9.-]*)'
 
 # Keystone (GPL-2.0): the version built/vendored must equal the one whose source
-# the release attaches for GPL §3.
+# the release attaches for GPL §3. A git-commit short-sha since 60-arm32-riscv-
+# author-mode.md T3 (no tagged release has RISC-V), hence the hex pattern —
+# every other group here still pins a numeric-dot tag.
 check_group "Keystone" \
-    'scripts/build-keystone.sh|VERSION="\$\{1:-([0-9][0-9.]*)\}"' \
-    'scripts/fetch-corresponding-source.sh|KEYSTONE_VERSION="\$\{KEYSTONE_VERSION:-([0-9][0-9.]*)\}"'
+    'scripts/build-keystone.sh|VERSION="\$\{1:-([0-9a-f][0-9a-f.]*)\}"' \
+    'scripts/fetch-corresponding-source.sh|KEYSTONE_VERSION="\$\{KEYSTONE_VERSION:-([0-9a-f][0-9a-f.]*)\}"'
 
 # Capstone (BSD): same corresponding-source consistency.
 check_group "Capstone" \
@@ -99,7 +101,7 @@ check_manifest() { # <name> <version>
     fi
 }
 check_manifest dynamorio "$(extract mk/bindings.mk 'DR_VERSION \?= ([0-9][0-9.]*)')"
-check_manifest keystone  "$(extract scripts/build-keystone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
+check_manifest keystone  "$(extract scripts/build-keystone.sh 'VERSION="\$\{1:-([0-9a-f][0-9a-f.]*)\}"')"
 check_manifest capstone  "$(extract scripts/build-capstone.sh 'VERSION="\$\{1:-([0-9][0-9.]*)\}"')"
 # The zig toolchain tarball (docker zig lane) is pinned per-arch: both digests must
 # anchor the single ZIG_VERSION declared in mk/docker.mk.

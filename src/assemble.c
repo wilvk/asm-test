@@ -16,9 +16,13 @@
 #include <keystone/keystone.h>
 
 /* Map an asm_arch_t to Keystone's (arch, mode). Returns false for a guest this
- * Keystone build can't assemble — notably RISC-V, which released Keystone does
- * not support (the #ifdef lights it up automatically if a future build adds
- * KS_ARCH_RISCV). On failure, *why points at a short reason for the caller. */
+ * Keystone build can't assemble. RISC-V is `#ifdef KS_ARCH_RISCV`-gated rather
+ * than assumed: this repo's pinned Keystone commit (60-arm32-riscv-author-
+ * mode.md T3 — no tagged Keystone release has RISC-V, so the pin is a raw
+ * commit; see scripts/build-keystone.sh) defines it, but the macro still
+ * guards a hand build against an older/system Keystone that predates it,
+ * degrading to the *why message below instead of a compile error. On
+ * failure, *why points at a short reason for the caller. */
 static bool ks_target(asm_arch_t arch, ks_arch *ks_a, int *ks_mode,
                       const char **why) {
     switch (arch) {
@@ -78,8 +82,11 @@ static asm_syntax_t syntax_from_int(int syntax) {
 /* Statement-counting rules for one (arch, syntax) pair. Keystone parses each
  * guest with the matching LLVM assembly dialect, and the three knobs below are
  * the only ones a statement counter needs. All three were measured against the
- * pinned Keystone (0.9.2) — see docs/internal/implementations/
- * assemble-silent-statement-drop.md; re-measure them across a Keystone bump.
+ * pinned Keystone (0.9.2), re-verified unchanged across the
+ * 60-arm32-riscv-author-mode.md T3 bump to a newer commit (x86/arm64/arm32
+ * cli-smoke + asmtrace-golden-check stayed byte-identical) — see
+ * docs/internal/implementations/assemble-silent-statement-drop.md;
+ * re-measure them again across any FUTURE Keystone bump.
  *
  *   ';'  separates statements everywhere EXCEPT x86/NASM, where it introduces
  *        an end-of-line comment (so a NASM source separates with newlines).

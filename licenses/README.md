@@ -9,7 +9,7 @@ Dear ImGui Test Engine (see their rows and the paragraph below).
 | File | Component | Version | SPDX |
 |---|---|---|---|
 | `Unicorn-COPYING` | Unicorn Engine (emulator) | 2.1.x | GPL-2.0-only |
-| `Keystone-COPYING` | Keystone Engine (in-line assembler) | 0.9.2 ([build-keystone.sh](../scripts/build-keystone.sh)) | GPL-2.0-only |
+| `Keystone-COPYING` | Keystone Engine (in-line assembler) | git-commit pin in [third-party-digests.txt](../scripts/third-party-digests.txt) ([build-keystone.sh](../scripts/build-keystone.sh)) — a pinned commit, not a tagged release, since 60-arm32-riscv-author-mode.md T3 (no tagged Keystone has RISC-V support) | GPL-2.0-only |
 | `Capstone-LICENSE.TXT` | Capstone (disassembler) | 5.0.1 ([build-capstone.sh](../scripts/build-capstone.sh)) | BSD-3-Clause |
 | `Capstone-LICENSE_LLVM.TXT` | Capstone (LLVM-derived tables) | 5.0.1 | LLVM (Apache-2.0-with-LLVM-exception) |
 | `DynamoRIO-<ver>.txt` | DynamoRIO (native-trace tier runtime) | 11.91.20630 ([fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh)) | BSD-3-Clause |
