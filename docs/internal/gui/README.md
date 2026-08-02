@@ -26,7 +26,7 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | Doc | Why it stays |
 > |---|---|
 > | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1, L4** are still open (arm64 live-dataflow leg, the Darwin `libasmtest_dataflow` build). L2/L3/L6/L7 closed as docs 40/41/37-T4/39; L5 cut as doc 60. |
-> | [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ARM32 (T1 guest, T2 Author dispatch) ☑ **2/2 landed**; RISC-V (T3) is gated on an unreleased-Keystone spike, not yet run. |
+> | [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ✅ **3/3 landed** (ARM32 T1/T2, RISC-V T3 via a pinned-commit Keystone bump); doc complete, stays here only until the next archive sweep. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48, 50 and 52 landed 2026-08-02, 51 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
@@ -509,13 +509,23 @@ through the same per-guest value-fabric producer arm64 uses
 `kAuthorArchLimit` label and RISC-V's own row note narrow to name only
 RISC-V, updated everywhere quoted; the capability panel already read the
 table generically, so it picked up ARM32 with no code change, confirming
-this doc's own prediction. RISC-V (T3) carries a
-real, previously-unsurfaced dependency gap: this repo's Keystone pin is 0.9.2
-(Feb 2019, upstream's newest **release**), and `KS_ARCH_RISCV` exists only on
-upstream's unreleased `master` — a spike (pin a commit, verify it builds and
-that the RISC-V backend assembles *correct* bytes under Unicorn, not merely
-that `ks_asm` returns success) gates T3 before it can be scoped as ordinary
-mirroring. ☑ 2/3 (T1+T2 landed 2026-08-02; T3 spike not run). · *free* · T3 · 2026-08-02.
+this doc's own prediction. RISC-V (T3) carried a
+real, previously-unsurfaced dependency gap: this repo's Keystone pin was 0.9.2
+(Feb 2019, upstream's newest **release**), and `KS_ARCH_RISCV` existed only on
+upstream's unreleased `master`. **T3 spike run 2026-08-02 — SUCCEEDED**: pinned
+`master` HEAD at spike time (`0d9567f08c0c`, a git-commit pin — no tagged
+release has RISC-V, mirroring `fetch-libdft.sh`'s own untagged-pin
+mechanism), verified the RISC-V backend assembles *correct* RV64I bytes
+(hand-checked encoding + a Capstone round-trip decode + a Unicorn execute,
+not merely that `ks_asm` returns success), and landed T3 in full — a real
+second gap the scoping pass didn't anticipate turned up along the way
+(Capstone's RISCV backend implements neither `cs_regs_access` nor a
+per-operand `.access` field, so `dataflow_operands.c` infers direction from
+RV64I's own instruction-format rules instead). Zero regressions: every
+existing x86-64/arm64/arm32 golden stayed byte-identical (docker-cli
+`asmtrace-golden-check`) except the already-known R1-T1 `code.sha256`
+window churn, and `docker-desktop desktop-test` stayed green. ✅ 3/3 (T1+T2+T3
+all landed 2026-08-02). · —.
 
 [42-loom-reweave-consumption.md](../archive/gui/42-loom-reweave-consumption.md) — **consume the
 Reweave request** (review #20): wires the fully-built-but-unreachable

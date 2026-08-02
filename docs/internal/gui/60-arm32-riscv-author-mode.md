@@ -20,7 +20,139 @@
 > Authored 2026-08-02. If a cited file:line disagrees with the code when you
 > implement, the code wins — re-verify, then fix this doc in the same change.
 >
-> **Status — ☑ 2/3 (T1 + T2 landed); T3 (RISC-V) spike not run.**
+> **Status — ✅ 3/3 (T1 + T2 + T3 all landed). Doc complete.**
+
+## Status (2026-08-02) — T3 (RISC-V) spike run, landed in full
+
+The T3 Keystone spike (this doc's own gate on RISC-V) **succeeded on the
+first candidate tried**, and T3 landed in full, mirroring T1/T2's ARM32
+shape end to end — **docker-cli/docker-desktop verified**
+(`make dataflow-test`, `make emu-test`, `make cli-smoke` including
+`asmtrace-golden-check`; `make desktop-test` + `desktop-ui-test` +
+`desktop-test-xvfb`):
+
+- **The spike.** Upstream's pinned release (0.9.2, Feb 2019) has no
+  `KS_ARCH_RISCV`. Searched `keystone-engine/keystone`'s default branch via
+  the GitHub commits API (`?q=repo:keystone-engine/keystone+riscv`, sorted
+  oldest-to-newest after the release tag) and found the RISC-V merge
+  (`ce229be18379`, 2023-05-19) plus a much more recent commit —
+  `0d9567f08c0c23e8f604b2cad3d49450c93cfb40` ("Fix build compatibility with
+  CMake 4, GCC 15, and MSVC", 2026-07-18, only 4 commits ahead of the
+  RISC-V merge on the direct line) — that ALSO independently fixes the
+  exact CMake4/CMP0051 and GCC13+/`<cstdint>` issues this repo's own
+  `build-keystone.sh` already patches around, plus an MSVC register-info
+  bug in the RISC-V backend itself. That recency plus "fixes our own
+  workarounds for free" made it candidate 1, tried first over the older
+  merge commit. **Candidate 1 built clean** inside `docker-cli`'s base
+  image (the CMP0051 sed and `-include cstdint` patches both correctly
+  no-op against it — confirmed by grep before applying) with `"RISCV"`
+  added to `LLVM_TARGETS_TO_BUILD`. No second candidate was needed.
+- **Verification (beyond `ks_asm` returning 0).** Assembled
+  `.option norvc; addi a0, a0, 5; add a0, a0, a1; ret` with the new
+  Keystone, hand-verified the emitted bytes against the known RV64I
+  encoding (`0x00550513`/`0x00b50533`/`0x00008067`, byte-exact match),
+  decoded them back with Capstone (`CS_ARCH_RISCV`/`CS_MODE_RISCV64` —
+  already supported by this repo's pinned Capstone 5.0.1, no bump needed)
+  to confirm the round-trip, and executed them under Unicorn
+  (`UC_ARCH_RISCV`/`UC_MODE_RISCV64` — already in the apt-packaged Unicorn
+  2.0.1 this repo uses) with `a0=10, a1=7`, confirming `a0 == 22` after
+  execution — the produced bytes are the CORRECT encoding AND execute
+  correctly, not merely non-erroring.
+- **The pin.** `KS_ARCH_RISCV` never shipped in a tagged Keystone release,
+  so `scripts/build-keystone.sh`'s `VERSION` is now a git **commit**
+  (`0d9567f08c0c`, the short-sha manifest key), not a tag — the same
+  mechanism `scripts/fetch-libdft.sh`/`scripts/build-dynamorio-macos.sh`
+  already use for their own untagged pins. The clone step switched from
+  `git clone --branch` (tags/branches only) to fetch-by-SHA with a
+  full-clone fallback (works for a tag too, so this generalizes the
+  mechanism rather than forking it).
+  `scripts/refresh-thirdparty-digests.sh` resolves the commit via the
+  GitHub commits API (`ks_commit_resolve`, mirroring the pre-existing
+  `drfork_commit`) instead of the tag-only `tag_commit`, since keystone
+  now has no tag to resolve. `scripts/check-thirdparty-versions.sh`'s
+  keystone regex widened to hex to match. `scripts/fetch-corresponding-
+  source.sh`'s GitHub archive fetch drops the `refs/tags/` path segment
+  (verified to resolve identically for a tag or a commit), so the GPL
+  corresponding-source step still works.
+- **T3 code — DONE.** `DF_GUEST_RISCV64` (`src/dataflow_emu.c`): the same
+  `df_guest` shape as `DF_GUEST_ARM32`/`DF_GUEST_ARM64`
+  (`cap_riscv_to_uc`, RV64I integer ABI `{a0..a7}`, no wide-register read /
+  FP-arg marshalling), guarded behind `#if CS_API_MAJOR >= 5` so a build
+  against an older system Capstone degrades to the existing "no guest
+  armed" refusal rather than a compile error. Also maps a small read/exec
+  landing page at `DF_RET_MAGIC` for this guest only — Unicorn's RISC-V
+  core fetches the instruction AT the `until` address before honoring
+  `uc_emu_start`'s stop (unlike x86-64/AArch64/ARM32), the same quirk
+  `src/emu.c`'s `emu_riscv_open` already works around, so leaving that
+  address unmapped would fault the sentinel `ret` itself.
+- **T3 code-vs-doc correction, and a real gap the doc's own scoping pass
+  didn't anticipate.** The pre-existing `emu_riscv_t` guest handle
+  (predates this brief — `emu_riscv_call`/`_call_fp`/`_call_traced`
+  already existed in `src/emu.c`/`include/asmtest_emu.h`) determined
+  naming, exactly as T1 found for `emu_arm_t`; the new ring mirrors it as
+  `emu_riscv_step_capture`/`_clear`/`_count`/`_dropped`/`_at` over
+  `emu_riscv_regs_t`, and `emu_riscv_run` now takes the whole
+  `emu_riscv_t *` handle (mirroring `emu_arm64_run`'s/`emu_arm_run`'s
+  shape) so it can wire in the ring. Separately, **the operand enumerator
+  arm turned out to be a real second gap, not "add a `CS_ARCH_RISCV`
+  case"**: Capstone's RISCV backend implements NEITHER `cs_regs_access`
+  (`RISCVModule.c` never sets `handle->reg_access` — confirmed against the
+  pinned Capstone 5.0.1 source, it returns `CS_ERR_ARCH` unconditionally
+  for `CS_ARCH_RISCV`) NOR a per-operand `.access` field (`cs_riscv_op` is
+  bare `type`/`reg`/`imm`/`mem`, no access bits, unlike
+  `cs_x86_op`/`cs_arm64_op`/`cs_arm_op`). `src/dataflow_operands.c`'s
+  `add_riscv_ops` infers read/write direction instead from the RV32I/RV64I
+  base ISA's own regular instruction-format rules (closed GP store/branch
+  mnemonic sets; Capstone's own operand order already mirrors the assembly
+  syntax's dest-first form) — and dedupes a register read twice by one
+  instruction (`add a3, a2, a2`) the way `cs_regs_access`'s SET semantics
+  give every other arch here for free (caught live by the golden itself:
+  3 def-use edges instead of arm64/arm32's 2 for the identical instruction
+  shape, before the dedup fix).
+- **T3 golden.** A `emu_riscv_regs_t@riscv64/lp64` `regstate` descriptor
+  ([asmtrace-schema.md](asmtrace-schema.md), the schema's fifth concrete
+  descriptor) naming `x0`..`x31`, `pc` — integer-only, no F/D-extension
+  deck, mirroring arm64/arm32's own integer-only scope.
+  `tools/asmtrace_record.c` gained `record_riscv` (mirroring
+  `record_arm64`/`record_arm32`), producing `riscv-df-chain.asmtrace`
+  (`"arch":"riscv64"`) with a baked `steps_cap=8` regstate ring, plus the
+  D7 low-fidelity companion `riscv-regstate-truncated.asmtrace`
+  (`steps_cap=2`). `examples/test_operands.c`'s RISCV64 stub test replaced
+  with real decode assertions (add/load/store — the store case
+  specifically proving operand[0] is correctly READ not WRITTEN for
+  S-type, the one case a naive "operand[0] is always the destination" rule
+  gets wrong). **The only other golden churn** is the same well-known R1-T1
+  `code.sha256` fragility T1 already recorded
+  (`abixray-make_pair-sysv`/`-win64`'s 64-byte code window shifted because
+  the new RISC-V producer functions moved `.text`) — a one-line sha diff,
+  not a content change. Every other existing golden (x86-64, arm64, arm32,
+  everything else) is byte-identical.
+- **T2's RISC-V half — DONE.** `desktop/src/author_vm.cpp`'s `ASM_RISCV64`
+  row now has `can_run = true`, dispatching through the same per-guest
+  value-fabric producer arm64/arm32 use. `kAuthorArchLimit` is now
+  UNCONDITIONAL — every architecture in `author_arch_table()` has
+  `can_run=true`, so the label is reachable only for an arch value outside
+  the table altogether; its text no longer names any one architecture,
+  updated everywhere quoted (`author_vm.h`'s RULE 3 docstring,
+  `desktop/test/test_author_vm.cpp`'s assertions, `author_door.cpp`'s
+  comments). `ui/author_door.cpp`'s dispatch gate widened from
+  `s.arch == ASM_ARM64 || s.arch == ASM_ARM32` to also include
+  `ASM_RISCV64`. The capability panel and `author_recording`'s `vf`
+  materialisation path needed no change (both already arch-generic,
+  confirming T2's own prediction for the third guest too).
+- **T3 tests.** `examples/test_dataflow_emu.c` (a RISC-V `add`/`mv`/`ret`
+  chain mirroring the arm64/arm32 `df_add` cases). `examples/test_emu.c`
+  (`emu_riscv.step_capture_records_prestates`/
+  `_drops_oldest_and_counts`/`_arming_survives_across_calls_on_same_handle`,
+  mirroring `emu_arm64.*`/`emu_arm.*`). `desktop/test/test_author_vm.cpp`:
+  the arch-gating table flip, the four `author_apply_run_vf` fidelity
+  branches re-exercised over riscv64-shaped data, and an end-to-end
+  `author_recording` -> `recording_to_asmtrace` -> `load_recording`
+  round-trip for a synthetic RISC-V fabric.
+
+**Not done:** nothing — all three tasks (T1 ARM32, T2 Author dispatch, T3
+RISC-V) are landed. `kAuthorArchLimit` and `author_arch_table()` now run
+every architecture Author mode assembles.
 
 ## Status (2026-08-02) — T1 + T2 landed
 
@@ -114,9 +246,10 @@ landed and docker-verified** (`docker-cli` cli-smoke, including
   round-trip for a synthetic ARM32 fabric (`"arch":"arm"`, trace/df_step/
   df_edge survive the round-trip, no fabricated `regstate`).
 
-**Not done:** T3 (RISC-V) — untouched, out of scope for this pass, gated on
-the Keystone spike this doc's own T3 describes. `kAuthorArchLimit` and the
-RISC-V row still refuse it, faithfully.
+**T3 (RISC-V) — now DONE too, see the "T3 (RISC-V) spike run, landed in
+full" status section above** (dated the same day this T1+T2 status was
+written but appended later): the Keystone spike succeeded and T3 landed in
+full. `kAuthorArchLimit` and the RISC-V row no longer refuse it.
 
 ## Why this work exists
 
