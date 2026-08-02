@@ -75,6 +75,22 @@
 > mark, and reusing it for "withheld at record time" would make one idiom
 > carry two unrelated claims.
 >
+> **The line-width wants this brief is parking**, for
+> [55](55-scene-render-quality.md) T6 step 1's quad-expansion pass to pick up.
+> Every line `scene3d/causal.cpp` draws is at width 1.0; these are the draws
+> that would read better wider, in descending order of how much it costs them:
+>
+> | draw | wanted | why |
+> |---|---|---|
+> | T5 ridge segments | width ∝ `log1p(count)` | the ridge is described as a *raised tube*; at 1px the transition count reads only through the lift and the brightness band |
+> | T2 crossing spurs | ~2px, and ∝ payload bytes | the payload channel currently rides on the rail glyph's point size instead |
+> | T5 cap brackets, T4 sink rings / born-untraced brackets | ~2px | four small line idioms have to stay distinguishable from each other at camera distance |
+> | T3 hollow rings, escape crosses, fray ticks | ~2px | same reason: three idioms, one plane, all currently 1px |
+>
+> None of these is a fidelity problem — every one of them still states its
+> quantity through a channel that works at 1px (a colour band, a point size, a
+> lift). They are legibility wants.
+>
 > **T3** landed as `space/taint.{h,cpp}` (pure, engine-free) + its geometry in
 > `scene3d/causal.cpp`. It is EXACT-ONLY BY TYPE: the builder's input is a
 > `DataflowStream`, so a `SurveyEdge` has physically nowhere to enter — D7
