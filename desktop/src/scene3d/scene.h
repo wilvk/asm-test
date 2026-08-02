@@ -78,6 +78,22 @@ class Scene {
     bool ready() const { return ready_; }
     const std::string &error() const { return err_; }
 
+    // T6 (55-scene-render-quality) step 2: the driver's own answer to "how
+    // wide can glLineWidth actually go here", queried once at init_gl —
+    // [1,1] (the spec's guaranteed floor) until then. This tree draws
+    // trajectories/arcs at 2-3px via glLineWidth (portable only on a
+    // COMPATIBILITY profile; a core+forward-compatible context, which is
+    // what this app's OWN Apple path requests, may report exactly [1,1] and
+    // silently clamp or GL_INVALID_VALUE above it) — recorded here so the
+    // next person to wonder has the driver's actual answer in hand, rather
+    // than re-deriving it. T6 step 1 (quad-expansion, the actual portable
+    // fix) is NOT implemented by this brief's landing: it would need to
+    // redesign how the pick pass shares position buffers with the colour
+    // pass for all three line categories (trajectories, spurs, convergence
+    // arcs) — see this brief's own status note for the reasoning — so this
+    // query is deliberately the diagnostic half only, landed on its own.
+    float aliased_line_width_range[2] = {1.0f, 1.0f};
+
     // Vertical scale: world Y per trace step for the trajectory. 0 => auto from
     // nsteps at upload time. Set (with nsteps) BEFORE set_trajectories.
     float time_scale = 0.0f;

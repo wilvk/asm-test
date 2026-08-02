@@ -153,6 +153,9 @@ bool Scene::init_gl(std::string *err) {
         return false;
     }
     build_sky_quad();
+    // T6 (55) step 2: the driver's own answer to how wide glLineWidth can
+    // actually go here — see the field's own doc comment (scene.h).
+    glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, aliased_line_width_range);
     ready_ = true;
     return true;
 }

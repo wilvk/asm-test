@@ -622,6 +622,13 @@ int main() {
         eglTerminate(dpy);
         return failures ? 1 : 0;
     }
+    // T6 GL (55) step 2: the query actually ran and reports a sane range
+    // (min >= 1, matching the spec's guaranteed floor; max >= min).
+    check("T6 GL: GL_ALIASED_LINE_WIDTH_RANGE queried at init_gl",
+          scene.aliased_line_width_range[0] >= 1.0f &&
+              scene.aliased_line_width_range[1] >=
+                  scene.aliased_line_width_range[0],
+          "line-width range looks unqueried or invalid");
 
     const int W = 160, H = 160;
     ColorFbo cf;
