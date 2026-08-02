@@ -52,8 +52,7 @@ being touched right now versus drifting cold?* (T3) · *over what interval is ea
 address alive?* (T4) · *is the access pattern streaming, strided, or
 pointer-chasing?* (T5) · *is each cell touched early, late, or throughout?* (T6)
 
-## What already exists (verified 2026-08-02 against `b657876`; line numbers
-re-verified 2026-08-03)
+## What already exists (verified 2026-08-02 against `b657876`; lines re-verified 2026-08-03)
 
 - **`DataCell`** = `{cell, steps (ascending `mem` steps), cum_size (parallel prefix
   sum of size), cum_rw (parallel prefix OR of READ/WRITE bits), cum_read_size /
@@ -462,3 +461,57 @@ Six tasks: one small (T1), five medium. Risks:
 - **All of T2–T5 are blocked on one task in another brief.** If
   [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 is claimed by another agent, take T6 and
   T1 here first; they are genuinely independent.
+
+## How it landed (2026-08-03)
+
+All six tasks, in order, one commit each. The two risks this section named both
+held up in practice, and one of them changed the shape of the work:
+
+- **Translucency did stop being decorative**, and the mitigation was structural
+  rather than a render trick: every layer here is a **batched `GL_LINES` buffer**,
+  and the halves that must never be confused get **separate batches** — read vs
+  write, live vs watermark, closed vs open-topped, exact vs statistical, joined vs
+  cross-span leap. That is what keeps a fidelity distinction from depending on draw
+  order or on a shader branch. [55](55-scene-render-quality.md) T1 (EDL) and T4
+  (dithered translucency) had landed, and the composed scene reads.
+- **T6 was the frame-budget risk** and it is wired to the *existing* degrade path,
+  not around it: `shell.cpp`'s scrub budget was hoisted from a function-local
+  `kScrubCellBudget` to file-scope `kSceneCellBudget`, and the sediment builder
+  takes that same number. Over budget it halves the **band count**, never the cell
+  set.
+
+Three places the brief's own prescription had to be corrected, each verified
+against the code rather than argued from the doc (all three are written up in the
+relevant task above):
+
+1. **T2 needed a new prefix array.** Direction *presence* is derivable from
+   neither `cum_rw` (which folds an unrecognised token into `TF_READ`) nor
+   `cum_read_size > 0` (which loses a zero-byte access). `DataCell::cum_dir` is the
+   honest three-state signal, and the whole absent-surface rule rests on it.
+2. **T3 step 4's degraded flag is not derivable as written.** `cum_rw` is a prefix
+   OR — monotone — so it can report that a bit *first appeared* in a window, never
+   that a bit is *present* in one. The field is named and labelled for what it is.
+3. **T6's `TF_STAT` columns cannot be banded at all.** A survey has no per-step
+   attribution, so a statistical column is one *unattributed* band over the whole
+   axis with `stat_has_no_phase` set, not a fabricated distribution.
+
+New pure models: `space/datacell.{h,cpp}` (T2/T3/T4), `space/dataribbon.{h,cpp}`
+(T5), `space/sediment.{h,cpp}` (T6). New draw half:
+`scene3d/data_layers_gl.cpp` — `scene.cpp` gained exactly two lines (one
+`draw_data_layers()` call in `render()`, one `free_data_layers()` in `shutdown()`).
+New test TU: `desktop/test/test_datalayers.cpp`, whose `weave()` performs
+`ui/shell.cpp`'s **exact** projection composition, so a layer that only worked
+against a hand-built data region would fail these tests rather than pass them.
+
+Five registry rows joined [56](../archive/gui/56-fidelity-and-module-layers.md)
+T1's `LayerDesc` table (`relief`, `working set`, `lifetime`, `access order`,
+`sediment`), all defaulting **off** — each adds a surface in the same footprint, and
+a session should not open into a composited haze it did not ask for.
+
+**Not done.** These layers are drawn, not **picked**: no pick band was allocated, so
+the terrain cell under a bar stays the click target and the drill-ins each task
+sketches (step 5 of T2/T3, step 4 of T4, step 5 of T5, step 5 of T6) open the flat
+reader for the *cell*, not for the bar standing on it. Adding a band is
+[47](47-scene-inspect-and-pickable-overlays.md) T3's allocator, and doing it per
+layer here would have meant five new bands negotiated against a brief being
+implemented concurrently.
