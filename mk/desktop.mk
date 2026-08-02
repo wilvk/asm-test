@@ -604,6 +604,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/pf/window_picker.o
 # regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
@@ -1113,6 +1114,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_camera \
+                 $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
@@ -1396,8 +1398,10 @@ $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
 # no engine. The same engine-free closure proof test_projection makes, now for the
 # pick path that reaches 04's router (D4). diff.o/slice.o ride canvas.o's closure.
 $(BUILD)/desktop_test_drillin: $(BUILD)/desktop/test/t/test_drillin.o \
-    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
@@ -1423,6 +1427,23 @@ $(BUILD)/desktop_test_converge: $(BUILD)/desktop/test/t/test_converge.o \
 $(BUILD)/desktop/test/t/test_camera.o \
 $(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
 $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The camera-navigation resolvers (48-scene-navigation-and-goto.md T2/T3/T4):
+# scene3d/goto.o + the GL-free pick id space (scene3d/pick.o, for Pick/
+# decode_pick only — no GL) + the pure space/ models it points a camera at +
+# the doc model (goto.o reaches decode_streams for observed-data-span
+# addresses via 54 T1) — and NOTHING else (D4). A standalone TU rather than an
+# addition to test_drillin.cpp, so it never collides with that file's own
+# concurrent work.
+$(BUILD)/desktop_test_goto: $(BUILD)/desktop/test/t/test_goto.o \
+    $(BUILD)/desktop/test/s3/goto.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # doc 45 T6: links NOTHING but window_picker.o — the proof this module
@@ -1715,7 +1736,8 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/trajectory.o \
     $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/s3/hud.o \
-    $(BUILD)/desktop/test/s3/pick.o $(DESKTOP_TEST_IG) \
+    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
+    $(DESKTOP_TEST_IG) \
     $(BUILD)/desktop/test/pf/window_picker.o
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \

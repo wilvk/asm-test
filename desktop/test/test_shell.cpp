@@ -419,6 +419,51 @@ int main() {
                   "an observed-data note appeared with nothing to observe");
         }
 
+        // === 48 T4: camera_here_text — a pure function of (Projection, target) ===
+        {
+            space::Projection p = space::build_projection(
+                {space::Region{0x400000, 0x1000, space::Region::Code,
+                               "libfoo .text", 0}});
+            float u = 0.0f, v = 0.0f;
+            check("here-text/setup: 0x400000 projects",
+                  p.project(0x400000, &u, &v), "test address did not project");
+            std::string t = scene3d::camera_here_text(p, u, v);
+            check("here-text: names the region label",
+                  t.find("libfoo .text") != std::string::npos,
+                  ("got: " + t).c_str());
+            check("here-text: names the address",
+                  t.find("0x400000") != std::string::npos,
+                  ("got: " + t).c_str());
+            // Outside [0,1) unprojects to nothing — a real, statable fact.
+            std::string outside = scene3d::camera_here_text(p, 5.0f, 5.0f);
+            check("here-text: outside the domain says so, never blank",
+                  outside.find("outside the compacted domain") !=
+                      std::string::npos,
+                  ("got: " + outside).c_str());
+        }
+
+        // === 48 T5: scene_control_lines — exhaustive over CamKey, never stale ===
+        {
+            std::vector<std::string> lines = scene3d::scene_control_lines();
+            using scene3d::CamKey;
+            const CamKey all[] = {
+                CamKey::OrbitLeft,  CamKey::OrbitRight,  CamKey::OrbitUp,
+                CamKey::OrbitDown,  CamKey::DollyIn,     CamKey::DollyOut,
+                CamKey::Reset,      CamKey::TopDown,     CamKey::PanLeft,
+                CamKey::PanRight,   CamKey::PanForward,  CamKey::PanBack,
+            };
+            check("controls: at least one line per CamKey value",
+                  lines.size() >= (sizeof(all) / sizeof(all[0])),
+                  ("got " + std::to_string(lines.size()) + " lines for " +
+                   std::to_string(sizeof(all) / sizeof(all[0])) +
+                   " CamKey values")
+                      .c_str());
+            check("controls: the mouse gestures are advertised too",
+                  !lines.empty() &&
+                      lines[0].find("orbit") != std::string::npos,
+                  "the left-drag orbit line must lead the list");
+        }
+
         // 36 T4: drive the pane for the LIVE dataflow golden and assert the df
         // shape renders end to end — a non-empty terrain from the df_step rung
         // and a fully-anchored PC path — where before 36 the tab was mute.

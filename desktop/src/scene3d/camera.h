@@ -58,6 +58,26 @@ struct Camera {
         radius = clampf(radius * factor, kMinRadius, kMaxRadius);
     }
 
+    // 48 T1: pan — translate the ORBIT TARGET in plane space (du/dv are
+    // target[0]/target[2] deltas directly, not camera-relative screen axes),
+    // clamped to [0,1] on both so the target never leaves the model (the same
+    // clamp-don't-break discipline dolly already uses). target[1] stays 0: the
+    // plane's height is not a pan axis, and letting it drift would produce a
+    // camera whose horizon lies about where the ground is.
+    void pan(float du, float dv) {
+        target[0] = clampf(target[0] + du, 0.0f, 1.0f);
+        target[2] = clampf(target[2] + dv, 0.0f, 1.0f);
+    }
+    // 48 T1: point the camera at a plane coordinate without reorienting it —
+    // yaw/pitch stay bit-identical, because recentring must not also reorient
+    // (the user would lose the mental map they just built). `radius` is
+    // clamped through the same kMinRadius/kMaxRadius dolly uses.
+    void frame(float u, float v, float new_radius) {
+        target[0] = clampf(u, 0.0f, 1.0f);
+        target[2] = clampf(v, 0.0f, 1.0f);
+        radius = clampf(new_radius, kMinRadius, kMaxRadius);
+    }
+
     void reset() { *this = Camera{}; }
     // The 2D-ish preset: look straight down (pitch at the ceiling, so the plane
     // reads as a flat heatmap) from a radius that frames the whole unit plane.
@@ -121,6 +141,12 @@ enum class CamKey {
     DollyOut,
     Reset,
     TopDown,
+    // 48 T1: pan the orbit target, joining the same funnel — du/dv are plane
+    // space (Camera::pan's own convention), not camera-relative.
+    PanLeft,
+    PanRight,
+    PanForward,
+    PanBack,
 };
 
 inline void camera_key(Camera &c, CamKey k) {
@@ -129,6 +155,9 @@ inline void camera_key(Camera &c, CamKey k) {
     constexpr float kOrbitStep = 0.12f;
     constexpr float kDollyIn = 1.0f / 1.1f;
     constexpr float kDollyOut = 1.1f;
+    // 48 T1: a comfortable keyboard pan nudge in plane units (the plane spans
+    // [0,1] on each axis, so this moves the target ~4% of the model per press).
+    constexpr float kPanStep = 0.04f;
     switch (k) {
     case CamKey::OrbitLeft:
         c.orbit(-kOrbitStep, 0.0f);
@@ -153,6 +182,18 @@ inline void camera_key(Camera &c, CamKey k) {
         break;
     case CamKey::TopDown:
         c.top_down();
+        break;
+    case CamKey::PanLeft:
+        c.pan(-kPanStep, 0.0f);
+        break;
+    case CamKey::PanRight:
+        c.pan(+kPanStep, 0.0f);
+        break;
+    case CamKey::PanForward:
+        c.pan(0.0f, -kPanStep);
+        break;
+    case CamKey::PanBack:
+        c.pan(0.0f, +kPanStep);
         break;
     }
 }

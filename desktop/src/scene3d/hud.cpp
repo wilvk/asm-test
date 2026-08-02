@@ -3,10 +3,12 @@
 #include "scene3d/hud.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "imgui.h"
 
+#include "scene3d/goto.h"
 #include "space/projection.h"
 #include "ui/theme.h"
 #include "ui/timepos.h" // one time-position widget, continuous scrub (24 T4)
@@ -132,6 +134,80 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
 std::string vertical_axes_note() {
     return "two vertical meanings share this screen axis: terrain height = "
           "access density (log), path height = trace time (steps)";
+}
+
+std::string camera_here_text(const space::Projection &proj, float u,
+                             float v) {
+    uint64_t addr = 0;
+    const space::Region *r = nullptr;
+    if (!proj.unproject(u, v, &addr, &r) || r == nullptr)
+        return "you are here: outside the compacted domain";
+    char buf[192];
+    space::RegionStyle st = space::region_style(r->kind);
+    std::snprintf(buf, sizeof buf, "you are here: 0x%llx (%s)",
+                 static_cast<unsigned long long>(addr),
+                 r->label.empty() ? st.name : r->label.c_str());
+    return buf;
+}
+
+std::vector<std::string> scene_control_lines() {
+    // 48 T5: one line per CamKey value (the exhaustiveness a test pins), plus
+    // the mouse gestures CamKey has no key for (drag/wheel/click/double-click
+    // have no keyboard equivalent to enumerate from the enum).
+    std::vector<std::string> out = {
+        "left-drag: orbit",
+        "middle-drag or shift+left-drag: pan",
+        "mouse wheel: dolly (zoom)",
+        "double-click: recentre on what's under the cursor",
+        "click (no drag): open in 2D (\"3D to find, 2D to read\")",
+    };
+    using scene3d::CamKey;
+    // One line per enum value, in declaration order — adding a CamKey without
+    // adding it here is the drift this generation exists to prevent.
+    for (CamKey k : {CamKey::OrbitLeft, CamKey::OrbitRight, CamKey::OrbitUp,
+                     CamKey::OrbitDown, CamKey::DollyIn, CamKey::DollyOut,
+                     CamKey::Reset, CamKey::TopDown, CamKey::PanLeft,
+                     CamKey::PanRight, CamKey::PanForward, CamKey::PanBack}) {
+        switch (k) {
+        case CamKey::OrbitLeft:
+            out.push_back("Left arrow: orbit left");
+            break;
+        case CamKey::OrbitRight:
+            out.push_back("Right arrow: orbit right");
+            break;
+        case CamKey::OrbitUp:
+            out.push_back("Up arrow: orbit up");
+            break;
+        case CamKey::OrbitDown:
+            out.push_back("Down arrow: orbit down");
+            break;
+        case CamKey::DollyIn:
+            out.push_back("+ / =: dolly in");
+            break;
+        case CamKey::DollyOut:
+            out.push_back("-: dolly out");
+            break;
+        case CamKey::Reset:
+            out.push_back("R: reset view (the landmark)");
+            break;
+        case CamKey::TopDown:
+            out.push_back("T: top-down (2D-ish)");
+            break;
+        case CamKey::PanLeft:
+            out.push_back("(pan left: mouse only — no key bound)");
+            break;
+        case CamKey::PanRight:
+            out.push_back("(pan right: mouse only — no key bound)");
+            break;
+        case CamKey::PanForward:
+            out.push_back("(pan forward: mouse only — no key bound)");
+            break;
+        case CamKey::PanBack:
+            out.push_back("(pan back: mouse only — no key bound)");
+            break;
+        }
+    }
+    return out;
 }
 
 void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
@@ -291,14 +367,123 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::SameLine();
     ImGui::Checkbox("contours", &s.layers.contours);
 
-    // --- camera presets --------------------------------------------------------
-    if (ImGui::Button("reset view"))
-        s.req_reset_view = true;
+    // --- camera presets ----------------------------------------------------
+    // 48 T4: two buttons, two honest meanings — "reset view" frames the
+    // LANDMARK (the code-district centroid, stable across live growth),
+    // "default view" restores the literal Camera{} pose 25/34 already
+    // documented. Neither is silently repurposed into the other.
+    if (s.has_home) {
+        if (ImGui::Button("reset view"))
+            s.req_reset_view = true;
+    } else {
+        ImGui::TextDisabled("reset view");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("no code region placed — nothing to land on");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("default view"))
+        s.req_default_view = true;
     ImGui::SameLine();
     if (ImGui::Button("top-down (2D-ish)"))
         s.req_top_down = true;
     ImGui::SameLine();
     ImGui::TextColored(kDim, "3D to find, 2D to read");
+
+    // 48 T4: "you are here" — a pure function of (terr.proj, camera target),
+    // so the wording is testable with no ImGui frame; drawn every frame here.
+    ImGui::TextColored(
+        kDim, "%s",
+        camera_here_text(terr.proj, s.cam_target_u, s.cam_target_v).c_str());
+
+    ImGui::Separator();
+
+    // --- go to (48 T3): name a destination instead of only hunting for it ---
+    ImGui::TextUnformatted("go to:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.0f);
+    const bool addr_enter = ImGui::InputTextWithHint(
+        "##goto_addr", "0x... address", s.goto_addr_buf,
+        sizeof s.goto_addr_buf, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if (ImGui::Button("go##addr") || addr_enter) {
+        char *end = nullptr;
+        uint64_t addr =
+            static_cast<uint64_t>(std::strtoull(s.goto_addr_buf, &end, 16));
+        float gu = 0.0f, gv = 0.0f;
+        if (end != s.goto_addr_buf && scene_goto_addr(terr.proj, addr, &gu, &gv)) {
+            s.req_goto = true;
+            s.goto_u = gu;
+            s.goto_v = gv;
+            // Keep the current dolly — a goto finds a place, it does not also
+            // decide how close to stand.
+            s.nav_note.clear();
+        } else {
+            s.nav_note =
+                end == s.goto_addr_buf
+                    ? "go to: enter a hex address (e.g. 0x400000)"
+                    : "go to: address not mapped by any region in this "
+                      "recording";
+        }
+    }
+    if (terr.proj.regions.empty()) {
+        // T5's own rule (48 T3 too): a control the current state cannot serve
+        // says why rather than vanishing.
+        ImGui::SameLine();
+        ImGui::TextDisabled("(region goto: no regions in this recording)");
+    } else {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        std::string preview =
+            s.goto_region_sel >= 0 &&
+                   static_cast<size_t>(s.goto_region_sel) <
+                       terr.proj.regions.size()
+                ? terr.proj.regions[static_cast<size_t>(s.goto_region_sel)]
+                      .label
+                : std::string("region...");
+        if (ImGui::BeginCombo("##goto_region", preview.c_str())) {
+            for (size_t i = 0; i < terr.proj.regions.size(); i++) {
+                const space::Region &r = terr.proj.regions[i];
+                // Verbatim label, never an invented name — code@0x<base> for
+                // an unnamed span (D7, and this brief's own fidelity note).
+                // Every region already carries a label today
+                // (regions_from_codeimage / observed_data_spans both set
+                // one); the fallback is defensive, not a real path.
+                char fallback[32];
+                std::snprintf(fallback, sizeof fallback, "code@0x%llx",
+                              static_cast<unsigned long long>(r.base));
+                std::string name = r.label.empty() ? fallback : r.label;
+                bool sel = s.goto_region_sel == static_cast<int>(i);
+                if (ImGui::Selectable(name.c_str(), sel))
+                    s.goto_region_sel = static_cast<int>(i);
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("go##region") && s.goto_region_sel >= 0) {
+            float gu = 0.0f, gv = 0.0f, grad = 0.0f;
+            if (scene_goto_region(terr.proj,
+                                  static_cast<size_t>(s.goto_region_sel), &gu,
+                                  &gv, &grad)) {
+                s.req_goto = true;
+                s.goto_u = gu;
+                s.goto_v = gv;
+                s.goto_radius = grad;
+                s.nav_note.clear();
+            } else {
+                s.nav_note = "go to: that region has no addressable extent";
+            }
+        }
+    }
+    if (!s.nav_note.empty())
+        ImGui::TextColored(kWarn, "%s", s.nav_note.c_str());
+
+    ImGui::Separator();
+
+    // --- controls (48 T5): generated from CamKey, never hand-written --------
+    if (ImGui::CollapsingHeader("controls")) {
+        for (const std::string &line : scene_control_lines())
+            ImGui::TextUnformatted(line.c_str());
+    }
 
     ImGui::Separator();
 

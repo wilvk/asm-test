@@ -76,6 +76,20 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps,
 // silently drift or vanish.
 std::string vertical_axes_note();
 
+// 48 T4: "you are here" — a pure function of (Projection, target), so the
+// wording is golden-testable without an ImGui frame. Names the region under
+// the camera target (via Projection::unproject) and its address, or states
+// plainly that the target sits outside the compacted domain (never a blank
+// line: an oriented-but-unmapped camera is still a fact worth stating, D7).
+std::string camera_here_text(const space::Projection &proj, float u, float v);
+
+// 48 T5: the FULL advertised control list, generated from the CamKey enum
+// (never a hand-written string — the review's own finding is precisely that
+// hand-written key lists drift from the bindings) plus the mouse gestures
+// CamKey has no key for. One entry per CamKey value; adding a value without
+// adding its line here fails test_camera's exhaustiveness check.
+std::vector<std::string> scene_control_lines();
+
 // 49 T4: draw the trajectory-time ruler into the 3D VIEWPORT (not the HUD
 // window) — ticks 0..nsteps, projected through `cam` at world (0, tick *
 // traj_scale, 0) (the plane's own origin corner) into `origin`/`size`'s
@@ -96,10 +110,44 @@ struct HudState {
     // Set true by draw_scene_hud when the user moved the playhead this frame, so
     // the caller re-slices T2 and rebuilds T3 for the new t. The caller clears it.
     bool playhead_moved = false;
-    // Camera preset requests (the "reset view" and plain "top-down 2D-ish"
-    // buttons); the caller applies them to its Camera and need not clear them.
+    // Camera preset requests. 48 T4 split "reset view" into two honest, distinct
+    // meanings: req_reset_view now frames the LANDMARK (home_u/home_v, the code-
+    // district centroid the caller computes once per weave), while
+    // req_default_view restores the literal Camera{} — the documented preset
+    // 25/34 already promised, kept rather than silently repurposed. The caller
+    // applies both to its Camera and clears both afterward (the existing
+    // req_top_down pattern), so a stale press cannot re-fire next frame.
     bool req_reset_view = false;
+    bool req_default_view = false;
     bool req_top_down = false;
+    // 48 T4: the landmark the "reset view" button frames — computed ONCE per
+    // weave by the caller (SceneView::home_u/v) and synced here every frame, not
+    // re-derived per frame (a home that drifts as events arrive on a live/growing
+    // capture is worse than a fixed one, per the brief's own fidelity note).
+    float home_u = 0.5f, home_v = 0.5f;
+    bool has_home = false; // false => no code region placed; the button is a no-op
+    // 48 T4: the camera target, synced by the caller every frame so the "you are
+    // here" readout is a pure function of (terr.proj, target) — never a second
+    // camera reference threaded through draw_scene_hud's signature.
+    float cam_target_u = 0.5f, cam_target_v = 0.5f;
+    // 48 T3: the "go to" row's intent — resolved INSIDE draw_scene_hud (which
+    // already receives terr.proj) and reported back exactly like the camera
+    // presets above, so the caller's Camera stays the one place that mutates.
+    bool req_goto = false;
+    float goto_u = 0.5f, goto_v = 0.5f, goto_radius = 2.2f;
+    // 48 T2/T3/T4: the one-line refusal note ("nothing to recentre on here",
+    // "address not mapped by any region", ...) for a recentre/goto that could
+    // not be honoured — named verbatim, in the warn colour, never silent (D7).
+    // Persists until the next attempt overwrites or clears it; the caller (a
+    // double-click recentre, or "show in 3D" from find) may also set this.
+    std::string nav_note;
+    // 48 T3: the "go to address" text input's own buffer — owned by the HUD
+    // (like FindState::query owns its own text) so the caller need not thread a
+    // char[] through its own state for a control this local.
+    char goto_addr_buf[64] = {0};
+    // 48 T3: the region-goto combo's selection, an index into terr.proj.regions
+    // (-1 = none chosen yet).
+    int goto_region_sel = -1;
 
     // 34 T3: the terrain-time play/pause transport, same shape as the camera
     // presets. `playing` is set by the caller before the draw so the button reads

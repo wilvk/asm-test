@@ -190,6 +190,127 @@ int main() {
               "T must ride the pitch ceiling (the 2D-ish collapse)");
     }
 
+    // === 48 T1: Camera::pan clamps target to [0,1] on both axes ==============
+    {
+        Camera c;
+        for (int i = 0; i < 100; i++)
+            c.pan(-1.0f, -1.0f);
+        check("pan floors target[0]", c.target[0] >= 0.0f - 1e-6f,
+              "target[0] fell below 0");
+        check("pan floors target[2]", c.target[2] >= 0.0f - 1e-6f,
+              "target[2] fell below 0");
+        for (int i = 0; i < 100; i++)
+            c.pan(+1.0f, +1.0f);
+        check("pan ceils target[0]", c.target[0] <= 1.0f + 1e-6f,
+              "target[0] rose above 1");
+        check("pan ceils target[2]", c.target[2] <= 1.0f + 1e-6f,
+              "target[2] rose above 1");
+        check("pan never moves target[1] off the plane",
+              c.target[1] == 0.0f, "target[1] drifted off the plane's height");
+    }
+
+    // === 48 T1: pan and orbit are commutative on the target ===================
+    // orbit() touches only yaw/pitch and pan() touches only target — this locks
+    // that separation in so a future change cannot quietly couple them.
+    {
+        Camera a, b;
+        a.pan(0.2f, -0.15f);
+        a.orbit(0.4f, -0.2f);
+        b.orbit(0.4f, -0.2f);
+        b.pan(0.2f, -0.15f);
+        check("pan-then-orbit == orbit-then-pan (target)",
+              a.target[0] == b.target[0] && a.target[1] == b.target[1] &&
+                  a.target[2] == b.target[2],
+              "pan and orbit must not interact on the target");
+        check("pan-then-orbit == orbit-then-pan (yaw/pitch)",
+              a.yaw == b.yaw && a.pitch == b.pitch,
+              "pan must never touch yaw/pitch");
+    }
+
+    // === 48 T1: Camera::frame moves the target, clamps radius, and leaves
+    // yaw/pitch bit-identical (a recentre must not also reorient) ==============
+    {
+        Camera c;
+        float y0 = c.yaw, p0 = c.pitch;
+        c.frame(0.25f, 0.75f, 5.0f);
+        check("frame sets target[0]", c.target[0] == 0.25f, "target[0] wrong");
+        check("frame sets target[2]", c.target[2] == 0.75f, "target[2] wrong");
+        check("frame leaves target[1] at the plane", c.target[1] == 0.0f,
+              "target[1] must stay 0");
+        check("frame leaves yaw bit-identical", c.yaw == y0,
+              "frame must not reorient (yaw moved)");
+        check("frame leaves pitch bit-identical", c.pitch == p0,
+              "frame must not reorient (pitch moved)");
+        check("frame sets radius", c.radius == 5.0f, "radius not applied");
+        c.frame(0.5f, 0.5f, 1000.0f);
+        check("frame clamps radius to the ceiling",
+              c.radius <= Camera::kMaxRadius + 1e-6f,
+              "frame must honour kMaxRadius");
+        c.frame(0.5f, 0.5f, -1000.0f);
+        check("frame clamps radius to the floor",
+              c.radius >= Camera::kMinRadius - 1e-6f,
+              "frame must honour kMinRadius");
+    }
+
+    // === 48 T1: reset() still returns a panned/framed camera to the default ===
+    {
+        Camera c;
+        c.pan(0.3f, -0.2f);
+        c.frame(0.9f, 0.1f, 7.0f);
+        c.reset();
+        Camera d;
+        check("reset restores target after pan/frame",
+              c.target[0] == d.target[0] && c.target[1] == d.target[1] &&
+                  c.target[2] == d.target[2],
+              "reset must fully restore the default target");
+    }
+
+    // === 48 T1: the keyboard pan keys apply the SAME deltas Camera::pan does ==
+    {
+        Camera viaKey, viaCall;
+        camera_key(viaKey, CamKey::PanRight);
+        viaCall.pan(0.04f, 0.0f); // kPanStep, mirrored (see camera.h)
+        check("key/pan-right matches Camera::pan",
+              viaKey.target[0] == viaCall.target[0] &&
+                  viaKey.target[2] == viaCall.target[2],
+              "PanRight must apply the documented kPanStep");
+    }
+    {
+        Camera c;
+        float u0 = c.target[0], v0 = c.target[2];
+        camera_key(c, CamKey::PanLeft);
+        check("key/pan-left decreases target[0]", c.target[0] < u0,
+              "PanLeft did not move target[0] left");
+        check("key/pan-left leaves target[2] alone", c.target[2] == v0,
+              "PanLeft must be a pure X-axis nudge");
+        camera_key(c, CamKey::PanRight);
+        camera_key(c, CamKey::PanRight);
+        check("key/pan-right increases target[0]", c.target[0] > u0,
+              "PanRight did not move target[0] right");
+        float u1 = c.target[0];
+        camera_key(c, CamKey::PanForward);
+        check("key/pan-forward decreases target[2]", c.target[2] < v0,
+              "PanForward did not move target[2] forward");
+        check("key/pan-forward leaves target[0] alone", c.target[0] == u1,
+              "PanForward must be a pure Z-axis nudge");
+        camera_key(c, CamKey::PanBack);
+        camera_key(c, CamKey::PanBack);
+        check("key/pan-back increases target[2]", c.target[2] > v0,
+              "PanBack did not move target[2] back");
+    }
+    {
+        // Keyboard pan clamps exactly like the mouse path (Camera::pan itself).
+        Camera c;
+        for (int i = 0; i < 200; i++)
+            camera_key(c, CamKey::PanLeft);
+        check("key/pan-left clamps at the floor", c.target[0] >= 0.0f - 1e-6f,
+              "keyboard pan must honour the [0,1] clamp");
+        for (int i = 0; i < 200; i++)
+            camera_key(c, CamKey::PanRight);
+        check("key/pan-right clamps at the ceiling", c.target[0] <= 1.0f + 1e-6f,
+              "keyboard pan must honour the [0,1] clamp");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d camera check(s) failed\n", failures);
         return 1;
