@@ -151,7 +151,14 @@ void main(){
   // The kind test admits the off-domain sentinel (k >= 6u) unconditionally:
   // such a cell has no kind to filter BY, and desaturating padding would
   // imply the filter had an opinion about it.
-  bool inKinds = (k >= 6u) || ((uKindMask & (1u << k)) != 0u);
+  //
+  // The shift is clamped rather than left to `||`'s short-circuit: k carries
+  // 255 for an off-domain cell, and a shift of 255 is UNDEFINED in GLSL. The
+  // clamp makes the expression well-defined on every driver whether or not it
+  // short-circuits, which is not a thing to leave to chance in a shader that
+  // decides what the reader sees.
+  uint kshift = k < 6u ? k : 0u;
+  bool inKinds = (k >= 6u) || ((uKindMask & (1u << kshift)) != 0u);
   bool inRegion = true;
   if (uHasFocusRegion == 1)
     inRegion = texture(uFocusMask, vUV).r != 0u;
