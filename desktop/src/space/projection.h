@@ -102,5 +102,29 @@ struct RegionStyle {
 };
 RegionStyle region_style(Region::Kind kind);
 
+// 51 T2 (scene-focus-and-scale.md): the plane cells one region occupies —
+// row-major indices `y * n + x` over the n = 2^order plane, ascending, no
+// duplicates. THE one rule for "which cells are this region's": it walks the
+// region's own compacted-domain range `[domain_off[i], domain_off[i+1])`
+// through the SAME Hilbert index -> cell mapping project() itself uses, so it
+// contains every cell project() can place an address of this region into, by
+// construction — never a bounding box (a Hilbert footprint for one contiguous
+// byte range is a real, non-rectangular SET of cells, and a rectangle assumed
+// from base/len would necessarily swallow a neighbour's cells; the same rule
+// 48's scene_goto_region states for framing).
+//
+// Cost is O(cells this region owns), never O(len) and never O(plane): the
+// domain range maps to a CONTIGUOUS run of Hilbert indices, so the walk is one
+// d2xy per owned cell. Empty for an out-of-range index or a zero-length region.
+//
+// Boundary note (exact, not a caveat): when the compacted domain is larger
+// than the plane, build_projection shifts the domain down onto it, so several
+// bytes — possibly the tail of one region and the head of the next — share one
+// cell. Two adjacent regions can therefore both legitimately own that single
+// shared cell. That is a fact about the plane's resolution, not an error, and
+// it is at most one cell per adjacent pair; with a domain that fits the plane
+// (every fixture and every ordinary recording) the sets are strictly disjoint.
+std::vector<uint32_t> region_cells(const Projection &proj, size_t region_index);
+
 } // namespace asmdesk::space
 #endif // ASMDESK_SPACE_PROJECTION_H

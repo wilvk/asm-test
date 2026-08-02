@@ -102,16 +102,13 @@ GLuint link_program(const char *vs, const char *fs, bool has_vid, bool pick,
 
 // A small per-tid palette (opaque exact paths); statistical layers are drawn
 // translucent from the same hue.
-void tid_color(int idx, float out[4]) {
-    static const float pal[6][3] = {
-        {0.95f, 0.85f, 0.25f}, {0.40f, 0.80f, 1.00f}, {0.55f, 0.95f, 0.45f},
-        {1.00f, 0.55f, 0.55f}, {0.80f, 0.60f, 1.00f}, {0.35f, 0.95f, 0.85f}};
-    const float *c = pal[((idx % 6) + 6) % 6];
-    out[0] = c[0];
-    out[1] = c[1];
-    out[2] = c[2];
-    out[3] = 1.0f;
-}
+//
+// 51 T1: the table itself moved to the PURE scene3d/focus.h (tid_palette) so
+// the HUD thread roster's swatch and the drawn worldline share ONE source —
+// unlike overlay_encoding_swatches(), which has to keep a deliberately-synced
+// copy because hud.cpp cannot include this GL TU. This wrapper stays so the
+// call sites below read unchanged.
+void tid_color(int idx, float out[4]) { tid_palette(idx, out); }
 
 } // namespace
 
@@ -406,6 +403,31 @@ void Scene::set_terrain(const space::Terrain &t) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, t.w, t.h, 0, GL_RED_INTEGER,
                  GL_UNSIGNED_INT, t.flags.data());
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// 51 T2 (scene-focus-and-scale): the focused REGION's per-cell mask — the one
+// piece of the subject filter a fragment shader cannot derive on its own (a
+// Hilbert footprint is a real cell SET, not a rectangle). Clones set_zoning's
+// texture shape verbatim; an empty/mis-sized mask clears the filter rather
+// than uploading a plane of zeroes, because a filter that hid EVERYTHING
+// would be a lie about the recording, not a filter.
+void Scene::set_focus_mask(const std::vector<uint8_t> &mask, uint32_t w,
+                           uint32_t h) {
+    if (w == 0 || h == 0 || mask.size() != static_cast<size_t>(w) * h) {
+        has_focus_mask_ = false;
+        return;
+    }
+    if (!tex_focus_)
+        glGenTextures(1, &tex_focus_);
+    glBindTexture(GL_TEXTURE_2D, tex_focus_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER,
+                 GL_UNSIGNED_BYTE, mask.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    has_focus_mask_ = true;
 }
 
 void Scene::set_zoning(const std::vector<uint8_t> &kind_by_cell, uint32_t w,
@@ -767,6 +789,10 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
         if (line.size() >= 6) { // at least two vertices
             Line l;
             l.statistical = (tr.flags & space::TRAJ_STATISTICAL) != 0;
+            // 51 T1: carry the thread identity into the renderer. The split
+            // was already here (one Line per Trajectory); only the identity
+            // was missing, so render() could not ghost the other threads.
+            l.tid = tr.tid;
             tid_color(tr.tid >= 0 ? tr.tid : tid_seq, l.color);
             if (l.statistical)
                 l.color[3] = 0.45f; // translucent — never a solid exact tube
@@ -988,6 +1014,8 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     glBindTexture(GL_TEXTURE_2D, tex_kind_); // T1: harmless if 0 / unused
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, tex_opclass_); // T4 (56): harmless if 0/unused
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, tex_focus_); // 51 T2: harmless if 0/unused
     glUniformMatrix4fv(glGetUniformLocation(prog, "uMVP"), 1, GL_FALSE, mvp);
     glUniform1f(glGetUniformLocation(prog, "uYScale"), y_scale);
     glUniform1f(glGetUniformLocation(prog, "uN"), static_cast<float>(n_));
@@ -1029,6 +1057,19 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     GLint uoc = glGetUniformLocation(prog, "uOpClass");
     if (uoc >= 0)
         glUniform1i(uoc, 3);
+    // 51 T2: the subject filter. Declared ONLY by kTerrainFrag — absent (loc
+    // -1, harmless) from the pick shader and prog_stat_, so a filter can
+    // never reach the PICK pass (a desaturated cell must stay exactly as
+    // clickable as a saturated one) nor the ghost-fog surface.
+    GLint ukm = glGetUniformLocation(prog, "uKindMask");
+    if (ukm >= 0)
+        glUniform1ui(ukm, focus.kind_mask);
+    GLint ufr = glGetUniformLocation(prog, "uHasFocusRegion");
+    if (ufr >= 0)
+        glUniform1i(ufr, (focus.region >= 0 && has_focus_mask_) ? 1 : 0);
+    GLint ufm = glGetUniformLocation(prog, "uFocusMask");
+    if (ufm >= 0)
+        glUniform1i(ufm, 4);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
@@ -1303,7 +1344,19 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
             continue;
         if (!l.statistical && !layers.exact)
             continue;
-        glUniform4fv(uColor, 1, l.color);
+        // 51 T1: GHOST, NEVER HIDE. A non-subject worldline keeps its hue and
+        // its geometry and loses only alpha, so "another thread ran here" is
+        // still on screen — hiding it would claim the thread did not run.
+        // focus_line_alpha returns the literal 1.0f whenever no tid is
+        // focused, so an unfocused scene's uniforms are byte-identical to the
+        // pre-51 render. The one exception is T4's distance budget, which may
+        // return 0 (drop) — and announces the dropped class by name.
+        const float fa = focus_line_alpha(focus, l.tid, l.statistical);
+        if (fa <= 0.0f)
+            continue;
+        const float lc[4] = {l.color[0], l.color[1], l.color[2],
+                             l.color[3] * fa};
+        glUniform4fv(uColor, 1, lc);
         glUniform1i(uStipple, l.statistical ? 1 : 0);
         const bool is_head_line =
             have_head && static_cast<int>(li) == head_line;
@@ -1560,6 +1613,8 @@ void Scene::shutdown() {
         glDeleteTextures(1, &tex_kind_);
     if (tex_opclass_)
         glDeleteTextures(1, &tex_opclass_);
+    if (tex_focus_) // 51 T2
+        glDeleteTextures(1, &tex_focus_);
     if (tex_height_stat_)
         glDeleteTextures(1, &tex_height_stat_);
     if (tex_flags_stat_)
@@ -1590,9 +1645,11 @@ void Scene::shutdown() {
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
     tex_kind_ = tex_height_stat_ = tex_flags_stat_ = tex_opclass_ = 0;
+    tex_focus_ = 0; // 51 T2
     vbo_sky_ = vao_sky_ = vbo_head_ = vao_head_ = 0;
     vbo_front_ = vao_front_ = 0;
     has_stat_terrain_ = false;
+    has_focus_mask_ = false; // 51 T2
     tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
     prog_stat_ = prog_sky_ = prog_edl_ = prog_canopy_ = 0;

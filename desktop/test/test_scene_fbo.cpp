@@ -1670,6 +1670,144 @@ int main() {
         }
     }
 
+    // --- 51 T1/T2/T3 (scene-focus-and-scale): the SUBJECT filter, in pixels --
+    // The pure half of the filter is test_focus.cpp; this is the shader half
+    // the brief asks the FBO smoke to carry — the parts only a real render can
+    // answer: does the filter actually reach the draw, does GHOSTING keep ink
+    // that DROPPING removes, and does a filter leave the plane's GEOMETRY
+    // (its silhouette, i.e. its heights) untouched.
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_threads()))),
+            load(ndjson_threads()));
+        space::TrajectorySet traj =
+            space::build_trajectories(load(ndjson_threads()), terr.proj);
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+        scene.set_zoning(terr.kind_by_cell, terr.w, terr.h);
+        // The sky covers the whole frame, so switch it off here: with it off
+        // the clear colour IS the background and "did a pixel lose all its
+        // ink" is answerable directly.
+        SceneLayers layers;
+        layers.weather = false;
+
+        scene.focus = scene3d::SceneFocus{}; // nothing focused
+        const std::vector<unsigned char> plain = capture(scene, cam, cf, layers);
+
+        // (1) focus_tid = -1 is BYTE-IDENTICAL to today: a default SceneFocus
+        // must not perturb a single pixel of the pre-51 render.
+        scene.focus = scene3d::SceneFocus{};
+        const std::vector<unsigned char> again = capture(scene, cam, cf, layers);
+        check("51 T1 GL: an unfocused scene is byte-identical to itself",
+              pixels_differ(plain, again) == 0,
+              "the default SceneFocus perturbed the render");
+
+        // (2) focusing a real tid reaches the draw.
+        scene3d::SceneFocus f;
+        f.tid = 1;
+        scene.focus = f;
+        const std::vector<unsigned char> ghosted =
+            capture(scene, cam, cf, layers);
+        check("51 T1 GL: focusing a thread changes the render",
+              pixels_differ(plain, ghosted) > 0,
+              "focus.tid never reached the trajectory draw");
+
+        // (3) GHOST, NEVER HIDE — the load-bearing one. Ghosting and dropping
+        // are the same code path with a different alpha, so the honest way to
+        // prove a ghost is not a hide is to render the hide and compare: a
+        // worldline is drawn OVER the terrain (not over the background), so
+        // the right measure is not "how much background is left" but "do the
+        // two images differ at all". They must, on the very pixels the ghosted
+        // line still occupies and the dropped one has surrendered to the
+        // terrain underneath.
+        scene3d::SceneFocus d = f;
+        d.drop_unfocused = true;
+        scene.focus = d;
+        const std::vector<unsigned char> dropped =
+            capture(scene, cam, cf, layers);
+        check("51 T1 GL: a GHOSTED non-subject worldline still marks pixels a "
+              "DROPPED one surrenders",
+              pixels_differ(ghosted, dropped) > 0,
+              "ghosting and dropping rendered identically — a ghost that is "
+              "indistinguishable from a hide is a hide");
+        check("51 T1 GL: dropping diverges from the unfiltered render at least "
+              "as much as ghosting does",
+              pixels_differ(plain, dropped) >= pixels_differ(plain, ghosted),
+              "removing a line changed less than dimming it");
+        scene.focus = scene3d::SceneFocus{};
+
+        // (4) T2/T3: a kind filter is a PRESENTATION channel. Its render must
+        // differ in colour but occupy EXACTLY the same silhouette — same
+        // covered pixels, because height is the encoded quantity and a filter
+        // may not touch it.
+        auto silhouette = [&](const std::vector<unsigned char> &px) {
+            unsigned char bg[3];
+            mode_color(px, bg);
+            std::vector<char> on(px.size() / 4, 0);
+            for (size_t i = 0, k = 0; i + 3 < px.size(); i += 4, k++)
+                on[k] = !(px[i] == bg[0] && px[i + 1] == bg[1] &&
+                          px[i + 2] == bg[2]);
+            return on;
+        };
+        scene3d::SceneFocus k;
+        k.kind_mask = 0u; // every kind excluded: the strongest filter there is
+        scene.focus = k;
+        const std::vector<unsigned char> filtered =
+            capture(scene, cam, cf, layers);
+        check("51 T2 GL: a kind filter changes the plane's colour",
+              pixels_differ(plain, filtered) > 0,
+              "uKindMask never reached the terrain shader");
+        check("51 T2/T3 GL: a kind filter leaves the plane's SILHOUETTE "
+              "unchanged (it desaturates, it never re-heights)",
+              silhouette(plain) == silhouette(filtered),
+              "the filtered plane covers different pixels — a filter changed "
+              "geometry, which would change the data");
+        scene.focus = scene3d::SceneFocus{};
+
+        // (5) T3: fidelity wins the LAST word. The torn fixture's red gash
+        // must still be red with every kind filtered out — a filtered-out
+        // torn cell may never read as a plain filtered cell.
+        space::TerrainModel tt = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_torn()))),
+            load(ndjson_torn()));
+        scene.set_terrain(tt.full());
+        scene.set_trajectories(space::build_trajectories(load(ndjson_torn())),
+                               tt.proj);
+        scene.set_zoning(tt.kind_by_cell, tt.w, tt.h);
+        scene.focus = k; // every kind excluded
+        const std::vector<unsigned char> torn_filtered =
+            capture(scene, cam, cf, layers);
+        std::vector<uint32_t> tids;
+        scene.render_pick_buffer(cam, W, H, tids);
+        const uint32_t torn_cell = cell_of(tt.proj, tt.w, 4194304);
+        int tp = -1;
+        for (size_t i = 0; i < tids.size(); i++)
+            if (tids[i] == pick_id_cell(torn_cell)) {
+                tp = static_cast<int>(i);
+                break;
+            }
+        check("51 T3 GL: the torn cell is still on screen under a filter",
+              tp >= 0, "the filtered plane lost the torn cell entirely");
+        if (tp >= 0) {
+            const unsigned char *p = &torn_filtered[tp * 4];
+            check("51 T3 GL: a FILTERED torn cell is still red — fidelity "
+                  "gets the last word on the pixel",
+                  p[0] > p[1] + 40 && p[0] > p[2] + 40,
+                  "the subject filter laundered a torn cell into a plain "
+                  "desaturated one");
+        }
+        check("51 T3 GL: the pick pass ignores the filter entirely (a "
+              "desaturated cell is exactly as clickable)",
+              tp >= 0 && tids[static_cast<size_t>(tp)] ==
+                             pick_id_cell(torn_cell),
+              "a filter reached the pick pass");
+        scene.focus = scene3d::SceneFocus{};
+    }
+
     scene.shutdown();
     eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(dpy, ctx);

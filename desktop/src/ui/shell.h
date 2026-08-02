@@ -172,6 +172,18 @@ struct SceneView {
     // 56 T5: the misprediction survey layer's plane-space geometry, built
     // from hotedges_scene alongside it (same weave-time cadence).
     space::MispredLayer mispred;
+
+    // 51 T2 (scene-focus-and-scale): the focused REGION's per-cell mask, the
+    // one part of the subject filter a fragment shader cannot derive
+    // (scene3d::build_focus_mask). Cached on (focused region, weave), never
+    // rebuilt per frame or on a playhead scrub — the same "recompute only
+    // when its inputs changed" discipline `highlight` above keeps.
+    // `focus_mask_region` is -2 until the first build (distinct from -1, a
+    // live "no region focused"); `focus_mask_gen` is the recording's
+    // event_count, because a grown weave means a new Projection.
+    std::vector<uint8_t> focus_mask;
+    int32_t focus_mask_region = -2;
+    uint64_t focus_mask_gen = UINT64_MAX;
 };
 
 struct ShellState {

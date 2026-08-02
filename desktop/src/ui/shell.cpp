@@ -34,8 +34,10 @@
 #include "analysis/diff.h" // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
 #include "live/inspect.h" // live_session_toasts (16 T1)
+#include "scene3d/focus.h" // 51 T1/T2: SceneFocus, build_focus_mask
 #include "scene3d/goto.h"
 #include "scene3d/hud.h"
+#include "scene3d/lod.h" // 51 T4: the camera-distance entity budget
 #include "scene3d/pick.h"
 #include "space/projection.h"
 #include "ui/legend.h"       // shared semantic legend (24 T1/T2)
@@ -1016,6 +1018,25 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 56 T5: the misprediction layer's off-plane endpoint count — never
     // silently dropped.
     sv.hud.mispred_off_plane = sv.mispred.off_plane;
+    // 51 T4 (scene-focus-and-scale): the camera-distance ENTITY BUDGET. The
+    // tier is a pure function of (Camera::radius, drawn-entity count) —
+    // scene3d/lod.h, tested directly in test_camera.cpp — and it is computed
+    // HERE, before the HUD draw, so the HUD can state what the budget is
+    // therefore not drawing right beside the toggles it appears to contradict.
+    // The count is the same "how much is on the plane" quantity the scrub
+    // budget above measures (touched cells), plus the overlay primitives that
+    // ride over it, since it is a FRAME's density that this budget guards.
+    {
+        uint64_t entities = sv.terr.code.size() + sv.terr.data.size();
+        for (const space::Trajectory &tr : sv.traj.trajectories)
+            entities += tr.points.size();
+        entities += sv.conv.marks.size();
+        sv.hud.lod = scene3d::lod_tier(sv.cam.radius, entities);
+        sv.hud.focus.drop_unfocused =
+            scene3d::lod_drops_unfocused(sv.hud.lod, sv.hud.focus.tid >= 0);
+        sv.hud.lod_note = scene3d::lod_placard(sv.hud.layers, sv.hud.lod,
+                                               sv.hud.focus.tid >= 0);
+    }
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1111,6 +1132,25 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     }
     if (sv.scrub_pending)
         ImGui::TextColored(dt_maybe_col(), "%s", scrub_degrade_note());
+    // 51 T4: the distance budget's placard, beside the scrub degrade note it
+    // is the density-axis sibling of — so a class the budget removed is named
+    // where the reader is looking at the plane, not only in the HUD window.
+    if (!sv.hud.lod_note.empty())
+        ImGui::TextColored(dt_maybe_col(), "%s", sv.hud.lod_note.c_str());
+    // 51 T2: rebuild the focused region's per-cell mask only when the focused
+    // region — or the weave behind the Projection — changed. Never per frame,
+    // never on a scrub (the mask is slice-invariant, exactly like
+    // kind_by_cell).
+    {
+        const uint64_t gen = r.event_count();
+        if (sv.focus_mask_region != sv.hud.focus.region ||
+            sv.focus_mask_gen != gen) {
+            sv.focus_mask =
+                scene3d::build_focus_mask(sv.terr.proj, sv.hud.focus.region);
+            sv.focus_mask_region = sv.hud.focus.region;
+            sv.focus_mask_gen = gen;
+        }
+    }
     sv.hud.playhead_moved = false;
 
     // No plane to draw without regions — say so, never a blank void.
@@ -1239,7 +1279,14 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.gen = r.event_count();
     f.slice_t = sv.slice_t;
     f.cam = sv.cam;
-    f.layers = sv.hud.layers;
+    // 51 T4: the entity budget draws LESS, never more — lod_apply can only
+    // clear a layer the reader asked for, and everything it cleared is named
+    // in sv.hud.lod_note (drawn above and in the HUD).
+    f.layers = scene3d::lod_apply(sv.hud.layers, sv.hud.lod);
+    // 51 T1/T2: the subject filter and (only when a region is focused) its
+    // per-cell mask.
+    f.focus = sv.hud.focus;
+    f.focus_mask = &sv.focus_mask;
     f.fbw = fbw;
     f.fbh = fbh;
     f.atmo = sv.atmo;                                    // T3

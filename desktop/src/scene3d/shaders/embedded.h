@@ -48,6 +48,13 @@ void main(){
 // a header, so this comment is the keep-in-sync mechanism: a branch added or
 // reordered here must be added or reordered in cell_paint() too, or the flat
 // surface and this 3D terrain will disagree about a cell's fidelity state.
+//
+// 51 T2/T3 exception, stated so the next reader does not "fix" it: the
+// SUBJECT-filter desaturation added below is deliberately NOT mirrored in
+// cell_paint(). cell_paint answers "what fidelity state is this cell in",
+// which a filter must never change — and the whole point of applying the
+// filter BEFORE the TF_* branches is that it cannot. The FIDELITY chain the
+// paragraph above governs is unchanged, branch for branch and in order.
 inline const char *kTerrainFrag = R"GLSL(#version 130
 in float vHeight;
 in vec2 vUV;
@@ -71,6 +78,15 @@ uniform int uConfidence;
 // never a stray colour for cells this layer has nothing to say about.
 uniform int uOpcode;
 uniform usampler2D uOpClass; // R8UI, n x n — 0..7 = OpClass, 255 = none
+// 51 T2 (scene-focus-and-scale): the SUBJECT filter. uKindMask has bit i set
+// for an admitted Region::Kind i (scene3d/focus.h's kAllKinds == no filter);
+// uHasFocusRegion + uFocusMask (R8UI, 1 = this cell is the focused region's)
+// narrow to one region's real Hilbert footprint. Both are PRESENTATION
+// channels: they change saturation and brightness only, and NEVER vHeight —
+// height is the encoded quantity, so changing it would change the data.
+uniform uint uKindMask;
+uniform int uHasFocusRegion;
+uniform usampler2D uFocusMask;
 out vec4 frag;
 const uint TORN = 1u;     // rubble: a KNOWN lower bound (capture truncated/torn)
 const uint STAT = 2u;
@@ -123,6 +139,41 @@ void main(){
   // brightness — kindHue[Code] is BYTE-IDENTICAL to the amber this used to
   // hardcode, so a code-only recording renders exactly today's ramp.
   vec3 base = mix(vec3(0.08,0.10,0.16), hot, clamp(vHeight,0.0,1.0));
+  // 51 T2/T3 — SUBJECT DESATURATION, AND ITS POSITION IS LOAD-BEARING.
+  // It runs HERE: after the hue/height base, BEFORE every TF_* fidelity
+  // branch below (churn, stat, unknown, the confidence hatches, the torn
+  // gash). Fidelity therefore always gets the LAST word on a pixel, so a
+  // torn cell reads as torn and a fog-of-war cell reads as fog-of-war at
+  // EVERY filter setting. Moving this block below any of them would silently
+  // launder a fidelity state into "merely filtered out" — the exact failure
+  // T3 exists to prevent. Keep it here.
+  //
+  // The kind test admits the off-domain sentinel (k >= 6u) unconditionally:
+  // such a cell has no kind to filter BY, and desaturating padding would
+  // imply the filter had an opinion about it.
+  //
+  // The shift is clamped rather than left to `||`'s short-circuit: k carries
+  // 255 for an off-domain cell, and a shift of 255 is UNDEFINED in GLSL. The
+  // clamp makes the expression well-defined on every driver whether or not it
+  // short-circuits, which is not a thing to leave to chance in a shader that
+  // decides what the reader sees.
+  uint kshift = k < 6u ? k : 0u;
+  bool inKinds = (k >= 6u) || ((uKindMask & (1u << kshift)) != 0u);
+  bool inRegion = true;
+  if (uHasFocusRegion == 1)
+    inRegion = texture(uFocusMask, vUV).r != 0u;
+  if (!(inKinds && inRegion)) {
+    float g = dot(base, vec3(0.299, 0.587, 0.114));
+    // Toward grey (hue removed) and flattened toward a MID band — never
+    // toward black. The fog-of-war UNKNOWN branch below is near-black BY
+    // DESIGN ("no content"), and "filtered out" must never be able to look
+    // like it: those are different states about different things. The 0.12
+    // floor is what keeps them apart, so it is a fidelity constant, not a
+    // taste knob. (`greyLevel`, never `flat`: `flat` is a reserved GLSL
+    // interpolation qualifier and some drivers reject it as an identifier.)
+    float greyLevel = mix(0.12, 0.30, clamp(g * 2.5, 0.0, 1.0));
+    base = mix(base, vec3(greyLevel), 0.85);
+  }
   if ((f & CHURN) != 0u) base = mix(base, vec3(0.2,0.7,1.0), 0.5); // scaffold
   if ((f & STAT)  != 0u) base *= 0.6;           // statistical layer is dimmer
   if ((f & UNKNOWN) != 0u)

@@ -471,6 +471,142 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // happen to be switched on right now.
     ImGui::TextColored(kDim, "%s", translucency_mode_note());
 
+    // --- 51 T4: the camera-distance entity budget's placard -----------------
+    // Empty at NEAR. Otherwise it names the tier and every class the budget
+    // removed, in the same colour and the same spirit as scrub_degrade_note()
+    // — a silent drop reads as "there was nothing there".
+    if (!s.lod_note.empty())
+        ImGui::TextColored(kWarn, "%s", s.lod_note.c_str());
+
+    // --- 51 T1/T2: SUBJECT — which thread / region / kind is being read -----
+    // Kept visually separate from "layers:" above, and captioned with the one
+    // line that keeps the two axes apart (T3 step 3).
+    ImGui::Separator();
+    ImGui::TextUnformatted("subject:");
+    ImGui::TextColored(kDim, "%s", focus_axis_note());
+    // T2 step 5: an active filter ALWAYS says so. A filtered plane that looks
+    // like an unfiltered one is a false reading of the recording.
+    {
+        const std::string note = subject_filter_note(s.focus, terr.proj);
+        if (!note.empty())
+            ImGui::TextColored(kWarn, "%s", note.c_str());
+    }
+
+    // T1 step 4: the thread roster. One row per trajectory the weave carries —
+    // including one the plane could not draw, which says so rather than being
+    // omitted. Selecting a row sets focus.tid; the statistical residency row
+    // is never selectable (a survey is an aggregate, not a thread).
+    {
+        const std::vector<ThreadRosterRow> roster =
+            thread_roster(traj, terr.proj);
+        if (roster.empty()) {
+            ImGui::TextColored(kDim, "threads: none woven in this recording");
+        } else {
+            for (size_t i = 0; i < roster.size(); i++) {
+                const ThreadRosterRow &row = roster[i];
+                ImVec4 col{row.rgb[0], row.rgb[1], row.rgb[2], 1.0f};
+                ImGui::ColorButton(("##tid" + std::to_string(i)).c_str(), col,
+                                   ImGuiColorEditFlags_NoTooltip |
+                                       ImGuiColorEditFlags_NoPicker,
+                                   ImVec2(12, 12));
+                ImGui::SameLine();
+                char label[96];
+                if (row.statistical)
+                    std::snprintf(label, sizeof label,
+                                  "survey residency (aggregate)##r%zu", i);
+                else if (row.tid < 0)
+                    std::snprintf(label, sizeof label,
+                                  "single path (no tid)##r%zu", i);
+                else
+                    std::snprintf(label, sizeof label, "tid %d##r%zu",
+                                  static_cast<int>(row.tid), i);
+                if (row.focusable) {
+                    const bool sel = s.focus.tid >= 0 && s.focus.tid == row.tid;
+                    if (ImGui::Selectable(label, sel))
+                        // Clicking the focused row clears the focus — the
+                        // roster is the ONE control for both directions.
+                        s.focus.tid = sel ? -1 : row.tid;
+                } else {
+                    // Never focusable, and it says why rather than looking
+                    // like a broken control (T5's own rule, 47/48).
+                    ImGui::TextDisabled("%s", label);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "a survey is a whole-recording aggregate, not a "
+                            "thread — it is never focusable, and keeps its "
+                            "normal weight while a thread is focused");
+                }
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "%llu of %llu vertices placed",
+                                   (unsigned long long)row.placed,
+                                   (unsigned long long)row.vertices);
+                if (!row.note.empty()) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(kWarn, "%s", row.note.c_str());
+                }
+            }
+        }
+    }
+
+    // T2 step 4: kind checkboxes, reusing region_style()'s labels and colours
+    // (via kind_label) so the filter UI and the plane share ONE palette.
+    ImGui::TextUnformatted("kinds:");
+    {
+        static const space::Region::Kind kKinds[6] = {
+            space::Region::Code, space::Region::Stack, space::Region::Heap,
+            space::Region::Data, space::Region::Mmap,  space::Region::Unknown};
+        for (space::Region::Kind k : kKinds) {
+            const uint32_t bit = 1u << static_cast<uint32_t>(k);
+            bool on = (s.focus.kind_mask & bit) != 0;
+            ImGui::SameLine();
+            space::RegionStyle st = space::region_style(k);
+            ImGui::ColorButton(
+                (std::string("##kc") + st.name).c_str(),
+                ImVec4(st.r, st.g, st.b, 1.0f),
+                ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker,
+                ImVec2(10, 10));
+            ImGui::SameLine();
+            if (ImGui::Checkbox(kind_label(k), &on)) {
+                if (on)
+                    s.focus.kind_mask |= bit;
+                else
+                    s.focus.kind_mask &= ~bit;
+            }
+        }
+    }
+
+    // T2 step 4: the region combo, listing proj.regions by VERBATIM label —
+    // the same rule the 48 T3 goto combo keeps, and a separate control from
+    // it because "point the camera there" and "read only that" are different
+    // intents.
+    if (terr.proj.regions.empty()) {
+        ImGui::TextDisabled("region filter: no regions in this recording");
+    } else {
+        ImGui::TextUnformatted("region:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(220.0f);
+        std::string preview =
+            s.focus.region >= 0 && static_cast<size_t>(s.focus.region) <
+                                       terr.proj.regions.size()
+                ? terr.proj.regions[static_cast<size_t>(s.focus.region)].label
+                : std::string("(all regions)");
+        if (ImGui::BeginCombo("##focus_region", preview.c_str())) {
+            if (ImGui::Selectable("(all regions)", s.focus.region < 0))
+                s.focus.region = -1;
+            for (size_t i = 0; i < terr.proj.regions.size(); i++) {
+                const space::Region &r = terr.proj.regions[i];
+                char fallback[32];
+                std::snprintf(fallback, sizeof fallback, "region@0x%llx",
+                              static_cast<unsigned long long>(r.base));
+                std::string name = r.label.empty() ? fallback : r.label;
+                const bool sel = s.focus.region == static_cast<int>(i);
+                if (ImGui::Selectable((name + "##fr").c_str(), sel))
+                    s.focus.region = static_cast<int32_t>(i);
+            }
+            ImGui::EndCombo();
+        }
+    }
+
     // --- camera presets ----------------------------------------------------
     // 48 T4: two buttons, two honest meanings — "reset view" frames the
     // LANDMARK (the code-district centroid, stable across live growth),
