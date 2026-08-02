@@ -34,6 +34,11 @@ wrapped in a terminal UI, plus a headless mode for scripting and CI. It lives in
 > documented under [Hardware tracing](hardware-tracing.md) and
 > [Native runtime tracing](native-tracing.md).
 
+> **Consuming the output?** [asmspy metrics and observability](asmspy-metrics.md)
+> lists every metric each view emits — its values, its name in each of the three
+> output channels (human text, `--json`, `.asmtrace`), and which architectures
+> can observe it at all.
+
 ## Build
 
 asmspy links the hardware-trace tier (for `run_to` / `trace_attached` +
@@ -226,6 +231,11 @@ asmspy --sample <pid> [ms] [--json]                    # statistical hot edges v
 asmspy --watch  <pid> <sym|sym+off|0xADDR> [n] [--rw] [--len=1|2|4|8] [--json]
                                    # hardware DATA watchpoint: who touches a field, and the value
 ```
+
+Every field these emit — in the human text, in `--json`, and in an `.asmtrace`
+recording — is catalogued in
+[asmspy metrics and observability](asmspy-metrics.md), including where the three
+channels name the same measurement differently.
 
 A **negative `n`** streams until the target exits or you interrupt. Malformed
 arguments (a non-numeric or non-positive pid, an unknown `--list` sort) are
