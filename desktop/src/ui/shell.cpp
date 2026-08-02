@@ -1093,6 +1093,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             // 56 T2: the confidence layer's coverage-window mask — a no-op
             // when the survey stated no window (the common case).
             apply_coverage_window(sv.slice, sv.terr, sv.hotedges_scene);
+            // 56 T3: the per-module skyline, t-gated the same way.
+            sv.canopies = space::build_module_canopies(sv.terr, sv.hud.t);
             sv.slice_t = sv.hud.t;
             sv.scrub_pending = false;
         }
@@ -1217,6 +1219,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.traj = &sv.traj;
     f.conv = &sv.conv;
     f.slice = &sv.slice;
+    f.canopies = &sv.canopies; // 56 T3
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

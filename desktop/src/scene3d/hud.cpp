@@ -418,6 +418,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             }
             ImGui::SameLine();
             ImGui::Checkbox(row.label, &(s.layers.*row.flag));
+            // The registry's own "question" (T1's stated goal: no layer
+            // ships without one) — a hover tooltip, so the toggle row stays
+            // compact while the question is still one hover away.
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", row.question);
             if (row.grade == LayerGrade::Statistical) {
                 ImGui::SameLine();
                 ImGui::TextColored(kWarn, "STATISTICAL — survey");

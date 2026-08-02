@@ -23,6 +23,7 @@
 #include "scene3d/camera.h"
 #include "scene3d/hud.h"
 #include "scene3d/pick.h" // T1/T2 (47): PickHint, SceneView::hover_hint
+#include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/terrain.h"
@@ -63,6 +64,10 @@ struct SceneView {
     space::ConvergenceSet conv;
     space::Terrain slice;          // the cached terrain slice for `slice_t`
     uint64_t slice_t = UINT64_MAX; // the t `slice` was cut at (invalid => none)
+    // 56 T3: the per-module canopies at THIS SAME slice_t — recomputed
+    // alongside `slice` (raw_heat is t-gated the same way), never on a
+    // playhead move that only re-lands the coarse degrade plane.
+    std::vector<space::ModuleCanopy> canopies;
     // The 3D scrub's degrade-to-coarse state (23-graded-truth-layer.md T4):
     // `scrub_pending` marks a re-slice deferred because the full slice would
     // exceed the frame budget — the coarse plane renders this frame and the full

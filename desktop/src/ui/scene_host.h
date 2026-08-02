@@ -13,6 +13,7 @@
 #define ASMDESK_UI_SCENE_HOST_H
 
 #include <cstdint>
+#include <vector>
 
 #include "imgui.h" // ImTextureID
 
@@ -20,6 +21,7 @@
 #include "scene3d/camera.h"     // Camera (pure math)
 #include "scene3d/pick.h"  // T3 (47): PickBands, SceneHost::pick_bands()'s type
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
+#include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -41,6 +43,11 @@ struct SceneFrame {
     const space::ConvergenceSet *conv = nullptr;
     const space::Terrain *slice =
         nullptr;          // the terrain slice [0, t] to display
+    // T3 (56-fidelity-and-module-layers): the per-module canopies at THIS
+    // slice's t — t-gated like `slice` itself (raw_heat sums hits at-or-
+    // before t), so the host re-uploads it on the SAME `slice_t` gate.
+    // nullptr is treated exactly like an empty vector (no canopies drawn).
+    const std::vector<space::ModuleCanopy> *canopies = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

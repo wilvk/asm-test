@@ -405,6 +405,11 @@ int main() {
                   "an abs recording must weave one exact trajectory");
             check("scene/slice cut at the playhead", sv.slice_t == sv.hud.t,
                   "the terrain slice must track the HUD playhead");
+            // 56 T3: the per-module canopies are woven alongside the slice —
+            // a recording with code regions and hits must produce at least
+            // one (the exact rung for whichever region(s) it touched).
+            check("scene/canopies woven", !sv.canopies.empty(),
+                  "a placed abs recording must produce module canopies");
 
             // 36 T4: the abs golden is fully placed — no placement chip fires
             // for it (all its chip branches are for rel/df/unplaced recordings).

@@ -618,6 +618,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
+  $(BUILD)/desktop/$(1)/sp/canopy.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
@@ -1128,6 +1129,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
                  $(BUILD)/desktop_test_coverage_window \
+                 $(BUILD)/desktop_test_canopy \
                  $(BUILD)/desktop_test_scene2d \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
@@ -1412,6 +1414,15 @@ $(BUILD)/desktop_test_coverage_window: \
     $(BUILD)/desktop/test/an/slice.o \
     $(BUILD)/desktop/test/vw/hotedges.o $(BUILD)/desktop/test/vw/observer.o \
     $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The per-module residency skyline (56-fidelity-and-module-layers.md T3):
+# canopy.o links the SAME terrain closure test_terrain does, plus itself.
+$(BUILD)/desktop_test_canopy: $(BUILD)/desktop/test/t/test_canopy.o \
+    $(BUILD)/desktop/test/sp/canopy.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The flat terrain surface (52-flat-terrain-surface.md T1/T2/T3): the pure
@@ -1816,6 +1827,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/trajectory.o \
     $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/sp/canopy.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \

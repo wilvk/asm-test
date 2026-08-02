@@ -146,7 +146,11 @@ bool Scene::init_gl(std::string *err) {
     if (prog_sky_)
         prog_edl_ =
             link_program(shaders::kEdlVert, shaders::kEdlFrag, false, false, e);
-    if (!prog_edl_) {
+    // T3 (56): the module-canopy quad program — joins the same required chain.
+    if (prog_edl_)
+        prog_canopy_ = link_program(shaders::kCanopyVert, shaders::kCanopyFrag,
+                                    false, false, e);
+    if (!prog_canopy_) {
         err_ = e;
         if (err)
             *err = e;
@@ -455,6 +459,73 @@ void Scene::set_stat_terrain(const space::Terrain &t) {
                  GL_UNSIGNED_INT, t.flags.data());
     glBindTexture(GL_TEXTURE_2D, 0);
     has_stat_terrain_ = true;
+}
+
+void Scene::free_canopies() {
+    for (CanopyDraw &d : canopy_draws_) {
+        if (d.vbo)
+            glDeleteBuffers(1, &d.vbo);
+        if (d.vao)
+            glDeleteVertexArrays(1, &d.vao);
+    }
+    canopy_draws_.clear();
+}
+
+// T3 (56-fidelity-and-module-layers): one flat quad per canopy, at its
+// footprint's bounding box (space::ModuleCanopy::min_u/v..max_u/v) and world
+// Y = height * y_scale — the SAME exaggeration the terrain's own vertex
+// shader applies, so a canopy's height reads on the same scale as the
+// terrain beneath it. A statistical entry sits a fixed 0.02 world units
+// higher (never merged with the exact quad — the T6 isolation invariant)
+// and is desaturated + more transparent, mirroring the ghost-fog terrain's
+// own "separate, dimmer" idiom without a second shader technique.
+void Scene::set_module_canopies(const std::vector<space::ModuleCanopy> &canopies,
+                                const space::Projection &proj) {
+    free_canopies();
+    canopy_draws_.reserve(canopies.size());
+    for (const space::ModuleCanopy &mc : canopies) {
+        if (mc.region >= proj.regions.size())
+            continue; // defensive: a canopy always names a real region
+        const space::RegionStyle st =
+            space::region_style(proj.regions[mc.region].kind);
+        const float y = static_cast<float>(mc.height) * y_scale +
+                        (mc.statistical ? 0.02f : 0.0f);
+        float r = st.r, g = st.g, b = st.b;
+        if (mc.torn) {
+            // The SAME red-gash mix the terrain shader applies to a torn
+            // cell (embedded.h's kTerrainFrag) — a torn module reads hatched
+            // in spirit (loudly red-shifted), not silently unremarked.
+            r = r * 0.3f + 1.0f * 0.7f;
+            g = g * 0.3f + 0.15f * 0.7f;
+            b = b * 0.3f + 0.15f * 0.7f;
+        }
+        const float alpha = mc.statistical ? 0.22f : 0.32f;
+        if (mc.statistical) {
+            const float grey = (r + g + b) / 3.0f;
+            r = g = b = grey; // desaturated, never the exact palette's hue
+        }
+
+        const float x0 = mc.min_u, x1 = mc.max_u;
+        const float z0 = mc.min_v, z1 = mc.max_v;
+        const float quad[18] = {
+            x0, y, z0, x1, y, z0, x1, y, z1, // first triangle
+            x0, y, z0, x1, y, z1, x0, y, z1, // second triangle
+        };
+        CanopyDraw d;
+        d.color[0] = r;
+        d.color[1] = g;
+        d.color[2] = b;
+        d.color[3] = alpha;
+        glGenVertexArrays(1, &d.vao);
+        glGenBuffers(1, &d.vbo);
+        glBindVertexArray(d.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, d.vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+        canopy_draws_.push_back(d);
+    }
 }
 
 void Scene::free_traj() {
@@ -847,6 +918,32 @@ void Scene::draw_sky() {
     glDepthMask(GL_TRUE);
 }
 
+// T3 (56-fidelity-and-module-layers): the per-module residency skyline — a
+// handful of translucent quads, depth-tested against the terrain (so a
+// canopy behind the camera's near geometry does not falsely win) but not
+// depth-WRITTEN (so two overlapping canopies both remain visible rather than
+// the nearer one occluding the farther, matching every other translucent
+// surface's own depth-mask discipline on this plane).
+void Scene::draw_canopies(const float mvp[16]) {
+    if (!prog_canopy_ || canopy_draws_.empty())
+        return;
+    glUseProgram(prog_canopy_);
+    glUniformMatrix4fv(glGetUniformLocation(prog_canopy_, "uMVP"), 1, GL_FALSE,
+                       mvp);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    const GLint uColor = glGetUniformLocation(prog_canopy_, "uColor");
+    for (const CanopyDraw &d : canopy_draws_) {
+        glUniform4fv(uColor, 1, d.color);
+        glBindVertexArray(d.vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glBindVertexArray(0);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
 bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
                         int *out_line) const {
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
@@ -950,6 +1047,11 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     // with).
     if (layers.ghost_fog && has_stat_terrain_)
         draw_stat_terrain(mvp);
+
+    // T3 (56): the module-canopy skyline, above both terrains — a whole-
+    // module overview riding over the per-cell surfaces it summarises.
+    if (layers.canopy)
+        draw_canopies(mvp);
 
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use
@@ -1236,6 +1338,7 @@ void Scene::render_pick_buffer(const Camera &cam, int fbw, int fbh,
 void Scene::shutdown() {
     free_traj();
     free_conv();
+    free_canopies();
     if (vbo_cell_)
         glDeleteBuffers(1, &vbo_cell_);
     if (ibo_grid_)
@@ -1272,7 +1375,8 @@ void Scene::shutdown() {
         glDeleteFramebuffers(1, &fbo_pick_);
     free_compose_targets(); // T1/T5 (55)
     for (unsigned p : {prog_terrain_, prog_traj_, prog_pick_terrain_,
-                       prog_pick_pt_, prog_stat_, prog_sky_, prog_edl_})
+                       prog_pick_pt_, prog_stat_, prog_sky_, prog_edl_,
+                       prog_canopy_})
         if (p)
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
@@ -1282,7 +1386,7 @@ void Scene::shutdown() {
     has_stat_terrain_ = false;
     tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
-    prog_stat_ = prog_sky_ = prog_edl_ = 0;
+    prog_stat_ = prog_sky_ = prog_edl_ = prog_canopy_ = 0;
     ready_ = false;
     n_ = 0;
 }

@@ -21,6 +21,7 @@
 #include "scene3d/atmosphere.h" // T3 (44): the fidelity weather sky's pure config
 #include "scene3d/camera.h"
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
+#include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
 #include "space/projection.h"
 #include "space/terrain.h"
@@ -60,6 +61,10 @@ struct SceneLayers {
     // already on screen, so a session does not silently start in the
     // trust-lens view instead of the density view it has always opened to.
     bool confidence = false;
+    // T3 (56-fidelity-and-module-layers): the per-module residency skyline —
+    // an ADDITIONAL translucent overview surface (like ghost_fog above), so
+    // default ON matches this struct's own convention for compositing layers.
+    bool canopy = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -141,6 +146,14 @@ class Scene {
     // The survey is absent for this weave: stop drawing the ghost-fog surface
     // (the previously-uploaded textures are left allocated, just unused).
     void clear_stat_terrain() { has_stat_terrain_ = false; }
+    // T3 (56-fidelity-and-module-layers): upload one translucent quad per
+    // ModuleCanopy (the footprint bounding box at world Y = height*y_scale,
+    // hued by region_style(proj.regions[region].kind), a statistical entry
+    // desaturated + drawn slightly higher — "offset", never merged with the
+    // exact canopy's own quad). Re-upload on every playhead move (raw_heat is
+    // t-gated), unlike set_zoning/set_stat_terrain above.
+    void set_module_canopies(const std::vector<space::ModuleCanopy> &canopies,
+                             const space::Projection &proj);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -251,6 +264,18 @@ class Scene {
     unsigned prog_pick_pt_ = 0;
     unsigned prog_stat_ = 0; // T4: the ghost-fog terrain program
     unsigned prog_sky_ = 0;  // T3: the weather sky quad program
+    unsigned prog_canopy_ = 0; // T3 (56): the module-canopy quad program
+
+    // T3 (56): one CPU-retained draw per canopy — a handful of regions, so a
+    // draw call each (rather than packing colour into one shared VBO) is the
+    // simplest correct thing, matching region_containing's own "a handful"
+    // scale note (pick.cpp).
+    struct CanopyDraw {
+        unsigned vao = 0, vbo = 0;
+        float color[4] = {1, 1, 1, 0.35f};
+    };
+    std::vector<CanopyDraw> canopy_draws_;
+    void free_canopies();
 
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;
@@ -368,6 +393,7 @@ class Scene {
                              bool confidence = false);
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
+    void draw_canopies(const float mvp[16]); // T3 (56)
     // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)
     // trajectory by either axis — the first trajectory (lowest tid, matching
     // by_tid's ascending iteration in trajectory.cpp) that yields a match.

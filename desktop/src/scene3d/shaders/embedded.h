@@ -399,5 +399,26 @@ void main(){
 }
 )GLSL";
 
+// --- T3 (56-fidelity-and-module-layers.md): the per-module residency
+//     skyline — one flat translucent quad per region's footprint bounding
+//     box, hued by region_style(kind), height = log-scaled summed heat.
+//     Scoped simplification (see canopy.h's own doc comment): plain alpha
+//     blend, not the dithered-discard idiom 55 established for the stat
+//     terrain/statistical trajectories — a second translucent-compositing
+//     technique on the SAME plane, stated rather than silently mismatched.
+inline const char *kCanopyVert = R"GLSL(#version 130
+in vec3 pos;
+uniform mat4 uMVP;
+void main(){
+  gl_Position = uMVP * vec4(pos, 1.0);
+}
+)GLSL";
+
+inline const char *kCanopyFrag = R"GLSL(#version 130
+uniform vec4 uColor;
+out vec4 frag;
+void main(){ frag = uColor; }
+)GLSL";
+
 } // namespace asmdesk::scene3d::shaders
 #endif // ASMDESK_SCENE3D_SHADERS_EMBEDDED_H

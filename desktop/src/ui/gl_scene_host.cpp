@@ -94,6 +94,11 @@ class GlSceneHost : public SceneHost {
         if (f.slice_t != up_t_) {
             scene_.nsteps = static_cast<uint32_t>(f.terr->nsteps);
             scene_.set_terrain(*f.slice);
+            // T3 (56): re-lift on the SAME gate as the terrain slice itself —
+            // raw_heat is t-gated exactly like `slice`'s own per-cell heights.
+            static const std::vector<space::ModuleCanopy> kNoCanopies;
+            scene_.set_module_canopies(f.canopies ? *f.canopies : kNoCanopies,
+                                       f.terr->proj);
             up_t_ = f.slice_t;
         }
         have_upload_ = true;
