@@ -621,6 +621,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/canopy.o $(BUILD)/desktop/$(1)/sp/opcode_terrain.o \
   $(BUILD)/desktop/$(1)/sp/stepplace.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/s3/causal.o \
+  $(BUILD)/desktop/$(1)/vw/crossing.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/s3/layers.o \
@@ -1177,6 +1179,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_budget \
                  $(BUILD)/desktop_test_inspect \
                  $(BUILD)/desktop_test_obs_syscalls \
+                 $(BUILD)/desktop_test_crossing \
                  $(BUILD)/desktop_test_obs_watch \
                  $(BUILD)/desktop_test_obs_topo \
                  $(BUILD)/desktop_test_obs_hotedges \
@@ -1287,6 +1290,22 @@ $(BUILD)/desktop_test_budget: $(BUILD)/desktop/test/t/test_budget.o \
 $(BUILD)/desktop_test_obs_syscalls: \
     $(BUILD)/desktop/test/t/test_obs_syscalls.o \
     $(BUILD)/desktop/test/vw/syscalls.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# 57 T2 (causal-layers): the kernel-crossing spur builder. Its OWN TU
+# (views/crossing.o), NOT an addition to syscalls.o — syscalls.o rides in the
+# DESKTOP_OBS_PURE bundle every Observer-view binary links, and making that
+# bundle drag space/locate.o + space/stepplace.o into a dozen link lines to
+# serve one 3D layer would be a worse trade than one more small TU. So this
+# binary is the only one that pays for the space/ resolvers.
+$(BUILD)/desktop_test_crossing: $(BUILD)/desktop/test/t/test_crossing.o \
+    $(BUILD)/desktop/test/vw/crossing.o \
+    $(BUILD)/desktop/test/vw/syscalls.o $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1573,6 +1592,7 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/s3/causal.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
@@ -1862,6 +1882,8 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/sp/canopy.o $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/sp/mnemonic.o \
+    $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/vw/crossing.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \

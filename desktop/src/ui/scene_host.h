@@ -23,7 +23,8 @@
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
-#include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
+#include "space/crossing.h" // T2 (57): CrossingLayer, SceneFrame::crossings
+#include "space/mispred.h"  // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -57,6 +58,12 @@ struct SceneFrame {
     // T5 (56-fidelity-and-module-layers): the misprediction survey layer —
     // a whole-recording survey aggregate like opcode_cells above, same gate.
     const space::MispredLayer *mispred = nullptr;
+    // 57-causal-layers: the four layers of CAUSE. All whole-recording
+    // aggregates like `mispred` above (a def-use cone, a blame set overlap and
+    // a block-transition histogram are all facts about the WHOLE recording,
+    // not about a playhead position), so all upload on the same gate. nullptr
+    // is treated exactly like a default-constructed, disabled layer.
+    const space::CrossingLayer *crossings = nullptr; // T2
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

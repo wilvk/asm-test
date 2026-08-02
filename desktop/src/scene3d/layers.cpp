@@ -34,6 +34,16 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},
+        // 57-causal-layers: the four layers of CAUSE. Each is graded here by
+        // what it actually claims, and each brief's own fidelity note is the
+        // source of that grade.
+        // T2: Derived — the syscall/instruction ORDER is recorded exactly
+        // (Event::seq), but the anchor is the nearest recorded instruction,
+        // not a measured crossing point, and the family class is parsed from
+        // a rendered line rather than read off a field.
+        {"crossings", "crossings",
+         "where did control leave userspace, and roughly where on the path?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::crossings},
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},

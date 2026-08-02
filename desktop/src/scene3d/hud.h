@@ -244,6 +244,21 @@ struct HudState {
     // could not place is COUNTED, never silently dropped (T5 step 3's own
     // bar). Shown only while SceneLayers::mispred is on.
     uint32_t mispred_off_plane = 0;
+
+    // --- 57-causal-layers: what each causal layer could not draw -------------
+    // Synced by the caller every frame from the layer models. A causal layer
+    // that silently drew less than the data contains would be worse than one
+    // that refused, so every one of these is stated rather than inferred from
+    // an absence (57's own fidelity note).
+    //
+    // T2: the kernel-crossing spurs. `crossings_disabled_reason` non-empty
+    // means the layer self-gated (no worldline, or no stream order) and the
+    // HUD says which; `crossings_before_first_insn` counts the syscalls that
+    // precede every recorded instruction and were therefore NOT anchored (to
+    // instruction 0 or anywhere else).
+    std::string crossings_disabled_reason;
+    uint32_t crossings_before_first_insn = 0;
+    uint32_t crossings_off_plane = 0;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

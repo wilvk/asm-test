@@ -18,7 +18,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 1/5 landed 2026-08-03.**
+> **Status — ◐ 2/5 landed 2026-08-03.**
 > T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
 > [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
 > (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
@@ -31,6 +31,38 @@
 > constructor takes no `Anchor` (`StepAddrResolver` already derives and caches
 > one; a second would be the parallel source of truth T1 exists to remove), and
 > `at()` is non-const (a miss mutates the count — that is the point).
+>
+> **T2** landed as `space/crossing.h` (the POD geometry scene3d/ consumes) +
+> `views/crossing.{h,cpp}` (the builder, which needs a `SyscallView`) — the
+> same type/builder split 56 T5 made for `MispredLayer`/`build_mispred_layer`,
+> and its own TU rather than an addition to `syscalls.cpp` because that object
+> rides in the `DESKTOP_OBS_PURE` bundle a dozen link lines pull in. The draw
+> half is `scene3d/causal.cpp`, a new TU defining `Scene` methods declared in
+> `scene.h`, behind an opaque `CausalGL` pimpl: the whole four-layer family
+> costs `scene.cpp` two lines (a `draw_causal()` call and a `free_causal()`
+> call) and `scene.h` one contiguous block, which is what keeps this brief out
+> of the way of the four sibling briefs editing those files at the same time.
+>
+> **Scope landed against T2's steps.** Steps 1-5 in full. Step 6 (pick →
+> the syscalls row) landed as far as the DATA — every spur carries
+> `CrossingSpur::row`, the drill-in target, and the layer test pins it — but
+> the pick-pass wiring (a fifth `PickBands` band, decoded in `pick.cpp` and
+> routed in `shell.cpp`) is NOT in this landing. It would mean reworking the
+> shared pick id space and its band decode, which is exactly the kind of edit
+> four concurrent briefs cannot resolve, and 56 T5 set the same precedent for
+> `MispredLayer` (drawn, not yet pickable). Stated here rather than quietly
+> dropped.
+>
+> **Two rendering deviations, both forced and both stated.** (a) Line width:
+> 55 T6 is concurrently removing every `glLineWidth(>1.0)` call because it is
+> invalid on a core forward-compatible context, so `causal.cpp` adds none. The
+> "thickness by `row.payload.size()`" channel rides on the rail glyph's
+> POINT SIZE instead (portable), and the spur line itself is a draw that WANTS
+> a heavier stroke — listed here for 55 T6 step 1's quad-expansion work.
+> (b) Hatching a `record_redacted` spur is real DASHED GEOMETRY, not the
+> `uStipple` shader mode: the stipple is this family's stated STATISTICAL
+> mark, and reusing it for "withheld at record time" would make one idiom
+> carry two unrelated claims.
 
 ## Why this work exists
 
@@ -154,7 +186,7 @@ counted, and `place_address` refuses an unmapped address without a cell.
 **Done when.** One resolver exists, its misses are countable, and no layer in this
 brief converts a step to a place any other way.
 
-### T2 — Crossing spurs on the worldline (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
+### T2 — ☑ Crossing spurs on the worldline (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
 
 **Goal.** Where control actually left userspace, shown *on the path being read*
 rather than in a separate flat list.
@@ -192,6 +224,17 @@ unparsed class and an unparsed return both land in the "other" bucket;
 `record_redacted` rows produce hatched spurs whose payload text never appears in
 the golden output. With `seq_present == false`, the layer self-disables with a
 stated reason.
+
+Landed as `desktop/test/test_crossing.cpp`, with all of the above plus: the
+anchor carries the anchoring instruction's own per-tid vertex ordinal (so the
+spur hangs on the vertex the worldline really drew), `rail_span() == 0` is
+asserted by name (deleting the meet-at-one-point property fails a check rather
+than silently reintroducing a fabricated duration), a truncated recording draws
+its anchors hollow, and a recording with no `trace` worldline self-disables.
+The `seq` coverage the brief asks of `test_obs_syscalls.cpp` already landed
+with 54 T3 and is unchanged. The payload-leak check is a blunt negative over
+`crossing_layer_dump()` rather than a committed golden — the layer needed no
+golden corpus file, so none was regenerated.
 
 **Done when.** Kernel crossings appear in situ, claim no duration, and never
 anchor by fabrication.

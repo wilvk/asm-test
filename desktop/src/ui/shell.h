@@ -26,6 +26,7 @@
 #include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
+#include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -172,6 +173,12 @@ struct SceneView {
     // 56 T5: the misprediction survey layer's plane-space geometry, built
     // from hotedges_scene alongside it (same weave-time cadence).
     space::MispredLayer mispred;
+
+    // 57-causal-layers: the four layers of CAUSE, all woven once per
+    // recording alongside terr/traj/conv above (a def-use cone, a blame set
+    // overlap and a block-transition histogram are whole-recording facts, not
+    // playhead-gated ones).
+    space::CrossingLayer crossings; // T2
 };
 
 struct ShellState {

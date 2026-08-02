@@ -47,6 +47,7 @@
 #include "ui/view_presence.h" // data-driven view set + faithful absence (20 T1)
 #include "ui/wayfinding.h"    // persistent breadcrumb + disambiguation (21 T2)
 #include "views/abixray.h"
+#include "views/crossing.h" // 57 T2: build_crossing_layer
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -957,6 +958,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 56 T5: the misprediction layer's plane-space geometry, from the
         // SAME survey aggregate just woven.
         sv.mispred = build_mispred_layer(sv.hotedges_scene, sv.terr.proj);
+        // 57 T2: the kernel-crossing spurs. Woven here, on the same
+        // whole-recording cadence: a syscall's stream position and the
+        // instruction stream it is ordered against are both fixed for the
+        // recording, so nothing about this layer moves with the playhead.
+        sv.crossings = build_crossing_layer(obs_syscalls_build(r), r,
+                                            sv.terr.proj);
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
         sv.opcode_cells = space::build_opcode_terrain(
@@ -1016,6 +1023,11 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 56 T5: the misprediction layer's off-plane endpoint count — never
     // silently dropped.
     sv.hud.mispred_off_plane = sv.mispred.off_plane;
+    // 57 T2: what the crossing layer could not draw, and why it may be off.
+    sv.hud.crossings_disabled_reason =
+        sv.crossings.enabled ? std::string() : sv.crossings.disabled_reason;
+    sv.hud.crossings_before_first_insn = sv.crossings.before_first_insn;
+    sv.hud.crossings_off_plane = sv.crossings.off_plane;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1232,6 +1244,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.canopies = &sv.canopies;         // 56 T3
     f.opcode_cells = &sv.opcode_cells; // 56 T4
     f.mispred = &sv.mispred;           // 56 T5
+    f.crossings = &sv.crossings;       // 57 T2
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

@@ -655,6 +655,31 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             ImGui::TextColored(kWarn, "%u branch endpoint(s) off-plane",
                                s.mispred_off_plane);
     }
+    // T2 (57): the kernel-crossing layer's own chrome. The dwell disclaimer
+    // is UNCONDITIONAL while the layer is on — "the geometry claims no
+    // duration" is exactly the kind of thing a reader will otherwise assume
+    // from a shape that leaves the plane and comes back.
+    if (s.layers.crossings) {
+        if (!s.crossings_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "crossings: %s",
+                               s.crossings_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "crossings: %s",
+                               space::CrossingLayer::dwell_note());
+            ImGui::TextColored(kDim, "crossing anchor: %s",
+                               space::CrossingLayer::anchor_label());
+            if (s.crossings_before_first_insn > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u syscall(s) precede every recorded instruction — not "
+                    "anchored (anchoring them to instruction 0 would be a "
+                    "fabrication)",
+                    s.crossings_before_first_insn);
+            if (s.crossings_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u crossing anchor(s) off-plane",
+                                   s.crossings_off_plane);
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

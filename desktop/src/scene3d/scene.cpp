@@ -1259,6 +1259,11 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     if (layers.mispred)
         draw_mispred(mvp);
 
+    // 57-causal-layers: the four layers of CAUSE, in their own TU
+    // (scene3d/causal.cpp). Each self-gates on its own SceneLayers bool
+    // inside; the whole family costs render() this one call.
+    draw_causal(mvp, layers);
+
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use
     // the same lookup).
@@ -1546,6 +1551,7 @@ void Scene::shutdown() {
     free_conv();
     free_canopies();
     free_mispred();
+    free_causal(); // 57-causal-layers (scene3d/causal.cpp)
     if (vbo_cell_)
         glDeleteBuffers(1, &vbo_cell_);
     if (ibo_grid_)

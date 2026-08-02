@@ -23,6 +23,7 @@
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
+#include "space/crossing.h" // T2 (57): CrossingLayer, set_crossing_layer
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
@@ -78,6 +79,16 @@ struct SceneLayers {
     // `statistical`/`ghost_fog` above, so default ON matches this struct's
     // compositing-layer convention.
     bool mispred = true;
+    // --- 57-causal-layers: the four layers of CAUSE ------------------------
+    // Each ADDS geometry rather than re-lifting the terrain's existing
+    // reading, so each defaults ON by this struct's own convention — except
+    // where noted. All four are self-gating: with nothing to draw they draw
+    // nothing and the HUD says why (they never fabricate a subject).
+    //
+    // T2 (57): kernel-crossing spurs — where control actually left userspace,
+    // shown ON the worldline being read. Claims no duration (see
+    // space/crossing.h).
+    bool crossings = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -178,6 +189,19 @@ class Scene {
     // layer's arcs + site columns — a whole-recording survey aggregate
     // (like the stat terrain), so call ONCE per weave, never on a scrub.
     void set_mispred_layer(const space::MispredLayer &layer);
+
+    // --- 57-causal-layers uploads ------------------------------------------
+    // All four are whole-recording aggregates like set_mispred_layer above,
+    // so they upload on the SAME gate (once per weave/growth batch, never on
+    // a playhead scrub). Their GL objects live behind ONE opaque holder
+    // (`CausalGL`, defined in scene3d/causal.cpp) so this brief's landing
+    // touches scene.h once and scene.cpp twice — a deliberately small
+    // footprint in the two files every 3D brief edits at the same time.
+    //
+    // set_crossing_layer must be called AFTER set_trajectories for the same
+    // weave: a spur hangs on a worldline vertex at world Y = t * traj_scale(),
+    // and that scale is fixed by the trajectory upload.
+    void set_crossing_layer(const space::CrossingLayer &layer);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -320,6 +344,17 @@ class Scene {
     std::vector<MispredArcDraw> mispred_arcs_;
     std::vector<MispredColumnDraw> mispred_columns_;
     void free_mispred();
+
+    // 57-causal-layers: the four causal layers' GL geometry, behind ONE
+    // opaque holder defined in scene3d/causal.cpp (which also defines every
+    // set_*/draw/free below). A pimpl rather than four more inline draw
+    // structs like MispredArcDraw above, precisely so four sibling briefs
+    // editing scene.{h,cpp} concurrently do not collide over this file: the
+    // whole family costs scene.h this block and scene.cpp two call sites.
+    struct CausalGL;
+    CausalGL *causal_ = nullptr;
+    void draw_causal(const float mvp[16], const SceneLayers &layers);
+    void free_causal();
 
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;

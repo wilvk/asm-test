@@ -97,6 +97,14 @@ class GlSceneHost : public SceneHost {
             // aggregate too — same upload gate.
             static const space::MispredLayer kNoMispred;
             scene_.set_mispred_layer(f.mispred ? *f.mispred : kNoMispred);
+            // 57-causal-layers: whole-recording aggregates, same gate. The
+            // crossing spurs hang on worldline vertices, so this must come
+            // AFTER set_trajectories above (which fixes traj_scale) — it
+            // does, and set_crossing_layer's own doc comment states the
+            // requirement rather than leaving it to call-site order alone.
+            static const space::CrossingLayer kNoCrossings;
+            scene_.set_crossing_layer(f.crossings ? *f.crossings
+                                                  : kNoCrossings);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below
