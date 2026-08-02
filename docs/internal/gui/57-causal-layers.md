@@ -18,7 +18,164 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Citations re-verified and corrected 2026-08-03** (this rule, applied). Six
+> of the file:line references above and below pointed at the wrong lines and
+> have been repointed against the tree as this brief leaves it: `BlameAttr` is
+> `streams.h:164-171` (was 152-159), `TrajPoint` is `types.h:58-75` (was
+> 51-68), `access_spurs_` is `scene.h:431` (was 187 — it was already 371 before
+> this brief), `resolve_pick`'s `link.step = pv.t` is `pick.cpp:327` (was
+> 136-139), `Anchor` is `projection.h:46-57` with `place` at `:56`, and
+> `placement_chips` is `hud.h:32-37`. The SUBSTANCE of every claim those
+> citations support was verified against the code and holds — only the line
+> numbers were wrong.
+>
+> **Status — ✅ 5/5 landed 2026-08-03.**
+> T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
+> [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
+> (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
+> per this brief's own risk note 57 adopts: the rbase/anchor resolution order,
+> the anchor caching and every refusal reason come from `locate.cpp` verbatim,
+> and `StepPlacer` adds only the plane coordinates, the region and the running
+> miss count the HUD chip needs. Three signature deviations from the sketch
+> below, each recorded there: `why` is a `std::string` (the refusal reasons are
+> the anchor's own, built at runtime — a `const char *` would dangle), the
+> constructor takes no `Anchor` (`StepAddrResolver` already derives and caches
+> one; a second would be the parallel source of truth T1 exists to remove), and
+> `at()` is non-const (a miss mutates the count — that is the point).
+>
+> **T2** landed as `space/crossing.h` (the POD geometry scene3d/ consumes) +
+> `views/crossing.{h,cpp}` (the builder, which needs a `SyscallView`) — the
+> same type/builder split 56 T5 made for `MispredLayer`/`build_mispred_layer`,
+> and its own TU rather than an addition to `syscalls.cpp` because that object
+> rides in the `DESKTOP_OBS_PURE` bundle a dozen link lines pull in. The draw
+> half is `scene3d/causal.cpp`, a new TU defining `Scene` methods declared in
+> `scene.h`, behind an opaque `CausalGL` pimpl: the whole four-layer family
+> costs `scene.cpp` two lines (a `draw_causal()` call and a `free_causal()`
+> call) and `scene.h` one contiguous block, which is what keeps this brief out
+> of the way of the four sibling briefs editing those files at the same time.
+>
+> **Scope landed against T2's steps.** Steps 1-5 in full; step 6 (drill-in) is
+> covered by the family-wide note below.
+>
+> **Two rendering deviations, both forced and both stated.** (a) Line width:
+> 55 T6 is concurrently removing every `glLineWidth(>1.0)` call because it is
+> invalid on a core forward-compatible context, so `causal.cpp` adds none. The
+> "thickness by `row.payload.size()`" channel rides on the rail glyph's
+> POINT SIZE instead (portable), and the spur line itself is a draw that WANTS
+> a heavier stroke — listed here for 55 T6 step 1's quad-expansion work.
+> (b) Hatching a `record_redacted` spur is real DASHED GEOMETRY, not the
+> `uStipple` shader mode: the stipple is this family's stated STATISTICAL
+> mark, and reusing it for "withheld at record time" would make one idiom
+> carry two unrelated claims.
+>
+> **The line-width wants this brief is parking**, for
+> [55](55-scene-render-quality.md) T6 step 1's quad-expansion pass to pick up.
+> Every line `scene3d/causal.cpp` draws is at width 1.0; these are the draws
+> that would read better wider, in descending order of how much it costs them:
+>
+> | draw | wanted | why |
+> |---|---|---|
+> | T5 ridge segments | width ∝ `log1p(count)` | the ridge is described as a *raised tube*; at 1px the transition count reads only through the lift and the brightness band |
+> | T2 crossing spurs | ~2px, and ∝ payload bytes | the payload channel currently rides on the rail glyph's point size instead |
+> | T5 cap brackets, T4 sink rings / born-untraced brackets | ~2px | four small line idioms have to stay distinguishable from each other at camera distance |
+> | T3 hollow rings, escape crosses, fray ticks | ~2px | same reason: three idioms, one plane, all currently 1px |
+>
+> None of these is a fidelity problem — every one of them still states its
+> quantity through a channel that works at 1px (a colour band, a point size, a
+> lift). They are legibility wants.
+>
+> **T3** landed as `space/taint.{h,cpp}` (pure, engine-free) + its geometry in
+> `scene3d/causal.cpp`. It is EXACT-ONLY BY TYPE: the builder's input is a
+> `DataflowStream`, so a `SurveyEdge` has physically nowhere to enter — D7
+> invariant 1 as a property of the signature rather than a rule to remember.
+> Generation comes from `dt_walk_depth` (54 T5), never `dt_slice_forward`.
+>
+> **One deliberate narrowing of step 2's selector, and why.** The brief says
+> to tint a reached step's memory write where `write && space in {"abs",
+> "off"}`. `"abs"` places. An `"off"` record is region-RELATIVE, and the wire
+> states no base for *data* — `df_step.rbase` is the CODE base, so placing a
+> data offset against it would be a fabrication of a different kind from the
+> one step 3 forbids. Those writes are therefore counted
+> (`TaintFront::off_relative_writes`) and stated in the HUD rather than
+> placed, which is exactly what `observed_data_spans` (`space/projection.h`)
+> already does with the same records for the same reason.
+>
+> **The "not reached" vs "not recorded" distinction is a POSITIVE mark**, per
+> the brief's own warning that an implementation loses it first because both
+> render as nothing. `TaintReach::unknown_beyond` marks the placeable cell the
+> front runs OFF into an undescribed step, drawn as radial fray ticks in a
+> deliberately off-ramp grey-violet (it is not a distance, so it is not on the
+> distance ramp), and a `bounded` walk's own rim frays identically because it
+> is the same claim. Depth is a HUE and never a height: giving the def-use
+> generation the vertical would make two quantities share one axis (46 G8) and
+> would silently fuse two clocks 34 left unfused.
+>
+> **T4** landed as `space/blameforest.{h,cpp}` + geometry in
+> `scene3d/causal.cpp`. Weight is keyed by STEP, not by cell, and two distinct
+> steps that project into the same cell keep SEPARATE weights — summing them
+> would manufacture a convergence that no single step has, which is the one
+> arithmetic mistake here that would look right. A renderer wanting a per-cell
+> brightness takes the MAX over a cell's entries, and the header says so.
+> The beacon rides on its own channel (point size + brightness at plane
+> level), never on terrain height, per step 3 and 46 G8.
+>
+> **A `cone[]` entry is a `{step, off, kind}` OBJECT, not a bare integer** —
+> `doc/streams.cpp`'s decoder reads `c["step"]`, matching the schema's own
+> `blame` example. A fixture that wrote bare integers silently decoded every
+> cone entry as step 0, which is worth recording because it produces a
+> *plausible* forest (one huge spike at step 0) rather than an obvious
+> failure.
+
+>
+> **T5** landed as `space/ridge.{h,cpp}` (the exact ridge) +
+> `views/hotedges.cpp`'s `build_ridge_survey` (the survey fallback, returning
+> its own `space::RidgeSurvey`) + geometry in `scene3d/causal.cpp`. **Never
+> blended** is structural, not a convention: two builders over two inputs
+> returning two types into two `SceneFrame` fields and two GL buffers. The
+> exact builder physically never sees a survey; the survey builder never sees
+> the trace.
+>
+> **The greedy rule the brief warns about is refused in two places, not one.**
+> `2026-07-17-blockstep-reconstruction-defects.md` records this tree shipping a
+> static successor guess twice with the rule in front of it, and notes that the
+> emulator-replay tier is immune "because it does not statically guess the
+> terminator". This builder is immune the same way. A transition exists only
+> when the recorded instruction stream actually went from one recorded block
+> start to another. Additionally — and this is a hazard the brief does not
+> name — an instruction is **never attributed to a block by "the greatest
+> recorded block start below it"**: that containment guess needs block LENGTHS
+> the wire does not carry, and it would fabricate membership for an instruction
+> in a block the recording never opened. Instructions before the first recorded
+> block start are counted (`unattributed_insns`). A recording with instructions
+> but NO `coverage` blocks is refused outright rather than having its block
+> boundaries inferred.
+>
+> **Tie-dimming is a pure function** (`space::ridge_brightness`, with
+> `kRidgeSplitBrightness` a named constant) and segments are BUCKETED by it in
+> the uploader, so a 51/49 fork and a 99/1 fork land in different GL buffers
+> and cannot be drawn alike even by accident.
+>
+> **Landed caveat on `coverage`.** A `coverage` event must state its own
+> `basis`: `decode_streams` runs `note_basis` over it exactly as over a
+> `trace` event, and omitting it sets `TraceStream::basis_error`, which this
+> layer (correctly) treats as a refusal. Worth knowing when hand-writing a
+> fixture.
+>
+> **DRILL-IN, ALL FOUR LAYERS: the TARGET landed, the PICK PASS did not.**
+> Each layer's steps ask for pick → a flat view. Every element carries its
+> deep-link target as data, and each layer test pins it: a `CrossingSpur`
+> carries `row` (the syscalls row), a `TaintReach` carries `step` (the writing
+> step, for the slice), a `BlameConvergence`/`BlameSink` carries `step` (the
+> shared step / the sink, for slice and blame), a `RidgeSegment` carries
+> `from_addr`/`to_addr` and a `RidgeFork` its block address (for canvas/disasm
+> and for the hotedges split). What is NOT here is the pick-pass wiring: four
+> new `PickBands` bands, their id encode in `scene.cpp`'s pick pass, their
+> decode in `pick.cpp`, and their routing in `shell.cpp`. That is a rework of
+> the SHARED pick id space — precisely the edit five concurrently-implemented
+> briefs cannot merge — and [56](../archive/gui/56-fidelity-and-module-layers.md)
+> T5 set the same precedent one brief earlier (`MispredLayer`: drawn, not yet
+> pickable). Stated here rather than quietly dropped; it is a clean follow-on
+> once the 3D family stops being worked in parallel.
 
 ## Why this work exists
 
@@ -37,7 +194,7 @@ trap. [46](46-3d-functional-roadmap.md) §4 states the rule once for the whole 3
 family — *cross-axis brushing goes through the ADDRESS, never through an ordinal* —
 and its G10 shows the rule already being broken in the shipped code
 (`resolve_pick` sets `link.step = pv.t`, a per-tid vertex counter,
-[pick.cpp:136-139](../../../desktop/src/scene3d/pick.cpp#L136)). Four new layers
+[pick.cpp:327](../../../desktop/src/scene3d/pick.cpp#L327)). Four new layers
 each doing their own step→place conversion is four new chances to repeat it. T1
 makes there be one conversion.
 
@@ -46,11 +203,11 @@ makes there be one conversion.
 - **The step→address bridge is real data, per step.** `insn_off` and `insn_rbase`
   with `rbase_present` saying whether the wire stated a base
   ([streams.h:68-76](../../../desktop/src/doc/streams.h#L68)); `Anchor::place`
-  ([projection.h:45-56](../../../desktop/src/space/projection.h#L45)) is the
+  ([projection.h:46-57](../../../desktop/src/space/projection.h#L46)) is the
   existing rel→abs resolver and **returns false rather than guessing**, so a miss
   is countable.
 - **`Streams::blame` is decoded.** `BlameAttr{step, off, has_loc, loc, cone,
-  born_untraced}` ([streams.h:152-159](../../../desktop/src/doc/streams.h#L152)),
+  born_untraced}` ([streams.h:164-171](../../../desktop/src/doc/streams.h#L164)),
   where `cone` is *"ascending producing steps (sink included)"* and
   `born_untraced` is the explicit verdict that a value has no traced producer —
   never an empty cone presented as "nothing found".
@@ -62,10 +219,10 @@ makes there be one conversion.
   `insns`, ascending `blocks`, plus per-offset `disasm`.
 - **The worldline geometry T2 hangs spurs on already exists.**
   `TrajectorySet`/`TrajPoint{t, addr, fidelity, is_access, tid, placed}`
-  ([types.h:51-68](../../../desktop/src/space/types.h#L51)), and `placed` already
+  ([types.h:58-75](../../../desktop/src/space/types.h#L58)), and `placed` already
   distinguishes a vertex that could be positioned from one that could not.
 - **`access_spurs_` is the precedent for a spur layer**: all spurs in one
-  `GL_LINES` buffer ([scene.h:187](../../../desktop/src/scene3d/scene.h#L187)),
+  `GL_LINES` buffer ([scene.h:431](../../../desktop/src/scene3d/scene.h#L431)),
   drawn from the trajectory program.
 - **`ValRec` carries what a taint front needs**: `space` (`"reg"`/`"abs"`/`"off"`),
   `addr`, `write`, `value_valid`
@@ -73,13 +230,15 @@ makes there be one conversion.
 
 ## Tasks
 
-### T1 — One step→place resolver, with its misses counted (M)
+### T1 — ☑ One step→place resolver, with its misses counted (M)
 
 **Goal.** Every layer in this brief converts a step to a cell through one
 function, and that function reports what it could not place.
 
 **Steps.**
-1. New pure helper in `space/` (engine-free, D4):
+1. New pure helper in `space/` (engine-free, D4) — landed as
+   `desktop/src/space/stepplace.{h,cpp}`, with the three sketch deviations
+   the status banner records marked inline:
    ```
    struct StepPlace {
        bool placed = false;
@@ -87,26 +246,34 @@ function, and that function reports what it could not place.
        float u = 0, v = 0;    // plane coordinates, valid iff placed
        uint32_t cell = 0;
        const Region *region = nullptr;
-       const char *why = "";  // when !placed: which resolution step failed
+       std::string why;       // when !placed: which resolution step failed
+                              // (a std::string, not a const char *: the
+                              // reasons are Anchor's own, built at runtime)
    };
    class StepPlacer {                 // built once per weave, reused per layer
      public:
-       StepPlacer(const Projection &, const DataflowStream &, const Anchor &);
-       StepPlace at(uint32_t step) const;
+       // No Anchor parameter: StepAddrResolver (50 T1) already derives and
+       // caches it from proj.regions, and a caller-supplied one would be a
+       // second source of truth.
+       StepPlacer(const Projection &, const DataflowStream &);
+       StepPlace at(uint32_t step);   // non-const: a miss mutates the count
        uint64_t unplaced() const;     // running count, for the HUD chip
        const std::string &note() const;
    };
+   // Three of the four layers also place addresses the recording states
+   // directly (a ValRec::addr, a block start), which have no step rung:
+   StepPlace place_address(const Projection &, uint64_t addr);
    ```
 2. **The resolution order is the recording's own**, and each rung is a stated
    fact rather than a fallback guess: (a) `insn_rbase[step] != 0` → `rbase + off`
    (37's on-the-wire region tag); (b) otherwise the `Anchor` (36's single-codeimage
    derivation) via `Anchor::place`, which already refuses rather than guessing
-   ([projection.h:51-55](../../../desktop/src/space/projection.h#L51)); (c)
+   ([projection.h:50-56](../../../desktop/src/space/projection.h#L50)); (c)
    otherwise unplaced, with `why` naming which rung failed.
 3. **A miss is counted, never dropped.** `unplaced()` feeds a HUD chip on every
    layer that uses the placer — "N steps off-plane" — using the wording
    `placement_chips` already establishes
-   ([hud.h:29-34](../../../desktop/src/scene3d/hud.h#L29)) rather than new phrasing
+   ([hud.h:32-37](../../../desktop/src/scene3d/hud.h#L32)) rather than new phrasing
    (D7 / [24](../archive/gui/24-one-visual-language.md)).
 4. **Never invert through an ordinal.** The header must say, in these words, that
    `TrajPoint::t` is a per-tid vertex counter
@@ -114,7 +281,9 @@ function, and that function reports what it could not place.
    interchangeable with a dataflow step index — the mismatch
    [46](46-3d-functional-roadmap.md) G10 found already shipped in the other
    direction. If [50](50-two-way-brushing.md) has landed, use its resolver instead
-   of adding a second; if it has not, write this one so 50 can adopt it.
+   of adding a second; if it has not, write this one so 50 can adopt it. **50 had
+   landed**, so `StepPlacer` delegates every resolution rung to
+   `space::StepAddrResolver` and re-derives nothing.
 
 **Tests.** New `test_stepplace.cpp`: an `rbase`-carrying step resolves through the
 wire base; a step with no rbase and a single codeimage resolves through the anchor;
@@ -122,11 +291,15 @@ a step with no rbase and two codeimage spans is unplaced with the anchor's own
 refusal reason; an offset past the span's length is unplaced with the clamp reason;
 `unplaced()` counts each of those exactly once. Assert the resolver never returns a
 cell for an unplaced step (no cell 0 fallback — the single most likely bug here).
+Landed with all of the above, plus: re-querying one unplaceable step does not
+double-count (`unplaced()` counts DISTINCT steps, never calls — a chip that said
+"2" for one bad step would be a fabricated quantity), an out-of-range index is
+counted, and `place_address` refuses an unmapped address without a cell.
 
 **Done when.** One resolver exists, its misses are countable, and no layer in this
 brief converts a step to a place any other way.
 
-### T2 — Crossing spurs on the worldline (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
+### T2 — ☑ Crossing spurs on the worldline (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
 
 **Goal.** Where control actually left userspace, shown *on the path being read*
 rather than in a separate flat list.
@@ -146,7 +319,7 @@ rather than in a separate flat list.
    buckets to a visible "other"/grey on any miss** — never folded into a known
    class, never green-on-unknown.
 4. Reuse the per-tid trajectory colouring and the `access_spurs_` single-buffer
-   pattern ([scene.h:187](../../../desktop/src/scene3d/scene.h#L187)).
+   pattern ([scene.h:431](../../../desktop/src/scene3d/scene.h#L431)).
 5. **Self-gate.** With no `TraceStream` worldline there is nothing to hang a spur
    on: disable the layer and have the HUD say why. Never synthesise a path to
    decorate.
@@ -165,10 +338,21 @@ unparsed class and an unparsed return both land in the "other" bucket;
 the golden output. With `seq_present == false`, the layer self-disables with a
 stated reason.
 
+Landed as `desktop/test/test_crossing.cpp`, with all of the above plus: the
+anchor carries the anchoring instruction's own per-tid vertex ordinal (so the
+spur hangs on the vertex the worldline really drew), `rail_span() == 0` is
+asserted by name (deleting the meet-at-one-point property fails a check rather
+than silently reintroducing a fabricated duration), a truncated recording draws
+its anchors hollow, and a recording with no `trace` worldline self-disables.
+The `seq` coverage the brief asks of `test_obs_syscalls.cpp` already landed
+with 54 T3 and is unchanged. The payload-leak check is a blunt negative over
+`crossing_layer_dump()` rather than a committed golden — the layer needed no
+golden corpus file, so none was regenerated.
+
 **Done when.** Kernel crossings appear in situ, claim no duration, and never
 anchor by fabrication.
 
-### T3 — Taint isochrone: the forward-spread front (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T5*
+### T3 — ☑ Taint isochrone: the forward-spread front (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T5*
 
 **Goal.** From a chosen definition, how far and where a value spreads across the
 plane — and whether it escapes into a different kind of region.
@@ -208,17 +392,25 @@ empty, not that cell 0 is untinted); a `value_valid == false` record produces a
 hollow mark; a `steps_missing` gap renders as unknown rather than closing the
 front; a `bounded` walk frays its rim.
 
+Landed as `desktop/test/test_taint.cpp` with all five, plus: an escape is a
+comparison of two RECORDED region kinds (and is never marked when either side's
+kind is unknown), the front CONTINUES past a gap rather than closing at it (the
+edges through the gap are recorded even where the step body is not), a truncated
+recording carries the lower-bound fact, and both refusals (no dataflow pass, an
+out-of-range origin) state a reason and emit no geometry. `test_slice.cpp`'s own
+`dt_walk_depth` coverage landed with 54 T5 and is unchanged.
+
 **Done when.** The front shows distance, marks escapes, and distinguishes "did not
 spread here" from "not recorded".
 
-### T4 — Blame convergence forest (M)
+### T4 — ☑ Blame convergence forest (M)
 
 **Goal.** Across all attribution cones in a recording, which producing step is the
 shared root cause many sinks trace back to.
 
 **Steps.**
 1. For each `BlameAttr` in `Streams::blame`
-   ([streams.h:152-159](../../../desktop/src/doc/streams.h#L152)): place the sink
+   ([streams.h:164-171](../../../desktop/src/doc/streams.h#L164)): place the sink
    at `off` → cell (through T1's placer), and place each step in `cone[]` the same
    way.
 2. A producer cell's **convergence weight is the count of distinct cones whose
@@ -245,10 +437,16 @@ every other step weight 1; a `born_untraced` cone contributes only its sink and
 never raises another cell's weight; an unplaceable `off` is counted by T1's placer
 and emits no beacon; a single-cone recording produces no spike above the baseline.
 
+Landed as `desktop/test/test_blameforest.cpp` with all four, plus: a step
+repeated WITHIN one cone counts once (weight counts distinct CONES, not cone
+entries), the `born_untraced` check is adversarial — the fixture's untraced cone
+deliberately names another cone's step and must still not raise it — and
+truncation rides as a stated lower bound.
+
 **Done when.** Shared root causes are visible, and a convergence is always a real
 set overlap.
 
-### T5 — Dominant-path ridge (M)
+### T5 — ☑ Dominant-path ridge (M)
 
 **Goal.** At each fork, which successor control usually takes — and how much mass
 leaves the other way.
@@ -289,6 +487,15 @@ none produce visibly different geometry (the second capped); the label text
 contains "aggregate"; the survey fallback never appears in the exact geometry
 buffer.
 
+Landed as `desktop/test/test_ridge.cpp` with all five (the last one structurally
+— the survey has its own type, built by a function in another TU that is not
+even on the exact test's link line), plus: a self-loop is recorded as the real
+observed transition it is rather than dropped, instructions before any recorded
+block are counted rather than attributed by containment, a block with one
+observed successor is NOT reported as a fork, brightness is monotonic and a 99/1
+fork differs from a 51/49 one by a pinned margin, and both refusals (no
+instruction stream, no recorded blocks) state a reason and emit no geometry.
+
 **Done when.** Fork bias is readable, and nothing in the layer or its labels
 claims an observed path.
 
@@ -322,3 +529,14 @@ Five medium tasks. Risks:
   in this tree by implementations that had the rule in front of them.
 - **T2 and T3 both depend on Phase 0** and cannot start before it. T4 and T5 can
   start immediately and are the sensible first cut of this brief.
+
+**How the two named risks actually played out (2026-08-03).**
+
+- **T1 vs [50](50-two-way-brushing.md).** 50 landed first, so 57 adopted:
+  `StepPlacer` delegates every rung to `space::StepAddrResolver` and adds only
+  the plane coordinates, the region and the miss count. No second resolver
+  exists.
+- **T5's greedy failure mode.** Refused in the builder, and the refusal is
+  asserted by name in `test_ridge.cpp`. A second instance of the same family —
+  attributing an instruction to a block by "the greatest recorded start below
+  it" — was found while implementing and is refused too; see the status note.

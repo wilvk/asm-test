@@ -27,6 +27,10 @@
 #include "space/converge.h"
 #include "space/datacell.h" // T2/T3/T4 (58): the data-cell family's models
 #include "space/dataribbon.h" // T5 (58): DataRibbon, set_data_ribbon
+#include "space/crossing.h" // T2 (57): CrossingLayer, set_crossing_layer
+#include "space/blameforest.h" // T4 (57): BlameForest, set_blame_forest
+#include "space/ridge.h"       // T5 (57): PathRidge, set_path_ridge
+#include "space/taint.h"    // T3 (57): TaintFront, set_taint_front
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
@@ -107,6 +111,27 @@ struct SceneLayers {
     // bands is the densest geometry here, so it is opted into deliberately and
     // its band count is stated in the HUD.
     bool sediment = false;
+    // --- 57-causal-layers: the four layers of CAUSE ------------------------
+    // Each ADDS geometry rather than re-lifting the terrain's existing
+    // reading, so each defaults ON by this struct's own convention — except
+    // where noted. All four are self-gating: with nothing to draw they draw
+    // nothing and the HUD says why (they never fabricate a subject).
+    //
+    // T2 (57): kernel-crossing spurs — where control actually left userspace,
+    // shown ON the worldline being read. Claims no duration (see
+    // space/crossing.h).
+    bool crossings = true;
+    // T3 (57): the taint isochrone — how far a chosen definition spread, on
+    // the DEF-USE generation axis (never the terrain playhead). Self-gates to
+    // nothing when the recording names no origin.
+    bool taint = true;
+    // T4 (57): the blame convergence forest — which producing step many sinks
+    // trace back to. A SET OVERLAP of recorded cones, never a synthesised
+    // link (see space/blameforest.h).
+    bool blame = true;
+    // T5 (57): the dominant-path ridge — which successor control usually
+    // takes at each fork. An AGGREGATE, never a path (see space/ridge.h).
+    bool ridge = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -248,6 +273,28 @@ class Scene {
     // aggregate (its whole point is to be readable with the playhead
     // stationary), so it uploads on the weave gate.
     void set_sediment_columns(const space::SedimentColumns &cols);
+    // --- 57-causal-layers uploads ------------------------------------------
+    // All four are whole-recording aggregates like set_mispred_layer above,
+    // so they upload on the SAME gate (once per weave/growth batch, never on
+    // a playhead scrub). Their GL objects live behind ONE opaque holder
+    // (`CausalGL`, defined in scene3d/causal.cpp) so this brief's landing
+    // touches scene.h once and scene.cpp twice — a deliberately small
+    // footprint in the two files every 3D brief edits at the same time.
+    //
+    // set_crossing_layer must be called AFTER set_trajectories for the same
+    // weave: a spur hangs on a worldline vertex at world Y = t * traj_scale(),
+    // and that scale is fixed by the trajectory upload.
+    void set_crossing_layer(const space::CrossingLayer &layer);
+    // T3: the taint isochrone. Independent of set_crossing_layer — each
+    // set_*_ below replaces ONLY its own layer's geometry.
+    void set_taint_front(const space::TaintFront &front);
+    // T4: the blame convergence forest.
+    void set_blame_forest(const space::BlameForest &forest);
+    // T5: the dominant-path ridge. The exact ridge and the SURVEY fallback
+    // arrive together but are uploaded into SEPARATE buffers and drawn in
+    // separate ink — they are never merged (57 T5 step 6).
+    void set_path_ridge(const space::PathRidge &ridge,
+                        const space::RidgeSurvey &survey);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -438,6 +485,17 @@ class Scene {
     // The family's single call site in render() — draws whichever of the
     // batches above the SceneLayers toggles enable.
     void draw_data_layers(const float mvp[16], const SceneLayers &layers);
+    // 57-causal-layers: the four causal layers' GL geometry, behind ONE
+    // opaque holder defined in scene3d/causal.cpp (which also defines every
+    // set_*/draw/free below). A pimpl rather than four more inline draw
+    // structs like MispredArcDraw above, precisely so four sibling briefs
+    // editing scene.{h,cpp} concurrently do not collide over this file: the
+    // whole family costs scene.h this block and scene.cpp two call sites.
+    struct CausalGL;
+    CausalGL *causal_ = nullptr;
+    void ensure_causal();
+    void draw_causal(const float mvp[16], const SceneLayers &layers);
+    void free_causal();
 
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;

@@ -28,6 +28,11 @@
 #include "space/datacell.h" // T2 (58): DataReliefLayer, SceneFrame::relief
 #include "space/dataribbon.h" // T5 (58): DataRibbon, SceneFrame::ribbon
 #include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
+#include "space/crossing.h" // T2 (57): CrossingLayer, SceneFrame::crossings
+#include "space/blameforest.h" // T4 (57): BlameForest, SceneFrame::blame
+#include "space/ridge.h"       // T5 (57): PathRidge, SceneFrame::ridge
+#include "space/taint.h"    // T3 (57): TaintFront, SceneFrame::taint
+#include "space/mispred.h"  // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/sediment.h" // T6 (58): SedimentColumns, SceneFrame::sediment
 #include "space/terrain.h"
@@ -96,6 +101,18 @@ struct SceneFrame {
     // T6 (58-memory-data-cell-family): the residency sediment columns — a
     // whole-recording aggregate on the same weave/growth gate.
     const space::SedimentColumns *sediment = nullptr;
+    // 57-causal-layers: the four layers of CAUSE. All whole-recording
+    // aggregates like `mispred` above (a def-use cone, a blame set overlap and
+    // a block-transition histogram are all facts about the WHOLE recording,
+    // not about a playhead position), so all upload on the same gate. nullptr
+    // is treated exactly like a default-constructed, disabled layer.
+    const space::CrossingLayer *crossings = nullptr; // T2
+    const space::TaintFront *taint = nullptr;        // T3
+    const space::BlameForest *blame = nullptr;       // T4
+    const space::PathRidge *ridge = nullptr;         // T5
+    // T5: the survey fallback, carried BESIDE the exact ridge rather than
+    // inside it — two pointers, so the host cannot accidentally merge them.
+    const space::RidgeSurvey *ridge_survey = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

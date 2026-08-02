@@ -1006,6 +1006,153 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // sparsely-hit one unless the reader is told which they are seeing.
     if (s.layers.sediment && !s.sediment_legend.empty())
         ImGui::TextColored(kDim, "%s", s.sediment_legend.c_str());
+    // T2 (57): the kernel-crossing layer's own chrome. The dwell disclaimer
+    // is UNCONDITIONAL while the layer is on — "the geometry claims no
+    // duration" is exactly the kind of thing a reader will otherwise assume
+    // from a shape that leaves the plane and comes back.
+    if (s.layers.crossings) {
+        if (!s.crossings_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "crossings: %s",
+                               s.crossings_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "crossings: %s",
+                               space::CrossingLayer::dwell_note());
+            ImGui::TextColored(kDim, "crossing anchor: %s",
+                               space::CrossingLayer::anchor_label());
+            if (s.crossings_before_first_insn > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u syscall(s) precede every recorded instruction — not "
+                    "anchored (anchoring them to instruction 0 would be a "
+                    "fabrication)",
+                    s.crossings_before_first_insn);
+            if (s.crossings_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u crossing anchor(s) off-plane",
+                                   s.crossings_off_plane);
+        }
+    }
+    // T3 (57): the taint front. The AXIS disclaimer is unconditional while
+    // the layer is on — a front that advances across a plane is exactly the
+    // shape a reader will otherwise read as time.
+    if (s.layers.taint) {
+        if (!s.taint_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "taint: %s",
+                               s.taint_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "taint: %s",
+                               space::TaintFront::axis_note());
+            if (s.taint_bounded)
+                ImGui::TextColored(kWarn, "taint: %s",
+                                   space::TaintFront::bounded_note());
+            if (s.taint_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "taint: the recording is truncated — the front's extent "
+                    "is a stated lower bound");
+            if (s.taint_unknown_steps > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u reached step(s) the recording never described — "
+                    "unknown, NOT \"the value did not go there\"",
+                    s.taint_unknown_steps);
+            if (s.taint_reg_only_writes > 0)
+                ImGui::TextColored(
+                    kDim,
+                    "%u register-only write(s) tint nothing (no address to "
+                    "place)",
+                    s.taint_reg_only_writes);
+            if (s.taint_off_relative_writes > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u region-relative memory write(s) not placed (the wire "
+                    "states no base for data)",
+                    s.taint_off_relative_writes);
+            if (s.taint_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u taint write(s) off-plane",
+                                   s.taint_off_plane);
+        }
+    }
+    // T4 (57): the blame convergence forest. The SET-OVERLAP disclaimer is
+    // unconditional while the layer is on: a bright spike shared by several
+    // cones is exactly the shape a reader will otherwise read as a link.
+    if (s.layers.blame) {
+        if (!s.blame_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "blame: %s",
+                               s.blame_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "blame: %s",
+                               space::BlameForest::label());
+            if (s.blame_single_cone)
+                ImGui::TextColored(
+                    kWarn,
+                    "blame: this recording attributes ONE sink — there is "
+                    "nothing to converge, so the layer is a single faint "
+                    "bundle, not a finding");
+            else
+                ImGui::TextColored(kDim,
+                                   "blame: %u cone(s), peak overlap %u",
+                                   s.blame_cones, s.blame_max_weight);
+            if (s.blame_born_untraced > 0)
+                ImGui::TextColored(kWarn, "%u cone(s) %s",
+                                   s.blame_born_untraced,
+                                   space::BlameForest::born_untraced_label());
+            if (s.blame_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "blame: the recording is truncated — every cone is a "
+                    "lower bound, and a missing convergence is NOT SEEN");
+            if (!s.blame_off_plane_note.empty())
+                ImGui::TextColored(kWarn, "blame: %s",
+                                   s.blame_off_plane_note.c_str());
+        }
+    }
+    // T5 (57): the dominant-path ridge. The AGGREGATE disclaimer is
+    // unconditional while the layer is on: a bright tube threaded through a
+    // chain of blocks is exactly the shape a reader takes for "one run went
+    // this way", and it is not that claim.
+    if (s.layers.ridge) {
+        if (!s.ridge_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "ridge: %s",
+                               s.ridge_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "%s",
+                               space::PathRidge::aggregate_note());
+            if (s.ridge_caps > 0)
+                ImGui::TextColored(kWarn, "%u block(s): %s", s.ridge_caps,
+                                   space::PathRidge::cap_note());
+            if (s.ridge_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "ridge: the trace is truncated — every transition count "
+                    "is a stated lower bound");
+            if (s.ridge_unattributed_insns > 0)
+                ImGui::TextColored(
+                    kDim,
+                    "%u instruction(s) seen before any recorded block — "
+                    "counted, never attributed by containment",
+                    s.ridge_unattributed_insns);
+            if (s.ridge_blocks_unvisited > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u recorded block(s) the instruction stream never "
+                    "reached",
+                    s.ridge_blocks_unvisited);
+            if (s.ridge_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u ridge endpoint(s) off-plane",
+                                   s.ridge_off_plane);
+        }
+        if (s.ridge_survey_edges > 0) {
+            // Its OWN line, and the STATISTICAL wording verbatim: the survey
+            // fallback is separate ink and separate evidence, never folded
+            // into the exact counts above.
+            ImGui::TextColored(kWarn, "%s", space::RidgeSurvey::label());
+            ImGui::TextColored(kDim, "  %u survey edge(s), sampler %s",
+                               s.ridge_survey_edges,
+                               s.ridge_survey_sampler.empty()
+                                   ? "(unstated)"
+                                   : s.ridge_survey_sampler.c_str());
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

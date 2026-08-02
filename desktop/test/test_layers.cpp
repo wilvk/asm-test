@@ -71,6 +71,9 @@ int main() {
         &SceneLayers::mispred,      &SceneLayers::data_relief,
         &SceneLayers::working_set, &SceneLayers::lifetime,
         &SceneLayers::data_ribbon, &SceneLayers::sediment,
+        &SceneLayers::crossings,
+        &SceneLayers::taint,        &SceneLayers::blame,
+        &SceneLayers::ridge,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

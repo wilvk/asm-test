@@ -50,6 +50,7 @@
 #include "ui/view_presence.h" // data-driven view set + faithful absence (20 T1)
 #include "ui/wayfinding.h"    // persistent breadcrumb + disambiguation (21 T2)
 #include "views/abixray.h"
+#include "views/crossing.h" // 57 T2: build_crossing_layer
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -1214,6 +1215,24 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 56 T5: the misprediction layer's plane-space geometry, from the
         // SAME survey aggregate just woven.
         sv.mispred = build_mispred_layer(sv.hotedges_scene, sv.terr.proj);
+        // 57 T2: the kernel-crossing spurs. Woven here, on the same
+        // whole-recording cadence: a syscall's stream position and the
+        // instruction stream it is ordered against are both fixed for the
+        // recording, so nothing about this layer moves with the playhead.
+        sv.crossings = build_crossing_layer(obs_syscalls_build(r), r,
+                                            sv.terr.proj);
+        // 57 T4: the blame convergence forest. A set overlap over every
+        // recorded cone — a whole-recording fact, so it is woven here too.
+        sv.blame = space::build_blame_forest(a.blame, a.df, sv.terr.proj,
+                                             r.truncated());
+        // 57 T5: the dominant-path ridge, and its survey fallback built by a
+        // DIFFERENT function from a DIFFERENT input. The exact builder never
+        // sees the survey and the survey builder never sees the trace, which
+        // is what makes "never blended" structural.
+        sv.ridge =
+            space::build_path_ridge(a.trace, sv.terr.proj, r.truncated());
+        sv.ridge_survey =
+            build_ridge_survey(sv.hotedges_scene, sv.terr.proj);
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
         // 58 T4: the lifetime pillars are a whole-recording Gantt (first..last
@@ -1311,6 +1330,49 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         }
     }
 
+    // 57 T3 (causal-layers): the taint front's ORIGIN — `Streams::blame` where
+    // the recording carries it (a producer-stated attribution beats a UI
+    // selection), otherwise the flat views' Selection step. Recomputed on the
+    // same epoch/growth gate the highlight above uses, because unlike the
+    // other three causal layers this one depends on a chosen origin. No
+    // origin means the layer draws nothing AND says why — never a silent
+    // blank.
+    {
+        const uint64_t gen = r.event_count();
+        bool have_origin = false;
+        uint32_t origin = 0;
+        if (!a.blame.empty()) {
+            origin = a.blame.front().step;
+            have_origin = true;
+        } else if (s.selection.rec == a.id && s.selection.step.has_value()) {
+            origin = static_cast<uint32_t>(*s.selection.step);
+            have_origin = true;
+        }
+        if (sv.taint_epoch != s.selection.epoch || sv.taint_gen != gen ||
+            sv.taint_has_origin != have_origin ||
+            sv.taint_origin != origin) {
+            sv.taint_epoch = s.selection.epoch;
+            sv.taint_gen = gen;
+            sv.taint_has_origin = have_origin;
+            sv.taint_origin = origin;
+            if (have_origin) {
+                // The cap is the pass's own step count: a visited-once BFS
+                // never needs more hops than that, so this is the UNBOUNDED
+                // walk (analysis/slice.h's own note) and `bounded` stays a
+                // real signal rather than an artefact of an arbitrary cap.
+                sv.taint = space::build_taint_front(
+                    a.df, sv.terr.proj, origin,
+                    static_cast<int32_t>(a.df.nsteps), r.truncated());
+            } else {
+                sv.taint = space::TaintFront{};
+                sv.taint.disabled_reason =
+                    "no origin to spread from — this recording carries no "
+                    "`blame` attribution, and nothing is selected in it. "
+                    "Select a step in a flat view to seed the front.";
+            }
+        }
+    }
+
     // The HUD (its own window): provenance chips, playhead, layer toggles, camera
     // presets, region legend. Pure ImGui — drawn even under the null backend. It
     // reports the user's intent back through sv.hud; we apply it here (04's rule:
@@ -1371,6 +1433,42 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 58 T6: the band count (and whether the budget coarsened it) is stated,
     // because a coarsened column looks exactly like a sparsely-hit one.
     sv.hud.sediment_legend = space::sediment_note(sv.sediment);
+    // 57 T2: what the crossing layer could not draw, and why it may be off.
+    sv.hud.crossings_disabled_reason =
+        sv.crossings.enabled ? std::string() : sv.crossings.disabled_reason;
+    sv.hud.crossings_before_first_insn = sv.crossings.before_first_insn;
+    sv.hud.crossings_off_plane = sv.crossings.off_plane;
+    // 57 T3: what the taint front could not draw, each reason kept distinct.
+    sv.hud.taint_disabled_reason =
+        sv.taint.enabled ? std::string() : sv.taint.disabled_reason;
+    sv.hud.taint_bounded = sv.taint.bounded;
+    sv.hud.taint_truncated = sv.taint.truncated;
+    sv.hud.taint_reg_only_writes = sv.taint.reg_only_writes;
+    sv.hud.taint_off_relative_writes = sv.taint.off_relative_writes;
+    sv.hud.taint_unknown_steps = sv.taint.unknown_steps;
+    sv.hud.taint_off_plane = sv.taint.off_plane;
+    // 57 T4: the forest's own honesty channel.
+    sv.hud.blame_disabled_reason =
+        sv.blame.enabled ? std::string() : sv.blame.disabled_reason;
+    sv.hud.blame_single_cone = sv.blame.single_cone;
+    sv.hud.blame_truncated = sv.blame.truncated;
+    sv.hud.blame_cones = sv.blame.cones;
+    sv.hud.blame_born_untraced = sv.blame.born_untraced;
+    sv.hud.blame_max_weight = sv.blame.max_weight;
+    sv.hud.blame_off_plane_note = sv.blame.off_plane_note;
+    // 57 T5: the ridge's honesty channel, with the survey's totals kept
+    // separate from the exact ones.
+    sv.hud.ridge_disabled_reason =
+        sv.ridge.enabled ? std::string() : sv.ridge.disabled_reason;
+    sv.hud.ridge_truncated = sv.ridge.truncated;
+    sv.hud.ridge_caps = static_cast<uint32_t>(sv.ridge.caps.size());
+    sv.hud.ridge_forks = static_cast<uint32_t>(sv.ridge.forks.size());
+    sv.hud.ridge_off_plane = sv.ridge.off_plane;
+    sv.hud.ridge_unattributed_insns = sv.ridge.unattributed_insns;
+    sv.hud.ridge_blocks_unvisited = sv.ridge.blocks_unvisited;
+    sv.hud.ridge_survey_edges =
+        static_cast<uint32_t>(sv.ridge_survey.edges.size());
+    sv.hud.ridge_survey_sampler = sv.ridge_survey.sampler;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1663,6 +1761,11 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.lifetime = &sv.lifetime;         // 58 T4
     f.ribbon = &sv.ribbon;             // 58 T5
     f.sediment = &sv.sediment;         // 58 T6
+    f.crossings = &sv.crossings;       // 57 T2
+    f.taint = &sv.taint;               // 57 T3
+    f.blame = &sv.blame;               // 57 T4
+    f.ridge = &sv.ridge;               // 57 T5
+    f.ridge_survey = &sv.ridge_survey; // 57 T5 (separate ink, separate field)
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

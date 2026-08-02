@@ -28,6 +28,10 @@
 #include "space/datacell.h" // DataReliefLayer (58 T2): SceneView::relief
 #include "space/dataribbon.h" // DataRibbon (58 T5): SceneView::ribbon
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
+#include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
+#include "space/blameforest.h" // BlameForest (57 T4): SceneView::blame
+#include "space/ridge.h"       // PathRidge (57 T5): SceneView::ridge
+#include "space/taint.h"    // TaintFront (57 T3): SceneView::taint
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/sediment.h" // SedimentColumns (58 T6): SceneView::sediment
 #include "space/terrain.h"
@@ -239,6 +243,28 @@ struct SceneView {
     // back restores what you had). Index by scene_kind_index().
     std::vector<scene3d::Camera> kind_cam;
     std::vector<char> kind_cam_inited;
+    // 57-causal-layers: the four layers of CAUSE, all woven once per
+    // recording alongside terr/traj/conv above (a def-use cone, a blame set
+    // overlap and a block-transition histogram are whole-recording facts, not
+    // playhead-gated ones).
+    space::CrossingLayer crossings; // T2
+    // T3: the taint front, and the origin it was built for. Unlike the other
+    // three this one depends on a CHOSEN origin (blame where the recording
+    // has it, else the flat views' Selection), so it is recomputed on the
+    // same epoch/growth gate `highlight` uses rather than only at weave time.
+    space::TaintFront taint;
+    bool taint_has_origin = false;
+    uint32_t taint_origin = 0;
+    uint64_t taint_epoch = UINT64_MAX;
+    uint64_t taint_gen = UINT64_MAX;
+    // T4: the blame convergence forest — a whole-recording set overlap, so
+    // woven once with terr/traj/conv above.
+    space::BlameForest blame;
+    // T5: the dominant-path ridge and, SEPARATELY, its survey fallback. Two
+    // members, never one: the exact transition histogram and the sampled
+    // edges are different evidence and must not share a container.
+    space::PathRidge ridge;
+    space::RidgeSurvey ridge_survey;
 };
 
 struct ShellState {

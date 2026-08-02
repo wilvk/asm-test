@@ -119,6 +119,23 @@ class GlSceneHost : public SceneHost {
             // T6 (58): the sediment columns are whole-recording too.
             static const space::SedimentColumns kNoSediment;
             scene_.set_sediment_columns(f.sediment ? *f.sediment : kNoSediment);
+            // 57-causal-layers: whole-recording aggregates, same gate. The
+            // crossing spurs hang on worldline vertices, so this must come
+            // AFTER set_trajectories above (which fixes traj_scale) — it
+            // does, and set_crossing_layer's own doc comment states the
+            // requirement rather than leaving it to call-site order alone.
+            static const space::CrossingLayer kNoCrossings;
+            scene_.set_crossing_layer(f.crossings ? *f.crossings
+                                                  : kNoCrossings);
+            static const space::TaintFront kNoTaint;
+            scene_.set_taint_front(f.taint ? *f.taint : kNoTaint);
+            static const space::BlameForest kNoBlame;
+            scene_.set_blame_forest(f.blame ? *f.blame : kNoBlame);
+            static const space::PathRidge kNoRidge;
+            static const space::RidgeSurvey kNoRidgeSurvey;
+            scene_.set_path_ridge(
+                f.ridge ? *f.ridge : kNoRidge,
+                f.ridge_survey ? *f.ridge_survey : kNoRidgeSurvey);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

@@ -34,6 +34,7 @@
 #include "doc/recording.h"
 #include "space/mispred.h" // 56 T5: MispredLayer, build_mispred_layer's return
 #include "space/projection.h" // 56 T5: Projection, build_mispred_layer
+#include "space/ridge.h" // 57 T5: RidgeSurvey, build_ridge_survey's return
 #include "space/terrain.h" // 56 T2: apply_coverage_window's Terrain/TerrainModel
 #include "views/observer.h"
 
@@ -165,6 +166,21 @@ void apply_coverage_window(space::Terrain &slice, const space::TerrainModel &mod
 // yields an empty layer, never fabricated geometry.
 space::MispredLayer build_mispred_layer(const HotEdgeSceneView &hv,
                                         const space::Projection &proj);
+
+// 57 T5 (causal-layers): the dominant-path ridge's SURVEY FALLBACK — the
+// max-count outgoing sampled edge per `from` block. Its own function and its
+// own return type (space::RidgeSurvey, space/ridge.h) precisely so it CANNOT
+// be blended into space::PathRidge::segments: the exact ridge is built from
+// the recorded instruction stream by a builder that never sees a survey, and
+// this one is built from the survey by a builder that never sees the trace.
+// Two functions, two types, no shared vector — D7 invariant 1 as a property of
+// the model rather than a rendering convention.
+//
+// An empty `hv.edges` yields an empty survey, never fabricated geometry. An
+// endpoint the projection cannot place is counted (RidgeSurvey::off_plane),
+// never drawn.
+space::RidgeSurvey build_ridge_survey(const HotEdgeSceneView &hv,
+                                      const space::Projection &proj);
 
 std::string obs_hotedges_dump(const HotEdgeView &v);
 

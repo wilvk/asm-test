@@ -335,6 +335,62 @@ struct HudState {
     // DISABLED with the reason beside it, never silently missing.
     std::vector<std::string> kind_unavailable =
         std::vector<std::string>(all_scene_kinds().size());
+    // --- 57-causal-layers: what each causal layer could not draw -------------
+    // Synced by the caller every frame from the layer models. A causal layer
+    // that silently drew less than the data contains would be worse than one
+    // that refused, so every one of these is stated rather than inferred from
+    // an absence (57's own fidelity note).
+    //
+    // T2: the kernel-crossing spurs. `crossings_disabled_reason` non-empty
+    // means the layer self-gated (no worldline, or no stream order) and the
+    // HUD says which; `crossings_before_first_insn` counts the syscalls that
+    // precede every recorded instruction and were therefore NOT anchored (to
+    // instruction 0 or anywhere else).
+    std::string crossings_disabled_reason;
+    uint32_t crossings_before_first_insn = 0;
+    uint32_t crossings_off_plane = 0;
+
+    // T3: the taint front. Every one of these is a thing the front could NOT
+    // draw, and each is a DIFFERENT reason — a register write with no
+    // address, a region-relative write with no stated data base, a step the
+    // recording never described, an address the plane does not map. Collapsing
+    // them into one number would lose exactly the distinction the layer
+    // exists to preserve.
+    std::string taint_disabled_reason;
+    bool taint_bounded = false;
+    bool taint_truncated = false;
+    uint32_t taint_reg_only_writes = 0;
+    uint32_t taint_off_relative_writes = 0;
+    uint32_t taint_unknown_steps = 0;
+    uint32_t taint_off_plane = 0;
+
+    // T4: the blame convergence forest. `blame_single_cone` is what makes
+    // "degrade honestly" visible: a recording that blames one sink has
+    // nothing to converge, and the HUD says so rather than letting a faint
+    // baseline read as a weak finding.
+    std::string blame_disabled_reason;
+    bool blame_single_cone = false;
+    bool blame_truncated = false;
+    uint32_t blame_cones = 0;
+    uint32_t blame_born_untraced = 0;
+    uint32_t blame_max_weight = 0;
+    std::string blame_off_plane_note;
+
+    // T5: the dominant-path ridge. `ridge_caps` is the count of blocks whose
+    // successor was never recorded — an UNKNOWN continuation, stated, because
+    // a capped ridge and a ridge that simply ends look identical otherwise.
+    std::string ridge_disabled_reason;
+    bool ridge_truncated = false;
+    uint32_t ridge_caps = 0;
+    uint32_t ridge_forks = 0;
+    uint32_t ridge_off_plane = 0;
+    uint32_t ridge_unattributed_insns = 0;
+    uint32_t ridge_blocks_unvisited = 0;
+    // The SURVEY fallback's own count and sampler — reported separately from
+    // everything above, because it is a different kind of evidence and this
+    // HUD must never let the two totals read as one number.
+    uint32_t ridge_survey_edges = 0;
+    std::string ridge_survey_sampler;
 };
 
 // T1 (59-standalone-scenes) step 4: draw the axis block for a kind — one line

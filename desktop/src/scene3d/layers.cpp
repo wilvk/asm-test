@@ -64,6 +64,35 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},
+        // 57-causal-layers: the four layers of CAUSE. Each is graded here by
+        // what it actually claims, and each brief's own fidelity note is the
+        // source of that grade.
+        // T2: Derived — the syscall/instruction ORDER is recorded exactly
+        // (Event::seq), but the anchor is the nearest recorded instruction,
+        // not a measured crossing point, and the family class is parsed from
+        // a rendered line rather than read off a field.
+        {"crossings", "crossings",
+         "where did control leave userspace, and roughly where on the path?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::crossings},
+        // T3: Derived — the def-use edges are recorded exactly, but the BFS
+        // GENERATION is an aggregate over them and the escape mark is a
+        // comparison this layer computes, not a field the wire carries.
+        {"taint", "taint",
+         "how far did a chosen value spread, and did it escape into a "
+         "different kind of region?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::taint},
+        // T4: Derived — every cone is a recorded fact, but the WEIGHT is a
+        // set-overlap count this layer computes across cones.
+        {"blame", "blame",
+         "which producing step do many sinks trace back to?", G::Activity,
+         LayerGrade::Derived, &SceneLayers::blame},
+        // T5: Derived — every transition it counts was observed exactly, but
+        // the ridge itself is a per-fork AGGREGATE and never a run, which is
+        // why its label says "aggregate" in words as well as in this grade.
+        {"ridge", "ridge (aggregate)",
+         "at each fork, which way does control usually go — and how much "
+         "mass leaves the other way?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::ridge},
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},

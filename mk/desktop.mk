@@ -623,6 +623,11 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/sediment.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/data_layers_gl.o \
   $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/sp/stepplace.o $(BUILD)/desktop/$(1)/sp/taint.o \
+  $(BUILD)/desktop/$(1)/sp/blameforest.o $(BUILD)/desktop/$(1)/sp/ridge.o \
+  $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/s3/causal.o \
+  $(BUILD)/desktop/$(1)/vw/crossing.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/s3/layers.o \
@@ -1154,6 +1159,10 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_focus \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
+                 $(BUILD)/desktop_test_stepplace \
+                 $(BUILD)/desktop_test_taint \
+                 $(BUILD)/desktop_test_blameforest \
+                 $(BUILD)/desktop_test_ridge \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
@@ -1186,6 +1195,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_budget \
                  $(BUILD)/desktop_test_inspect \
                  $(BUILD)/desktop_test_obs_syscalls \
+                 $(BUILD)/desktop_test_crossing \
                  $(BUILD)/desktop_test_obs_watch \
                  $(BUILD)/desktop_test_obs_topo \
                  $(BUILD)/desktop_test_obs_hotedges \
@@ -1296,6 +1306,22 @@ $(BUILD)/desktop_test_budget: $(BUILD)/desktop/test/t/test_budget.o \
 $(BUILD)/desktop_test_obs_syscalls: \
     $(BUILD)/desktop/test/t/test_obs_syscalls.o \
     $(BUILD)/desktop/test/vw/syscalls.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# 57 T2 (causal-layers): the kernel-crossing spur builder. Its OWN TU
+# (views/crossing.o), NOT an addition to syscalls.o — syscalls.o rides in the
+# DESKTOP_OBS_PURE bundle every Observer-view binary links, and making that
+# bundle drag space/locate.o + space/stepplace.o into a dozen link lines to
+# serve one 3D layer would be a worse trade than one more small TU. So this
+# binary is the only one that pays for the space/ resolvers.
+$(BUILD)/desktop_test_crossing: $(BUILD)/desktop/test/t/test_crossing.o \
+    $(BUILD)/desktop/test/vw/crossing.o \
+    $(BUILD)/desktop/test/vw/syscalls.o $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1627,6 +1653,58 @@ $(BUILD)/desktop_test_locate: $(BUILD)/desktop/test/t/test_locate.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# 57 T1 (causal-layers): the shared step->place resolver — stepplace.o over
+# locate.o (which it ADAPTS, never duplicates) + projection.o + terrain.o
+# (regions_from_codeimage, the fixtures' region builder) + the doc model.
+# Exactly test_locate's own closure plus the one new TU.
+# 57 T3 (causal-layers): the taint isochrone. taint.o + stepplace.o's plane
+# arithmetic + analysis/slice.o's dt_walk_depth (54 T5) + the doc model.
+# Exact-only BY TYPE: the builder takes a DataflowStream, so a SurveyEdge has
+# nowhere to enter.
+# 57 T4 (causal-layers): the blame convergence forest. blameforest.o +
+# stepplace.o (the ONE placer, whose refusals it counts) + the doc model.
+# 57 T5 (causal-layers): the dominant-path ridge. ridge.o + stepplace.o's
+# shared address route + the doc model. The SURVEY fallback lives in a
+# different TU entirely (views/hotedges.o's build_ridge_survey) and is NOT on
+# this link line: the exact builder never sees a survey, by construction.
+$(BUILD)/desktop_test_ridge: $(BUILD)/desktop/test/t/test_ridge.o \
+    $(BUILD)/desktop/test/sp/ridge.o $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_blameforest: \
+    $(BUILD)/desktop/test/t/test_blameforest.o \
+    $(BUILD)/desktop/test/sp/blameforest.o \
+    $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_taint: $(BUILD)/desktop/test/t/test_taint.o \
+    $(BUILD)/desktop/test/sp/taint.o $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_stepplace: $(BUILD)/desktop/test/t/test_stepplace.o \
+    $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # doc 45 T6: links NOTHING but window_picker.o — the proof this module
 # carries zero desktop deps of its own (D4), same shape test_loom_fabric
 # makes for the Loom. X11_LIBS is empty on the stub path (no libx11-dev /
@@ -1650,6 +1728,9 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/sp/mnemonic.o \
     $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/tree.o \
     $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/s3/causal.o \
+    $(BUILD)/desktop/test/sp/stepplace.o $(BUILD)/desktop/test/sp/taint.o \
+    $(BUILD)/desktop/test/sp/blameforest.o $(BUILD)/desktop/test/sp/ridge.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
@@ -1941,6 +2022,10 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/canopy.o $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/sp/mnemonic.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/sp/dataribbon.o $(BUILD)/desktop/test/sp/sediment.o \
+    $(BUILD)/desktop/test/sp/mnemonic.o \
+    $(BUILD)/desktop/test/sp/stepplace.o $(BUILD)/desktop/test/sp/taint.o \
+    $(BUILD)/desktop/test/sp/blameforest.o $(BUILD)/desktop/test/sp/ridge.o \
+    $(BUILD)/desktop/test/vw/crossing.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/focus.o \
