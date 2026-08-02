@@ -24,6 +24,13 @@ rules follow [../implementations/](../implementations/README.md) — read
 > |---|---|
 > | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1–L6** are still open (arm64 live-dataflow leg, `df_invocation`-aware decode, live `blame`/`statediff` kinds, the Darwin `libasmtest_dataflow` build, ARM32/RISC-V Author guests, doc-37 T4 on the serve disasm path). L7 closed as doc 39. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
+> | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52, all ☐ not started. |
+> | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | ☐ 0/5 — hover readout, pick preview, pickable convergence arcs / access spurs. |
+> | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | ☐ 0/5 — camera pan/recentre, address & region goto, landmark home, discoverable controls. |
+> | [49-one-time-truth-in-the-scene.md](49-one-time-truth-in-the-scene.md) | ☐ 0/4 — clip the worldline to the playhead, mark the execution front, make height readable. |
+> | [50-two-way-brushing.md](50-two-way-brushing.md) | ☐ 0/4 — light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal. |
+> | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
+> | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | ☐ 0/4 — a GL-free 2D terrain surface: the no-GL branches gain a real view and the GL path gains a reading mode. |
 > | [asmtrace-schema.md](asmtrace-schema.md) | the live `.asmtrace` schema reference — not a brief, and still the normative format doc. |
 
 > **Provenance.** Generated 2026-07-23/24 from the GUI plan (itself
@@ -568,6 +575,50 @@ never calls `PTRACE_TRACEME`/`PTRACE_SEIZE` — `desktop-ui-test` 28/28,
 `desktop-test-xvfb`); `cli-smoke` green headless. `asmtrace-golden-check`'s
 one diff (`abixray-make_pair-sysv`) is a pre-existing host-Capstone-version
 artifact, confirmed unrelated via baseline comparison. · —.
+
+**The 3D as an instrument (docs 46–52, 2026-08-02): the second 3D family, cut
+from the same three analysis docs 43 read — but from the half none of them
+acted on.** [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) is the
+roadmap; [47](47-scene-inspect-and-pickable-overlays.md)–[52](52-flat-terrain-surface.md)
+are its six implementation-ready briefs, all ☐ not started, all unclaimed.
+Where [43](43-faithful-city-roadmap.md) is the **representation** axis (what the
+scene depicts — zoning, weather, districts, towers), this family is the
+**instrument** axis (what a person can do with it). That split is not
+editorial: the [3D catalog](../analysis/2026-07-29-3d-visualization-catalog.md)
+and the [city doc](../analysis/2026-07-30-computer-as-city-3d.md) between them
+propose 33 concepts and 44 city elements, and every one is something to *draw* —
+neither proposes a single new thing to *do*. Only the
+[UX/dataviz review](../analysis/2026-07-29-gui-ux-dataviz-review.md) looked at
+operation, and its 3D findings (#14, #36, #37, #38, #40, #50, #55, #56, #58)
+were never absorbed by the city doc, which says outright that it absorbs the
+*catalog*. 46§2 is the resulting gap table — 13 gaps, each with its evidence
+re-verified against `f110150`: no hover/inspect before a pick commits (and
+`resolve_pick` already computes the answer and discards it); half the drawn
+geometry not pickable at all (arcs, spurs); a camera that cannot pan, recentre
+or go to a named address; a worldline that ignores the playhead while the
+terrain slices on it (two contradictory time truths on one screen); height with
+no scale, no contours, no key; navigation that only runs 3D→2D; no per-thread or
+per-region focus; no distance-based LOD; and no spatial channel at all without
+GL. Two findings are worth calling out on their own: **G10** — `resolve_pick`
+sets `link.step = pv.t`, handing a per-tid vertex counter
+([trajectory.cpp:99](../../../desktop/src/space/trajectory.cpp#L99)) to a field
+documented as a dataflow step index ([nav.h:62](../../../desktop/src/nav.h#L62)),
+i.e. the *same* axis conflation [44](../archive/gui/44-faithful-city-phase-a-mvp-terrain-reskin.md)
+correctly declined in the forward direction, already shipped unguarded in the
+reverse one (50-T3 opens by verifying that reading before changing anything);
+and the family's single load-bearing design decision, **cross-axis brushing goes
+through the ADDRESS, never through an ordinal** (46§4) — which is what makes
+[50](50-two-way-brushing.md) able to close 44's deferred cross-brush soundly,
+since `Selection.off → base+off → Projection::project` is exactly invertible and
+`DataflowStream::insn_off[step]`/`insn_rbase[step]` supply the same bridge from a
+step. Five of the six briefs are pure render/UI work over models that already
+exist; none needs a producer change, a schema change, a new dep, or the Phase-D
+instanced-building system, and none conflicts with a later city phase (two of
+them — 48's landmarks, 51's entity budget — answer open questions the city doc
+raises in its own §7). Sequencing in 46§3: 47/48/49 are independent and land in
+any order (49 first if capacity is short — it is the only one fixing something
+currently *misleading* rather than absent), then 50/51, with 52 parallel
+throughout. 46: roadmap only, no tasks · —. 47–52: ☐ 0/26 total · *free*.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
