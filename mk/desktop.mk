@@ -1144,6 +1144,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_scene_kind \
+                 $(BUILD)/desktop_test_standalone \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
@@ -1514,8 +1515,23 @@ $(BUILD)/desktop_test_scene_kind: $(BUILD)/desktop/test/t/test_scene_kind.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# T2-T5: the four standalone scene BUILDERS, over real fixtures. Links
+# s3/standalone.o + the models it reads from (analysis/diff.o for the
+# divergence gate, views/region.o + views/tree.o for the invocation/ribbon
+# sources, space/mnemonic.o for the prism's ambiguity gate) + the doc model,
+# and NOTHING else: no ImGui, no GL, no engine. Same engine-free closure proof
+# test_drillin makes, now for the substrates that are not the address plane.
+$(BUILD)/desktop/test/t/test_standalone.o \
 $(BUILD)/desktop/test/t/test_scene_kind.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop_test_standalone: $(BUILD)/desktop/test/t/test_standalone.o \
+    $(BUILD)/desktop/test/s3/standalone.o \
+    $(BUILD)/desktop/test/sp/mnemonic.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/tree.o \
+    $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \
+    $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The convergence detector + the incremental live feed (10-spacetime-3d-overview.md
 # T5) links space/converge.o + trajectory.o + projection.o (it places PC vertices

@@ -16,7 +16,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 1/5, in progress (2026-08-03).** T1 landed the second
+> **Status — ◐ 2/5, in progress (2026-08-03).** T1 landed the second
 > substrate: `scene3d/scene_kind.h` (the `SceneKind` discriminant + the
 > required axis contract), the outer pick-id band inside 47 T3's own
 > `PickBands`, `scene3d/glcommon.{h,cpp}` (the shared program link + R32UI
@@ -142,7 +142,7 @@ kinds and switching back reproduces the original image.
 **Done when.** A second substrate can be rendered and picked, the plane path is
 unchanged, and no scene can have an unlabelled axis.
 
-### T2 — Divergence worldline (M)
+### T2 — ✅ Divergence worldline (M)
 
 **Goal.** Two recordings of the same routine: where their architectural states
 first diverge, and how the disagreement widens.
