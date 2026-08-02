@@ -48,6 +48,12 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"lifetime", "lifetime",
          "over what interval is each address OBSERVED alive?", G::Activity,
          LayerGrade::Exact, &SceneLayers::lifetime},
+        // 58 T5: Exact — every vertex is a recorded access at its recorded
+        // address, and a segment exists only between two accesses that really
+        // were consecutive in the record.
+        {"access order", "access order",
+         "is the access pattern streaming, strided, or pointer-chasing?",
+         G::Activity, LayerGrade::Exact, &SceneLayers::data_ribbon},
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},

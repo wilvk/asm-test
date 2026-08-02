@@ -24,6 +24,7 @@
 #include "space/canopy.h"   // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
 #include "space/datacell.h" // T2/T3/T4 (58): the data-cell family's models
+#include "space/dataribbon.h" // T5 (58): DataRibbon, set_data_ribbon
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
@@ -93,6 +94,11 @@ struct SceneLayers {
     // Gantt-in-3D over the WHOLE recording, so the playhead reads as a plane
     // through them rather than cutting them. Default OFF, same reason.
     bool lifetime = false;
+    // T5 (58-memory-data-cell-family): the data-access worldline ribbon — the
+    // SHAPE of the access order. Default OFF: it is a dense per-access
+    // polyline, and it must never be mistaken for the access-mark spurs that
+    // are on by default (`access_marks`), so it opts in deliberately.
+    bool data_ribbon = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -220,6 +226,14 @@ class Scene {
     // into their own batch: an interval and a lower bound on an interval are
     // different claims and must not share one buffer or one colour.
     void set_lifetime_pillars(const space::LifetimePillars &pillars);
+    // T5 (58): the data-access ribbon. A whole-recording aggregate like the
+    // pillars. Reads and writes go into separate batches (the colour channel
+    // T5 asks for), and a CROSS-REGION leap into a third — a leap between
+    // distinct observed-data spans is genuine non-locality and is drawn
+    // distinctly so a reader never blames the address compaction for it. A
+    // GAP emits no segment at all, which is the only honest representation of
+    // an access sequence that was not recorded.
+    void set_data_ribbon(const space::DataRibbon &ribbon);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -380,6 +394,7 @@ class Scene {
     DataLineBatch relief_read_, relief_write_; // T2
     DataLineBatch tide_live_, tide_watermark_; // T3
     DataLineBatch pillars_, pillars_open_;     // T4
+    DataLineBatch ribbon_read_, ribbon_write_, ribbon_leap_; // T5
     void free_data_layers();
     // Upload `verts` (3 floats per vertex) into `b`, replacing whatever it
     // held. Defined in data_layers_gl.cpp with the rest of the family.

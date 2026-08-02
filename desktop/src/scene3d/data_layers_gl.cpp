@@ -80,7 +80,8 @@ void Scene::upload_data_batch(DataLineBatch &b, const std::vector<float> &verts)
 
 void Scene::free_data_layers() {
     DataLineBatch *all[] = {&relief_read_, &relief_write_, &tide_live_,
-                            &tide_watermark_, &pillars_, &pillars_open_};
+                            &tide_watermark_, &pillars_,     &pillars_open_,
+                            &ribbon_read_,    &ribbon_write_, &ribbon_leap_};
     for (DataLineBatch *b : all) {
         if (b->vbo)
             glDeleteBuffers(1, &b->vbo);
@@ -218,6 +219,58 @@ void Scene::set_lifetime_pillars(const space::LifetimePillars &pillars) {
     pillars_open_.line_width = 1.5f;
 }
 
+// T5 (58): the data-access worldline ribbon. One vertex per recorded access at
+// its effective address's plane position, Y = trace time, joined in step order
+// — the SAME per-vertex line construction the PC worldlines use, with `ea`
+// substituted for the PC.
+//
+// THE RULE: a segment exists only where the MODEL emitted one. A gap in the
+// step coverage, or an access no region maps, produces NO segment — never an
+// interpolated join, which would draw an access that was never recorded. This
+// file does not decide where the gaps are; it structurally cannot invent a
+// segment, because it only ever walks DataRibbon::segs.
+//
+// Three batches: reads, writes (T5's colour channel) and cross-region LEAPS. A
+// leap between distinct observed-data spans is genuine non-locality, so it is
+// drawn distinctly and never blamed on the address compaction.
+void Scene::set_data_ribbon(const space::DataRibbon &ribbon) {
+    std::vector<float> reads, writes, leaps;
+    for (const space::RibbonSegment &sg : ribbon.segs) {
+        if (sg.a >= ribbon.verts.size() || sg.b >= ribbon.verts.size())
+            continue;
+        const space::RibbonVertex &a = ribbon.verts[sg.a];
+        const space::RibbonVertex &b = ribbon.verts[sg.b];
+        const float ya = static_cast<float>(a.step) * traj_scale_;
+        const float yb = static_cast<float>(b.step) * traj_scale_;
+        std::vector<float> &into =
+            sg.cross_region                       ? leaps
+            : (b.dir == space::RibbonVertex::Write) ? writes
+                                                    : reads;
+        seg(into, a.u, ya, a.v, b.u, yb, b.v);
+    }
+    upload_data_batch(ribbon_read_, reads);
+    upload_data_batch(ribbon_write_, writes);
+    upload_data_batch(ribbon_leap_, leaps);
+    // The SAME cool=read / warm=write axis the twin relief uses, so two layers
+    // never claim one hue for two meanings.
+    ribbon_read_.color[0] = 0.30f;
+    ribbon_read_.color[1] = 0.72f;
+    ribbon_read_.color[2] = 0.95f;
+    ribbon_read_.color[3] = 0.75f;
+    ribbon_write_.color[0] = 1.00f;
+    ribbon_write_.color[1] = 0.60f;
+    ribbon_write_.color[2] = 0.20f;
+    ribbon_write_.color[3] = 0.75f;
+    // A leap gets its own colour AND its own line width: it is the layer's
+    // real finding (pointer-chasing across objects), not a rendering artefact.
+    ribbon_leap_.color[0] = 0.85f;
+    ribbon_leap_.color[1] = 0.30f;
+    ribbon_leap_.color[2] = 0.85f;
+    ribbon_leap_.color[3] = 0.80f;
+    ribbon_read_.line_width = ribbon_write_.line_width = 1.5f;
+    ribbon_leap_.line_width = 2.0f;
+}
+
 void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (!prog_traj_)
         return;
@@ -229,6 +282,11 @@ void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (layers.lifetime) {
         batches.push_back(&pillars_);
         batches.push_back(&pillars_open_);
+    }
+    if (layers.data_ribbon) {
+        batches.push_back(&ribbon_read_);
+        batches.push_back(&ribbon_write_);
+        batches.push_back(&ribbon_leap_);
     }
     if (layers.working_set) {
         // Watermark first, live second: the faded decay sits behind the mass

@@ -963,6 +963,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // OBSERVED touch), so they are woven here with the other
         // playhead-independent models, never re-gated on a scrub.
         sv.lifetime = space::build_lifetime_pillars(sv.terr);
+        // 58 T5: the access-order ribbon, likewise a whole-recording aggregate
+        // (every recorded access in step order), so it is woven here too.
+        sv.ribbon = space::build_data_ribbon(r, sv.terr.proj);
         sv.opcode_cells = space::build_opcode_terrain(
             sv.terr, r, space::opcode_guest_from_arch(a.arch));
         sv.hud.nsteps = sv.terr.nsteps;
@@ -1034,6 +1037,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 58 T4: an open-topped pillar is a lower bound, never an interval — the
     // count is stated, never silently folded into the closed ones.
     sv.hud.lifetime_open_topped = sv.lifetime.open_topped;
+    // 58 T5: the ribbon's legend comes from the MODEL, so the source
+    // population, the gap rule and the leap rule are stated once.
+    sv.hud.ribbon_legend = space::data_ribbon_note(sv.ribbon);
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1279,6 +1285,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.tide = &sv.tide;                 // 58 T3
     f.tide_gen = sv.tide_window;
     f.lifetime = &sv.lifetime;         // 58 T4
+    f.ribbon = &sv.ribbon;             // 58 T5
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

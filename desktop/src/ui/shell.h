@@ -26,6 +26,7 @@
 #include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
 #include "space/datacell.h" // DataReliefLayer (58 T2): SceneView::relief
+#include "space/dataribbon.h" // DataRibbon (58 T5): SceneView::ribbon
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
@@ -84,6 +85,9 @@ struct SceneView {
     // pillar spans first..last touch regardless of the playhead), so it is
     // woven ONCE per recording alongside terr/traj, exactly like opcode_cells.
     space::LifetimePillars lifetime;
+    // 58 T5: the data-access order ribbon — also a whole-recording aggregate
+    // (every recorded access, in step order), woven once with the models above.
+    space::DataRibbon ribbon;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

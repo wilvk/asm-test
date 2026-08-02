@@ -11,6 +11,7 @@
 //
 // Fixtures are hand-built NDJSON recordings loaded through the real loader, so
 // `seq`, basis and truncation behave exactly as a producer's would.
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -21,6 +22,7 @@
 #include "doc/recording.h"
 #include "scene3d/hud.h"
 #include "space/datacell.h"
+#include "space/dataribbon.h"
 #include "space/projection.h"
 #include "space/terrain.h"
 
@@ -656,11 +658,227 @@ static void t4_lifetime_pillars() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T5 — data-access worldline ribbon
+// ---------------------------------------------------------------------------
+// The largest Chebyshev plane distance any one segment covers — the "how far
+// does one step of this access pattern travel on the plane" measure the shape
+// claim rests on.
+static uint32_t max_hop(const DataRibbon &R, uint32_t w) {
+    uint32_t worst = 0;
+    for (const RibbonSegment &sg : R.segs) {
+        const uint32_t ca = R.verts[sg.a].cell, cb = R.verts[sg.b].cell;
+        const uint32_t ax = ca % w, ay = ca / w, bx = cb % w, by = cb / w;
+        const uint32_t dx = ax > bx ? ax - bx : bx - ax;
+        const uint32_t dy = ay > by ? ay - by : by - ay;
+        worst = std::max(worst, std::max(dx, dy));
+    }
+    return worst;
+}
+
+static void t5_access_ribbon() {
+    uint32_t seq_max_hop = 0;
+    // A SEQUENTIAL scan: eight consecutive 8-byte reads over one span. The
+    // cells must be adjacent-or-equal in the compacted domain, which is the
+    // locality property the Hilbert projection exists to preserve.
+    {
+        std::string nd = kHeader + trace_steps(24);
+        for (int i = 0; i < 8; i++)
+            nd += mem_ev(static_cast<uint64_t>(i + 1), 0x200000 + 8 * i, 8, "r");
+        nd += kEnd;
+        Recording r = mk_rec(nd);
+        TerrainModel m = weave(r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: the ribbon sourced from `mem`", R.source == RibbonSource::Mem,
+              "wrong source");
+        check("T5: one vertex per recorded access", R.verts.size() == 8,
+              "got " + std::to_string(R.verts.size()));
+        check("T5: every access placed", R.off_plane == 0,
+              std::to_string(R.off_plane) + " off-plane");
+        check("T5: seven segments join eight consecutive accesses",
+              R.segs.size() == 7 && R.gaps == 0,
+              "got " + std::to_string(R.segs.size()) + " segments, " +
+                  std::to_string(R.gaps) + " gaps");
+        check("T5: vertices are in recorded step order",
+              [&] {
+                  for (size_t i = 1; i < R.verts.size(); i++)
+                      if (R.verts[i].step < R.verts[i - 1].step)
+                          return false;
+                  return true;
+              }(),
+              "the ribbon is not ordered by step");
+        // A sequential scan hugs adjacent cells: no segment leaps between
+        // observed-data spans (there is only one span here).
+        check("T5: a sequential scan produces NO cross-span leaps",
+              R.cross_region == 0,
+              "a scan within one object was reported as non-locality");
+        seq_max_hop = max_hop(R, m.w);
+    }
+
+    // A STRIDED pattern alternates: the documented zig-zag. Assert the shape
+    // is DIFFERENT from the sequential one rather than pinning a Hilbert
+    // curve's exact geometry (which is the projection's business, not this
+    // layer's).
+    {
+        std::string nd = kHeader + trace_steps(24);
+        for (int i = 0; i < 8; i++)
+            nd +=
+                mem_ev(static_cast<uint64_t>(i + 1), 0x200000 + 256 * i, 8, "r");
+        nd += kEnd;
+        Recording r = mk_rec(nd);
+        TerrainModel m = weave(r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: the strided fixture joins all eight",
+              R.verts.size() == 8 && R.segs.size() == 7,
+              "the stride lost a segment");
+        // THE shape assertion, stated as a COMPARISON rather than as an
+        // absolute plane distance: how far apart two consecutive cells land is
+        // the Hilbert projection's business (it depends on the compacted
+        // domain size and the clamped order), while "a stride travels further
+        // than a scan" is THIS layer's claim and is what makes the pattern
+        // legible as a shape at all.
+        const uint32_t stride_max_hop = max_hop(R, m.w);
+        check("T5: a strided pattern travels FURTHER per step than a scan",
+              stride_max_hop > seq_max_hop,
+              "a 256-byte stride hopped no further than a sequential scan (" +
+                  std::to_string(stride_max_hop) + " vs " +
+                  std::to_string(seq_max_hop) +
+                  ") — the layer would show no shape at all");
+    }
+
+    // POINTER-CHASING across two distinct observed-data spans: the leap is
+    // labelled GENUINE non-locality so a reader does not blame the compaction.
+    {
+        std::string nd = kHeader + trace_steps(24) +
+                         mem_ev(1, 0x200000, 8, "r") +
+                         mem_ev(2, 0x900000, 8, "r") +
+                         mem_ev(3, 0x200008, 8, "r") + kEnd;
+        Recording r = mk_rec(nd);
+        TerrainModel m = weave(r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: two distinct observed-data spans exist (test setup)",
+              [&] {
+                  size_t n = 0;
+                  for (const Region &g : m.proj.regions)
+                      if (g.label == kObservedDataLabel)
+                          n++;
+                  return n == 2;
+              }(),
+              "the fixture did not produce two spans");
+        check("T5: a leap across distinct spans is FLAGGED as non-locality",
+              R.cross_region == 2 && R.segs.size() == 2,
+              "got " + std::to_string(R.cross_region) + " leaps of " +
+                  std::to_string(R.segs.size()) + " segments");
+        check("T5: the note names the leaps as GENUINE non-locality",
+              data_ribbon_note(R).find("GENUINE") != std::string::npos,
+              "a reader could blame the address compaction for the leap");
+    }
+
+    // A GAP in the step coverage produces a BREAK, never a joined segment. The
+    // covered domain here is the trace's 6 steps; the access at step 40 sits
+    // outside it, so the pair straddling the boundary is not joined.
+    {
+        std::string nd = kHeader + trace_steps(6) + mem_ev(1, 0x200000, 8, "r") +
+                         mem_ev(2, 0x200008, 8, "r") +
+                         mem_ev(40, 0x200010, 8, "r") + kEnd;
+        Recording r = mk_rec(nd);
+        TerrainModel m = weave(r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: the covered step domain is the trace's own extent",
+              R.covered_steps == 6,
+              "got " + std::to_string(R.covered_steps));
+        check("T5: a gap in the step coverage BREAKS the ribbon",
+              R.segs.size() == 1 && R.gaps == 1,
+              "got " + std::to_string(R.segs.size()) + " segments and " +
+                  std::to_string(R.gaps) +
+                  " gaps — an interpolated join would draw an access that was "
+                  "never recorded");
+        check("T5: the out-of-domain access is still COUNTED as a vertex",
+              R.verts.size() == 3,
+              "the access outside the covered domain was dropped, not gapped");
+    }
+
+    // An UNPLACEABLE access breaks the ribbon too, and is counted.
+    {
+        std::string nd = kHeader + trace_steps(24) +
+                         mem_ev(1, 0x200000, 8, "r") +
+                         mem_ev(2, 0x900000, 8, "r") +
+                         mem_ev(3, 0x200008, 8, "r") + kEnd;
+        Recording r = mk_rec(nd);
+        // Deliberately build the projection from the CODE regions only, so the
+        // middle access places nowhere — the honest "we know it happened, we
+        // cannot say where" case.
+        TerrainModel m =
+            build_terrain(build_projection(regions_from_codeimage(r)), r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: unplaceable accesses are COUNTED, never dropped",
+              R.verts.size() == 3 && R.off_plane == 3,
+              "got " + std::to_string(R.off_plane) + " off-plane of " +
+                  std::to_string(R.verts.size()));
+        check("T5: no segment is drawn across an unplaceable access",
+              R.segs.empty() && R.gaps == 2, "a segment spanned a lost vertex");
+        check("T5: the note states the off-plane count",
+              data_ribbon_note(R).find("could not be placed") !=
+                  std::string::npos,
+              "the off-plane accesses vanished silently");
+    }
+
+    // The FALLBACK source is labelled DIFFERENTLY from `mem`.
+    {
+        const std::string ma = ribbon_source_label(RibbonSource::Mem);
+        const std::string df = ribbon_source_label(RibbonSource::DataflowAbs);
+        check("T5: the two sources carry different labels", ma != df,
+              "the fallback source is presented as `mem`");
+        check("T5: the fallback label says it is NOT the same population",
+              df.find("NOT the same population") != std::string::npos,
+              "the fallback label implies the two are interchangeable");
+    }
+
+    // Truncation CAPS the ribbon, and the cap is stated.
+    {
+        std::string nd = kHeader + trace_steps(24) +
+                         mem_ev(1, 0x200000, 8, "r") + mem_ev(2, 0x200008, 8, "r");
+        Recording r = mk_rec(nd); // no `end` footer => torn
+        TerrainModel m = weave(r);
+        DataRibbon R = build_data_ribbon(r, m.proj);
+        check("T5: a torn recording CAPS the ribbon", R.capped,
+              "the tail was presented as an end");
+        check("T5: the note states the cap",
+              data_ribbon_note(R).find("CAPPED") != std::string::npos,
+              "the cap is invisible to the reader");
+    }
+
+    // The note names the layer it is NOT.
+    {
+        std::string nd = kHeader + trace_steps(6) + mem_ev(1, 0x200000, 8, "r") +
+                         kEnd;
+        Recording r = mk_rec(nd);
+        TerrainModel m = weave(r);
+        const std::string note = data_ribbon_note(build_data_ribbon(r, m.proj));
+        check("T5: the note distinguishes itself from the access spurs",
+              note.find("NOT the PC->data access spurs") != std::string::npos,
+              "the ribbon and the spurs could read as one layer");
+    }
+
+    // No `mem` and no abs dataflow => an empty ribbon that SAYS so.
+    {
+        std::string coarse = kHeader + trace_steps(6) + kEnd;
+        Recording cr = mk_rec(coarse);
+        TerrainModel cm = weave(cr);
+        DataRibbon CR = build_data_ribbon(cr, cm.proj);
+        check("T5: no source => an empty ribbon, labelled",
+              CR.verts.empty() && CR.segs.empty() &&
+                  CR.source == RibbonSource::None,
+              "an empty ribbon claimed a source");
+    }
+}
+
 int main() {
     t1_hud_contract();
     t2_twin_relief();
     t3_working_set_tide();
     t4_lifetime_pillars();
+    t5_access_ribbon();
 
     if (failures) {
         std::fprintf(stderr, "%d data-layer check(s) failed\n", failures);

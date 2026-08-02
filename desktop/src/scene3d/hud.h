@@ -287,6 +287,13 @@ struct HudState {
     // top is a lower bound). Synced by the caller; shown only while
     // SceneLayers::lifetime is on, in the refuse colour.
     uint32_t lifetime_open_topped = 0;
+
+    // T5 (58-memory-data-cell-family): the access-order ribbon's own legend
+    // line, built by the caller from space::data_ribbon_note(ribbon) — it
+    // names the SOURCE population (`mem` vs dataflow operands, which are NOT
+    // the same set of accesses), the gap rule and the leap rule. Shown only
+    // while SceneLayers::data_ribbon is on.
+    std::string ribbon_legend;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

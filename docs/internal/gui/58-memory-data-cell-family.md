@@ -19,7 +19,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change. Line numbers below were re-verified 2026-08-03 while implementing.
 >
-> **Status — ☑ 4/6 (T1–T4 landed 2026-08-03).**
+> **Status — ☑ 5/6 (T1–T5 landed 2026-08-03).**
 
 ## Why this work exists
 
@@ -293,7 +293,7 @@ pillar would hide it. Tests: 5-and-900 yields **one** pillar spanning 5..900 (ne
 two); the single-touch stub keeps its stated zero-length interval; the torn tail
 open-tops exactly the right pillar; no `mem` yields no pillars at all.
 
-### T5 — Data-access worldline ribbon (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
+### ☑ T5 — Data-access worldline ribbon (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
 
 **Goal.** The *shape* of the access order — streaming, strided, or pointer-chasing —
 which a flat address list cannot show and a locality-preserving plane can.
@@ -328,6 +328,38 @@ differently from `mem`.
 
 **Done when.** Access locality is legible as a shape, and no segment exists where no
 access was recorded.
+
+**Landed.** `space/dataribbon.{h,cpp}`. `build_data_ribbon(rec, proj)` reuses
+`trajectory.cpp`'s construction shape — same `mem` events, same `step` axis, same
+ordering rule — with `ea` substituted for the PC. Fallback to
+`DataflowStream::recs`' **abs**-space `ValRec`s when `mem` is absent (an `"off"`
+record is region-relative and is never placed raw, the same rule 54 T1 holds), and
+`RibbonSource` is stated in the legend with the sentence *"NOT the same population:
+the emulator's hardware hooks see implicit stack traffic a live `mem` enumeration
+does not"*.
+
+**What "a gap in the step coverage" actually means here, made checkable.** The
+brief asks for a break rather than a joined segment; the concrete rule shipped is:
+a segment is emitted only when **both** endpoints place **and** both steps lie
+inside the covered step domain (`TraceStream::insns.size()`, or
+`DataflowStream::insn_off.size()`), the number of steps the capture actually holds.
+An unplaceable access is kept as a vertex and **counted** (`off_plane`) but breaks
+the ribbon: joining across it would assert a locality step from A straight to C
+that the program never made. Gaps are counted, never silent. The GL half walks
+`DataRibbon::segs` only, so it structurally cannot invent a segment.
+
+`rec.dropped()` is a whole-recording fact that cannot be localised to a pair, so it
+is stated on the layer (`drops_present`, surfaced in the note) rather than silently
+ignored or used to break every segment.
+
+Shape tests are stated as **comparisons**, not as absolute plane distances: how far
+two consecutive cells land apart is the Hilbert projection's business (it depends
+on the compacted domain size and the clamped order), while *"a stride travels
+further per step than a scan"* is this layer's own claim — so the test asserts
+`max_hop(strided) > max_hop(sequential)`. Cross-span leaps get their own GL batch
+and colour and the note calls them **GENUINE** non-locality, so a reader never
+blames the compaction. The HUD adds one more line when `access order` and `access`
+are both on, naming them as two different layers.
 
 ### T6 — Residency sediment columns (M)
 

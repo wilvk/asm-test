@@ -24,6 +24,7 @@
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
 #include "space/datacell.h" // T2 (58): DataReliefLayer, SceneFrame::relief
+#include "space/dataribbon.h" // T5 (58): DataRibbon, SceneFrame::ribbon
 #include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/terrain.h"
@@ -73,6 +74,9 @@ struct SceneFrame {
     // whole-recording aggregate like `opcode_cells`, so the host uploads it on
     // the weave/growth gate, never on a playhead scrub.
     const space::LifetimePillars *lifetime = nullptr;
+    // T5 (58-memory-data-cell-family): the data-access order ribbon — a
+    // whole-recording aggregate on the same weave/growth gate as `lifetime`.
+    const space::DataRibbon *ribbon = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

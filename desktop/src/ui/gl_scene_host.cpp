@@ -102,6 +102,9 @@ class GlSceneHost : public SceneHost {
             // that moved with the playhead would not be a Gantt.
             static const space::LifetimePillars kNoLifetime;
             scene_.set_lifetime_pillars(f.lifetime ? *f.lifetime : kNoLifetime);
+            // T5 (58): the access-order ribbon is whole-recording too.
+            static const space::DataRibbon kNoRibbon;
+            scene_.set_data_ribbon(f.ribbon ? *f.ribbon : kNoRibbon);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

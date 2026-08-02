@@ -794,6 +794,21 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                "lower bound",
                                s.lifetime_open_topped);
     }
+    // T5 (58): the access-order ribbon. Its note comes from the model
+    // (space::data_ribbon_note) so the source population, the gap rule and the
+    // leap rule are stated once and cannot drift; the extra line here is the
+    // disambiguation against the access SPURS, which are a different layer
+    // drawn in the same pane and would otherwise read as one thing.
+    if (s.layers.data_ribbon) {
+        if (!s.ribbon_legend.empty())
+            ImGui::TextColored(kDim, "%s", s.ribbon_legend.c_str());
+        if (s.layers.access_marks)
+            ImGui::TextColored(kWarn,
+                               "\"access order\" and \"access\" are two "
+                               "DIFFERENT layers, both on: the ribbon is the "
+                               "ORDER data was touched in, the spurs are which "
+                               "instruction touched which datum");
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.
