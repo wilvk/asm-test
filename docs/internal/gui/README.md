@@ -29,7 +29,7 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52, all ☐ not started. |
 > | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | ☐ 0/5 — hover readout, pick preview, pickable convergence arcs / access spurs. |
-> | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | ☐ 0/5 — camera pan/recentre, address & region goto, landmark home, discoverable controls. |
+> | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | ◐ pure infra + HUD landed 2026-08-02 (`Camera::pan`/`frame`, `scene3d/goto.h` resolvers, the HUD's go-to/reset/you-are-here/controls additions); the `shell.cpp` input wiring is open, deferred alongside 47's concurrent edits to the same file. |
 > | [50-two-way-brushing.md](50-two-way-brushing.md) | ☐ 0/4 — light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
 > | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | ☐ 0/4 — a GL-free 2D terrain surface: the no-GL branches gain a real view and the GL path gains a reading mode. |
@@ -534,7 +534,7 @@ the catalog nor the city doc acted on.
 |---|---|---|---|---|---|
 | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 13-gap table (G1–G13), sequencing, and the one fidelity decision the family turns on — *cross-axis brushing goes through the ADDRESS, never an ordinal* (**roadmap, not a brief**) | — | 10, 44 | roadmap · cuts 47–52 | — |
 | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | G1–G3: throttled hover pick + cell→content index, `resolve_pick_hint`, pickable convergence arcs / access spurs, hover readout, HUD legend | 5 | none | ☐ 0/5 | claude · T1–T5 · 2026-08-02 |
-| [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ☐ 0/5 | will · T1–T5 · 2026-08-02 |
+| [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ◐ infra+HUD landed, shell.cpp wiring open | will · shell.cpp wiring · 2026-08-02 |
 | [49-one-time-truth-in-the-scene.md](../archive/gui/49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ✅ 4/4 | — |
 | [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☐ 0/4 | *free* |
 | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | G11–G12: per-tid/region/kind focus, thread ghosting, camera-distance entity budget | 4 | 48 (landmarks, else free) | ☐ 0/4 | *free* |
