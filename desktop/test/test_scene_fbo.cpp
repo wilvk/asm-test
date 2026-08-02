@@ -401,12 +401,13 @@ static void pure_scene_checks() {
     {
         Scene s;
         check("Scene::slice_step defaults to UINT64_MAX (no cut configured)",
-              s.slice_step == UINT64_MAX, "a default-constructed Scene must "
-                                          "not retroactively clip a caller "
-                                          "that never touches slice_step");
+              s.slice_step == UINT64_MAX,
+              "a default-constructed Scene must "
+              "not retroactively clip a caller "
+              "that never touches slice_step");
         s.slice_step = 42;
-        check("Scene::slice_step is a plain settable field",
-              s.slice_step == 42, "the value did not round-trip");
+        check("Scene::slice_step is a plain settable field", s.slice_step == 42,
+              "the value did not round-trip");
     }
 }
 
@@ -732,7 +733,8 @@ int main() {
             SceneLayers zoning_on;
             SceneLayers zoning_off;
             zoning_off.zoning = false;
-            std::vector<unsigned char> px_on = capture(scene, cam, cf, zoning_on);
+            std::vector<unsigned char> px_on =
+                capture(scene, cam, cf, zoning_on);
             std::vector<unsigned char> px_off =
                 capture(scene, cam, cf, zoning_off);
             const unsigned char *pon = &px_on[dpx * 4];
@@ -800,7 +802,8 @@ int main() {
             scene.set_atmosphere(kTiers[i]);
             std::vector<unsigned char> on = capture(scene, cam, cf, weather_on);
             check("T3 GL: the sky quad draws without GL error",
-                  glGetError() == GL_NO_ERROR, "a GL error followed set_atmosphere/render");
+                  glGetError() == GL_NO_ERROR,
+                  "a GL error followed set_atmosphere/render");
             std::vector<unsigned char> off =
                 capture(scene, cam, cf, weather_off);
             check("T3 GL: the weather layer toggle owns background pixels",
@@ -910,6 +913,33 @@ int main() {
               "no arc pixels");
         check("convergence arc turns off with its layer", without == 0,
               "arc still visible with its layer off");
+
+        // --- T3 (47-scene-inspect-and-pickable-overlays): the arc is ---------
+        // PICKABLE — its id (pick_id_conv, band-sized by the scene's own
+        // pick_bands()) must appear somewhere in the pick buffer for this
+        // known-convergence fixture, and decoding that id back must resolve
+        // to Pick::Conv, index 0 (the only mark).
+        {
+            const scene3d::PickBands bands = scene.pick_bands();
+            check("T3 GL: pick_bands reports one convergence mark",
+                  bands.nconv == 1,
+                  ("got " + std::to_string(bands.nconv)).c_str());
+            const uint32_t want_id = pick_id_conv(terr.w, bands.npts, /*i=*/0);
+            std::vector<uint32_t> ids;
+            scene.render_pick_buffer(cam, W, H, ids);
+            bool found = false;
+            for (uint32_t id : ids)
+                if (id == want_id) {
+                    found = true;
+                    break;
+                }
+            check("T3 GL: the convergence arc's id appears in the pick buffer",
+                  found, "no pixel carried the arc's pick id");
+            Pick decoded = decode_pick(want_id, terr.w, bands);
+            check("T3 GL: the arc id decodes to Pick::Conv, index 0",
+                  decoded.kind == Pick::Conv && decoded.conv == 0,
+                  "decode mismatch");
+        }
     }
 
     // --- T4 (44-faithful-city-phase-a): ghost districts — a stat surface ----
@@ -952,7 +982,8 @@ int main() {
         SceneLayers ghost_on;
         SceneLayers ghost_off;
         ghost_off.ghost_fog = false;
-        std::vector<unsigned char> px_full_on = capture(scene, cam, cf, ghost_on);
+        std::vector<unsigned char> px_full_on =
+            capture(scene, cam, cf, ghost_on);
         std::vector<unsigned char> px_full_off =
             capture(scene, cam, cf, ghost_off);
         check("T4 GL: the ghost-fog layer toggle puts pixels on screen",
@@ -1028,14 +1059,15 @@ int main() {
               "vertex not rendered");
         if (vpx >= 0) {
             scene.follow_step = kFollow;
-            SceneLayers with_vehicle; // vehicle = true by default
+            SceneLayers with_vehicle;              // vehicle = true by default
             capture(scene, cam, cf, with_vehicle); // draws the head glyph
-            int px_x = vpx % W, py = vpx / W;       // bottom-left origin
+            int px_x = vpx % W, py = vpx / W;      // bottom-left origin
             int y_top = H - 1 - py;
             uint32_t got = scene.pick(cam, W, H, px_x, y_top);
             check("T6 GL: the vehicle draw does not disturb the underlying "
                   "vertex's pick id",
-                  got == vid, "the head glyph changed the pick id underneath it");
+                  got == vid,
+                  "the head glyph changed the pick id underneath it");
         }
 
         // An absent/unplaced follow_step draws NOTHING — never a mis-snapped
@@ -1087,8 +1119,9 @@ int main() {
             }
         }
         check("T1 GL: at least one path pixel dims under a half playhead",
-              dimmed > 0, "no dimming observed — is uTimeCutY reaching the "
-                         "shader?");
+              dimmed > 0,
+              "no dimming observed — is uTimeCutY reaching the "
+              "shader?");
         check("T1 GL: a dimmed pixel is never driven to background (dim, "
               "never discard)",
               driven_dark == 0,
@@ -1114,8 +1147,9 @@ int main() {
             space::build_projection(space::regions_from_codeimage(rec)), rec);
         space::TrajectorySet traj = space::build_trajectories(rec);
         check("T2 GL: hotcold recording has a real step extent",
-              terr.nsteps > 1, "not enough steps to place a mid-recording "
-                              "front");
+              terr.nsteps > 1,
+              "not enough steps to place a mid-recording "
+              "front");
         scene.nsteps = static_cast<uint32_t>(terr.nsteps);
         scene.set_terrain(terr.full());
         scene.set_trajectories(traj, terr.proj);
@@ -1137,13 +1171,12 @@ int main() {
         };
 
         scene.slice_step = terr.nsteps / 2; // a mid-recording playhead
-        SceneLayers on;  // exact = true (default): the front glyph gates on it
+        SceneLayers on; // exact = true (default): the front glyph gates on it
         SceneLayers off;
         off.exact = false;
         check("T2 GL: the execution front marks the playhead (amber "
               "present)",
-              count_amber(on) > 0,
-              "no front-glyph pixels at a mid playhead");
+              count_amber(on) > 0, "no front-glyph pixels at a mid playhead");
         check("T2 GL: the front glyph is gated on the exact layer",
               count_amber(off) == 0,
               "the front glyph drew with the exact layer off");
@@ -1151,8 +1184,7 @@ int main() {
         // No trajectory at all => no qualifying vertex => no glyph, never a
         // snapped one (mirrors 44-T6's own rule for the vehicle).
         scene.set_trajectories(space::TrajectorySet{}, terr.proj);
-        check("T2 GL: no trajectory data, no front glyph",
-              count_amber(on) == 0,
+        check("T2 GL: no trajectory data, no front glyph", count_amber(on) == 0,
               "a front glyph appeared with no trajectory to place it on");
 
         scene.slice_step = UINT64_MAX; // reset to the "unconfigured" default

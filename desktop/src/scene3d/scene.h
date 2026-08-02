@@ -20,6 +20,7 @@
 
 #include "scene3d/atmosphere.h" // T3 (44): the fidelity weather sky's pure config
 #include "scene3d/camera.h"
+#include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/converge.h"
 #include "space/projection.h"
 #include "space/terrain.h"
@@ -39,7 +40,7 @@ struct SceneLayers {
     bool statistical = true;  // stippled/translucent statistical residency
     bool access_marks = true; // spurs from a PC vertex to its data cell
     bool convergence =
-        true; // bright cross-thread convergence arcs (a hint, T5)
+        true;              // bright cross-thread convergence arcs (a hint, T5)
     bool zoning = true;    // T1: kind-hued terrain (kind_by_cell / uKind)
     bool weather = true;   // T3: the fidelity weather sky quad
     bool ghost_fog = true; // T4: the separate stippled statistical terrain
@@ -146,6 +147,17 @@ class Scene {
     void render_pick_buffer(const Camera &cam, int fbw, int fbh,
                             std::vector<uint32_t> &out);
 
+    // T3 (47-scene-inspect-and-pickable-overlays): the actual band sizes the
+    // MOST RECENT set_trajectories()/set_convergences() upload used — the
+    // ground truth a pick decode needs (PickBands, pick.h). Reading this back
+    // from what was really uploaded (rather than re-deriving the counts a
+    // second time from the pure models) is what keeps a click/hover decode
+    // from ever aliasing two different bands onto the same id.
+    PickBands pick_bands() const {
+        return {static_cast<uint64_t>(pts_count_),
+                static_cast<uint64_t>(nconv_), static_cast<uint64_t>(nspur_)};
+    }
+
     void shutdown();
     uint32_t grid_n() const { return n_; }
     // T4 (49): the world-Y-per-step scale the last set_trajectories() upload
@@ -205,19 +217,34 @@ class Scene {
         // order == pick_vertex_order's order for this trajectory), so the
         // followed-citizen head can be located by `follow_step` alone at
         // render time — no VBO schema change, no re-upload on every tick.
-        std::vector<uint64_t> pt_t;      // TrajPoint::t (this tid's own axis)
-        std::vector<uint8_t> pt_placed;  // TrajPoint::placed && projected
-        std::vector<float> pt_pos;       // 3 floats/entry; valid iff pt_placed
+        std::vector<uint64_t> pt_t;       // TrajPoint::t (this tid's own axis)
+        std::vector<uint8_t> pt_placed;   // TrajPoint::placed && projected
+        std::vector<float> pt_pos;        // 3 floats/entry; valid iff pt_placed
         std::vector<uint32_t> pt_pick_id; // the SAME id the pick pass writes
     };
     std::vector<Line> traj_lines_;
     Line access_spurs_; // all spurs in one GL_LINES buffer
     Line
         conv_arcs_; // all convergence arcs, tessellated into one GL_LINES buffer
-    float traj_scale_ = 0.02f; // the world-Y-per-step scale set_trajectories used
+    float traj_scale_ =
+        0.02f; // the world-Y-per-step scale set_trajectories used
 
     unsigned vao_pts_ = 0, vbo_pts_pos_ = 0, vbo_pts_id_ = 0;
     int pts_count_ = 0;
+
+    // T3 (47-scene-inspect-and-pickable-overlays): conv_arcs_/access_spurs_'
+    // OWN pick-pass geometry — a SEPARATE vao from their colour-draw one
+    // (access_spurs_.vao/conv_arcs_.vao are bound to prog_traj_'s "pos"-only
+    // layout; the pick pass needs prog_pick_pt_'s "pos"+"vid" layout, mirroring
+    // vao_pts_/vbo_pts_id_ above). Reuses the SAME position buffer
+    // (access_spurs_.vbo / conv_arcs_.vbo) rather than re-uploading positions
+    // twice — only the id array is new. nconv_/nspur_ are the counts
+    // pick_bands() reports: nconv_ = the number of ConvergenceMark units (one
+    // id per WHOLE arc, not per tessellated segment); nspur_ = the number of
+    // spur line segments (one id per spur, i.e. per vertex PAIR).
+    unsigned vao_conv_pick_ = 0, vbo_conv_pick_id_ = 0;
+    unsigned vao_spur_pick_ = 0, vbo_spur_pick_id_ = 0;
+    int nconv_ = 0, nspur_ = 0;
 
     unsigned fbo_pick_ = 0, tex_pick_ = 0, rbo_pick_depth_ = 0;
     int pick_w_ = 0, pick_h_ = 0;

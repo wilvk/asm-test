@@ -18,7 +18,8 @@
 
 #include "scene3d/atmosphere.h" // Atmosphere (a POD; T3, 44-faithful-city-phase-a)
 #include "scene3d/camera.h"     // Camera (pure math)
-#include "scene3d/scene.h"  // SceneLayers (a POD; no GL pulled in by the header)
+#include "scene3d/pick.h"  // T3 (47): PickBands, SceneHost::pick_bands()'s type
+#include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/converge.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -38,10 +39,11 @@ struct SceneFrame {
     const space::TerrainModel *terr = nullptr;
     const space::TrajectorySet *traj = nullptr;
     const space::ConvergenceSet *conv = nullptr;
-    const space::Terrain *slice = nullptr; // the terrain slice [0, t] to display
-    uint64_t key = 0;                      // recording identity
-    uint64_t gen = 0;                      // recording growth generation
-    uint64_t slice_t = 0;                  // the t `slice` was cut at
+    const space::Terrain *slice =
+        nullptr;          // the terrain slice [0, t] to display
+    uint64_t key = 0;     // recording identity
+    uint64_t gen = 0;     // recording growth generation
+    uint64_t slice_t = 0; // the t `slice` was cut at
     scene3d::Camera cam;
     scene3d::SceneLayers layers;
     int fbw = 0, fbh = 0; // desired offscreen size, in pixels
@@ -93,6 +95,15 @@ class SceneHost {
     // upload used (0 before any upload) — the HUD ruler needs it to place
     // ticks at the same world Y the trajectory geometry sits at.
     virtual float traj_scale() const = 0;
+
+    // T3 (47-scene-inspect-and-pickable-overlays): the actual vertex/conv/spur
+    // band sizes the last render()'s upload used — the ground truth
+    // decode_pick needs (scene3d::PickBands) so a click/hover decode reads
+    // what was REALLY uploaded rather than re-deriving the counts a second
+    // time (the exact "no second lookup path" discipline pick.h's id-band
+    // comments already state). {} (the PickBands default: unbounded vertex
+    // band, no conv/spur band) before any upload.
+    virtual scene3d::PickBands pick_bands() const = 0;
 };
 
 } // namespace asmdesk

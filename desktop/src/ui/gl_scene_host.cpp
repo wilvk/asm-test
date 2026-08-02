@@ -124,6 +124,12 @@ class GlSceneHost : public SceneHost {
 
     float traj_scale() const override { return scene_.traj_scale(); }
 
+    // T3 (47-scene-inspect-and-pickable-overlays): ground truth from the
+    // scene's own last upload — see SceneHost::pick_bands()'s doc comment.
+    scene3d::PickBands pick_bands() const override {
+        return scene_.pick_bands();
+    }
+
     ~GlSceneHost() override { free_fbo(); }
 
   private:
@@ -148,7 +154,8 @@ class GlSceneHost : public SceneHost {
                                GL_TEXTURE_2D, tex_, 0);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                   GL_RENDERBUFFER, rbo_);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+            GL_FRAMEBUFFER_COMPLETE) {
             free_fbo(); // leave fbo_ == 0 so render() reports no frame
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

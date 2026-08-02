@@ -680,6 +680,242 @@ int main() {
         }
     }
 
+    // === T3 (47-scene-inspect-and-pickable-overlays): the id bands ===========
+    // round-trip cleanly, with no aliasing between the vertex/conv/spur bands,
+    // across several (n, npts, nconv, nspur) combinations including empty
+    // bands. This is the pure decode-side proof; test_scene_fbo.cpp's GL
+    // smoke proves the SAME bands come back from a real render_pick_buffer.
+    {
+        struct Combo {
+            uint32_t n;
+            uint64_t npts, nconv, nspur;
+        };
+        const Combo combos[] = {
+            {8, 0, 0, 0},   // every band empty
+            {8, 5, 0, 0},   // vertices only
+            {8, 0, 3, 0},   // convergences only (npts=0 is a legal shape)
+            {8, 0, 0, 4},   // spurs only
+            {8, 5, 3, 4},   // all three populated
+            {64, 1, 1, 1},  // a realistic plane, one of each
+        };
+        for (const Combo &c : combos) {
+            PickBands bands;
+            bands.npts = c.npts;
+            bands.nconv = c.nconv;
+            bands.nspur = c.nspur;
+            const std::string tag = "n=" + std::to_string(c.n) +
+                                    " npts=" + std::to_string(c.npts) +
+                                    " nconv=" + std::to_string(c.nconv) +
+                                    " nspur=" + std::to_string(c.nspur);
+
+            // Cell band: unaffected by npts/nconv/nspur.
+            Pick c0 = decode_pick(pick_id_cell(0), c.n, bands);
+            check("T3 bands " + tag + ": cell 0 round-trips",
+                  c0.kind == Pick::Cell && c0.cell == 0, "cell 0 wrong");
+            Pick cLast =
+                decode_pick(pick_id_cell(c.n * c.n - 1), c.n, bands);
+            check("T3 bands " + tag + ": last cell round-trips",
+                  cLast.kind == Pick::Cell && cLast.cell == c.n * c.n - 1,
+                  "last cell wrong");
+
+            if (c.npts > 0) {
+                Pick v0 = decode_pick(pick_id_vertex(c.n, 0), c.n, bands);
+                check("T3 bands " + tag + ": vertex 0 round-trips",
+                      v0.kind == Pick::Vertex && v0.vertex == 0,
+                      "vertex 0 wrong");
+                Pick vLast = decode_pick(pick_id_vertex(c.n, c.npts - 1),
+                                        c.n, bands);
+                check("T3 bands " + tag + ": last vertex round-trips",
+                      vLast.kind == Pick::Vertex &&
+                          vLast.vertex == c.npts - 1,
+                      "last vertex wrong");
+            }
+            if (c.nconv > 0) {
+                Pick a0 = decode_pick(pick_id_conv(c.n, c.npts, 0), c.n,
+                                      bands);
+                check("T3 bands " + tag + ": conv 0 round-trips",
+                      a0.kind == Pick::Conv && a0.conv == 0, "conv 0 wrong");
+                Pick aLast = decode_pick(
+                    pick_id_conv(c.n, c.npts, c.nconv - 1), c.n, bands);
+                check("T3 bands " + tag + ": last conv round-trips",
+                      aLast.kind == Pick::Conv && aLast.conv == c.nconv - 1,
+                      "last conv wrong");
+            }
+            if (c.nspur > 0) {
+                Pick s0 = decode_pick(pick_id_spur(c.n, c.npts, c.nconv, 0),
+                                      c.n, bands);
+                check("T3 bands " + tag + ": spur 0 round-trips",
+                      s0.kind == Pick::Spur && s0.spur == 0, "spur 0 wrong");
+                Pick sLast = decode_pick(
+                    pick_id_spur(c.n, c.npts, c.nconv, c.nspur - 1), c.n,
+                    bands);
+                check("T3 bands " + tag + ": last spur round-trips",
+                      sLast.kind == Pick::Spur && sLast.spur == c.nspur - 1,
+                      "last spur wrong");
+            }
+            // An id one past the LAST populated band decodes to None — the
+            // "no aliasing" bar: it must never fall back into an adjacent
+            // band by miscounting a boundary.
+            const uint64_t past =
+                static_cast<uint64_t>(c.n) * c.n + 1u + c.npts + c.nconv +
+                c.nspur;
+            Pick none = decode_pick(static_cast<uint32_t>(past), c.n, bands);
+            check("T3 bands " + tag + ": one past every band -> None",
+                  none.kind == Pick::None,
+                  "an id past every band must decode to nothing, not alias");
+        }
+
+        // The legacy default (no bands argument) is UNCHANGED: an unbounded
+        // vertex band, exactly pre-T3 behaviour — every existing call site
+        // that never learned about PickBands must decode identically.
+        Pick legacy = decode_pick(pick_id_vertex(8, 12345), 8);
+        check("T3 bands: the no-bands default stays legacy-unbounded",
+              legacy.kind == Pick::Vertex && legacy.vertex == 12345,
+              "the default PickBands changed pre-T3 decode behaviour");
+    }
+
+    // === T3: a convergence arc resolves to whichever tid is nearer follow_step
+    {
+        // Two threads (tid 1, tid 2) both touch the same cell — one PC vertex
+        // each — so detect_convergences yields exactly one mark.
+        Recording rec = mk_rec(
+            std::string(kHdrExact) +
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304,\"tid\":1}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304,\"tid\":2}\n"
+            "{\"k\":\"end\",\"events\":3,\"truncated\":false,\"drops\":{"
+            "\"lost\":0,\"throttled\":false}}\n");
+        space::Projection p =
+            space::build_projection(space::regions_from_codeimage(rec));
+        space::TerrainModel terr = space::build_terrain(p, rec);
+        space::TrajectorySet traj = space::build_trajectories(rec, p);
+        space::ConvergenceSet conv = space::detect_convergences(traj, p);
+        check("T3 conv: one cross-thread mark", conv.marks.size() == 1,
+              "got " + std::to_string(conv.marks.size()));
+
+        if (conv.marks.size() == 1) {
+            const space::ConvergenceMark &m = conv.marks[0];
+            Pick pk;
+            pk.kind = Pick::Conv;
+            pk.conv = 0;
+
+            // follow_step nearer tid_a's t: resolves to tid_a's step.
+            auto link_a =
+                resolve_pick(terr, traj, "rec.asmtrace", pk, conv, m.t_a);
+            check("T3 conv: resolves to a link", link_a.has_value(),
+                  "no link");
+            if (link_a) {
+                check("T3 conv: opens the operand timeline",
+                      link_a->view == dt_view::timeline, "wrong view");
+                check("T3 conv: step names one of the two tids' t",
+                      link_a->step.has_value() &&
+                          (*link_a->step == m.t_a || *link_a->step == m.t_b),
+                      "step names neither tid");
+                check("T3 conv: follow_step==t_a resolves to t_a",
+                      *link_a->step == m.t_a, "did not pick the nearer side");
+            }
+            // follow_step nearer tid_b's t (if the two differ; else both
+            // sides tie and 'a' wins by the documented tie rule).
+            if (m.t_a != m.t_b) {
+                auto link_b = resolve_pick(terr, traj, "rec.asmtrace", pk,
+                                           conv, m.t_b);
+                check("T3 conv: follow_step==t_b resolves to t_b",
+                      link_b.has_value() && *link_b->step == m.t_b,
+                      "did not pick the nearer side");
+            }
+
+            // The hint must say WHICH side was chosen, carry gap verbatim,
+            // and never upgrade the co-locality hint into a stronger claim.
+            PickHint hint =
+                resolve_pick_hint(terr, traj, conv, pk, m.t_a);
+            check("T3 conv: hint not empty", !hint.empty, "empty hint");
+            check("T3 conv: hint/what == convergence",
+                  hint.what == "convergence", hint.what);
+            check("T3 conv: hint names the chosen tid",
+                  hint.fidelity.find(std::to_string(m.tid_a)) !=
+                      std::string::npos,
+                  hint.fidelity);
+            check("T3 conv: hint carries the hint wording verbatim",
+                  hint.fidelity.find("not a proven race or order") !=
+                      std::string::npos,
+                  hint.fidelity);
+            check("T3 conv: hint quantity states the gap with its unit",
+                  hint.quantity.find("gap") != std::string::npos &&
+                      hint.quantity.find("step") != std::string::npos,
+                  hint.quantity);
+            check("T3 conv: hint target agrees with resolve_pick",
+                  link_a.has_value() &&
+                      hint.target == dt_view_name(link_a->view),
+                  "target/view disagreement: '" + hint.target + "'");
+
+            // An out-of-range conv index resolves to nothing on both sides.
+            Pick past;
+            past.kind = Pick::Conv;
+            past.conv = 99;
+            check("T3 conv: an out-of-range conv index -> no link",
+                  !resolve_pick(terr, traj, "r", past, conv, 0).has_value(),
+                  "an out-of-range conv index produced a link");
+            PickHint past_hint =
+                resolve_pick_hint(terr, traj, conv, past, 0);
+            check("T3 conv: an out-of-range conv index -> empty hint",
+                  past_hint.empty, "not empty");
+        }
+    }
+
+    // === T3: an access spur resolves to its owning PC vertex's step ==========
+    {
+        Recording rec = mk_rec(
+            std::string(kHdrExact) +
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194308}\n"
+            "{\"k\":\"mem\",\"step\":1,\"ea\":6291456,\"size\":8,\"rw\":\"r\"}"
+            "\n"
+            "{\"k\":\"end\",\"events\":4,\"truncated\":false,\"drops\":{"
+            "\"lost\":0,\"throttled\":false}}\n");
+        std::vector<space::Region> regs = space::regions_from_codeimage(rec);
+        regs.push_back(region(6291456, 4096, space::Region::Data));
+        space::Projection p = space::build_projection(regs);
+        space::TrajectorySet traj = space::build_trajectories(rec, p);
+        std::vector<PickSpur> sorder = pick_spur_order(traj, p);
+        check("T3 spur: one access spur is pickable", sorder.size() == 1,
+              "got " + std::to_string(sorder.size()));
+        if (sorder.size() == 1) {
+            check("T3 spur: the spur names its owning vertex's step (1)",
+                  sorder[0].t == 1, "got " + std::to_string(sorder[0].t));
+
+            space::TerrainModel terr = space::build_terrain(p, rec);
+            space::ConvergenceSet conv;
+            Pick pk;
+            pk.kind = Pick::Spur;
+            pk.spur = 0;
+            auto link = resolve_pick(terr, traj, "rec.asmtrace", pk, conv, 0);
+            check("T3 spur: resolves to a link", link.has_value(), "no link");
+            if (link) {
+                check("T3 spur: opens the operand timeline at its step",
+                      link->view == dt_view::timeline &&
+                          link->step.has_value() && *link->step == 1,
+                      "wrong view/step");
+            }
+            PickHint hint = resolve_pick_hint(terr, traj, conv, pk, 0);
+            check("T3 spur: hint not empty", !hint.empty, "empty hint");
+            check("T3 spur: hint/what == access spur",
+                  hint.what == "access spur", hint.what);
+            check("T3 spur: hint target agrees with resolve_pick",
+                  link.has_value() && hint.target == dt_view_name(link->view),
+                  "target/view disagreement: '" + hint.target + "'");
+
+            Pick past;
+            past.kind = Pick::Spur;
+            past.spur = 99;
+            check("T3 spur: an out-of-range spur index -> no link",
+                  !resolve_pick(terr, traj, "r", past, conv, 0).has_value(),
+                  "an out-of-range spur index produced a link");
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d drill-in check(s) failed\n", failures);
         return 1;

@@ -246,8 +246,7 @@ void Scene::set_terrain(const space::Terrain &t) {
 
 void Scene::set_zoning(const std::vector<uint8_t> &kind_by_cell, uint32_t w,
                        uint32_t h) {
-    if (w == 0 || h == 0 ||
-        kind_by_cell.size() != static_cast<size_t>(w) * h)
+    if (w == 0 || h == 0 || kind_by_cell.size() != static_cast<size_t>(w) * h)
         return;
     if (!tex_kind_)
         glGenTextures(1, &tex_kind_);
@@ -264,7 +263,8 @@ void Scene::set_zoning(const std::vector<uint8_t> &kind_by_cell, uint32_t w,
 void Scene::set_stat_terrain(const space::Terrain &t) {
     if (t.w == 0 || t.h == 0)
         return;
-    build_grid(t.w); // same dims as the exact terrain; idempotent if already built
+    build_grid(
+        t.w); // same dims as the exact terrain; idempotent if already built
 
     float maxh = 0.0f;
     for (float h : t.height)
@@ -318,6 +318,15 @@ void Scene::free_traj() {
         glDeleteVertexArrays(1, &vao_pts_);
     vbo_pts_pos_ = vbo_pts_id_ = vao_pts_ = 0;
     pts_count_ = 0;
+    // T3 (47): the spur PICK id buffer (built in set_convergences, once npts
+    // AND nconv are both known — see that function's own doc comment) reuses
+    // access_spurs_.vbo for position, so it must not outlive it.
+    if (vbo_spur_pick_id_)
+        glDeleteBuffers(1, &vbo_spur_pick_id_);
+    if (vao_spur_pick_)
+        glDeleteVertexArrays(1, &vao_spur_pick_);
+    vbo_spur_pick_id_ = vao_spur_pick_ = 0;
+    nspur_ = 0;
 }
 
 void Scene::set_trajectories(const space::TrajectorySet &ts,
@@ -361,7 +370,7 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
                 pt_t.push_back(pt.t);
                 pt_placed.push_back((pt.placed && projected) ? 1u : 0u);
                 pt_pos.insert(pt_pos.end(),
-                             {projected ? u : 0.0f, y, projected ? v : 0.0f});
+                              {projected ? u : 0.0f, y, projected ? v : 0.0f});
                 pt_pick_id.push_back(pid);
                 if (projected) {
                     line.insert(line.end(), {u, y, v});
@@ -445,6 +454,22 @@ void Scene::free_conv() {
     if (conv_arcs_.vao)
         glDeleteVertexArrays(1, &conv_arcs_.vao);
     conv_arcs_ = Line{};
+    // T3 (47): the conv/spur PICK id buffers are built together below (both
+    // need `npts`, and the spur band's own encoding additionally needs
+    // `nconv` — see pick_id_spur's doc comment — so both are only knowable
+    // once THIS function runs, after set_trajectories has fixed npts).
+    if (vbo_conv_pick_id_)
+        glDeleteBuffers(1, &vbo_conv_pick_id_);
+    if (vao_conv_pick_)
+        glDeleteVertexArrays(1, &vao_conv_pick_);
+    vbo_conv_pick_id_ = vao_conv_pick_ = 0;
+    nconv_ = 0;
+    if (vbo_spur_pick_id_)
+        glDeleteBuffers(1, &vbo_spur_pick_id_);
+    if (vao_spur_pick_)
+        glDeleteVertexArrays(1, &vao_spur_pick_);
+    vbo_spur_pick_id_ = vao_spur_pick_ = 0;
+    nspur_ = 0;
 }
 
 void Scene::set_convergences(const space::ConvergenceSet &cs,
@@ -456,9 +481,17 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
     const float scale =
         time_scale > 0.0f ? time_scale : (nsteps > 0 ? 0.6f / nsteps : 0.02f);
 
+    // T3 (47): nconv_ is the FULL mark count — pick_id_conv's band is sized by
+    // cs.marks.size(), not by how many actually draw, so an id past an
+    // unplaced-endpoint mark still lands correctly on the NEXT drawable one
+    // (an empty/unplaced mark changes no other id, the brief's own bar).
+    nconv_ = static_cast<int>(cs.marks.size());
+
     std::vector<float>
         segs; // GL_LINES pairs: each arc tessellated into segments
-    for (const space::ConvergenceMark &m : cs.marks) {
+    std::vector<unsigned> conv_ids; // one id per vertex in `segs`, 32/arc
+    for (size_t mi = 0; mi < cs.marks.size(); ++mi) {
+        const space::ConvergenceMark &m = cs.marks[mi];
         float ua = 0, va = 0, ub = 0, vb = 0;
         if (!proj.project(m.addr_a, &ua, &va) ||
             !proj.project(m.addr_b, &ub, &vb))
@@ -476,6 +509,8 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
         const float cy = std::max(ya, yb) + lift;
         const float cz = 0.5f * (va + vb);
         const int kSteps = 16;
+        const unsigned pid = pick_id_conv(n_, static_cast<uint64_t>(pts_count_),
+                                          static_cast<uint64_t>(mi));
         float px = ua, py = ya, pz = va;
         for (int k = 1; k <= kSteps; k++) {
             float s = static_cast<float>(k) / kSteps;
@@ -485,36 +520,85 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
             float qy = o * o * ya + 2 * o * s * cy + s * s * yb;
             float qz = o * o * va + 2 * o * s * cz + s * s * vb;
             segs.insert(segs.end(), {px, py, pz, qx, qy, qz});
+            conv_ids.push_back(pid); // T3: the WHOLE arc shares one id
+            conv_ids.push_back(pid);
             px = qx;
             py = qy;
             pz = qz;
         }
     }
-    if (segs.empty())
-        return;
 
-    Line &l = conv_arcs_;
-    // A bright magenta distinct from every tid colour and from the torn-red gash and
-    // the lavender access spur — the "two threads on the same line" hint reads at a
-    // glance and cannot be mistaken for a path.
-    l.color[0] = 1.0f;
-    l.color[1] = 0.25f;
-    l.color[2] = 0.85f;
-    l.color[3] = 0.95f;
-    l.count = static_cast<int>(segs.size() / 3);
-    glGenVertexArrays(1, &l.vao);
-    glGenBuffers(1, &l.vbo);
-    glBindVertexArray(l.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, l.vbo);
-    glBufferData(GL_ARRAY_BUFFER, segs.size() * sizeof(float), segs.data(),
-                 GL_STATIC_DRAW);
-    glEnableVertexAttribArray(kAttrPos);
-    glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-    glBindVertexArray(0);
+    if (!segs.empty()) {
+        Line &l = conv_arcs_;
+        // A bright magenta distinct from every tid colour and from the torn-red
+        // gash and the lavender access spur — the "two threads on the same line"
+        // hint reads at a glance and cannot be mistaken for a path.
+        l.color[0] = 1.0f;
+        l.color[1] = 0.25f;
+        l.color[2] = 0.85f;
+        l.color[3] = 0.95f;
+        l.count = static_cast<int>(segs.size() / 3);
+        glGenVertexArrays(1, &l.vao);
+        glGenBuffers(1, &l.vbo);
+        glBindVertexArray(l.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, l.vbo);
+        glBufferData(GL_ARRAY_BUFFER, segs.size() * sizeof(float), segs.data(),
+                     GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+
+        // T3: the pick-pass twin of the SAME position buffer (reused, not
+        // re-uploaded) plus the per-vertex id array just built above — mirrors
+        // vao_pts_/vbo_pts_id_'s existing "pos"+"vid" layout for prog_pick_pt_.
+        glGenVertexArrays(1, &vao_conv_pick_);
+        glGenBuffers(1, &vbo_conv_pick_id_);
+        glBindVertexArray(vao_conv_pick_);
+        glBindBuffer(GL_ARRAY_BUFFER, l.vbo);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_conv_pick_id_);
+        glBufferData(GL_ARRAY_BUFFER, conv_ids.size() * sizeof(unsigned),
+                     conv_ids.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrVid);
+        glVertexAttribIPointer(kAttrVid, 1, GL_UNSIGNED_INT, 0, nullptr);
+        glBindVertexArray(0);
+    }
+
+    // T3: the access-spur pick-id buffer — built HERE (not in
+    // set_trajectories) because pick_id_spur needs BOTH npts (fixed by the
+    // most recent set_trajectories, which always runs before this per
+    // gl_scene_host.cpp's upload gate) and nconv_ (just computed above).
+    // access_spurs_' POSITION buffer is untouched (built by set_trajectories,
+    // reused here) — this only adds the parallel id array.
+    if (access_spurs_.vbo && access_spurs_.count > 0) {
+        nspur_ = access_spurs_.count / 2;
+        std::vector<unsigned> spur_ids;
+        spur_ids.reserve(static_cast<size_t>(access_spurs_.count));
+        for (int si = 0; si < nspur_; ++si) {
+            const unsigned pid = pick_id_spur(
+                n_, static_cast<uint64_t>(pts_count_),
+                static_cast<uint64_t>(nconv_), static_cast<uint64_t>(si));
+            spur_ids.push_back(pid);
+            spur_ids.push_back(pid); // both endpoints of the spur share one id
+        }
+        glGenVertexArrays(1, &vao_spur_pick_);
+        glGenBuffers(1, &vbo_spur_pick_id_);
+        glBindVertexArray(vao_spur_pick_);
+        glBindBuffer(GL_ARRAY_BUFFER, access_spurs_.vbo);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_spur_pick_id_);
+        glBufferData(GL_ARRAY_BUFFER, spur_ids.size() * sizeof(unsigned),
+                     spur_ids.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrVid);
+        glVertexAttribIPointer(kAttrVid, 1, GL_UNSIGNED_INT, 0, nullptr);
+        glBindVertexArray(0);
+    }
 }
 
-void Scene::draw_terrain_common(unsigned prog, const float mvp[16],
-                                bool zoning, float contour_levels) {
+void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
+                                float contour_levels) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex_height_);
@@ -561,8 +645,7 @@ void Scene::draw_stat_terrain(const float mvp[16]) {
     glUniformMatrix4fv(glGetUniformLocation(prog_stat_, "uMVP"), 1, GL_FALSE,
                        mvp);
     glUniform1f(glGetUniformLocation(prog_stat_, "uYScale"), y_scale);
-    glUniform1f(glGetUniformLocation(prog_stat_, "uN"),
-               static_cast<float>(n_));
+    glUniform1f(glGetUniformLocation(prog_stat_, "uN"), static_cast<float>(n_));
     GLint uh = glGetUniformLocation(prog_stat_, "uHeight");
     if (uh >= 0)
         glUniform1i(uh, 0);
@@ -583,10 +666,10 @@ void Scene::draw_sky() {
     glUseProgram(prog_sky_);
     glUniform3fv(glGetUniformLocation(prog_sky_, "uAmbient"), 1, atmo_.ambient);
     glUniform3fv(glGetUniformLocation(prog_sky_, "uFrontColor"), 1,
-                atmo_.front);
+                 atmo_.front);
     glUniform3fv(glGetUniformLocation(prog_sky_, "uSunDir"), 1, atmo_.sun_dir);
     glUniform1f(glGetUniformLocation(prog_sky_, "uFogDensity"),
-               atmo_.fog_density);
+                atmo_.fog_density);
     glBindVertexArray(vao_sky_);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
@@ -660,7 +743,7 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
 
     if (layers.terrain)
         draw_terrain_common(prog_terrain_, mvp, layers.zoning,
-                           layers.contours ? kContourLevels : 0.0f);
+                            layers.contours ? kContourLevels : 0.0f);
 
     // T4: the ghost-fog terrain, after the exact terrain — depth-tested but
     // depth-write off (so it never occludes anything BEHIND it either) and
@@ -679,8 +762,7 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     // the same lookup).
     float head_pos[3] = {0, 0, 0};
     int head_line = -1;
-    const bool have_head =
-        layers.vehicle && find_head(head_pos, &head_line);
+    const bool have_head = layers.vehicle && find_head(head_pos, &head_line);
 
     // T2 (49): locate the execution front — the exact trajectory's own
     // boundary at slice_step, a DIFFERENT clock from the vehicle's
@@ -688,8 +770,7 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     // a point on that layer), never on `vehicle`. Its own colour (never a
     // per-tid one), so which line it fell on is not needed.
     float front_pos[3] = {0, 0, 0};
-    const bool have_front =
-        layers.exact && find_front(front_pos, nullptr);
+    const bool have_front = layers.exact && find_front(front_pos, nullptr);
 
     // Trajectories over the terrain.
     glUseProgram(prog_traj_);
@@ -722,7 +803,8 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
             continue;
         glUniform4fv(uColor, 1, l.color);
         glUniform1i(uStipple, l.statistical ? 1 : 0);
-        const bool is_head_line = have_head && static_cast<int>(li) == head_line;
+        const bool is_head_line =
+            have_head && static_cast<int>(li) == head_line;
         glUniform1i(uHasHead, is_head_line ? 1 : 0);
         if (is_head_line) {
             glUniform1f(uHeadY, head_y);
@@ -769,14 +851,14 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         glBindVertexArray(vao_head_);
         glBindBuffer(GL_ARRAY_BUFFER, vbo_head_);
         glBufferData(GL_ARRAY_BUFFER, sizeof(head_pos), head_pos,
-                    GL_DYNAMIC_DRAW);
+                     GL_DYNAMIC_DRAW);
         glEnableVertexAttribArray(kAttrPos);
         glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glUniform1i(uStipple, 0);
         glUniform1i(uHasHead, 0);
-        const float *hc = (head_line >= 0)
-                              ? traj_lines_[static_cast<size_t>(head_line)].color
-                              : nullptr;
+        const float *hc =
+            (head_line >= 0) ? traj_lines_[static_cast<size_t>(head_line)].color
+                             : nullptr;
         const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         glUniform4fv(uColor, 1, hc ? hc : white);
         glUniform1f(glGetUniformLocation(prog_traj_, "uPointSize"), 10.0f);
@@ -799,7 +881,7 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         glBindVertexArray(vao_front_);
         glBindBuffer(GL_ARRAY_BUFFER, vbo_front_);
         glBufferData(GL_ARRAY_BUFFER, sizeof(front_pos), front_pos,
-                    GL_DYNAMIC_DRAW);
+                     GL_DYNAMIC_DRAW);
         glEnableVertexAttribArray(kAttrPos);
         glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glUniform1i(uStipple, 0);
@@ -875,6 +957,32 @@ int Scene::render_pick_into_fbo(const Camera &cam, int fbw, int fbh) {
         glBindVertexArray(0);
         glDisable(GL_PROGRAM_POINT_SIZE);
     }
+
+    // T3 (47-scene-inspect-and-pickable-overlays): the two overlay-line pick
+    // bands, drawn AFTER the points with prog_pick_pt_'s own "pos"+"vid"
+    // layout (its frag shader just writes the incoming id — kPickPointFrag —
+    // so it needs no changes to serve GL_LINES instead of GL_POINTS). A
+    // widened line width makes a thin arc/spur actually clickable, mirroring
+    // why the pick points are drawn larger than they render.
+    if (vao_conv_pick_ && nconv_ > 0) {
+        glUseProgram(prog_pick_pt_);
+        glUniformMatrix4fv(glGetUniformLocation(prog_pick_pt_, "uMVP"), 1,
+                           GL_FALSE, mvp);
+        glLineWidth(6.0f);
+        glBindVertexArray(vao_conv_pick_);
+        glDrawArrays(GL_LINES, 0, conv_arcs_.count);
+        glBindVertexArray(0);
+    }
+    if (vao_spur_pick_ && nspur_ > 0) {
+        glUseProgram(prog_pick_pt_);
+        glUniformMatrix4fv(glGetUniformLocation(prog_pick_pt_, "uMVP"), 1,
+                           GL_FALSE, mvp);
+        glLineWidth(5.0f);
+        glBindVertexArray(vao_spur_pick_);
+        glDrawArrays(GL_LINES, 0, access_spurs_.count);
+        glBindVertexArray(0);
+    }
+    glLineWidth(1.0f); // restore: the colour pass sets its own width per layer
     return prev_fbo;
 }
 
