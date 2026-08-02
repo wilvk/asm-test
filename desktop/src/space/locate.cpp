@@ -111,9 +111,13 @@ Located scene_locate_off(const Projection &proj, const Recording &rec,
     return out;
 }
 
-bool StepAddrResolver::resolve(uint32_t i, uint64_t *addr, std::string *how) {
-    if (i >= df_.insn_off.size())
+bool StepAddrResolver::resolve(uint32_t i, uint64_t *addr, std::string *how,
+                               std::string *fail_reason) {
+    if (i >= df_.insn_off.size()) {
+        if (fail_reason)
+            *fail_reason = "step index is out of range for this pass";
         return false;
+    }
     const uint64_t raw = df_.insn_off[i];
     const bool has_rbase = df_.rbase_present &&
                            static_cast<size_t>(i) < df_.insn_rbase.size() &&
@@ -128,11 +132,17 @@ bool StepAddrResolver::resolve(uint32_t i, uint64_t *addr, std::string *how) {
         anchor_ = resolve_anchor(proj_.regions);
         anchor_computed_ = true;
     }
-    if (!anchor_.ok)
+    if (!anchor_.ok) {
+        if (fail_reason)
+            *fail_reason = anchor_.reason;
         return false;
+    }
     uint64_t abs = 0;
-    if (!anchor_.place(raw, &abs))
+    if (!anchor_.place(raw, &abs)) {
+        if (fail_reason)
+            *fail_reason = "this step's offset is past the anchored span";
         return false;
+    }
     *addr = abs;
     if (how)
         *how = "step->offset (derived anchor)";
@@ -151,17 +161,14 @@ Located scene_locate_step(const Projection &proj, const DataflowStream &df,
 
     StepAddrResolver resolver(proj, df);
     uint64_t addr = 0;
-    std::string how;
-    if (!resolver.resolve(step, &addr, &how)) {
-        const bool has_rbase =
-            df.rbase_present && static_cast<size_t>(step) < df.insn_rbase.size() &&
-            df.insn_rbase[static_cast<size_t>(step)] != 0;
-        const Anchor probe = resolve_anchor(proj.regions);
-        out.reason = has_rbase
-                        ? "the wire-stated base places this step past its span"
-                        : (!probe.ok ? probe.reason
-                                    : "this step's offset is past the "
-                                      "anchored span");
+    std::string how, fail_reason;
+    if (!resolver.resolve(step, &addr, &how, &fail_reason)) {
+        // resolve() already derived has_rbase and, on the no-rbase path,
+        // already ran (and cached) resolve_anchor() to answer this same
+        // question — fail_reason carries the answer straight through rather
+        // than this function re-deriving has_rbase and re-scanning
+        // resolve_anchor() a second time just to build the message.
+        out.reason = fail_reason;
         return out;
     }
 

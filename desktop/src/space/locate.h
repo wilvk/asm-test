@@ -90,8 +90,13 @@ class StepAddrResolver {
 
     // Resolve step `i`'s own offset to an absolute address. False when `i` is
     // out of range, or the step has no wire rbase and no span will anchor it
-    // (`how`, when non-null, is left untouched on failure).
-    bool resolve(uint32_t i, uint64_t *addr, std::string *how = nullptr);
+    // (`how`, when non-null, is left untouched on failure). `fail_reason`,
+    // when non-null, is filled with why on failure (verbatim, never empty) —
+    // so a caller building a "why not" message (scene_locate_step) reads it
+    // straight off this call instead of re-deriving has_rbase and re-running
+    // resolve_anchor() a second time to ask the same question.
+    bool resolve(uint32_t i, uint64_t *addr, std::string *how = nullptr,
+                std::string *fail_reason = nullptr);
 
   private:
     const Projection &proj_;

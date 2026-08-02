@@ -57,7 +57,7 @@ struct EncodingSwatch {
     std::string label;
     float rgb[3];
 };
-std::vector<EncodingSwatch> terrain_encoding_swatches();
+const std::vector<EncodingSwatch> &terrain_encoding_swatches();
 
 // T5 (47-scene-inspect-and-pickable-overlays): one swatch per PICKABLE
 // OVERLAY LINE class (as distinct from terrain_encoding_swatches' per-cell
@@ -77,7 +77,7 @@ struct OverlaySwatch {
     std::string label;
     float rgb[3];
 };
-std::vector<OverlaySwatch> overlay_encoding_swatches();
+const std::vector<OverlaySwatch> &overlay_encoding_swatches();
 
 // T5: the one-line advertisement that the pane is interrogable — "hover to
 // inspect, click to open the flat reader" — a single source of truth between
@@ -86,7 +86,7 @@ std::vector<OverlaySwatch> overlay_encoding_swatches();
 // function, drawn every frame), never the first-open-only primer
 // (shell.cpp's dt_primer), so it stays reachable after the primer is
 // dismissed.
-std::string inspect_hint_note();
+const char *inspect_hint_note();
 
 // 49 T3: the raw scale a height contour band is worth, formatted for the
 // legend — "no data at this slice" when max_full_heat is 0. Pure so the
@@ -103,7 +103,7 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps,
 // 49 T4: the one-line statement of the two vertical meanings — a single
 // source of truth between the draw call and the test that wording didn't
 // silently drift or vanish.
-std::string vertical_axes_note();
+const char *vertical_axes_note();
 
 // 48 T4: "you are here" — a pure function of (Projection, target), so the
 // wording is golden-testable without an ImGui frame. Names the region under
@@ -117,7 +117,7 @@ std::string camera_here_text(const space::Projection &proj, float u, float v);
 // hand-written key lists drift from the bindings) plus the mouse gestures
 // CamKey has no key for. One entry per CamKey value; adding a value without
 // adding its line here fails test_camera's exhaustiveness check.
-std::vector<std::string> scene_control_lines();
+const std::vector<std::string> &scene_control_lines();
 
 // 49 T4: draw the trajectory-time ruler into the 3D VIEWPORT (not the HUD
 // window) — ticks 0..nsteps, projected through `cam` at world (0, tick *

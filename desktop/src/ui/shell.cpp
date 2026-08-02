@@ -54,6 +54,15 @@ namespace asmdesk {
 // Defined below draw_shell, used by both shells' status areas (18-T6 breadcrumb).
 static void draw_breadcrumb(ShellState &s);
 
+// 50 T4: the cell-centre rounding resolve_pick/classify_cell (pick.cpp)
+// already use, shared here so "frame the selection" and the off-screen
+// disclosure label can never round differently from each other or from a
+// click.
+static void cell_center_uv(uint32_t cell, uint32_t n, float *u, float *v) {
+    *u = (cell % n + 0.5f) / static_cast<float>(n);
+    *v = (cell / n + 0.5f) / static_cast<float>(n);
+}
+
 // The verbatim greyed-out-shows-why reason (plan D2): an engine door disabled in
 // the render-only viewer states, in place, exactly why. [[maybe_unused]] because
 // only the render-only build (-DASMTEST_DESKTOP_RENDER_ONLY) references it.
@@ -1010,9 +1019,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 50 T4: "frame the selection" — the located cell's centre, the same
     // cell-centre rounding resolve_pick/classify_cell already use.
     if (sv.hud.req_frame_highlight && sv.highlight.ok && sv.terr.w > 0) {
-        const uint32_t n = sv.terr.w;
-        const float hu = (sv.highlight.cell % n + 0.5f) / static_cast<float>(n);
-        const float hv = (sv.highlight.cell / n + 0.5f) / static_cast<float>(n);
+        float hu = 0.0f, hv = 0.0f;
+        cell_center_uv(sv.highlight.cell, sv.terr.w, &hu, &hv);
         sv.cam.frame(hu, hv, sv.cam.radius);
     }
     sv.hud.req_reset_view = sv.hud.req_default_view = sv.hud.req_top_down =
@@ -1238,9 +1246,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // that) or silently absent. Never fires for "behind" (degenerate/no
     // camera set up yet); the ruler's own GL-path gate applies here too.
     if (sv.highlight.ok && sv.terr.w > 0) {
-        const uint32_t n = sv.terr.w;
-        const float hu = (sv.highlight.cell % n + 0.5f) / static_cast<float>(n);
-        const float hv = (sv.highlight.cell / n + 0.5f) / static_cast<float>(n);
+        float hu = 0.0f, hv = 0.0f;
+        cell_center_uv(sv.highlight.cell, sv.terr.w, &hu, &hv);
         const float aspect =
             fbh > 0 ? static_cast<float>(fbw) / static_cast<float>(fbh) : 1.0f;
         std::string edge;

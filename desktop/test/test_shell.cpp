@@ -834,7 +834,7 @@ int main() {
         // T4: the axis note is non-empty (the single source of truth between
         // the draw call and this check that the wording did not vanish).
         check("vertical axes note: non-empty",
-              !scene3d::vertical_axes_note().empty(), "note text is empty");
+              scene3d::vertical_axes_note()[0] != '\0', "note text is empty");
 
         // T4: ticks span exactly [0, nsteps], and the ruler is skipped
         // entirely (empty ticks) when there is no time axis to ruler.
@@ -907,10 +907,11 @@ int main() {
         }
 
         check("inspect hint: advertises hover-then-click",
-              scene3d::inspect_hint_note().find("hover") != std::string::npos &&
-                  scene3d::inspect_hint_note().find("click") !=
+              std::string(scene3d::inspect_hint_note()).find("hover") !=
+                      std::string::npos &&
+                  std::string(scene3d::inspect_hint_note()).find("click") !=
                       std::string::npos,
-              scene3d::inspect_hint_note().c_str());
+              scene3d::inspect_hint_note());
     }
 
     // T5: toggling the convergence checkbox is reflected in the SceneLayers

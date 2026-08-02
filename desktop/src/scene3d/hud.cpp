@@ -83,12 +83,16 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
     return out;
 }
 
-std::vector<EncodingSwatch> terrain_encoding_swatches() {
+const std::vector<EncodingSwatch> &terrain_encoding_swatches() {
     // Mirrors kTerrainFrag's branches (scene3d/shaders/embedded.h) VERBATIM —
     // the same keep-in-sync convention TORN/STAT/CHURN's C++ bit values
     // already follow against the GLSL constants. TF_READ/TF_WRITE are
     // deliberately absent: the terrain shader does not branch on them.
-    return {
+    // A function-local static: this is compile-time-constant data, so every
+    // caller (the legend is drawn every HUD frame) shares one built-once
+    // instance rather than reallocating the vector + its string labels per
+    // frame.
+    static const std::vector<EncodingSwatch> kSwatches = {
         {space::TF_CHURN,
          "churn: codeimage version changed within [0,t] (scaffold)",
          {0.2f, 0.7f, 1.0f}}, // kTerrainFrag CHURN: mix(base, this, 0.5)
@@ -102,23 +106,26 @@ std::vector<EncodingSwatch> terrain_encoding_swatches() {
          "fog-of-war: in-domain, no content reached yet (dark pit)",
          {0.02f, 0.02f, 0.03f}}, // kTerrainFrag UNKNOWN: mix(base, this, 0.85)
     };
+    return kSwatches;
 }
 
-std::vector<OverlaySwatch> overlay_encoding_swatches() {
+const std::vector<OverlaySwatch> &overlay_encoding_swatches() {
     // Mirrors scene.cpp's Line::color literals VERBATIM (set_convergences /
     // set_trajectories' access_spurs_ setup) — see this function's own doc
     // comment in hud.h for why the colours are a synced copy, not a shared
-    // constant.
-    return {
+    // constant. Function-local static for the same built-once reason as
+    // terrain_encoding_swatches above.
+    static const std::vector<OverlaySwatch> kSwatches = {
         {"convergence: co-locality hint (same cell, stated gap) — never a "
          "proven race or order",
          {1.0f, 0.25f, 0.85f}}, // scene.cpp set_convergences' bright magenta
         {"access spur: a PC vertex's data access, at the same height",
          {0.85f, 0.85f, 0.90f}}, // scene.cpp set_trajectories' lavender
     };
+    return kSwatches;
 }
 
-std::string inspect_hint_note() {
+const char *inspect_hint_note() {
     return "hover to inspect, click to open the flat reader";
 }
 
@@ -149,7 +156,7 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
     return out;
 }
 
-std::string vertical_axes_note() {
+const char *vertical_axes_note() {
     return "two vertical meanings share this screen axis: terrain height = "
            "access density (log), path height = trace time (steps)";
 }
@@ -167,64 +174,72 @@ std::string camera_here_text(const space::Projection &proj, float u, float v) {
     return buf;
 }
 
-std::vector<std::string> scene_control_lines() {
+const std::vector<std::string> &scene_control_lines() {
     // 48 T5: one line per CamKey value (the exhaustiveness a test pins), plus
     // the mouse gestures CamKey has no key for (drag/wheel/click/double-click
-    // have no keyboard equivalent to enumerate from the enum).
-    std::vector<std::string> out = {
-        "left-drag: orbit",
-        "middle-drag or shift+left-drag: pan",
-        "mouse wheel: dolly (zoom)",
-        "double-click: recentre on what's under the cursor",
-        "click (no drag): open in 2D (\"3D to find, 2D to read\")",
-    };
-    using scene3d::CamKey;
-    // One line per enum value, in declaration order — adding a CamKey without
-    // adding it here is the drift this generation exists to prevent.
-    for (CamKey k : {CamKey::OrbitLeft, CamKey::OrbitRight, CamKey::OrbitUp,
-                     CamKey::OrbitDown, CamKey::DollyIn, CamKey::DollyOut,
-                     CamKey::Reset, CamKey::TopDown, CamKey::PanLeft,
-                     CamKey::PanRight, CamKey::PanForward, CamKey::PanBack}) {
-        switch (k) {
-        case CamKey::OrbitLeft:
-            out.push_back("Left arrow: orbit left");
-            break;
-        case CamKey::OrbitRight:
-            out.push_back("Right arrow: orbit right");
-            break;
-        case CamKey::OrbitUp:
-            out.push_back("Up arrow: orbit up");
-            break;
-        case CamKey::OrbitDown:
-            out.push_back("Down arrow: orbit down");
-            break;
-        case CamKey::DollyIn:
-            out.push_back("+ / =: dolly in");
-            break;
-        case CamKey::DollyOut:
-            out.push_back("-: dolly out");
-            break;
-        case CamKey::Reset:
-            out.push_back("R: reset view (the landmark)");
-            break;
-        case CamKey::TopDown:
-            out.push_back("T: top-down (2D-ish)");
-            break;
-        case CamKey::PanLeft:
-            out.push_back("(pan left: mouse only — no key bound)");
-            break;
-        case CamKey::PanRight:
-            out.push_back("(pan right: mouse only — no key bound)");
-            break;
-        case CamKey::PanForward:
-            out.push_back("(pan forward: mouse only — no key bound)");
-            break;
-        case CamKey::PanBack:
-            out.push_back("(pan back: mouse only — no key bound)");
-            break;
+    // have no keyboard equivalent to enumerate from the enum). CamKey's
+    // enumeration is invariant across the run, so this is built once
+    // (function-local static) rather than reconstructed every frame the
+    // "controls" header is expanded.
+    static const std::vector<std::string> kLines = [] {
+        std::vector<std::string> lines = {
+            "left-drag: orbit",
+            "middle-drag or shift+left-drag: pan",
+            "mouse wheel: dolly (zoom)",
+            "double-click: recentre on what's under the cursor",
+            "click (no drag): open in 2D (\"3D to find, 2D to read\")",
+        };
+        using scene3d::CamKey;
+        // One line per enum value, in declaration order — adding a CamKey
+        // without adding it here is the drift this generation exists to
+        // prevent.
+        for (CamKey k :
+            {CamKey::OrbitLeft, CamKey::OrbitRight, CamKey::OrbitUp,
+             CamKey::OrbitDown, CamKey::DollyIn, CamKey::DollyOut,
+             CamKey::Reset, CamKey::TopDown, CamKey::PanLeft,
+             CamKey::PanRight, CamKey::PanForward, CamKey::PanBack}) {
+            switch (k) {
+            case CamKey::OrbitLeft:
+                lines.push_back("Left arrow: orbit left");
+                break;
+            case CamKey::OrbitRight:
+                lines.push_back("Right arrow: orbit right");
+                break;
+            case CamKey::OrbitUp:
+                lines.push_back("Up arrow: orbit up");
+                break;
+            case CamKey::OrbitDown:
+                lines.push_back("Down arrow: orbit down");
+                break;
+            case CamKey::DollyIn:
+                lines.push_back("+ / =: dolly in");
+                break;
+            case CamKey::DollyOut:
+                lines.push_back("-: dolly out");
+                break;
+            case CamKey::Reset:
+                lines.push_back("R: reset view (the landmark)");
+                break;
+            case CamKey::TopDown:
+                lines.push_back("T: top-down (2D-ish)");
+                break;
+            case CamKey::PanLeft:
+                lines.push_back("(pan left: mouse only — no key bound)");
+                break;
+            case CamKey::PanRight:
+                lines.push_back("(pan right: mouse only — no key bound)");
+                break;
+            case CamKey::PanForward:
+                lines.push_back("(pan forward: mouse only — no key bound)");
+                break;
+            case CamKey::PanBack:
+                lines.push_back("(pan back: mouse only — no key bound)");
+                break;
+            }
         }
-    }
-    return out;
+        return lines;
+    }();
+    return kLines;
 }
 
 void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
@@ -238,12 +253,11 @@ void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
     ImVec2 prev{};
     bool have_prev = false;
     for (uint64_t t : trajectory_axis_ticks(nsteps)) {
-        const float world[4] = {0.0f, static_cast<float>(t) * traj_scale, 0.0f,
-                                1.0f};
-        float clip[4];
-        for (int r = 0; r < 4; r++)
-            clip[r] = m[0 * 4 + r] * world[0] + m[1 * 4 + r] * world[1] +
-                      m[2 * 4 + r] * world[2] + m[3 * 4 + r] * world[3];
+        // The same world->clip transform goto.cpp's scene_on_screen already
+        // does — one linmath call, not a second hand-unrolled multiply.
+        vec4 world = {0.0f, static_cast<float>(t) * traj_scale, 0.0f, 1.0f};
+        vec4 clip;
+        mat4x4_mul_vec4(clip, reinterpret_cast<vec4 *>(m), world);
         if (clip[3] <= 0.0f) { // behind the camera: cannot place this tick
             have_prev = false;
             continue;
@@ -565,10 +579,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::SameLine();
         ImGui::TextUnformatted(sw.label.c_str());
     }
-    ImGui::TextColored(kDim, "%s", vertical_axes_note().c_str());
+    ImGui::TextColored(kDim, "%s", vertical_axes_note());
     // T5: advertise that the pane is interrogable — kept in the legend
     // (drawn every frame), never the first-open-only primer.
-    ImGui::TextColored(kDim, "%s", inspect_hint_note().c_str());
+    ImGui::TextColored(kDim, "%s", inspect_hint_note());
 
     ImGui::Separator();
 
