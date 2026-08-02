@@ -687,7 +687,12 @@ DESKTOP_TEST_AN  := $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/an/di
 DESKTOP_TEST_VW  := $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/test/vw/%.o) \
                     $(BUILD)/desktop/test/src/nav.o
 # The Observer builders, for the shell/golden binaries that draw them.
-DESKTOP_TEST_OBS := $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/test/vw/%.o)
+# sp/projection.o joins the bundle because hotedges.o now calls
+# space::Projection::project/unproject directly (56 T2/T5's
+# apply_coverage_window/build_mispred_layer) — every consumer of this bundle
+# needs it, not just the ones that already happened to link it separately.
+DESKTOP_TEST_OBS := $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/test/vw/%.o) \
+                    $(BUILD)/desktop/test/sp/projection.o
 DESKTOP_TEST_DA  := $(BUILD)/desktop/test/da/features_data.o \
                     $(BUILD)/desktop/test/da/perf_history.o
 DESKTOP_TEST_LOOM := $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/test/lo/%.o)
