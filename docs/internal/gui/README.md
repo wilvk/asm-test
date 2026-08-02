@@ -25,7 +25,8 @@ rules follow [../implementations/](../implementations/README.md) — read
 >
 > | Doc | Why it stays |
 > |---|---|
-> | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1–L6** are still open (arm64 live-dataflow leg, `df_invocation`-aware decode, live `blame`/`statediff` kinds, the Darwin `libasmtest_dataflow` build, ARM32/RISC-V Author guests, doc-37 T4 on the serve disasm path). L7 closed as doc 39. |
+> | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1, L4** are still open (arm64 live-dataflow leg, the Darwin `libasmtest_dataflow` build). L2/L3/L6/L7 closed as docs 40/41/37-T4/39; L5 cut as doc 60. |
+| [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ARM32 is unblocked and ☐ 0/2 (T1 guest, T2 Author dispatch); RISC-V (T3) is gated on an unreleased-Keystone spike, not yet run. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48 and 50 landed 2026-08-02, 51–52 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
@@ -485,6 +486,22 @@ started-params announce. **Genuinely low value** (the *views* already worked liv
 client-side; this is the reproducible/deep-linkable *convenience* only) but cheap and
 host-testable — `cli_smoke` asserts the live cone + the step-0-`computed:false` delta.
 Authored 2026-07-29. ✅ 3/3 · —.
+
+[60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) — **ARM32 + RISC-V
+run/trace in Author mode** (gap **L5** from
+[38](38-live-feed-completion-roadmap.md)): another `df_guest` instance, per doc
+32/R5's own closing line. Cut 2026-08-02 as its own per-gap brief, following the
+39/40/41 pattern. Scoping found the two targets are **not symmetric**: ARM32 is
+fully unblocked today (Keystone/Unicorn/Capstone all already build it; only the
+operand enumerator's ARM32 memory-operand branch is missing) and is
+doc-32-shaped end to end — T1 the `df_guest_arm32` instance + `emu_arm32_t` ring
++ enumerator arm + golden, T2 the Author dispatch flip. RISC-V (T3) carries a
+real, previously-unsurfaced dependency gap: this repo's Keystone pin is 0.9.2
+(Feb 2019, upstream's newest **release**), and `KS_ARCH_RISCV` exists only on
+upstream's unreleased `master` — a spike (pin a commit, verify it builds and
+that the RISC-V backend assembles *correct* bytes under Unicorn, not merely
+that `ks_asm` returns success) gates T3 before it can be scoped as ordinary
+mirroring. ☐ 0/3 (T1/T2 not started; T3 spike not run). · will · T1-T3 · 2026-08-02.
 
 [42-loom-reweave-consumption.md](../archive/gui/42-loom-reweave-consumption.md) — **consume the
 Reweave request** (review #20): wires the fully-built-but-unreachable
