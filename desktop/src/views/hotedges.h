@@ -107,6 +107,42 @@ const char *obs_hotedges_no_flame_note();
 // prefix, and it says so rather than pretending to be the whole story).
 std::vector<HotEdge> obs_hotedges_top(const HotEdgeView &v, size_t n);
 
+// 54-3d-catalog-phase0-plumbing.md T7: the DECIDED source for any 3D scene
+// layer that draws statistical control-flow edges (L5's kernel-crossing
+// spurs, L14's misprediction survey) — never `doc/streams.h`'s `SurveyEdge`
+// (see the comment beside it). Sourcing here means the layer and this view's
+// own reader can never disagree about the same edge, and the drill-in target
+// for a statistical pick is this view itself.
+//
+// A separate, minimal type from `HotEdge` on purpose — no resolved from/to
+// text, no rank, so a layer physically cannot reach for a display field this
+// view never promised to keep stable. That is what makes D7 invariant 1 (the
+// statistical source stays physically distinct from the exact one) a
+// property of the model layer rather than a rendering convention every new
+// layer has to remember on its own.
+struct HotEdgeForScene {
+    uint64_t from_addr = 0, to_addr = 0;
+    uint64_t count = 0;
+    uint64_t mispred = 0;
+    uint64_t is_return = 0;
+};
+struct HotEdgeSceneView {
+    std::vector<HotEdgeForScene> edges; // same order obs_hotedges_build ranks
+    // The fidelity a consumer of `edges` MUST render (D7): the
+    // "STATISTICAL — survey" label, graded opacity by `sampler` (a crisp
+    // "ibs-op" vs. a washed "sw-clock"), never summed into an exact surface.
+    // An empty survey yields an empty `edges` and these fields still say why
+    // (samples/lost/throttled), rather than a silent zero-count edge.
+    std::string sampler;
+    uint64_t samples = 0;
+    uint64_t branch_samples = 0;
+    uint64_t lost = 0;
+    bool throttled = false;
+    bool have_window = false;
+    uint64_t window_base = 0, window_len = 0;
+};
+HotEdgeSceneView obs_hotedges_for_scene(const HotEdgeView &v);
+
 std::string obs_hotedges_dump(const HotEdgeView &v);
 
 } // namespace asmdesk

@@ -139,6 +139,18 @@ struct SegmentedDataflow {
 
 // One statistical hot edge (`survey`). STATISTICAL: never merged into exact
 // heat, always labelled where it is shown (schema Provenance rule).
+//
+// 54-3d-catalog-phase0-plumbing.md T7: this is the decoded WIRE form; it is
+// NOT the source a renderer draws from. Anything drawing a statistical
+// control-flow edge (the hotedges view itself, and any future 3D layer —
+// L5's kernel-crossing spurs, L14's misprediction survey) reads
+// `views/hotedges.h`'s `HotEdge`/`obs_hotedges_for_scene` instead: that is
+// where the required fidelity channel lives (`sampler`/`lost`/`throttled`/
+// the window, HotEdgeView), and `SurveyEdge` alone carries none of it.
+// Sourcing from here would just have to reach for HotEdgeView anyway, adding
+// a second decode path that could disagree with the view about the same
+// edge. This struct itself is unchanged — a rendering-source decision, not a
+// schema change.
 struct SurveyEdge {
     uint64_t from = 0, to = 0;
     uint64_t count = 0, mispred = 0;

@@ -15,9 +15,12 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 4/7.** T3–T6 landed. T7 next (claimed, in progress); T1–T2
-> (terrain-touching) deliberately left open — see the brief's own T1/T2 vs.
-> T3–T7 split and the [README](README.md) claim row.
+> **Status — ◐ 5/7.** T3–T7 landed (2026-08-02) — the full non-terrain half
+> of the brief's own suggested T1+T2 / T3–T7 split. T1 (observed-data-span
+> projection) and T2 (read/write prefix-sum split) remain: both touch
+> `space/terrain.{h,cpp}` and are unclaimed — see the [README](README.md)
+> claim row. T1 is still "the single highest-leverage task in either open
+> family" (README) and is unblocked by anything here.
 
 ## Why this work exists
 

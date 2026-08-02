@@ -122,6 +122,23 @@ std::vector<HotEdge> obs_hotedges_top(const HotEdgeView &v, size_t n) {
     return out;
 }
 
+HotEdgeSceneView obs_hotedges_for_scene(const HotEdgeView &v) {
+    HotEdgeSceneView out;
+    out.edges.reserve(v.edges.size());
+    for (const HotEdge &e : v.edges)
+        out.edges.push_back(
+            {e.from_addr, e.to_addr, e.count, e.mispred, e.is_return});
+    out.sampler = v.sampler;
+    out.samples = v.samples;
+    out.branch_samples = v.branch_samples;
+    out.lost = v.lost;
+    out.throttled = v.throttled;
+    out.have_window = v.have_window;
+    out.window_base = v.window_base;
+    out.window_len = v.window_len;
+    return out;
+}
+
 std::string obs_hotedges_dump(const HotEdgeView &v) {
     std::string s;
     if (!v.chrome.banner.empty())

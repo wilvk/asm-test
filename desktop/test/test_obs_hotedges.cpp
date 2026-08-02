@@ -114,5 +114,46 @@ int main() {
 
     vt::golden("obs-hotedges-ibs.txt", dump);
     vt::golden("obs-hotedges-sw.txt", obs_hotedges_dump(s));
+
+    // 54 T7: the scene accessor — the DECIDED source for a 3D statistical
+    // layer. Same edges, same order, with count/mispred/is_return preserved
+    // (from/to text and rank are deliberately absent from the returned type).
+    HotEdgeSceneView scene = obs_hotedges_for_scene(v);
+    vt::eq("scene: same edge count", scene.edges.size(), v.edges.size());
+    for (size_t i = 0; i < v.edges.size() && i < scene.edges.size(); i++) {
+        vt::eq("scene: from_addr order preserved at " + std::to_string(i),
+               scene.edges[i].from_addr, v.edges[i].from_addr);
+        vt::eq("scene: to_addr preserved at " + std::to_string(i),
+               scene.edges[i].to_addr, v.edges[i].to_addr);
+        vt::eq("scene: count preserved at " + std::to_string(i),
+               scene.edges[i].count, v.edges[i].count);
+        vt::eq("scene: mispred preserved at " + std::to_string(i),
+               scene.edges[i].mispred, v.edges[i].mispred);
+        vt::eq("scene: is_return preserved at " + std::to_string(i),
+               scene.edges[i].is_return, v.edges[i].is_return);
+    }
+
+    // The view-level fidelity fields survive the projection — a consumer
+    // reads them from HotEdgeSceneView directly, with no second decode path
+    // back through HotEdgeView.
+    vt::eq("scene: sampler survives", scene.sampler, v.sampler);
+    vt::eq("scene: samples survives", scene.samples, v.samples);
+    vt::eq("scene: branch_samples survives", scene.branch_samples,
+           v.branch_samples);
+    vt::eq("scene: lost survives", scene.lost, v.lost);
+    vt::eq("scene: throttled survives", scene.throttled, v.throttled);
+    vt::eq("scene: have_window survives", scene.have_window, v.have_window);
+    vt::eq("scene: window_base survives", scene.window_base, v.window_base);
+    vt::eq("scene: window_len survives", scene.window_len, v.window_len);
+
+    // An empty survey yields an empty edge set, never a silent zero-count
+    // edge — and the fidelity fields still state WHY (samples=0), rather
+    // than the accessor inventing something to show.
+    HotEdgeSceneView empty = obs_hotedges_for_scene(HotEdgeView{});
+    vt::check("scene: empty survey yields no edges", empty.edges.empty(),
+              "an edgeless view must not synthesise one");
+    vt::eq("scene: empty survey states zero samples (the reason)",
+           empty.samples, uint64_t{0});
+
     return vt::report("test_obs_hotedges");
 }
