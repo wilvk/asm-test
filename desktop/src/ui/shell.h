@@ -74,6 +74,12 @@ struct SceneView {
     // alongside `slice`/`canopies` (its two prefix sums are t-gated the same
     // way), never on a degrade frame that only re-lands the coarse plane.
     space::DataReliefLayer relief;
+    // 58 T3: the working-set tide at THIS SAME slice_t, with the HUD's dwell
+    // window. Rebuilt when EITHER the playhead or the window moves — the
+    // window is part of the layer's definition, so a stale one would draw a
+    // recency claim the reader did not ask for.
+    space::WorkingSetTide tide;
+    uint64_t tide_window = space::kTideWindowDefault;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

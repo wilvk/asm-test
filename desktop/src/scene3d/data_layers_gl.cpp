@@ -79,7 +79,8 @@ void Scene::upload_data_batch(DataLineBatch &b, const std::vector<float> &verts)
 }
 
 void Scene::free_data_layers() {
-    DataLineBatch *all[] = {&relief_read_, &relief_write_};
+    DataLineBatch *all[] = {&relief_read_, &relief_write_, &tide_live_,
+                            &tide_watermark_};
     for (DataLineBatch *b : all) {
         if (b->vbo)
             glDeleteBuffers(1, &b->vbo);
@@ -133,6 +134,46 @@ void Scene::set_data_relief(const space::DataReliefLayer &relief) {
     relief_read_.line_width = relief_write_.line_width = 2.0f;
 }
 
+// T3 (58): the working-set tide. The LIVE crest and the cold WATERMARK are
+// separate batches, for a fidelity reason and not a rendering one: a cold cell
+// is excluded from the live mass by construction, so no draw-order accident
+// can composite a decayed cell into "what is hot right now". The watermark
+// draws at ~10% alpha — a faithful decay, never a zero: a cell that has gone
+// cold has not gone to zero, and a zero-height nub would say it was never
+// touched at all. A cell never touched by this slice produces no TideCell at
+// all, so it contributes no vertex to either batch.
+void Scene::set_working_set_tide(const space::WorkingSetTide &tide) {
+    std::vector<float> live, mark;
+    live.reserve(tide.cells.size() * 6);
+    mark.reserve(tide.cells.size() * 6);
+    for (const space::TideCell &c : tide.cells) {
+        if (c.live)
+            seg(live, c.u, 0.0f, c.v, c.u,
+                static_cast<float>(c.live_height) * y_scale, c.v);
+        else if (c.cold)
+            seg(mark, c.u, 0.0f, c.v, c.u,
+                static_cast<float>(c.watermark_height) * y_scale, c.v);
+    }
+    upload_data_batch(tide_live_, live);
+    upload_data_batch(tide_watermark_, mark);
+    // A torn capture floors the window, so the crest is red-shifted with the
+    // same mix the relief uses.
+    const float torn = tide.torn ? 0.55f : 0.0f, mix = 1.0f - torn;
+    tide_live_.color[0] = 0.35f * mix + 1.00f * torn;
+    tide_live_.color[1] = 0.95f * mix + 0.15f * torn;
+    tide_live_.color[2] = 0.70f * mix + 0.15f * torn;
+    tide_live_.color[3] = 0.90f;
+    tide_live_.line_width = 2.5f;
+    // The watermark keeps the live hue (it IS the same quantity, at an earlier
+    // time) and spends its difference entirely on alpha — 10%, the "faded
+    // watermark" the layer's own rule names.
+    tide_watermark_.color[0] = tide_live_.color[0];
+    tide_watermark_.color[1] = tide_live_.color[1];
+    tide_watermark_.color[2] = tide_live_.color[2];
+    tide_watermark_.color[3] = 0.10f;
+    tide_watermark_.line_width = 1.5f;
+}
+
 void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (!prog_traj_)
         return;
@@ -140,6 +181,12 @@ void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (layers.data_relief) {
         batches.push_back(&relief_read_);
         batches.push_back(&relief_write_);
+    }
+    if (layers.working_set) {
+        // Watermark first, live second: the faded decay sits behind the mass
+        // it decayed from wherever the two overlap.
+        batches.push_back(&tide_watermark_);
+        batches.push_back(&tide_live_);
     }
     bool any = false;
     for (const DataLineBatch *b : batches)

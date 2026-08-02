@@ -37,6 +37,11 @@ const std::vector<LayerDesc> &scene_layers_all() {
         // --- activity: what happened, and when ------------------------------
         {"vehicle", "vehicle", "where is the followed thread right now?",
          G::Activity, LayerGrade::Exact, &SceneLayers::vehicle},
+        // 58 T3: Derived for the same reason as `relief` — a windowed
+        // log-scaled sum of recorded sizes, not a raw recorded field.
+        {"working set", "working set",
+         "what is being touched now, and what has drifted cold?", G::Activity,
+         LayerGrade::Derived, &SceneLayers::working_set},
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},

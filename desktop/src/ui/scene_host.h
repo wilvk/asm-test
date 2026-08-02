@@ -63,6 +63,12 @@ struct SceneFrame {
     // re-uploads it on the SAME slice_t gate. nullptr is treated exactly like
     // an empty layer (nothing drawn), never as a flat surface at zero.
     const space::DataReliefLayer *relief = nullptr;
+    // T3 (58-memory-data-cell-family): the working-set tide, on the same
+    // playhead gate as `relief`. `tide_gen` advances whenever the dwell window
+    // changes, so a window move re-uploads even though slice_t did not — the
+    // window is part of the layer's definition, not a display option.
+    const space::WorkingSetTide *tide = nullptr;
+    uint64_t tide_gen = 0;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

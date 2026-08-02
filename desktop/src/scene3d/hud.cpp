@@ -764,6 +764,23 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                s.relief_undirected_cells,
                                (unsigned long long)s.relief_undirected_bytes);
     }
+    // T3 (58): the working-set tide's own chrome, shown only while it is on:
+    // the dwell knob (with its UNIT named on the control — a bare number was
+    // the 2026-07-29 review's top finding), the live/cold split, and the
+    // legend line the model itself produced.
+    if (s.layers.working_set) {
+        int win = static_cast<int>(s.tide_window > 0 ? s.tide_window : 1);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::SliderInt("dwell window (trace-time steps)", &win, 1,
+                             static_cast<int>(s.nsteps > 1 ? s.nsteps : 1024))) {
+            s.tide_window = static_cast<uint64_t>(win < 1 ? 1 : win);
+            s.tide_window_changed = true;
+        }
+        if (!s.tide_legend.empty())
+            ImGui::TextColored(kDim, "%s", s.tide_legend.c_str());
+        ImGui::TextColored(kDim, "%u live cell(s), %u cold (faded watermark)",
+                           s.tide_live_cells, s.tide_cold_cells);
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

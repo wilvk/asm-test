@@ -109,5 +109,81 @@ DataReliefLayer build_data_relief(const TerrainModel &m, uint64_t t);
 // missing surface as a measured zero. Pinned by test.
 const char *data_relief_note();
 
+// ---------------------------------------------------------------------------
+// T3 — working-set tide
+// ---------------------------------------------------------------------------
+
+// How the crest tint was derived. `Split` is the honest per-direction byte
+// ratio from 54 T2's split sums, and is what this tree normally has.
+//
+// `RwFlagOnly` is the DEGRADED form for a recording NONE of whose accesses
+// carry a recognisable `rw` token: there is then no ratio to compute, and the
+// only thing `cum_rw` can honestly report is whether a direction bit that had
+// not been seen before this window FIRST APPEARED inside it. That is strictly
+// weaker than "the window contains a write" — cum_rw is a prefix OR, so it is
+// monotone and cannot un-set a bit — and this enum exists so the difference is
+// LABELLED rather than quietly presented as a ratio (T3 step 4: an OR flag
+// shown as a read/write ratio is a fabricated quantity).
+enum class TideTint { Split, RwFlagOnly };
+const char *tide_tint_label(TideTint tint);
+
+struct TideCell {
+    uint32_t cell = 0;
+    float u = 0.0f, v = 0.0f;
+
+    // The LIVE mass: bytes accessed within the window (t-W, t]. Two binary
+    // searches over the existing prefix arrays, no rescan.
+    uint64_t live_bytes = 0;
+    double live_height = 0.0; // log1p(live_bytes); 0 when nothing is live
+    bool live = false;        // any access landed inside the window
+
+    // The receding WATERMARK: a cold cell's height at its own last crest —
+    // the window sum it had when it was last touched, computed over
+    // (last_step-W, last_step]. This is a decay, never a zero: a cell that has
+    // gone cold has not gone to zero, and drawing it at zero would say it was
+    // never touched.
+    double watermark_height = 0.0;
+    bool cold = false; // touched at-or-before t, but NOT inside the window
+
+    // Direction WITHIN the window, from the split sums (TideTint::Split) —
+    // the crest tint. Under TideTint::RwFlagOnly these stay 0/false and
+    // `window_has_direction_bit` is the only honest thing the layer can say.
+    uint64_t win_read_bytes = 0, win_write_bytes = 0;
+    uint64_t win_unknown_bytes = 0; // window traffic with no recorded direction
+    // The degraded binary flag, meaningful only under TideTint::RwFlagOnly:
+    // a cum_rw bit that had not been seen before this window appeared inside
+    // it. See TideTint's own comment for why this is NOT "the window contains
+    // a write".
+    bool window_first_direction_bit = false;
+
+    bool torn = false;
+    uint64_t last_step = 0; // drill-in: the last hitting step at-or-before t
+};
+
+struct WorkingSetTide {
+    std::vector<TideCell> cells;
+    uint64_t t = 0;
+    uint64_t window = 0; // W, in TERRAIN-TIME steps (never the exec-step axis)
+    TideTint tint = TideTint::Split;
+    bool mem_present = false;
+    uint32_t live_cells = 0, cold_cells = 0;
+    bool torn = false;
+};
+
+// The default dwell window, in terrain-time steps. A knob, not a constant of
+// nature: exposed on the HUD (HudState::tide_window) so a reader can widen it,
+// and NAMED with its unit wherever it is shown — a bare number was the 2026-07-29
+// dataviz review's top finding.
+inline constexpr uint64_t kTideWindowDefault = 64;
+
+// Build the tide at the inclusive slice [0, t] with dwell window `window`
+// (0 => kTideWindowDefault). Cells never touched at-or-before t produce no
+// entry, so "cold" and "never touched" are structurally distinguishable.
+WorkingSetTide build_working_set_tide(const TerrainModel &m, uint64_t t,
+                                      uint64_t window = 0);
+
+// The layer's legend line — states the axis, the unit and the watermark rule.
+std::string tide_note(const WorkingSetTide &tide);
+
 } // namespace asmdesk::space
 #endif // ASMDESK_SPACE_DATACELL_H

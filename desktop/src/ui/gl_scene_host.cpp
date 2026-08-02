@@ -114,7 +114,20 @@ class GlSceneHost : public SceneHost {
             // relief standing over a freshly-scrubbed terrain.
             static const space::DataReliefLayer kNoRelief;
             scene_.set_data_relief(f.relief ? *f.relief : kNoRelief);
+            // T3 (58): same gate, plus its own dwell-window generation below.
+            static const space::WorkingSetTide kNoTide;
+            scene_.set_working_set_tide(f.tide ? *f.tide : kNoTide);
+            up_tide_gen_ = f.tide_gen;
             up_t_ = f.slice_t;
+        }
+        // T3 (58): the dwell window is part of the tide's DEFINITION, so a
+        // window move must re-upload even though the playhead did not — a
+        // stale tide would draw a recency claim for a window the reader is no
+        // longer looking at.
+        if (f.tide_gen != up_tide_gen_) {
+            static const space::WorkingSetTide kNoTide2;
+            scene_.set_working_set_tide(f.tide ? *f.tide : kNoTide2);
+            up_tide_gen_ = f.tide_gen;
         }
         have_upload_ = true;
 
@@ -215,6 +228,9 @@ class GlSceneHost : public SceneHost {
     uint64_t up_key_ = 0;
     uint64_t up_gen_ = 0;
     uint64_t up_t_ = 0;
+    // T3 (58): the working-set dwell window last uploaded. UINT64_MAX so the
+    // very first frame always re-uploads (a real window is never that value).
+    uint64_t up_tide_gen_ = UINT64_MAX;
     bool have_upload_ = false;
 };
 

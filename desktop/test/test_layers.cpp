@@ -69,6 +69,7 @@ int main() {
         &SceneLayers::edl,          &SceneLayers::confidence,
         &SceneLayers::canopy,       &SceneLayers::opcode,
         &SceneLayers::mispred,      &SceneLayers::data_relief,
+        &SceneLayers::working_set,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

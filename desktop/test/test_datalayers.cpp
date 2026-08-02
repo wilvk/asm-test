@@ -381,9 +381,170 @@ static void t2_twin_relief() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T3 — working-set tide
+// ---------------------------------------------------------------------------
+static void t3_working_set_tide() {
+    // kHot is touched late (inside the window at t=40, W=10); kCold only
+    // early; kFuture only after t. All three place in the same span.
+    const uint64_t kHot = 0x200000, kCold = 0x200040, kFuture = 0x200080;
+    std::string nd = kHeader + trace_steps(60) + mem_ev(2, kCold, 8, "r") +
+                     mem_ev(3, kCold, 8, "w") + mem_ev(34, kHot, 16, "r") +
+                     mem_ev(38, kHot, 8, "w") + mem_ev(50, kFuture, 8, "r") +
+                     kEnd;
+    Recording r = mk_rec(nd);
+    TerrainModel m = weave(r);
+
+    const uint64_t t = 40, W = 10;
+    WorkingSetTide T = build_working_set_tide(m, t, W);
+    check("T3: the window and its unit ride on the model",
+          T.window == W && T.t == t, "window/t not carried");
+
+    const TideCell *hot = find_at(T.cells, m.proj, m.w, m.h, kHot);
+    const TideCell *cold = find_at(T.cells, m.proj, m.w, m.h, kCold);
+    const TideCell *fut = find_at(T.cells, m.proj, m.w, m.h, kFuture);
+    check("T3: the hot and cold cells both produce entries", hot && cold,
+          "a touched cell produced no entry");
+    check("T3: a cell NOT YET touched at this slice produces NOTHING",
+          fut == nullptr,
+          "a not-yet-touched cell appeared (it must be indistinguishable from "
+          "never-touched at this slice, and BOTH must be absent)");
+    if (!(hot && cold))
+        return;
+
+    check("T3: the live cell's window mass is the observed byte delta",
+          hot->live && hot->live_bytes == 24,
+          "got " + std::to_string(hot->live_bytes));
+    check("T3: the live cell is not marked cold", !hot->cold, "live and cold");
+    check("T3: the live cell's direction split survives the window",
+          hot->win_read_bytes == 16 && hot->win_write_bytes == 8,
+          "the window lost a direction");
+
+    // THE central rule for this layer: a cell touched only OUTSIDE the window
+    // has zero live height and a NON-ZERO watermark. Zero would say it was
+    // never touched.
+    check("T3: the cold cell has zero live height",
+          cold->cold && !cold->live && cold->live_bytes == 0 &&
+              cold->live_height == 0.0,
+          "a cold cell still carried live mass");
+    check("T3: the cold cell's WATERMARK is non-zero (a decay, never a zero)",
+          cold->watermark_height > 0.0,
+          "a cold cell decayed to zero, which reads as never-touched");
+    check("T3: the layer counts the live/cold split",
+          T.live_cells == 1 && T.cold_cells == 1,
+          "live=" + std::to_string(T.live_cells) + " cold=" +
+              std::to_string(T.cold_cells));
+
+    // The windowed delta equals a brute-force sum over the same range, for
+    // several (t, W). This is the assertion that the two binary searches are
+    // not an approximation of the thing they replace.
+    {
+        bool all_ok = true;
+        for (uint64_t tt : {5ull, 20ull, 40ull, 59ull}) {
+            for (uint64_t ww : {1ull, 4ull, 16ull, 1000ull}) {
+                WorkingSetTide X = build_working_set_tide(m, tt, ww);
+                for (const TerrainModel::DataCell &dc : m.data) {
+                    uint64_t brute = 0;
+                    for (size_t i = 0; i < dc.steps.size(); i++) {
+                        const uint64_t st = dc.steps[i];
+                        if (st > tt)
+                            continue;
+                        if (tt > ww && st <= tt - ww)
+                            continue;
+                        // the per-access size, recovered from the prefix sum
+                        brute += dc.cum_size[i] -
+                                 (i > 0 ? dc.cum_size[i - 1] : uint64_t{0});
+                    }
+                    const TideCell *c = nullptr;
+                    for (const TideCell &x : X.cells)
+                        if (x.cell == dc.cell)
+                            c = &x;
+                    const uint64_t got = c ? c->live_bytes : 0;
+                    if (got != brute)
+                        all_ok = false;
+                }
+            }
+        }
+        check("T3: the windowed delta equals a brute-force sum over the same "
+              "range, for every (t, W) probed",
+              all_ok, "the two binary searches disagree with a linear scan");
+    }
+
+    // The degraded path is LABELLED differently from the split path. Built
+    // from a fixture whose accesses carry no recognisable direction token at
+    // all — the only case in which no ratio exists to draw.
+    {
+        std::string und = kHeader + trace_steps(20) +
+                          mem_ev(2, kHot, 8, "?") + mem_ev(9, kHot, 8, "?") +
+                          kEnd;
+        Recording ur = mk_rec(und);
+        TerrainModel um = weave(ur);
+        WorkingSetTide UT = build_working_set_tide(um, 12, 8);
+        check("T3: with no recognisable direction the tint DEGRADES",
+              UT.tint == TideTint::RwFlagOnly, "the split tint was claimed");
+        const std::string deg = tide_tint_label(TideTint::RwFlagOnly);
+        const std::string split = tide_tint_label(TideTint::Split);
+        check("T3: the degraded label differs from the split label",
+              deg != split, "the two tint sources share one label");
+        check("T3: the degraded label refuses to call itself a ratio",
+              deg.find("no ratio") != std::string::npos &&
+                  deg.find("prefix OR") != std::string::npos,
+              "the degraded label does not state what it actually is");
+        check("T3: the split fixture claims the split tint",
+              build_working_set_tide(m, t, W).tint == TideTint::Split,
+              "a recording WITH directions was degraded");
+    }
+
+    // The note names its axis and its unit — a bare number is the review's own
+    // top finding.
+    {
+        const std::string note = tide_note(T);
+        check("T3: the note names the TRACE-TIME axis",
+              note.find("TRACE-TIME") != std::string::npos,
+              "the note does not name the axis");
+        check("T3: the note names the window's unit and value",
+              note.find(std::to_string(W)) != std::string::npos &&
+                  note.find("steps") != std::string::npos,
+              "the note states a bare number");
+        check("T3: the note states the watermark rule",
+              note.find("WATERMARK") != std::string::npos &&
+                  note.find("never to zero") != std::string::npos,
+              "the note does not state that cold is a decay, not a zero");
+    }
+
+    // Torn floors the window and the flag survives onto every cell.
+    {
+        std::string tn = kHeader + trace_steps(20) + mem_ev(2, kHot, 8, "r");
+        Recording trr = mk_rec(tn); // no `end` footer => torn
+        TerrainModel tm = weave(trr);
+        WorkingSetTide TT = build_working_set_tide(tm, 10, 8);
+        bool all = !TT.cells.empty();
+        for (const TideCell &c : TT.cells)
+            if (!c.torn)
+                all = false;
+        check("T3: TORN floors the window on every cell", TT.torn && all,
+              "a torn window was presented as a measurement");
+        check("T3: the torn note says so",
+              tide_note(TT).find("TORN") != std::string::npos,
+              "the note hid the truncation");
+    }
+
+    // Absent `mem` => an empty layer, never a flat plane of zero cells.
+    {
+        std::string coarse = kHeader + trace_steps(6) + kEnd;
+        Recording cr = mk_rec(coarse);
+        TerrainModel cm = weave(cr);
+        WorkingSetTide CT = build_working_set_tide(cm, 5, 4);
+        check("T3: no `mem` => an EMPTY tide, not a zero-height one",
+              CT.cells.empty() && !CT.mem_present,
+              "the coarse rung produced tide cells");
+    }
+}
+
 int main() {
     t1_hud_contract();
     t2_twin_relief();
+    t3_working_set_tide();
 
     if (failures) {
         std::fprintf(stderr, "%d data-layer check(s) failed\n", failures);

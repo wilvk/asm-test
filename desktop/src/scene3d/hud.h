@@ -268,6 +268,19 @@ struct HudState {
     // Shown only while SceneLayers::data_relief is on.
     uint32_t relief_undirected_cells = 0;
     uint64_t relief_undirected_bytes = 0;
+
+    // T3 (58-memory-data-cell-family): the working-set DWELL WINDOW, in
+    // TERRAIN-TIME steps — the playhead's own axis (`t` above), NEVER the
+    // execution step the flat views brush (34-playhead-and-scene-reach's
+    // two-axes rule). The HUD owns the control; the caller reads it back and
+    // rebuilds the tide, exactly as it does for `t`. `tide_window_changed` is
+    // the one-shot intent, cleared by the caller like playhead_moved.
+    uint64_t tide_window = space::kTideWindowDefault;
+    bool tide_window_changed = false;
+    // Synced by the caller from space::WorkingSetTide so the HUD can state the
+    // live/cold split and the tint provenance without rebuilding the layer.
+    uint32_t tide_live_cells = 0, tide_cold_cells = 0;
+    std::string tide_legend; // space::tide_note(tide), built by the caller
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

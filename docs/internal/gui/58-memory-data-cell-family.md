@@ -19,7 +19,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change. Line numbers below were re-verified 2026-08-03 while implementing.
 >
-> **Status — ☑ 2/6 (T1, T2 landed 2026-08-03).**
+> **Status — ☑ 3/6 (T1, T2, T3 landed 2026-08-03).**
 
 ## Why this work exists
 
@@ -179,7 +179,7 @@ unknown-direction access feeding neither surface and being **counted**
 write surface off a mixed cell at `t=4`; the legend's exhaustiveness over
 `ReliefShape`.
 
-### T3 — Working-set tide (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 + T2*
+### ☑ T3 — Working-set tide (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 + T2*
 
 **Goal.** What the program is touching *now* versus what has drifted cold — recency
 the cumulative, monotonic terrain cannot show by construction.
@@ -210,6 +210,35 @@ the degraded binary path is labelled differently from the split path.
 
 **Done when.** Recency and drift are visible, and cold and never-touched look
 different.
+
+**Landed.** `build_working_set_tide(model, t, W)` in `space/datacell.{h,cpp}`:
+`live_bytes` is the `(t−W, t]` delta over the existing prefix sums (two binary
+searches, no rescan), pinned by a test that compares it to a brute-force sum over
+the same range for **every (t, W) in a 4×4 probe grid** — so the fast path is
+proved equal to the thing it replaces, not just plausible. A cold cell's watermark
+is the same window sum recomputed **as of its own last hitting step**, so it
+recedes to its last crest rather than to zero; a cell not yet touched at this slice
+produces **no entry at all**, which is what keeps "went cold" and "never touched"
+from looking the same. `W` is a HUD `SliderInt` labelled *"dwell window (trace-time
+steps)"* — the unit is on the control, and it moves on the **terrain-time** axis
+only (doc 34's two-axes rule); a window move rebuilds the tide on its own
+condition, never by re-slicing the terrain and never through the degrade path.
+
+**One honest correction to step 4.** The brief's degraded form — *"a binary 'the
+window contains a write' flag from `cum_rw`"* — is not derivable: `cum_rw` is a
+prefix **OR**, so it is monotone and cannot report that a bit is present *within* a
+window, only that a bit not seen before the window **first appeared** inside it.
+Shipping the stronger sentence would have been the exact fabrication step 4 exists
+to forbid, so `TideCell::window_first_direction_bit` is named and labelled for what
+it actually is, and `tide_tint_label(RwFlagOnly)` says *"no ratio... cum_rw is a
+prefix OR, not a ratio"*. A test asserts the two tint labels differ and that the
+degraded one refuses to call itself a ratio. In practice the split path is what
+runs: `RwFlagOnly` is reached only when **no** access in the recording carried a
+recognisable `rw` token.
+
+The live crest and the cold watermark are separate GL batches, so no draw-order
+accident can composite a decayed cell into the live mass; the watermark draws at
+10% alpha in the live hue (it is the same quantity at an earlier time).
 
 ### T4 — Observed-lifetime pillars (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
 

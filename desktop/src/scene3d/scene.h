@@ -85,6 +85,10 @@ struct SceneLayers {
     // stops being decorative" risk), and a session should not silently open
     // into a composited haze it did not ask for.
     bool data_relief = false;
+    // T3 (58-memory-data-cell-family): the working-set tide — recency, which
+    // the cumulative, monotonic terrain cannot show by construction. Default
+    // OFF for the same compositing reason as data_relief above.
+    bool working_set = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -199,6 +203,12 @@ class Scene {
     // direction was never OBSERVED contributes NO vertex on that side: the
     // absence is geometric, so no shader branch can accidentally draw it flat.
     void set_data_relief(const space::DataReliefLayer &relief);
+    // T3 (58): the working-set tide. Playhead-gated like the relief. The live
+    // crest and the cold WATERMARK go into SEPARATE batches so a cold cell can
+    // never be composited into the live mass — the receding watermark is a
+    // decay, and a decay summed into "what is hot right now" would be a lie
+    // about the working set.
+    void set_working_set_tide(const space::WorkingSetTide &tide);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -357,6 +367,7 @@ class Scene {
         float line_width = 2.0f;
     };
     DataLineBatch relief_read_, relief_write_; // T2
+    DataLineBatch tide_live_, tide_watermark_; // T3
     void free_data_layers();
     // Upload `verts` (3 floats per vertex) into `b`, replacing whatever it
     // held. Defined in data_layers_gl.cpp with the rest of the family.

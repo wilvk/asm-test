@@ -1021,6 +1021,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // between the terrain (which counts it in cum_size) and this layer.
     sv.hud.relief_undirected_cells = sv.relief.unknown_direction_cells;
     sv.hud.relief_undirected_bytes = sv.relief.unknown_direction_bytes;
+    // 58 T3: the tide's live/cold split and its own legend line — built by the
+    // MODEL (space::tide_note), never re-worded here, so the crest tint's
+    // provenance (split vs the degraded cum_rw flag) cannot drift.
+    sv.hud.tide_live_cells = sv.tide.live_cells;
+    sv.hud.tide_cold_cells = sv.tide.cold_cells;
+    sv.hud.tide_legend = space::tide_note(sv.tide);
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1116,10 +1122,29 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             // scrub frame draws NO relief instead of a stale one — the same
             // rule the canopies follow.
             sv.relief = space::build_data_relief(sv.terr, sv.hud.t);
+            // 58 T3: the working-set tide, on the same t gate and the HUD's
+            // dwell window.
+            sv.tide_window = sv.hud.tide_window;
+            sv.tide =
+                space::build_working_set_tide(sv.terr, sv.hud.t, sv.tide_window);
             sv.slice_t = sv.hud.t;
             sv.scrub_pending = false;
         }
     }
+    // 58 T3: the dwell window is part of the tide's DEFINITION, not a display
+    // option, so moving it rebuilds the layer even though the playhead did
+    // not. Its own condition rather than a widened `slice_t != hud.t`: a
+    // window move must NOT re-slice the whole terrain, and it must NOT be able
+    // to trigger the degrade path (the tide is two binary searches per data
+    // cell — the same cost the slice it rides on already paid).
+    if (sv.built && sv.tide_window != sv.hud.tide_window) {
+        sv.tide_window = sv.hud.tide_window;
+        sv.tide = space::build_working_set_tide(sv.terr, sv.slice_t == UINT64_MAX
+                                                             ? sv.hud.t
+                                                             : sv.slice_t,
+                                                sv.tide_window);
+    }
+    sv.hud.tide_window_changed = false;
     if (sv.scrub_pending)
         ImGui::TextColored(dt_maybe_col(), "%s", scrub_degrade_note());
     sv.hud.playhead_moved = false;
@@ -1244,6 +1269,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.opcode_cells = &sv.opcode_cells; // 56 T4
     f.mispred = &sv.mispred;           // 56 T5
     f.relief = &sv.relief;             // 58 T2
+    f.tide = &sv.tide;                 // 58 T3
+    f.tide_gen = sv.tide_window;
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant
