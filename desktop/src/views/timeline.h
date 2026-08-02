@@ -34,6 +34,11 @@ dt_rowstyle dt_row_style(const dt_slice *cone, uint32_t step);
 struct dt_timeline_row {
     uint32_t step = 0;
     uint64_t off = 0;
+    // 37 T1: the region base `off` is relative to (df_step.rbase), 0 where the
+    // wire stated none. Carried per row because `off` alone does NOT identify an
+    // instruction: an `auto` candidate walk records several spans into one
+    // stream, and offset 0x6 is a different instruction in each of them.
+    uint64_t rbase = 0;
     std::string disasm; // recorded text, or "" -> the view shows the offset
     std::string ann;    // the value annotation, asmspy_df_annotate's grammar
     size_t n_in = 0, n_out = 0;
@@ -47,6 +52,14 @@ struct dt_timeline_row {
 
 struct dt_timeline {
     std::vector<dt_timeline_row> rows; // step order
+    // The distinct region bases the rows span (37 T1), ascending; a base the
+    // wire never stated is not one. More than one means the offset axis is
+    // AMBIGUOUS — two rows can share an offset and be different instructions —
+    // so the dump names each row's region and the draw adds a region column.
+    // Exactly one is the ordinary case: the region is a property of the whole
+    // timeline, not of any row, and per-row chrome would be noise.
+    std::vector<uint64_t> regions;
+    bool multi_region() const { return regions.size() > 1; }
     bool truncated = false;
     std::string banner;
     // The ONE shared selection, projected in by the caller (22 T1): the row for

@@ -96,11 +96,23 @@ void draw_timeline_overview(const dt_timeline &t, uint32_t nsteps, double *lo,
 
 void draw_timeline(const dt_timeline &t) {
     draw_banner(t.banner.c_str(), false);
-    if (!ImGui::BeginTable("timeline", 5,
+    // 37 T1: a `region` column ONLY when the rows span more than one. Every
+    // offset here is relative to a region base, so with two spans in the stream
+    // the offset alone stops identifying an instruction — two rows can read
+    // "0x6 / add rcx, rax" and be different code. With one span the region is
+    // the timeline's own identity and a per-row column would be dead chrome.
+    const bool regioned = t.multi_region();
+    if (regioned)
+        ImGui::TextDisabled("%zu regions in this stream — offsets are relative "
+                            "to the region column, not comparable across it",
+                            t.regions.size());
+    if (!ImGui::BeginTable("timeline", regioned ? 6 : 5,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                ImGuiTableFlags_ScrollY))
         return;
     ImGui::TableSetupColumn("step", ImGuiTableColumnFlags_WidthFixed);
+    if (regioned)
+        ImGui::TableSetupColumn("region", ImGuiTableColumnFlags_WidthFixed);
     ImGui::TableSetupColumn("offset", ImGuiTableColumnFlags_WidthFixed);
     ImGui::TableSetupColumn("instruction");
     ImGui::TableSetupColumn("values");
@@ -116,6 +128,8 @@ void draw_timeline(const dt_timeline &t) {
             drew_separator = true;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            if (regioned)
+                ImGui::TableNextColumn(); // the region column, blank here
             ImGui::TableNextColumn();
             ImGui::TextDisabled("- - -");
             ImGui::TableNextColumn();
@@ -145,6 +159,15 @@ void draw_timeline(const dt_timeline &t) {
             ImGui::BeginDisabled();
         ImGui::TableNextColumn();
         ImGui::Text("%u", r.step);
+        if (regioned) {
+            ImGui::TableNextColumn();
+            // A dropped step's region is UNKNOWN, not zero — the same rule the
+            // offset cell below follows, for the same reason.
+            if (r.missing || r.rbase == 0)
+                ImGui::TextDisabled("(unknown)");
+            else
+                ImGui::Text("0x%llx", (unsigned long long)r.rbase);
+        }
         ImGui::TableNextColumn();
         if (r.missing)
             ImGui::TextUnformatted("(unknown)");

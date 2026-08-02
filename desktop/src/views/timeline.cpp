@@ -164,6 +164,9 @@ dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone) {
         r.step = step;
         r.missing = !df.has_step(step);
         r.off = df.insn_off[step];
+        // 37 T1: the row's OWN region base — the stream's bases are per step, not
+        // per recording, so this is read at `step` and never inherited.
+        r.rbase = step < df.insn_rbase.size() ? df.insn_rbase[step] : 0;
         r.disasm = df.disasm[step];
         char ann[256];
         asmspy_df_annotate(&vt, step, &cur, 4, ann, sizeof ann);
@@ -172,6 +175,15 @@ dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone) {
         r.style = dt_row_style(cone, step);
         t.rows.push_back(r);
     }
+    // The distinct regions the rows actually span. A dropped step (`missing`)
+    // contributes none — its base is unknown, not zero, and counting it would
+    // invent a region the recording never named.
+    for (const dt_timeline_row &r : t.rows)
+        if (!r.missing && r.rbase != 0)
+            t.regions.push_back(r.rbase);
+    std::sort(t.regions.begin(), t.regions.end());
+    t.regions.erase(std::unique(t.regions.begin(), t.regions.end()),
+                    t.regions.end());
     return t;
 }
 
@@ -203,6 +215,15 @@ std::string dt_timeline_dump(const dt_timeline &t) {
     if (!t.banner.empty())
         s += "banner=" + t.banner + "\n";
     s += "rows=" + std::to_string(t.rows.size()) + "\n";
+    // Only when the offset axis is ambiguous (37 T1). One region is the whole
+    // timeline's own identity and needs no line; stating it here would churn
+    // every single-region golden to say something no reader has to act on.
+    if (t.multi_region()) {
+        s += "regions=";
+        for (size_t i = 0; i < t.regions.size(); i++)
+            s += (i ? "," : "") + hex(t.regions[i]);
+        s += "\n";
+    }
     if (t.div_step)
         s += "divergence step=" + std::to_string(*t.div_step) + "\n";
     for (const dt_timeline_row &r : t.rows) {
@@ -215,6 +236,11 @@ std::string dt_timeline_dump(const dt_timeline &t) {
         s += std::to_string(r.step) + "|" + hex(r.off) + "|" +
              (r.disasm.empty() ? hex(r.off) : r.disasm) + "|" + r.ann + "|" +
              std::to_string(r.n_in) + "/" + std::to_string(r.n_out);
+        // Which region this row's offset belongs to. Emitted ONLY when the
+        // timeline spans more than one — that is exactly when the offset alone
+        // stops identifying the instruction.
+        if (t.multi_region())
+            s += "|region=" + hex(r.rbase);
         switch (r.style) {
         case dt_rowstyle::normal:
             break;

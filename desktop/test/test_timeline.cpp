@@ -129,6 +129,56 @@ int main() {
                   "a refused pair has no meaningful divergence");
     }
 
+    // --- 37 T1: the region a row belongs to, when there is more than one ----
+    // A `df_step`'s offset is RELATIVE to its region base (`rbase`), so two
+    // regions' rows collide on the offset axis: an `auto` candidate walk
+    // records span 0x100000 and span 0x110000 into one stream, and offset 0x6
+    // means a different instruction in each. The row must carry its own base
+    // and the view must say which region it is, or the timeline shows two
+    // regions as one.
+    {
+        Streams s = load("scene-df-two-span.asmtrace");
+        dt_timeline t = dt_timeline_build(s);
+        vt::eq("two-span rows", t.rows.size(), size_t{13});
+        // The distinct regions the rows span, ascending — the fact the view
+        // needs in order to know a region column is warranted at all.
+        vt::eq("two-span region count", t.regions.size(), size_t{2});
+        if (t.regions.size() == 2) {
+            vt::eq("first region base", t.regions[0], uint64_t{0x100000});
+            vt::eq("second region base", t.regions[1], uint64_t{0x110000});
+        }
+        // Each row's OWN base, not the stream's first or last.
+        vt::eq("step 2 region", t.rows[2].rbase, uint64_t{0x100000});
+        vt::eq("step 5 region", t.rows[5].rbase, uint64_t{0x110000});
+        // Steps 2 and 5 share offset 0x6 and disassembly, and differ ONLY by
+        // region. Two identical dump lines here is the bug this test exists
+        // for: it is the view claiming one region ran both.
+        vt::eq("steps 2 and 5 share an offset", t.rows[2].off, t.rows[5].off);
+        {
+            std::string d = dt_timeline_dump(t);
+            vt::check("a multi-region dump names each row's region",
+                      d.find("region=0x100000") != std::string::npos &&
+                          d.find("region=0x110000") != std::string::npos,
+                      "neither region is named:\n" + d);
+        }
+        vt::golden("timeline-two-span.txt", dt_timeline_dump(t));
+    }
+
+    // --- one region: no region chrome, and the dump is unchanged ------------
+    // Every ordinary recording is a single region, where the region is a
+    // property of the whole timeline and not of any row. Naming it per row
+    // would be noise, so `regions` holds it and the rows say nothing.
+    {
+        Streams s = load("add_signed.asmtrace");
+        dt_timeline t = dt_timeline_build(s);
+        vt::eq("single-region region count", t.regions.size(), size_t{1});
+        vt::eq("single-region base", t.regions[0], uint64_t{0x100000});
+        vt::eq("the row still carries it", t.rows[0].rbase, uint64_t{0x100000});
+        vt::check("a single-region dump names no per-row region",
+                  dt_timeline_dump(t).find("region=") == std::string::npos,
+                  "one region needs no per-row column");
+    }
+
     // --- 28 R1 T3: a wide operand's bytes render as hex, not "[wide]" --------
     // No golden carries a wide-with-bytes operand (the emulator L0 corpus has no
     // >8-byte values), so this is a synthetic Streams: the reconstruction of the
