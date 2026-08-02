@@ -136,6 +136,34 @@ struct TerrainModel {
     std::vector<CodeCell> code;
     std::vector<DataCell> data;
 
+    // T1 (47-scene-inspect-and-pickable-overlays.md): a cell -> content index,
+    // built ONCE by build_terrain() (never re-derived per slice, exactly like
+    // kind_by_cell) so a cell's CodeCell/DataCell resolves in O(log n) instead of
+    // the O(code.size()+data.size()) linear scan resolve_pick used to run on
+    // every click — and, without this, would have had to run on every THROTTLED
+    // hover-pick frame too. Two candidate shapes were weighed: a flat
+    // vector<int32_t> of size w*h (O(1), one entry per cell) or a sorted-by-cell
+    // parallel index (O(log n), one entry per TOUCHED cell). This picks the
+    // SORTED shape: build_projection clamps order to [6,12] (projection.h), so a
+    // busy recording can size the plane to 4096x4096 = 16.7M cells — a flat
+    // vector<int32_t> table at that order is ~67MB for what is typically a few
+    // hundred to a few thousand TOUCHED cells, and the plane is largest exactly
+    // when it is sparsest (a small domain never needs order 12). Memory that
+    // scales with touched cells, not domain size, is the right trade here;
+    // std::lower_bound over a few thousand entries is comfortably sub-microsecond,
+    // far under the per-frame hover budget T1 exists to protect.
+    std::vector<std::pair<uint32_t, uint32_t>>
+        code_index; // cell -> index in code, sorted by cell
+    std::vector<std::pair<uint32_t, uint32_t>>
+        data_index;     // cell -> index in data, sorted by cell
+    void build_index(); // (re)builds code_index/data_index from code/data
+    // O(log n) lookups through code_index/data_index — nullptr when the cell
+    // holds no code/data content. resolve_pick (pick.cpp) and T1's hover pick
+    // both route through these, so a click and a hover cannot drift onto two
+    // different answers for the same cell.
+    const CodeCell *code_at(uint32_t cell) const;
+    const DataCell *data_at(uint32_t cell) const;
+
     // The exact/coarse terrain for the INCLUSIVE time slice [0, t] (t is a trace
     // step index; a code cell counts hits with index <= t, a data cell sums the
     // `mem` sizes with step <= t). O(touched cells).

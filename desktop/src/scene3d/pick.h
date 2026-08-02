@@ -15,6 +15,7 @@
 #include <string>
 
 #include "nav.h"
+#include "space/converge.h" // T2 (47): ConvergenceSet, resolve_pick_hint's third param
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -35,6 +36,23 @@ struct Pick {
     uint64_t vertex = 0; // Kind::Vertex: index in the canonical PC-vertex order
 };
 
+// T2 (47-scene-inspect-and-pickable-overlays): everything a hover readout needs
+// to answer "what is this, and where would a click send me?" before any
+// navigation happens — computed by resolve_pick_hint (pick.cpp), which shares
+// ONE classification helper with resolve_pick so `target` can never disagree
+// with what a click actually does (the anti-drift bar T2 exists for).
+struct PickHint {
+    bool empty = true;    // nothing pickable under the cursor (background, or a
+                          // decoded id past all known geometry)
+    std::string what;     // "code cell" | "data cell" | "survey cell" |
+                          // "PC vertex" | "padding"
+    std::string where;    // region label + address/offset, verbatim
+    std::string quantity; // the cell's own number, with its unit named
+    std::string fidelity; // "" when exact; else the graded reason
+    std::string target;   // dt_view_name of where a click would go, or
+                          // "" when a click would do nothing
+};
+
 // Decode a read-back id against a plane of side n (n = 2^order).
 Pick decode_pick(uint32_t id, uint32_t n);
 
@@ -50,6 +68,13 @@ struct PickVertex {
     int32_t tid;
     uint64_t t;
     bool statistical = false;
+    // T2 (47-scene-inspect-and-pickable-overlays): the vertex's own address —
+    // the DERIVED absolute address for a placed rel/df offset, the raw wire
+    // offset for one the anchor could not place (TrajPoint::addr's own
+    // contract, space/types.h). Added so resolve_pick_hint can name a
+    // vertex's region/offset without a second trajectory scan; resolve_pick
+    // itself does not need it (it routes on tid/t alone).
+    uint64_t addr = 0;
 };
 std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 
@@ -71,6 +96,20 @@ std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
                                     const space::TrajectorySet &traj,
                                     const std::string &rec, const Pick &p);
+
+// T2 (47-scene-inspect-and-pickable-overlays): the readout resolve_pick throws
+// away — a pure, golden-testable function answering "what is this, and where
+// would a click send me?" for the SAME pick resolve_pick would resolve, so a
+// hover preview can never disagree with what a click actually does. Shares one
+// private classification helper with resolve_pick (pick.cpp) rather than
+// re-deriving the branch logic — the anti-drift bar this task exists for.
+// `conv` is unused by T2's own Cell/Vertex branches (left unnamed so
+// -Wunused-parameter/WERROR stays clean) and is wired up by T3, which adds the
+// convergence/spur pick kinds this same signature already anticipates.
+PickHint resolve_pick_hint(const space::TerrainModel &terr,
+                           const space::TrajectorySet &traj,
+                           const space::ConvergenceSet & /*conv*/,
+                           const Pick &p);
 
 } // namespace asmdesk::scene3d
 #endif // ASMDESK_SCENE3D_PICK_H

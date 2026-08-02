@@ -177,16 +177,17 @@ int main() {
                       (full.flags[i] & TF_UNKNOWN) == 0u,
                       "populated cell " + std::to_string(i) + " reads unknown");
         }
-        check("an under-described plane shows fog-of-war",
-              [&] {
-                  size_t n = 0;
-                  for (uint32_t f : full.flags)
-                      if (f & TF_UNKNOWN)
-                          n++;
-                  return n;
-              }() > 0,
-              "no TF_UNKNOWN cell on a plane with only 3 of ~512 in-domain "
-              "cells touched");
+        check(
+            "an under-described plane shows fog-of-war",
+            [&] {
+                size_t n = 0;
+                for (uint32_t f : full.flags)
+                    if (f & TF_UNKNOWN)
+                        n++;
+                return n;
+            }() > 0,
+            "no TF_UNKNOWN cell on a plane with only 3 of ~512 in-domain "
+            "cells touched");
 
         // --- REUSE PROOF: slice(full) reproduces the canvas per-offset heat ---
         // The coarse height source is 04-T3's per-offset count; re-project every
@@ -295,6 +296,33 @@ int main() {
                 any_flag = true;
         check("coarse/no-torn-when-clean", !any_flag,
               "a complete recording's coarse plane carries no TORN flag");
+
+        // --- T1 (47-scene-inspect-and-pickable-overlays): the cell->content --
+        // index is built ONCE and is byte-stable across slice(t) calls, exactly
+        // like kind_by_cell above — it indexes `code`/`data` (slice-invariant
+        // vectors), never the per-slice Terrain, so a playhead scrub must never
+        // touch it.
+        check("T1: code_index is non-empty for a fixture with touched cells",
+              !m.code_index.empty(), "the index was never built");
+        std::vector<std::pair<uint32_t, uint32_t>> code_index_before =
+            m.code_index;
+        std::vector<std::pair<uint32_t, uint32_t>> data_index_before =
+            m.data_index;
+        (void)m.slice(0);
+        (void)m.slice(2);
+        (void)m.full();
+        check("T1: code_index is byte-stable across slice(t) calls",
+              m.code_index == code_index_before,
+              "slice(t) must never mutate the slice-invariant cell index");
+        check("T1: data_index is byte-stable across slice(t) calls",
+              m.data_index == data_index_before,
+              "slice(t) must never mutate the slice-invariant cell index");
+        check("T1: code_at agrees with the index for A0's cell",
+              m.code_at(cA0) != nullptr && m.code_at(cA0)->cell == cA0,
+              "code_at disagreed with the built index");
+        check("T1: data_at is null for a code-only fixture",
+              m.data_at(cA0) == nullptr,
+              "a code cell must not also resolve as a data cell");
         steps_explained("A", m);
     }
 
@@ -440,20 +468,23 @@ int main() {
         const auto *dcD1 = data_cell(cD1);
         check("D0 split sums exist", dcD0 != nullptr, "no DataCell at D0");
         if (dcD0) {
-            uint64_t r = dcD0->cum_read_size.back(), w = dcD0->cum_write_size.back();
-            check("D0 read/write split is 8 read + 8 write",
-                  r == 8 && w == 8,
-                  "got read=" + std::to_string(r) + " write=" + std::to_string(w));
-            check("D0 split sums to cum_size at every index",
-                  dcD0->cum_read_size.size() == dcD0->cum_size.size() &&
-                      [&] {
-                          for (size_t i = 0; i < dcD0->cum_size.size(); ++i)
-                              if (dcD0->cum_read_size[i] + dcD0->cum_write_size[i] !=
-                                  dcD0->cum_size[i])
-                                  return false;
-                          return true;
-                      }(),
-                  "read+write must equal cum_size at every index");
+            uint64_t r = dcD0->cum_read_size.back(),
+                     w = dcD0->cum_write_size.back();
+            check("D0 read/write split is 8 read + 8 write", r == 8 && w == 8,
+                  "got read=" + std::to_string(r) +
+                      " write=" + std::to_string(w));
+            check(
+                "D0 split sums to cum_size at every index",
+                dcD0->cum_read_size.size() == dcD0->cum_size.size() &&
+                    [&] {
+                        for (size_t i = 0; i < dcD0->cum_size.size(); ++i)
+                            if (dcD0->cum_read_size[i] +
+                                    dcD0->cum_write_size[i] !=
+                                dcD0->cum_size[i])
+                                return false;
+                        return true;
+                    }(),
+                "read+write must equal cum_size at every index");
         }
         check("D1 split sums exist", dcD1 != nullptr, "no DataCell at D1");
         if (dcD1)
@@ -470,7 +501,8 @@ int main() {
               "no DataCell at D2");
         if (dcD2) {
             check("D2's unknown-direction access counts in cum_size only",
-                  dcD2->cum_size.back() == 2 && dcD2->cum_read_size.back() == 0 &&
+                  dcD2->cum_size.back() == 2 &&
+                      dcD2->cum_read_size.back() == 0 &&
                       dcD2->cum_write_size.back() == 0,
                   "an unrecognised rw token must land in neither direction");
         }
@@ -875,7 +907,8 @@ int main() {
             "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
             "\"when\":1,\"bytes\":\"90\"}\n"
             "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"
-            "{\"k\":\"mem\",\"step\":0,\"ea\":104857600,\"size\":8,\"rw\":\"w\"}"
+            "{\"k\":\"mem\",\"step\":0,\"ea\":104857600,\"size\":8,\"rw\":"
+            "\"w\"}"
             "\n"
             "{\"k\":\"end\",\"events\":3,\"truncated\":false,"
             "\"drops\":{\"lost\":0,\"throttled\":false}}\n");

@@ -22,6 +22,7 @@
 #include "scene3d/atmosphere.h" // T3 (44): Atmosphere, SceneView::atmo
 #include "scene3d/camera.h"
 #include "scene3d/hud.h"
+#include "scene3d/pick.h" // T1/T2 (47): PickHint, SceneView::hover_hint
 #include "space/converge.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -68,6 +69,18 @@ struct SceneView {
     scene3d::Camera cam;
     scene3d::HudState hud;
     bool nav_dragging = false; // a left-drag is orbiting (suppresses the pick)
+
+    // T1 (47-scene-inspect-and-pickable-overlays): the throttled hover-pick
+    // state. `hover_px` is the viewport-local pixel the LAST hover pick ran for
+    // (a sentinel far off-screen so the very first frame always runs one);
+    // `hover_id` is the raw id that pick returned — persisted so re-picking
+    // runs only when the cursor pixel actually moves and no drag is in
+    // progress (an orbit must cost zero readbacks, the brief's own risk to
+    // guard against). `hover_hint` (T2) is the resolved PickHint the tooltip
+    // (T4) reads without re-reading the FBO every frame.
+    ImVec2 hover_px = ImVec2(-1.0f, -1.0f);
+    uint32_t hover_id = 0;
+    scene3d::PickHint hover_hint;
     // Did the Tab-reachable 3D viewport hit-target hold focus last frame (22 T2)?
     // ORed with the HUD focus to decide whether the keyboard camera acts; persisted
     // because the target is drawn after the camera keys are applied.
@@ -108,6 +121,16 @@ struct SceneView {
     // verified sound (43's roadmap); this brief does not.
     Transport follow_play;
     uint64_t follow_step = 0;
+
+    // 48 T4: the landmark — the code-district centroid (scene3d::
+    // scene_home_target), computed ONCE per weave alongside terr/traj above,
+    // never re-derived per frame (stable across live growth by construction:
+    // a founding region's placement does not move as new events arrive).
+    // has_home is false when the recording places no code region at all; the
+    // "reset view" button is then a documented no-op rather than a silent
+    // jump to the plane centre.
+    float home_u = 0.5f, home_v = 0.5f;
+    bool has_home = false;
 };
 
 struct ShellState {

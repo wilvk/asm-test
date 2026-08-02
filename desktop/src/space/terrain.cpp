@@ -160,6 +160,8 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
         // at every cell. slice() stays flat; the HUD shows basis_error.
         m.basis_error = canvas.basis_error;
         m.proj = std::move(proj);
+        m.build_index(); // T1 (47): empty code/data here, but keep the
+                         // invariant that the index always mirrors code/data
         return m;
     }
 
@@ -444,7 +446,38 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     }
 
     m.proj = std::move(proj);
+    m.build_index(); // T1 (47): built once, over the final code/data vectors
     return m;
+}
+
+void TerrainModel::build_index() {
+    code_index.clear();
+    code_index.reserve(code.size());
+    for (uint32_t i = 0; i < code.size(); ++i)
+        code_index.push_back({code[i].cell, i});
+    std::sort(code_index.begin(), code_index.end());
+
+    data_index.clear();
+    data_index.reserve(data.size());
+    for (uint32_t i = 0; i < data.size(); ++i)
+        data_index.push_back({data[i].cell, i});
+    std::sort(data_index.begin(), data_index.end());
+}
+
+const TerrainModel::CodeCell *TerrainModel::code_at(uint32_t cell) const {
+    auto it = std::lower_bound(code_index.begin(), code_index.end(),
+                               std::make_pair(cell, uint32_t{0}));
+    if (it != code_index.end() && it->first == cell)
+        return &code[it->second];
+    return nullptr;
+}
+
+const TerrainModel::DataCell *TerrainModel::data_at(uint32_t cell) const {
+    auto it = std::lower_bound(data_index.begin(), data_index.end(),
+                               std::make_pair(cell, uint32_t{0}));
+    if (it != data_index.end() && it->first == cell)
+        return &data[it->second];
+    return nullptr;
 }
 
 Terrain TerrainModel::slice(uint64_t t) const {
