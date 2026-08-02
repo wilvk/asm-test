@@ -23,6 +23,7 @@
 
 #include "doc/recording.h"
 #include "doc/streams.h"
+#include "scene3d/camera.h"
 #include "scene3d/goto.h"
 #include "scene3d/pick.h"
 #include "space/projection.h"
