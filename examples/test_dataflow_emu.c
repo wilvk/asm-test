@@ -84,6 +84,19 @@ static const uint8_t arm64_df_add[] = {
     0xc0, 0x03, 0x5f, 0xd6, /* 0x08 ret            */
 };
 
+/* ARM32 (A32) leaf routine df_add(a, b)  [r0=a, r1=b] — the doc-60 T1 arm32
+ * guest end to end, the SAME shape as arm64_df_add above:
+ *   0x00  add r2, r0, r1   ; step0: R2 <- R0 + R1   (reads r0,r1; writes r2)
+ *   0x04  mov r0, r2       ; step1: R0 <- R2        (the return value; edge r2)
+ *   0x08  bx lr            ; step2: return via lr
+ * Hand-derived: a def-use edge step0 -> step1 (r2), and r0 = a + b at step1 —
+ * a different `df_guest`, not a second code path. */
+static const uint8_t arm32_df_add[] = {
+    0x01, 0x20, 0x80, 0xe0, /* 0x00 add r2, r0, r1 */
+    0x02, 0x00, 0xa0, 0xe1, /* 0x04 mov r0, r2     */
+    0x1e, 0xff, 0x2f, 0xe1, /* 0x08 bx lr          */
+};
+
 /* Find a memory WRITE record at `step` and report its captured value. */
 static int mem_write_value(const asmtest_valtrace_t *v, uint32_t step,
                            uint64_t *out) {
@@ -157,18 +170,21 @@ int main(void) {
     asmtest_valtrace_t *va = asmtest_valtrace_new(64, 512, 256);
     if (va != NULL) {
         long aargs[2] = {7, 5}; /* x0=7, x1=5 -> x0 = 12 */
-        int arc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, arm64_df_add,
-                                                sizeof arm64_df_add, aargs, 2, 0,
-                                                va);
-        CHECK(arc == 0, "arm64: routine ran to the sentinel return (via x30/LR)");
-        CHECK(va->steps_len == 3, "arm64: three steps captured (add, mov, ret)");
+        int arc =
+            asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, arm64_df_add,
+                                          sizeof arm64_df_add, aargs, 2, 0, va);
+        CHECK(arc == 0,
+              "arm64: routine ran to the sentinel return (via x30/LR)");
+        CHECK(va->steps_len == 3,
+              "arm64: three steps captured (add, mov, ret)");
         if (va->steps_len == 3) {
             static const uint64_t want[3] = {0x00, 0x04, 0x08};
             int ok = 1;
             for (int i = 0; i < 3; i++)
                 if (va->insn_off[i] != want[i])
                     ok = 0;
-            CHECK(ok, "arm64: per-step offsets are the 4-byte instruction stride");
+            CHECK(ok,
+                  "arm64: per-step offsets are the 4-byte instruction stride");
         }
         uint64_t x2 = 0;
         CHECK(reg_write_value(va, 0, &x2) && x2 == 12,
@@ -181,6 +197,38 @@ int main(void) {
         asmtest_valtrace_free(va);
     } else {
         CHECK(0, "arm64: valtrace_new failed");
+    }
+
+    /* --- doc 60 T1: the ARM32 guest, same L0->L1 machinery, a different df_guest --- */
+    asmtest_valtrace_t *v32 = asmtest_valtrace_new(64, 512, 256);
+    if (v32 != NULL) {
+        long a32[2] = {7, 5}; /* r0=7, r1=5 -> r0 = 12 */
+        int rc32 =
+            asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM32, arm32_df_add,
+                                          sizeof arm32_df_add, a32, 2, 0, v32);
+        CHECK(rc32 == 0, "arm32: routine ran to the sentinel return (via lr)");
+        CHECK(v32->steps_len == 3,
+              "arm32: three steps captured (add, mov, bx)");
+        if (v32->steps_len == 3) {
+            static const uint64_t want[3] = {0x00, 0x04, 0x08};
+            int ok = 1;
+            for (int i = 0; i < 3; i++)
+                if (v32->insn_off[i] != want[i])
+                    ok = 0;
+            CHECK(ok,
+                  "arm32: per-step offsets are the 4-byte instruction stride");
+        }
+        uint64_t r2 = 0;
+        CHECK(reg_write_value(v32, 0, &r2) && r2 == 12,
+              "arm32: add r2, r0, r1 captured r2 = 7 + 5 = 12");
+        asmtest_defuse_t *g32 = asmtest_defuse_build(v32);
+        CHECK(g32 != NULL, "arm32: def-use graph built");
+        CHECK(has_edge(g32, 0, 1),
+              "arm32: def-use edge step0 -> step1 (r2 add -> mov)");
+        asmtest_defuse_free(g32);
+        asmtest_valtrace_free(v32);
+    } else {
+        CHECK(0, "arm32: valtrace_new failed");
     }
 
     printf("1..%d\n", checks);

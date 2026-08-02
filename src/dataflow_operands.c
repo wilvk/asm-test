@@ -14,9 +14,10 @@
  *
  * ONE persistent csh per arch (detail mode on), opened lazily and cached — never a
  * per-call cs_open/cs_close on the hot path (the grep gate in mk/dataflow.mk
- * asserts a single cs_open call site). Only x86-64 and arm64 are armed (both
- * already decode elsewhere); ARM32 / RISCV64 are stubbed (return 0). Without
- * Capstone every entry point degrades to a no-op, so the file always compiles.
+ * asserts a single cs_open call site). x86-64, arm64, and (60-arm32-riscv-
+ * author-mode.md T1) arm32 are armed (all three already decode elsewhere);
+ * RISCV64 is stubbed (return 0). Without Capstone every entry point degrades
+ * to a no-op, so the file always compiles.
  */
 #include "asmtest_valtrace.h"
 
@@ -33,9 +34,13 @@ bool asmtest_operands_available(void) {
 #ifdef ASMTEST_HAVE_CAPSTONE
 #include <capstone/capstone.h>
 
-/* Map an asmtest_arch_t to Capstone's (arch, mode). Only x86-64 and arm64 are
- * armed for operand enumeration (the plan stubs ARM32 / RISCV64 here); returns
- * false for the rest so the enumerator degrades to 0. */
+/* Map an asmtest_arch_t to Capstone's (arch, mode). x86-64, arm64, and (T1)
+ * arm32 are armed for operand enumeration; RISCV64 stays stubbed (the doc-60
+ * T3 Keystone spike gates it, not this enumerator) — returns false so it
+ * degrades to 0. ARM32 decodes ARM (A32) mode, never Thumb — the existing
+ * ASM_ARM32 assembly path already commits to ARM mode, and this enumerator
+ * inherits that choice rather than deciding it (60-arm32-riscv-author-mode.md
+ * T1). */
 static bool cs_target(asmtest_arch_t arch, cs_arch *a, cs_mode *m) {
     switch (arch) {
     case ASMTEST_ARCH_X86_64:
@@ -47,8 +52,11 @@ static bool cs_target(asmtest_arch_t arch, cs_arch *a, cs_mode *m) {
         *m = CS_MODE_LITTLE_ENDIAN;
         return true;
     case ASMTEST_ARCH_ARM32:
+        *a = CS_ARCH_ARM;
+        *m = CS_MODE_ARM;
+        return true;
     case ASMTEST_ARCH_RISCV64:
-        return false; /* stubbed: no operand model armed for these yet */
+        return false; /* stubbed: gated on the doc-60 T3 Keystone spike */
     }
     return false;
 }
@@ -175,6 +183,29 @@ static void add_mem_ops(cs_arch a, const cs_detail *d, bool diet,
             uint32_t index = op->mem.index == ARM64_REG_INVALID
                                  ? 0
                                  : (uint32_t)op->mem.index;
+            bool w = !diet && (op->access & CS_AC_WRITE);
+            bool rd = diet || (op->access & CS_AC_READ);
+            if (rd)
+                put_mem(reads, nr, rcap, 0, base, index, 0, op->mem.disp, 0,
+                        false);
+            if (w)
+                put_mem(writes, nw, wcap, 0, base, index, 0, op->mem.disp, 0,
+                        true);
+        }
+    } else if (a == CS_ARCH_ARM) {
+        /* AArch32 (A32): the arm64 branch's shape, adapted for cs_arm_op's
+         * field names (arm_op_mem: base/index/scale/disp/lshift — no `size`
+         * on the operand itself, exactly like the arm64 branch above, which
+         * likewise passes size 0 rather than reading a field that is not
+         * there; 60-arm32-riscv-author-mode.md T1). */
+        for (int i = 0; i < d->arm.op_count; i++) {
+            const cs_arm_op *op = &d->arm.operands[i];
+            if (op->type != ARM_OP_MEM)
+                continue;
+            uint32_t base =
+                op->mem.base == ARM_REG_INVALID ? 0 : (uint32_t)op->mem.base;
+            uint32_t index =
+                op->mem.index == ARM_REG_INVALID ? 0 : (uint32_t)op->mem.index;
             bool w = !diet && (op->access & CS_AC_WRITE);
             bool rd = diet || (op->access & CS_AC_READ);
             if (rd)

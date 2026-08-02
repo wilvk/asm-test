@@ -6,7 +6,8 @@
  *
  * The table asserts the full set — including the IMPLICIT operands the plan calls
  * out: `eflags` written by `cmp`, `rsp` read+written by `push`, and a `gs:`-segmented
- * memory operand. The stubbed arches (ARM32 / RISCV64) must enumerate nothing.
+ * memory operand. x86-64, arm64, and (60-arm32-riscv-author-mode.md T1) arm32 are
+ * armed; RISCV64 stays stubbed and must enumerate nothing.
  */
 #include "asmtest_valtrace.h"
 
@@ -114,16 +115,39 @@ static void test_arm64(void) {
     CHECK(has_reg(wr, nw, ARM64_REG_X0), "arm64 ldr: writes x0");
 }
 
+/* 60-arm32-riscv-author-mode.md T1: ARM32 (A32) is now armed, mirroring
+ * test_arm64 — a straight add + a base-register load. */
+static void test_arm32(void) {
+    at_val_rec_t rd[64], wr[64];
+    size_t nr, nw, len;
+
+    /* add r0, r1, r2 — read {r1,r2}, write {r0} */
+    const uint8_t add[] = {0x02, 0x00, 0x81, 0xe0};
+    nr = 64;
+    nw = 64;
+    len = asmtest_operands(ASMTEST_ARCH_ARM32, add, sizeof add, 0, rd, &nr, wr,
+                           &nw);
+    CHECK(len == 4, "arm32 add r0,r1,r2: decodes (len 4)");
+    CHECK(has_reg(rd, nr, ARM_REG_R1) && has_reg(rd, nr, ARM_REG_R2),
+          "arm32 add: reads r1 and r2");
+    CHECK(has_reg(wr, nw, ARM_REG_R0), "arm32 add: writes r0");
+
+    /* ldr r0, [r1] — memory READ based on r1, write {r0} */
+    const uint8_t ldr[] = {0x00, 0x00, 0x91, 0xe5};
+    nr = 64;
+    nw = 64;
+    asmtest_operands(ASMTEST_ARCH_ARM32, ldr, sizeof ldr, 0, rd, &nr, wr, &nw);
+    CHECK(has_mem_base(rd, nr, ARM_REG_R1),
+          "arm32 ldr r0,[r1]: memory read operand based on r1");
+    CHECK(has_reg(wr, nw, ARM_REG_R0), "arm32 ldr: writes r0");
+}
+
+/* RISCV64 stays stubbed — gated on the doc-60 T3 Keystone spike, not this
+ * enumerator (its cs_target() branch still returns false). */
 static void test_stubbed(void) {
     at_val_rec_t rd[8], wr[8];
     size_t nr = 8, nw = 8;
     const uint8_t bytes[] = {0x00, 0x00, 0x00, 0x00};
-    CHECK(asmtest_operands(ASMTEST_ARCH_ARM32, bytes, sizeof bytes, 0, rd, &nr,
-                           wr, &nw) == 0 &&
-              nr == 0 && nw == 0,
-          "stub: ARM32 enumerates nothing");
-    nr = 8;
-    nw = 8;
     CHECK(asmtest_operands(ASMTEST_ARCH_RISCV64, bytes, sizeof bytes, 0, rd,
                            &nr, wr, &nw) == 0 &&
               nr == 0 && nw == 0,
@@ -151,6 +175,7 @@ int main(void) {
 #ifdef ASMTEST_HAVE_CAPSTONE
     test_x86();
     test_arm64();
+    test_arm32();
     test_stubbed();
 #else
     printf("# SKIP operand enumerator: built without Capstone\n");

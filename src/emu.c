@@ -268,9 +268,7 @@ void emu_close(emu_t *e) {
  * sibling value-producer tier (src/dataflow_resume.c, R3) can seed registers,
  * attach its value-capture hooks, and drive the engine on the SAME uc that
  * carries emu_snapshot / emu_restore + the per-step ring. Not a public API. */
-struct uc_struct *emu_uc(emu_t *e) {
-    return e != NULL ? e->uc : NULL;
-}
+struct uc_struct *emu_uc(emu_t *e) { return e != NULL ? e->uc : NULL; }
 
 /* Hand the coverage-growing corpus (malloc'd by emu_fuzz_cover1) to the handle,
  * which owns it until the next fuzz run or emu_close — so the stat can be a
@@ -1445,8 +1443,24 @@ bool emu_riscv_call_fp(emu_riscv_t *e, const void *code, size_t code_len,
 /* ARM32 (A32) guest                                                   */
 /* ------------------------------------------------------------------ */
 
+/* Opt-in per-step register ring for the ARM32 guest (60-arm32-riscv-author-
+ * mode.md T1, mirroring arm64_step_ring_t above): the same drop-oldest ring
+ * discipline (armed/buf/cap/head/count/dropped), captured into
+ * emu_arm_regs_t entries. Kept as its OWN type scoped to emu_arm_t, the same
+ * reasoning arm64_step_ring_t gives — emu_arm_t is already a separate
+ * per-guest handle type. */
+typedef struct {
+    bool armed;
+    emu_arm_regs_t *buf; /* cap entries, handle-owned (NULL == disarmed) */
+    size_t cap;
+    size_t head;
+    size_t count;
+    uint64_t dropped;
+} arm_step_ring_t;
+
 struct emu_arm {
     uc_engine *uc;
+    arm_step_ring_t step_ring; /* opt-in per-step register capture (T1) */
 };
 
 emu_arm_t *emu_arm_open(void) {
@@ -1480,6 +1494,7 @@ void emu_arm_close(emu_arm_t *e) {
     if (e == NULL)
         return;
     uc_close(e->uc);
+    free(e->step_ring.buf);
     free(e);
 }
 
@@ -1547,9 +1562,36 @@ static bool emu_arm_setup(uc_engine *uc, const void *code, size_t code_len,
     return true;
 }
 
-/* Shared ARM32 run-and-capture (registers/stack already set up). */
-static bool emu_arm_run(uc_engine *uc, uint64_t max_insns,
-                        emu_arm_result_t *out, emu_trace_t *trace) {
+/* UC_HOOK_CODE companion (emu_arm_step_capture): captures the full A32
+ * register file BEFORE each executed instruction into the handle's bounded
+ * ring, evicting and counting the earliest entry once the ring is full — the
+ * ARM32 analogue of on_code_step_arm64, reading the SAME register set as
+ * read_all_regs_arm (the result read-back). */
+static void on_code_step_arm(uc_engine *uc, uint64_t address, uint32_t size,
+                             void *user) {
+    (void)address;
+    (void)size;
+    arm_step_ring_t *sr = (arm_step_ring_t *)user;
+    if (sr->buf == NULL || sr->cap == 0)
+        return;
+    size_t pos;
+    if (sr->count < sr->cap) {
+        pos = (sr->head + sr->count) % sr->cap;
+        sr->count++;
+    } else {
+        pos = sr->head; /* full: overwrite the oldest, advance head */
+        sr->head = (sr->head + 1) % sr->cap;
+        sr->dropped++;
+    }
+    read_all_regs_arm(uc, &sr->buf[pos]);
+}
+
+/* Shared ARM32 run-and-capture (registers/stack already set up). Takes the
+ * whole handle (not just its uc_engine), mirroring emu_arm64_run's shape, so
+ * it can wire in the handle's opt-in per-step ring (T1) the same way. */
+static bool emu_arm_run(emu_arm_t *e, uint64_t max_insns, emu_arm_result_t *out,
+                        emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -1558,6 +1600,18 @@ static bool emu_arm_run(uc_engine *uc, uint64_t max_insns,
     uc_hook hcode, hblock;
     add_trace_hooks(uc, &tc, &hcode, &hblock);
 
+    /* Opt-in per-step register ring (emu_arm_step_capture): one more
+     * UC_HOOK_CODE, reset to empty for this run before it captures each
+     * pre-instruction state — the ARM32 mirror of emu_arm64_run's hstep. */
+    uc_hook hstep = 0;
+    if (e->step_ring.armed && e->step_ring.buf != NULL) {
+        e->step_ring.head = 0;
+        e->step_ring.count = 0;
+        e->step_ring.dropped = 0;
+        uc_hook_add(uc, &hstep, UC_HOOK_CODE, (void *)on_code_step_arm,
+                    &e->step_ring, 1, 0);
+    }
+
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
     uc_hook_del(uc, hh);
@@ -1565,6 +1619,8 @@ static bool emu_arm_run(uc_engine *uc, uint64_t max_insns,
         uc_hook_del(uc, hcode);
         uc_hook_del(uc, hblock);
     }
+    if (hstep)
+        uc_hook_del(uc, hstep);
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -1584,7 +1640,7 @@ bool emu_arm_call_traced(emu_arm_t *e, const void *code, size_t code_len,
         out->uc_err = -1;
         return false;
     }
-    return emu_arm_run(uc, max_insns, out, trace);
+    return emu_arm_run(e, max_insns, out, trace);
 }
 
 bool emu_arm_call(emu_arm_t *e, const void *code, size_t code_len,
@@ -1606,7 +1662,7 @@ bool emu_arm_call_fp(emu_arm_t *e, const void *code, size_t code_len,
     }
     for (int i = 0; i < nfargs && i < 8; i++)
         uc_reg_write(uc, UC_ARM_REG_D0 + i, &fargs[i]);
-    return emu_arm_run(uc, max_insns, out, NULL);
+    return emu_arm_run(e, max_insns, out, NULL);
 }
 
 bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
@@ -1623,7 +1679,65 @@ bool emu_arm_call_vec(emu_arm_t *e, const void *code, size_t code_len,
     }
     for (int i = 0; i < nvargs && i < 4; i++)
         uc_reg_write(uc, UC_ARM_REG_Q0 + i, (void *)vargs[i].u8);
-    return emu_arm_run(uc, max_insns, out, NULL);
+    return emu_arm_run(e, max_insns, out, NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (ARM32 guest, 60-arm32-riscv-      */
+/* author-mode.md T1)                                                  */
+/* ------------------------------------------------------------------ */
+
+/* Arm (or re-arm) the ARM32 per-step ring — the ARM32 mirror of
+ * emu_arm64_step_capture. Returns false on a NULL handle, a zero cap, or
+ * allocation failure. */
+bool emu_arm_step_capture(emu_arm_t *e, size_t cap) {
+    if (e == NULL || cap == 0)
+        return false;
+    emu_arm_regs_t *buf = (emu_arm_regs_t *)calloc(cap, sizeof *buf);
+    if (buf == NULL)
+        return false;
+    free(e->step_ring.buf); /* drop any previously armed ring */
+    e->step_ring.armed = true;
+    e->step_ring.buf = buf;
+    e->step_ring.cap = cap;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+    return true;
+}
+
+/* Disarm the ring and free its buffer (no-op if never armed). */
+void emu_arm_step_capture_clear(emu_arm_t *e) {
+    if (e == NULL)
+        return;
+    free(e->step_ring.buf);
+    e->step_ring.buf = NULL;
+    e->step_ring.armed = false;
+    e->step_ring.cap = 0;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+}
+
+size_t emu_arm_step_count(const emu_arm_t *e) {
+    return e != NULL ? e->step_ring.count : 0;
+}
+
+uint64_t emu_arm_step_dropped(const emu_arm_t *e) {
+    return e != NULL ? e->step_ring.dropped : 0;
+}
+
+bool emu_arm_step_at(const emu_arm_t *e, size_t i, uint64_t *step_index,
+                     emu_arm_regs_t *out) {
+    if (e == NULL || i >= e->step_ring.count)
+        return false;
+    /* Held entries are the contiguous most-recent steps, so the absolute step
+     * number of entry i is dropped_steps + i (the earliest evicted count). */
+    if (step_index != NULL)
+        *step_index = e->step_ring.dropped + (uint64_t)i;
+    if (out != NULL)
+        *out = e->step_ring.buf[(e->step_ring.head + i) % e->step_ring.cap];
+    return true;
 }
 
 /* RISC-V has no emu_riscv_call_vec: the RISC-V "V" (vector) extension would be

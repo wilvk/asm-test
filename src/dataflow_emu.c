@@ -36,7 +36,7 @@
 
 #include "asmtest_dataflow_internal.h" /* DF_* layout + the seed/capture seam (R3) */
 #include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
-#include <capstone/capstone.h> /* X86_REG_* / ARM64_REG_* ids from the enumerator */
+#include <capstone/capstone.h> /* X86_REG_* / ARM64_REG_* / ARM_REG_* ids from the enumerator */
 #include <stdlib.h>
 #include <string.h>
 #include <unicorn/unicorn.h>
@@ -58,9 +58,9 @@ typedef struct {
 /* The per-guest seam (R5). Everything the run does that is arch-specific is one of
  * these; the run itself is arch-neutral. */
 typedef struct df_guest {
-    const char *name;    /* chrome: "x86_64" / "arm64" */
-    uc_arch arch;        /* Unicorn open arch */
-    uc_mode mode;        /* Unicorn open mode */
+    const char *name;       /* chrome: "x86_64" / "arm64" */
+    uc_arch arch;           /* Unicorn open arch */
+    uc_mode mode;           /* Unicorn open mode */
     asmtest_arch_t op_arch; /* operand-enumerator arch tag (asmtest_operands) */
     /* Map a Capstone register id to its Unicorn id (folding a sub-register to its
      * full-width container), or -1 for a register this guest does not model. */
@@ -72,7 +72,7 @@ typedef struct df_guest {
      * arm64/x86 Capstone reg-id spaces overlap numerically). */
     bool (*read_wide)(uc_engine *uc, uint32_t cap_reg, uint8_t buf[16]);
     const int *arg_regs; /* Unicorn integer arg registers, ABI order */
-    int nargs;           /* how many of arg_regs the ABI fills before spilling */
+    int nargs; /* how many of arg_regs the ABI fills before spilling */
     /* Marshal SSE-class / FP double args into the guest's FP arg registers, or NULL
      * when the guest marshals no FP args (arm64 is integer-arg only here). */
     void (*setup_fp_args)(uc_engine *uc, const double *fargs, int nfargs);
@@ -211,7 +211,8 @@ static void df_init_x86(uc_engine *uc) {
 
 /* SysV: rsp ≡ 8 (mod 16) at entry, with the sentinel return address on top of the
  * stack (a `ret` pops it into rip and the run stops). */
-static void setup_call_x86(uc_engine *uc, uint64_t stack_top, uint64_t ret_addr) {
+static void setup_call_x86(uc_engine *uc, uint64_t stack_top,
+                           uint64_t ret_addr) {
     uint64_t sp = stack_top - 8;
     uc_mem_write(uc, sp, &ret_addr, sizeof ret_addr);
     uc_reg_write(uc, UC_X86_REG_RSP, &sp);
@@ -233,8 +234,8 @@ static const int x86_arg_regs[6] = {UC_X86_REG_RDI, UC_X86_REG_RSI,
                                     UC_X86_REG_R8,  UC_X86_REG_R9};
 
 static const df_guest DF_GUEST_X86_64 = {
-    "x86_64",          UC_ARCH_X86,      UC_MODE_64,   ASMTEST_ARCH_X86_64,
-    cap_x86_to_uc,     df_reg_read_wide, x86_arg_regs, 6,
+    "x86_64",          UC_ARCH_X86,      UC_MODE_64,     ASMTEST_ARCH_X86_64,
+    cap_x86_to_uc,     df_reg_read_wide, x86_arg_regs,   6,
     setup_fp_args_x86, df_init_x86,      setup_call_x86,
 };
 
@@ -289,18 +290,98 @@ static void setup_call_arm64(uc_engine *uc, uint64_t stack_top,
     uc_reg_write(uc, UC_ARM64_REG_X30, &ret_addr);
 }
 
-static const int arm64_arg_regs[8] = {UC_ARM64_REG_X0, UC_ARM64_REG_X1,
-                                      UC_ARM64_REG_X2, UC_ARM64_REG_X3,
-                                      UC_ARM64_REG_X4, UC_ARM64_REG_X5,
-                                      UC_ARM64_REG_X6, UC_ARM64_REG_X7};
+static const int arm64_arg_regs[8] = {
+    UC_ARM64_REG_X0, UC_ARM64_REG_X1, UC_ARM64_REG_X2, UC_ARM64_REG_X3,
+    UC_ARM64_REG_X4, UC_ARM64_REG_X5, UC_ARM64_REG_X6, UC_ARM64_REG_X7};
 
 /* AArch64 captures the scalar integer fabric only: no wide-register read (NEON/SVE
  * is a future seam — NULL, never the x86 XMM read, whose id range would misfire on
  * the numerically-overlapping arm64 reg ids) and no FP-arg marshalling. */
 static const df_guest DF_GUEST_ARM64 = {
-    "arm64",         UC_ARCH_ARM64,  UC_MODE_ARM,    ASMTEST_ARCH_ARM64,
-    cap_arm64_to_uc, NULL,           arm64_arg_regs, 8,
-    NULL,            df_init_arm64,  setup_call_arm64,
+    "arm64",
+    UC_ARCH_ARM64,
+    UC_MODE_ARM,
+    ASMTEST_ARCH_ARM64,
+    cap_arm64_to_uc,
+    NULL,
+    arm64_arg_regs,
+    8,
+    NULL,
+    df_init_arm64,
+    setup_call_arm64,
+};
+
+/* --- ARM32 (A32) guest (60-arm32-riscv-author-mode.md T1) ------------------- */
+
+/* Map a Capstone arm (A32) register id to its Unicorn UC_ARM_REG_* id. Capstone
+ * lists R0..R12 as a contiguous block; SP/LR/PC are separate named enumerators
+ * (R13/R14/R15 are aliases of the SAME enum values, so no separate case is
+ * needed for them). Registers are 32-bit — unlike the arm64 W/X fold, there is
+ * no sub-register to widen. Vector/VFP (D/Q/S) registers are not modelled by
+ * this integer producer, mirroring arm64's own scope. */
+static int cap_arm32_to_uc(uint32_t r) {
+    if (r >= ARM_REG_R0 && r <= ARM_REG_R12)
+        return (int)UC_ARM_REG_R0 + (int)(r - ARM_REG_R0);
+    switch (r) {
+    case ARM_REG_SP: /* == ARM_REG_R13 */
+        return UC_ARM_REG_SP;
+    case ARM_REG_LR: /* == ARM_REG_R14 */
+        return UC_ARM_REG_LR;
+    case ARM_REG_PC: /* == ARM_REG_R15 */
+        return UC_ARM_REG_PC;
+    case ARM_REG_CPSR:
+        return UC_ARM_REG_CPSR;
+    default:
+        return -1;
+    }
+}
+
+/* ARM32 analogue of emu_arm_zero_regs (src/emu.c): clear r0..r12 and the
+ * condition-code bits of CPSR (N/Z/C/V/Q), preserving the mode/T/IT bits a
+ * blind zero-write would corrupt (unlike AArch64's NZCV, ARM32's CPSR packs
+ * processor-mode state alongside the flags). */
+static void df_init_arm32(uc_engine *uc) {
+    uint32_t z = 0;
+    for (int r = UC_ARM_REG_R0; r <= UC_ARM_REG_R12; r++)
+        uc_reg_write(uc, r, &z);
+    uint32_t cpsr = 0;
+    uc_reg_read(uc, UC_ARM_REG_CPSR, &cpsr);
+    cpsr &= ~0xF8000000u; /* clear N,Z,C,V,Q; keep mode/T/IT state */
+    uc_reg_write(uc, UC_ARM_REG_CPSR, &cpsr);
+}
+
+/* AAPCS32: the return address goes in the link register (r14), not on the
+ * stack — a `bx lr` branches to it, so pointing it at the sentinel stops the
+ * run exactly as AArch64's link-register return does. DF_STACK_BASE +
+ * DF_STACK_SIZE / DF_RET_MAGIC already sit well inside the 32-bit address
+ * space (0x100000 / 0x210000 / 0xf00000), so ARM32 reuses the shared layout
+ * constants rather than needing its own. */
+static void setup_call_arm32(uc_engine *uc, uint64_t stack_top,
+                             uint64_t ret_addr) {
+    uint32_t sp = (uint32_t)stack_top;
+    uint32_t lr = (uint32_t)ret_addr;
+    uc_reg_write(uc, UC_ARM_REG_SP, &sp);
+    uc_reg_write(uc, UC_ARM_REG_LR, &lr);
+}
+
+static const int arm32_arg_regs[4] = {UC_ARM_REG_R0, UC_ARM_REG_R1,
+                                      UC_ARM_REG_R2, UC_ARM_REG_R3};
+
+/* ARM32 captures the scalar integer fabric only: no wide-register read
+ * (VFP/NEON is a future seam, like arm64's — NULL) and no FP-arg marshalling,
+ * mirroring DF_GUEST_ARM64's own integer-only scope. */
+static const df_guest DF_GUEST_ARM32 = {
+    "arm32",
+    UC_ARCH_ARM,
+    UC_MODE_ARM,
+    ASMTEST_ARCH_ARM32,
+    cap_arm32_to_uc,
+    NULL,
+    arm32_arg_regs,
+    4,
+    NULL,
+    df_init_arm32,
+    setup_call_arm32,
 };
 
 /* Non-static (declared in asmtest_dataflow_internal.h) so the emu_t-hosted producer
@@ -311,8 +392,10 @@ const df_guest *df_guest_for(asmtest_arch_t arch) {
         return &DF_GUEST_X86_64;
     case ASMTEST_ARCH_ARM64:
         return &DF_GUEST_ARM64;
+    case ASMTEST_ARCH_ARM32:
+        return &DF_GUEST_ARM32;
     default:
-        return NULL; /* ARM32 / RISCV64: no guest armed (the enumerator stubs them) */
+        return NULL; /* RISCV64: no guest armed (gated on the doc-60 T3 spike) */
     }
 }
 
@@ -360,7 +443,8 @@ static void df_finalize(df_ctx *c) {
     for (size_t i = 0; i < c->cur.n; i++) {
         at_val_rec_t *r = &c->cur.v[i];
         if (r->is_write && r->kind == AT_LOC_REG && !r->value_valid)
-            df_capture_reg_value(c->g, c->uc, c->vt, r); /* wide XMM or scalar GP */
+            df_capture_reg_value(c->g, c->uc, c->vt,
+                                 r); /* wide XMM or scalar GP */
     }
     asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
     c->have_cur = 0;
@@ -385,12 +469,14 @@ static void df_on_code(uc_engine *uc, uint64_t address, uint32_t size,
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;
-    asmtest_operands(c->g->op_arch, c->code, c->code_len, off, rd, &nr, wr, &nw);
+    asmtest_operands(c->g->op_arch, c->code, c->code_len, off, rd, &nr, wr,
+                     &nw);
     for (size_t i = 0; i < nr; i++) {
         if (rd[i].kind != AT_LOC_REG)
             continue; /* mem reads arrive via the mem hook */
         at_val_rec_t r = rd[i];
-        df_capture_reg_value(c->g, c->uc, c->vt, &r); /* wide XMM or scalar GP */
+        df_capture_reg_value(c->g, c->uc, c->vt,
+                             &r); /* wide XMM or scalar GP */
         recbuf_push(&c->cur, &r);
     }
     for (size_t i = 0; i < nw; i++) {
@@ -471,9 +557,8 @@ static int df_fault_kind_of(uc_mem_type type) {
     }
 }
 
-static bool df_on_invalid_mem(uc_engine *uc, uc_mem_type type,
-                              uint64_t address, int size, int64_t value,
-                              void *user) {
+static bool df_on_invalid_mem(uc_engine *uc, uc_mem_type type, uint64_t address,
+                              int size, int64_t value, void *user) {
     (void)uc;
     (void)size;
     (void)value;
@@ -521,7 +606,8 @@ int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
         uc_hook_add(uc, &hinvalid, UC_HOOK_MEM_INVALID,
                     (void *)df_on_invalid_mem, fault_out, 1, 0);
 
-    uc_err err = uc_emu_start(uc, start_addr, DF_RET_MAGIC, 0, (size_t)max_insns);
+    uc_err err =
+        uc_emu_start(uc, start_addr, DF_RET_MAGIC, 0, (size_t)max_insns);
     if (c.have_cur)
         df_finalize(&c); /* last step's deferred writes + append */
 

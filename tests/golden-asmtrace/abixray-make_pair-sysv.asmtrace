@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"abixray-make_pair-sysv","sha256":"6884de7f06928fd5c41bfc76ce0ab107e6e210407d1e66ac67b1a5f4437f7ac7","len":64}}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"abixray-make_pair-sysv","sha256":"f5539ebab57e34ed91e302509a1b39e1c078fda8a368cd7755adb706ccd99361","len":64}}
 {"k":"note","text":"make_pair(7, 11) — the same call marshalled two ways: System V (left) returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it by a hidden pointer. Step the walkthrough to watch the register files diverge."}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"mov rdx, rsi"}

@@ -1,0 +1,17 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"arm","code":{"name":"arm32-df-chain","sha256":"81e558c5ff88274f5d4514f998ce77650c5aa232ab4f53926474e9c0546a5136","len":16}}
+{"k":"note","text":"arm32_df_chain(7, 5) under the deterministic emulator L0 producer, ARM32 guest"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"add r2, r0, r1"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"add r3, r2, r2"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"mov r0, r3"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"bx lr"}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"add r2, r0, r1","ops":[{"space":"reg","reg":66,"size":0,"write":false,"value_valid":true,"value":7},{"space":"reg","reg":67,"size":0,"write":false,"value_valid":true,"value":5},{"space":"reg","reg":68,"size":0,"write":true,"value_valid":true,"value":12}]}
+{"k":"df_step","step":1,"off":4,"rbase":1048576,"disasm":"add r3, r2, r2","ops":[{"space":"reg","reg":68,"size":0,"write":false,"value_valid":true,"value":12},{"space":"reg","reg":69,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":2,"off":8,"rbase":1048576,"disasm":"mov r0, r3","ops":[{"space":"reg","reg":69,"size":0,"write":false,"value_valid":true,"value":24},{"space":"reg","reg":66,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":3,"off":12,"rbase":1048576,"disasm":"bx lr","ops":[{"space":"reg","reg":11,"size":0,"write":true,"value_valid":true,"value":15728640}]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":68,"size":0,"write":false,"value_valid":true,"value":12}}
+{"k":"df_edge","from":1,"to":2,"loc":{"space":"reg","reg":69,"size":0,"write":false,"value_valid":true,"value":24}}
+{"k":"regstate","desc":"emu_arm32_regs_t@arm/aapcs32","values":{"r0":7,"r1":5,"r2":0,"r3":0,"r4":0,"r5":0,"r6":0,"r7":0,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"sp":2162672,"lr":15728640,"pc":1048576,"cpsr":467}}
+{"k":"regstate","desc":"emu_arm32_regs_t@arm/aapcs32","values":{"r0":7,"r1":5,"r2":12,"r3":0,"r4":0,"r5":0,"r6":0,"r7":0,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"sp":2162672,"lr":15728640,"pc":1048580,"cpsr":467}}
+{"k":"regstate","desc":"emu_arm32_regs_t@arm/aapcs32","values":{"r0":7,"r1":5,"r2":12,"r3":24,"r4":0,"r5":0,"r6":0,"r7":0,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"sp":2162672,"lr":15728640,"pc":1048584,"cpsr":467}}
+{"k":"regstate","desc":"emu_arm32_regs_t@arm/aapcs32","values":{"r0":24,"r1":5,"r2":12,"r3":24,"r4":0,"r5":0,"r6":0,"r7":0,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"sp":2162672,"lr":15728640,"pc":1048588,"cpsr":467}}
+{"k":"end","events":15,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":4}

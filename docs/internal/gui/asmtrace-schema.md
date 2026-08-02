@@ -1173,6 +1173,91 @@ edge. A recording with no `regstate` events simply had the arm64 ring unarmed
 — the `arm64-df-chain.asmtrace` golden without one is the normal case (the
 un-augmented value-fabric-only recording R5 T2 originally shipped).
 
+## `regstate` descriptor — `emu_arm32_regs_t@arm/aapcs32` (60-arm32-riscv-author-mode.md T1 arm32 ring)
+
+> **Owned by [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md)**
+> (T1, the regstate/Scrubber half — doc 32's own closing line, "ARM32 is
+> another `df_guest` instance… and another `emu_<arch>_t` ring instance",
+> made concrete), appended under this file's D5 append-only rule. It gives
+> the `regstate` kind its **fourth** concrete descriptor — the emulator's
+> per-step A32 register ring — and **adds no field to any existing kind and
+> no new envelope major.** The kind, the `{"desc","values"}` shape and the
+> descriptor-reference rule are unchanged and remain 01's.
+
+The ARM32 analogue of the AArch64 emulator ring
+([include/asmtest_emu.h](../../../include/asmtest_emu.h) —
+`emu_arm_step_capture`), scoped to the separate `emu_arm_t` handle (ARM32
+has always been its own guest handle type — `emu_arm_open`/`emu_arm_call`
+predate this brief — this ring is the one Track F seam it gains; `emu_arm_t`
+still has no snapshot/restore, that stays an x86-64 `emu_t` / Reweave
+concern). Code note: the C symbols are spelled `emu_arm_*` /
+`emu_arm_regs_t` (not `emu_arm32_*`) — the existing ARM32 guest type predates
+this brief and this ring mirrors its naming rather than inventing a second
+one; the **descriptor id** is still `emu_arm32_regs_t@arm/aapcs32` (naming
+the architecture, per this file's `<struct>@<arch>/<abi>` convention, not
+literally the C struct tag). The corpus recorder
+([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) bakes a ring
+cap into the arm32 golden fixtures directly, mirroring the arm64 fixtures'
+own pattern; after the run it emits one `regstate` event per held pre-state,
+referencing this descriptor.
+
+**Descriptor id.** `emu_arm32_regs_t@arm/aapcs32` — naming the A32
+architecture and the AAPCS32 calling convention, over the full ARM32
+emulator register file backing type `emu_arm_regs_t`
+([include/asmtest_emu.h:339](../../../include/asmtest_emu.h#L339)).
+
+**`values` fields.** The 13 general-purpose registers `r0`..`r12`, plus
+`sp` (r13), `lr` (r14), `pc` (r15), and `cpsr`, in `emu_arm_regs_t`
+**declaration order** (`r[0..15]` then `cpsr`, with `r13`/`r14`/`r15` named
+by their AAPCS32 roles rather than as `r13`/`r14`/`r15`, mirroring how the
+x86-64 descriptor names `rbp`/`rsp` by register and the arm64 descriptor
+names `x29`/`x30` by register — role-named here instead because ARM32's own
+disassembly and ABI docs conventionally call them `sp`/`lr`/`pc`), each a
+decimal `u32` (widened to a JSON number, exactly like the x86-64/arm64
+descriptors' `u64` fields):
+
+```
+r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 r12 sp lr pc cpsr
+```
+
+The pre-state of `arm32-df-chain.asmtrace`'s first held step (args `r0=7,
+r1=5`; `lr`/`sp`/`pc`/`cpsr` are the guest's fixed entry state, not yet the
+routine's own values — `cpsr` 467 (0x1d3) is Unicorn's ARM-core reset state,
+SVC mode with IRQ/FIQ disabled, not a value this producer chose):
+
+```json
+{"k":"regstate","desc":"emu_arm32_regs_t@arm/aapcs32","values":{"r0":7,"r1":5,"r2":0,"r3":0,"r4":0,"r5":0,"r6":0,"r7":0,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"sp":2162672,"lr":15728640,"pc":1048576,"cpsr":467}}
+```
+
+- **No VFP/NEON deck** — like the x86-64 descriptor's original v1 omission
+  and the arm64 descriptor's own scope, a wide value is not a bare JSON
+  integer; `emu_arm_regs_t.q[16]` is not captured here (a further descriptor
+  row, mirroring the x86-64 wide-deck extension above), exactly as the arm32
+  value fabric's own scope stayed integer-only
+  ([60](60-arm32-riscv-author-mode.md) T1).
+- **The reader has no arm32-specific field-order table.**
+  `stepindex_reg_order()`
+  ([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp))
+  lists neither the arm64 nor the arm32 names; an arm32 `values` object's
+  field names all fall through its generic "any other integer key, sorted"
+  path, exactly like arm64's own degradation. The Scrubber therefore renders
+  every field — time-travel works end to end — just in a lexicographic
+  rather than a hand-curated order. Cosmetic, not correctness.
+- **No live (ptrace) ARM32 producer exists.** This descriptor has exactly
+  one producer today, the emulator ring; a live A32 single-step engine is a
+  separate host concern ([60](60-arm32-riscv-author-mode.md) Non-goals).
+
+**Order, dropping and truncation (D7).** Identical discipline to the
+x86-64/arm64 emulator rings: held pre-states are emitted **oldest first**,
+each snapshotted BEFORE its instruction; when more steps run than the ring
+holds, the **earliest** entries are evicted and the `end` footer carries
+`"truncated":true` plus the evicted count in `drops.lost`, so a reader
+offsets the first held step by `drops.lost` and renders the missing prefix
+as a torn edge. A recording with no `regstate` events simply had the arm32
+ring unarmed — the `arm32-df-chain.asmtrace` golden without one would be the
+normal case, mirroring arm64's own note (this golden bakes a ring in, like
+arm64's does).
+
 ## `fpenv` — the FP/SIMD environment (rounding / sticky / FTZ-DAZ)
 
 > **Owned by [31-wide-register-deck.md](../archive/gui/31-wide-register-deck.md)** (T2), appended

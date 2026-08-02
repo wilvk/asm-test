@@ -577,6 +577,227 @@ static int record_arm64(const char *dir, const char *out, const char *label,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* ARM32 (A32) worked example (60-arm32-riscv-author-mode.md T1)       */
+/*                                                                     */
+/* Mirrors the arm64 listing immediately above: a BYTE LITERAL, hand-  */
+/* derivable on paper. Run through the arm32 `df_guest` under Unicorn  */
+/* (which emulates A32 on any host), generated on the SAME x86-64 lane */
+/* as every other golden — the guest is the arch, not the host.        */
+/* ------------------------------------------------------------------ */
+
+/* arm32_df_chain(a, b)  [r0=a, r1=b] — the SAME straight-line def-use chain
+ * shape as ARM64_DF_CHAIN, in A32:
+ *   0x00  add r2, r0, r1   ; 01 20 80 e0   r2 = a + b   (reads r0,r1; writes r2)
+ *   0x04  add r3, r2, r2   ; 02 30 82 e0   r3 = 2 * r2  (edge r2; writes r3)
+ *   0x08  mov r0, r3       ; 03 00 a0 e1   r0 = r3      (edge r3; the return value)
+ *   0x0c  bx lr            ; 1e ff 2f e1   return via lr
+ * With a = 7, b = 5 the fabric is r2 = 12, r3 = 24, r0 = 24, and the def-use
+ * graph has edges 0->1 (r2) and 1->2 (r3) — the same L0->L1 story the arm64
+ * chain tells, under the arm32 guest. */
+static const uint8_t ARM32_DF_CHAIN[] = {
+    0x01, 0x20, 0x80, 0xe0, /* 0x00 add r2, r0, r1 */
+    0x02, 0x30, 0x82, 0xe0, /* 0x04 add r3, r2, r2 */
+    0x03, 0x00, 0xa0, 0xe1, /* 0x08 mov r0, r3     */
+    0x1e, 0xff, 0x2f, 0xe1, /* 0x0c bx lr          */
+};
+
+/* One ARM32 per-step register snapshot as a `regstate` event, by descriptor
+ * reference — the arm32 analogue of emit_regstate_arm64. `values` names the
+ * raw physical register file: r0..r12, sp, lr, pc, cpsr, in emu_arm_regs_t
+ * declaration order (r[0..15], then cpsr) — integer-only, no VFP/NEON deck,
+ * mirroring both the arm64 descriptor and the arm32 value fabric's own
+ * integer-only scope (60-arm32-riscv-author-mode.md T1). */
+static void emit_regstate_arm32(asmtrace_writer_t *w, const emu_arm_regs_t *r) {
+    char body[1024];
+    int o = snprintf(
+        body, sizeof body,
+        "\"desc\":\"emu_arm32_regs_t@arm/aapcs32\",\"values\":{"
+        "\"r0\":%llu,\"r1\":%llu,\"r2\":%llu,\"r3\":%llu,\"r4\":%llu,"
+        "\"r5\":%llu,\"r6\":%llu,\"r7\":%llu,\"r8\":%llu,\"r9\":%llu,"
+        "\"r10\":%llu,\"r11\":%llu,\"r12\":%llu,\"sp\":%llu,\"lr\":%llu,"
+        "\"pc\":%llu,\"cpsr\":%llu}",
+        (unsigned long long)r->r[0], (unsigned long long)r->r[1],
+        (unsigned long long)r->r[2], (unsigned long long)r->r[3],
+        (unsigned long long)r->r[4], (unsigned long long)r->r[5],
+        (unsigned long long)r->r[6], (unsigned long long)r->r[7],
+        (unsigned long long)r->r[8], (unsigned long long)r->r[9],
+        (unsigned long long)r->r[10], (unsigned long long)r->r[11],
+        (unsigned long long)r->r[12], (unsigned long long)r->r[13] /* sp */,
+        (unsigned long long)r->r[14] /* lr */,
+        (unsigned long long)r->r[15] /* pc */, (unsigned long long)r->cpsr);
+    if (o < 0)
+        return;
+    size_t n = (size_t)o >= sizeof body ? sizeof body - 1 : (size_t)o;
+    body[n] = '\0';
+    asmtrace_emit(w, "regstate", body);
+}
+
+/* Per-step ARM32 register ring (T1): when steps_cap > 0, run the SAME bytes
+ * again under a FRESH emu_arm_t handle with its per-step ring armed
+ * (emu_arm_step_capture) and emit one `regstate` event per held pre-state
+ * (oldest first) — the arm32 analogue of emit_regstates_arm64. A SEPARATE
+ * Unicorn engine from the value-fabric run above, exactly like the arm64
+ * pair; EMU_CODE_BASE/EMU_STACK_BASE match DF_CODE_BASE/DF_STACK_BASE
+ * numerically, so both engines see the same addresses even though neither
+ * shares state with the other. Returns the number of earliest steps the
+ * ring evicted. */
+static uint64_t emit_regstates_arm32(asmtrace_writer_t *w, const uint8_t *code,
+                                     size_t code_len, const long *args,
+                                     int nargs, size_t steps_cap) {
+    emu_arm_t *e;
+    emu_arm_result_t res;
+    uint64_t dropped = 0;
+    if (steps_cap == 0)
+        return 0;
+    e = emu_arm_open();
+    if (e == NULL)
+        return 0;
+    if (emu_arm_step_capture(e, steps_cap)) {
+        size_t held, i;
+        memset(&res, 0, sizeof res);
+        emu_arm_call(e, code, code_len, args, nargs, 0, &res);
+        held = emu_arm_step_count(e);
+        dropped = emu_arm_step_dropped(e);
+        for (i = 0; i < held; i++) {
+            emu_arm_regs_t regs;
+            if (!emu_arm_step_at(e, i, NULL, &regs))
+                continue;
+            emit_regstate_arm32(w, &regs);
+        }
+    }
+    emu_arm_close(e);
+    return dropped;
+}
+
+/* Record one ARM32 routine as a value-fabric golden (60-arm32-riscv-author-
+ * mode.md T1), written as `note` + `trace` (rel) + `df_step` + `df_edge`
+ * through the arm32 `df_guest` — plus, when `steps_cap > 0`, the regstate/
+ * Scrubber half: one `regstate` event per held pre-state of the arm32
+ * per-step ring (emu_arm32_regs_t@arm/aapcs32). The header's `arch` is
+ * accurately "arm" (the guest, via the writer override) even though the
+ * recording is produced on an x86-64 lane. No mem/blame: those ride their
+ * own opt-ins and are not armed here. The reader needs NO change either
+ * way, mirroring record_arm64's own closing note. Returns 0 / -1. */
+static int record_arm32(const char *dir, const char *out, const char *label,
+                        const uint8_t *code, size_t code_len, const long *args,
+                        int nargs, size_t steps_cap) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    asmtest_defuse_t *g = NULL;
+    char path[1024], body[65536];
+    size_t nsteps, nrecs, cur = 0, s;
+    int rc;
+
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM32, code, code_len, args,
+                                       nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr,
+                "asmtrace_record: arm32 emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    g = asmtest_defuse_build(vt);
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_writer_set_arch(&w, "arm"); /* the guest, not the host (T1) */
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        char text[256];
+        int o = snprintf(text, sizeof text, "%s(", label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(text + o, sizeof text - (size_t)o,
+                 ") under the deterministic emulator L0 producer, ARM32 guest");
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    nsteps = vt->steps_len;
+    nrecs = vt->recs_len;
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_ARM32, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           (unsigned long long)vt->insn_off[s], body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                           (unsigned long long)vt->insn_off[s]);
+        }
+    }
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        size_t first;
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_ARM32, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        while (cur < nrecs && vt->recs[cur].step < s)
+            cur++;
+        first = cur;
+        while (cur < nrecs && vt->recs[cur].step == s)
+            cur++;
+        asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
+                              REC_CODE_BASE, 0, dis, &vt->recs[first],
+                              cur - first, vt->wide, vt->wide_len);
+        asmtrace_emit(&w, "df_step", body);
+    }
+
+    for (size_t i = 0; g && i < g->n; i++) {
+        asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
+        asmtrace_emit(&w, "df_edge", body);
+    }
+
+    /* Per-step arm32 register states from the ring (T1), after the value
+     * stream — the same ordering emit_regstates_arm64 uses. A non-zero
+     * eviction count is truncation just like a full recs buffer. */
+    uint64_t step_dropped =
+        emit_regstates_arm32(&w, code, code_len, args, nargs, steps_cap);
+
+    if (vt->truncated || step_dropped > 0)
+        w.truncated = 1;
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, step_dropped, 0, NULL);
+
+    {
+        size_t nedges = g ? g->n : (size_t)0;
+        int trunc = vt->truncated || step_dropped > 0;
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        printf("  %-20s %zu steps, %zu records, %zu def-use edges", out, nsteps,
+               nrecs, nedges);
+        if (steps_cap > 0)
+            printf(", regstate cap %zu (dropped %llu)", steps_cap,
+                   (unsigned long long)step_dropped);
+        printf("  [arm32]%s\n", trunc ? " [TRUNCATED]" : "");
+    }
+    return 0;
+}
+
 /* One per-step register snapshot as a `regstate` event, by descriptor
  * reference (schema: `desc` names a state descriptor, never a bare inline
  * register list). The `values` object carries the full x86-64 INTEGER file —
@@ -1121,8 +1342,8 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
  *
  * Returns 0 on success, -1 on a setup/write failure. */
 static int record_scene_df(const char *dir, const char *out, const char *label,
-                           const uint8_t *code, size_t code_len, const long *args,
-                           int nargs) {
+                           const uint8_t *code, size_t code_len,
+                           const long *args, int nargs) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -1132,8 +1353,9 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
     int rc;
 
     if (code_len > REC_WINDOW) {
-        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
-                out, REC_WINDOW);
+        fprintf(stderr,
+                "asmtrace_record: scene %s exceeds the %d-byte window\n", out,
+                REC_WINDOW);
         return -1;
     }
     vt = asmtest_valtrace_new(4096, 65536, 4096);
@@ -1166,13 +1388,14 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
         for (int i = 0; i < nargs; i++)
             o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
                           i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") under the deterministic emulator L0 producer, written as a "
-                 "live serve dataflow session does: an absolute `codeimage` at "
-                 "0x%lx plus REGION-RELATIVE `df_step` offsets, and NO `trace`. "
-                 "36 anchors the offsets to the single codeimage span (base+off) "
-                 "and the terrain draws a labelled single-step residency rung.",
-                 REC_CODE_BASE);
+        snprintf(
+            text + o, sizeof text - (size_t)o,
+            ") under the deterministic emulator L0 producer, written as a "
+            "live serve dataflow session does: an absolute `codeimage` at "
+            "0x%lx plus REGION-RELATIVE `df_step` offsets, and NO `trace`. "
+            "36 anchors the offsets to the single codeimage span (base+off) "
+            "and the terrain draws a labelled single-step residency rung.",
+            REC_CODE_BASE);
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -1213,7 +1436,8 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
     asmtrace_writer_set_steps_total(&w, vt->steps_total);
     asmtrace_close(&w, 0, 0, NULL);
     asmtest_valtrace_free(vt);
-    printf("  %-28s %zu step(s), 1 codeimage, df_step (no trace)\n", out, nsteps);
+    printf("  %-28s %zu step(s), 1 codeimage, df_step (no trace)\n", out,
+           nsteps);
     return 0;
 }
 
@@ -1244,8 +1468,9 @@ static int record_scene_df_multi(const char *dir, const char *out,
         (unsigned long long)REC_CODE_BASE + 0x10000ULL;
 
     if (code_len > REC_WINDOW) {
-        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
-                out, REC_WINDOW);
+        fprintf(stderr,
+                "asmtrace_record: scene %s exceeds the %d-byte window\n", out,
+                REC_WINDOW);
         return -1;
     }
     vt = asmtest_valtrace_new(4096, 65536, 4096);
@@ -1272,20 +1497,20 @@ static int record_scene_df_multi(const char *dir, const char *out,
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     {
-        int o =
-            snprintf(text, sizeof text,
-                     "3D-overview golden scene (two-span dataflow shape): %s(",
-                     label);
+        int o = snprintf(
+            text, sizeof text,
+            "3D-overview golden scene (two-span dataflow shape): %s(", label);
         for (int i = 0; i < nargs; i++)
             o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
                           i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") — TWO absolute `codeimage` spans at 0x%llx and 0x%llx plus "
-                 "REGION-RELATIVE `df_step` events tagged (rbase) to one span or "
-                 "the other, NO `trace`. 36's single-span anchor MUST refuse this "
-                 "(two spans, no derivable base); 37 resolves each step from its "
-                 "stated rbase, so both spans place.",
-                 baseA, baseB);
+        snprintf(
+            text + o, sizeof text - (size_t)o,
+            ") — TWO absolute `codeimage` spans at 0x%llx and 0x%llx plus "
+            "REGION-RELATIVE `df_step` events tagged (rbase) to one span or "
+            "the other, NO `trace`. 36's single-span anchor MUST refuse this "
+            "(two spans, no derivable base); 37 resolves each step from its "
+            "stated rbase, so both spans place.",
+            baseA, baseB);
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -1328,8 +1553,9 @@ static int record_scene_df_multi(const char *dir, const char *out,
     asmtrace_writer_set_steps_total(&w, vt->steps_total);
     asmtrace_close(&w, 0, 0, NULL);
     asmtest_valtrace_free(vt);
-    printf("  %-28s %zu step(s), 2 codeimage spans, df_step tagged (no trace)\n",
-           out, nsteps);
+    printf(
+        "  %-28s %zu step(s), 2 codeimage spans, df_step tagged (no trace)\n",
+        out, nsteps);
     return 0;
 }
 
@@ -1838,6 +2064,33 @@ int main(int argc, char **argv) {
         if (record_arm64(dir, "arm64-regstate-truncated",
                          "arm64_df_chain (steps_cap = 2)", ARM64_DF_CHAIN,
                          sizeof ARM64_DF_CHAIN, arm64_args, 2, 2) != 0)
+            failed++;
+    }
+
+    /* The ARM32 value-fabric golden (60-arm32-riscv-author-mode.md T1): the
+     * second non-x86-64 guest, the doc-32-shaped mirror of the arm64 block
+     * above. Generated on the SAME x86-64 lane (Unicorn emulates the A32
+     * guest); deterministic and byte-stable. The header's arch is accurately
+     * "arm" (the guest), and the Loom / Slice / Timeline render its fabric
+     * with no desktop change. Baked steps_cap = 8 comfortably holds all four
+     * executed steps (add/add/mov/bx), so this is also the arm32 regstate
+     * worked example, exercising the `regstate` kind without a separate
+     * --steps-style flag. */
+    {
+        static const long arm32_args[2] = {7, 5};
+        if (record_arm32(dir, "arm32-df-chain", "arm32_df_chain",
+                         ARM32_DF_CHAIN, sizeof ARM32_DF_CHAIN, arm32_args, 2,
+                         8) != 0)
+            failed++;
+        /* The D7 low-fidelity fixture for the arm32 ring (mirrors
+         * arm64-regstate-truncated.asmtrace): the SAME chain with a
+         * two-entry step ring over four executed steps, so the earliest two
+         * pre-states are evicted. `-truncated` in the name so the golden
+         * test requires it to actually be truncated. Generated, never
+         * hand-edited. */
+        if (record_arm32(dir, "arm32-regstate-truncated",
+                         "arm32_df_chain (steps_cap = 2)", ARM32_DF_CHAIN,
+                         sizeof ARM32_DF_CHAIN, arm32_args, 2, 2) != 0)
             failed++;
     }
 
