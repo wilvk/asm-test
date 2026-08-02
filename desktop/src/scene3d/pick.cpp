@@ -2,11 +2,16 @@
 // resolution of a pick to a 04 deep-link, plus (T2, 47-scene-inspect-and-
 // pickable-overlays) the hover-readout hint that shares its classification.
 // Standard library + nav.h + the space/ models only; no GL, no ImGui, no
-// engine (D4).
+// engine (D4). T3 (50-two-way-brushing) adds doc/streams.h (DataflowStream,
+// engine-free itself) and space/locate.h (StepAddrResolver) for the
+// reverse-direction address search — still no GL, no ImGui, no engine.
 #include "scene3d/pick.h"
 
 #include <cmath>
 #include <cstdio>
+
+#include "doc/streams.h"
+#include "space/locate.h"
 
 namespace asmdesk::scene3d {
 
@@ -175,7 +180,7 @@ std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj) {
         const bool st = (tr.flags & space::TRAJ_STATISTICAL) != 0;
         for (const space::TrajPoint &pt : tr.points)
             if (!pt.is_access)
-                out.push_back({tr.tid, pt.t, st, pt.addr});
+                out.push_back({tr.tid, pt.t, st, pt.addr, pt.placed});
     }
     return out;
 }
@@ -211,7 +216,8 @@ std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
                                     const space::TrajectorySet &traj,
                                     const std::string &rec, const Pick &p,
                                     const space::ConvergenceSet &conv,
-                                    uint64_t follow_step) {
+                                    uint64_t follow_step,
+                                    const DataflowStream *df) {
     if (p.kind == Pick::None)
         return std::nullopt;
 
@@ -288,10 +294,68 @@ std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
             link.view = dt_view::hotedges;
             return link;
         }
-        link.view =
-            dt_view::timeline; // the Loom / operand timeline reads this vertex
-        link.step = static_cast<uint32_t>(pv.t);
-        return link;
+
+        // T3 (50-two-way-brushing): prefer the ADDRESS route over the per-tid
+        // ordinal `pv.t` — a dataflow step index only by luck (see this
+        // header's contract block). `pv.placed` guards it: an UNPLACED
+        // vertex's addr is a raw wire offset, not a real address, and
+        // searching a DataflowStream for it could accidentally alias a real
+        // low address. StepAddrResolver resolves each candidate step the
+        // SAME way scene_locate_step would (wire rbase first, else the
+        // single-span anchor), so this can never disagree with what a `go
+        // to` on that address would find. First match wins on a loop — the
+        // hover readout (resolve_pick_hint) is where "one of N" gets said,
+        // not this click resolver.
+        if (pv.placed && df != nullptr) {
+            space::StepAddrResolver resolver(terr.proj, *df);
+            for (uint32_t i = 0; i < df->insn_off.size(); i++) {
+                uint64_t a = 0;
+                if (resolver.resolve(i, &a) && a == pv.addr) {
+                    link.view = dt_view::timeline;
+                    link.step = i;
+                    return link;
+                }
+            }
+        }
+
+        // No `df`, or the address route found no match: the ordinal is
+        // provably a dataflow-pass step index ONLY when this trajectory set
+        // holds exactly one trajectory — the single-tid case where nothing
+        // else could have collided onto the same step numbers.
+        if (traj.trajectories.size() == 1) {
+            link.view = dt_view::timeline;
+            link.step = static_cast<uint32_t>(pv.t);
+            return link;
+        }
+
+        // Neither route can honestly name a step: address it by OFFSET
+        // instead, through whichever basis the vertex itself carries, rather
+        // than pass an index the stream cannot honour.
+        if (!pv.placed) {
+            link.view = dt_view::canvas;
+            link.off = pv.addr; // the raw wire offset, already the recording's
+                                // own basis (TrajPoint::addr's contract)
+            return link;
+        }
+        {
+            float u = 0.0f, v = 0.0f;
+            const uint32_t n = terr.w;
+            if (n > 0 && terr.proj.project(pv.addr, &u, &v)) {
+                uint32_t x = static_cast<uint32_t>(u * n);
+                uint32_t y = static_cast<uint32_t>(v * n);
+                if (x >= n)
+                    x = n - 1;
+                if (y >= n)
+                    y = n - 1;
+                const CellFacts f = classify_cell(terr, y * n + x);
+                if (f.have_region) {
+                    link.view = dt_view::canvas;
+                    link.off = f.off;
+                    return link;
+                }
+            }
+        }
+        return std::nullopt; // no route can honestly address this vertex
     }
 
     if (p.kind == Pick::Conv) {

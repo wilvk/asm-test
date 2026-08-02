@@ -19,6 +19,12 @@
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
+namespace asmdesk {
+// T3 (50-two-way-brushing): forward-declared rather than pulling in the whole
+// of doc/streams.h — resolve_pick only ever holds a pointer to one.
+struct DataflowStream;
+} // namespace asmdesk
+
 namespace asmdesk::scene3d {
 
 // The id space written into the R32UI pick target. 0 is the cleared background
@@ -112,9 +118,17 @@ struct PickVertex {
     // the DERIVED absolute address for a placed rel/df offset, the raw wire
     // offset for one the anchor could not place (TrajPoint::addr's own
     // contract, space/types.h). Added so resolve_pick_hint can name a
-    // vertex's region/offset without a second trajectory scan; resolve_pick
-    // itself does not need it (it routes on tid/t alone).
+    // vertex's region/offset without a second trajectory scan; T3 (50-
+    // two-way-brushing) also reads it — resolve_pick's reverse-direction fix
+    // searches a DataflowStream for a step at this address rather than
+    // trusting the per-tid ordinal `t` to double as a step index.
     uint64_t addr = 0;
+    // T3 (50): TrajPoint::placed, mirrored — false means `addr` above is the
+    // RAW WIRE OFFSET, not a real address (an anchor could not place it), so
+    // resolve_pick must not search a DataflowStream for it (a raw offset
+    // could accidentally alias a real low address) and instead falls back to
+    // the offset-basis canvas route directly.
+    bool placed = true;
 };
 std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 
@@ -149,7 +163,24 @@ std::vector<PickSpur> pick_spur_order(const space::TrajectorySet &traj,
 //                                    last hit that data cell;
 //   Cell, statistical-only (TF_STAT, no exact content) -> the HOT-EDGE view
 //                                    (08-T4), NEVER the exact slice explorer;
-//   Vertex, exact PC              -> the Loom / operand TIMELINE at that step;
+//   Vertex, exact PC, address found in `df`  -> the Loom / operand TIMELINE at
+//                                    the step whose OWN offset resolves to the
+//                                    same address (50-two-way-brushing.md T3:
+//                                    the address route, never the per-tid
+//                                    ordinal `t`, which is a step index only
+//                                    by luck — see the fidelity note below);
+//                                    several steps sharing that address open
+//                                    the FIRST (a loop body — see
+//                                    resolve_pick_hint for "one of N" wording);
+//   Vertex, exact PC, no `df` supplied, or the address is in NO step of it,
+//   or the vertex itself is unplaced (raw wire offset, not a real address)
+//                                  -> `traj.trajectories.size() == 1` (the
+//                                    ONLY condition under which the per-tid
+//                                    ordinal is provably 1:1 with a pass's
+//                                    step index) falls back to `t` as the
+//                                    step; otherwise the CANVAS at the
+//                                    vertex's own offset (never a step index
+//                                    the stream cannot honour);
 //   Vertex, statistical residency -> the HOT-EDGE view (08-T4), never timeline;
 //   Conv (T3, 47)                 -> the TIMELINE at whichever of the arc's two
 //                                    tids' t is nearer `follow_step` (a two-
@@ -159,14 +190,17 @@ std::vector<PickSpur> pick_spur_order(const space::TrajectorySet &traj,
 //   Spur (T3, 47)                 -> the TIMELINE at its owning PC vertex's step
 //                                    (the same step it already implied before it
 //                                    was independently pickable).
-// `conv`/`follow_step` (T3) are unused by every kind but Conv; the defaults keep
-// every pre-T3 call site (every existing test, every Cell/Vertex-only caller)
-// byte-identical.
+// `conv`/`follow_step` (T3, 47) and `df` (T3, 50) are unused by every kind but
+// Conv and Vertex respectively; the defaults keep every pre-existing call site
+// (every existing test, every Cell/Conv/Spur-only caller) byte-identical. `df`
+// must be the SAME pass the trajectory's df_step-derived vertices came from —
+// resolve_pick never re-derives which pass "step" means.
 std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
                                     const space::TrajectorySet &traj,
                                     const std::string &rec, const Pick &p,
                                     const space::ConvergenceSet &conv = {},
-                                    uint64_t follow_step = 0);
+                                    uint64_t follow_step = 0,
+                                    const DataflowStream *df = nullptr);
 
 // T2 (47-scene-inspect-and-pickable-overlays): the readout resolve_pick throws
 // away — a pure, golden-testable function answering "what is this, and where

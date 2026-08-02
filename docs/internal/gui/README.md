@@ -27,8 +27,7 @@ rules follow [../implementations/](../implementations/README.md) — read
 > |---|---|
 > | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1–L6** are still open (arm64 live-dataflow leg, `df_invocation`-aware decode, live `blame`/`statediff` kinds, the Darwin `libasmtest_dataflow` build, ARM32/RISC-V Author guests, doc-37 T4 on the serve disasm path). L7 closed as doc 39. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
-> | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47 and 48 landed 2026-08-02, 50–52 ☐ not started. |
-> | [50-two-way-brushing.md](50-two-way-brushing.md) | ☐ 0/4 — light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal. |
+> | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48 and 50 landed 2026-08-02, 51–52 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
 > | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | ☐ 0/4 — a GL-free 2D terrain surface: the no-GL branches gain a real view and the GL path gains a reading mode. |
 > | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; docs 55–59 all ☐ not started. |
@@ -534,7 +533,7 @@ the catalog nor the city doc acted on.
 | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | G1–G3: throttled hover pick + cell→content index, `resolve_pick_hint`, pickable convergence arcs / access spurs, hover readout, HUD legend | 5 | none | ✅ 5/5 (T1 the `TerrainModel` sorted-vector cell→content index + throttled hover-pick, `resolve_pick` routed through it, `3b7ebf1`; T2 `resolve_pick_hint` sharing one `classify_cell()` helper with `resolve_pick` so a preview can never drift from a click, golden-tested per branch incl. the anti-drift assertion, `3b7ebf1`; T3 pickable convergence arcs/access spurs — new id bands past the now-bounded vertex band via an explicit `PickBands`, both functions resolve an arc to whichever tid is nearer `follow_step` and say which side was chosen, `ee82b9a`; T4 the hover tooltip (what/where/quantity/fidelity/click-target), null-backend-safe, tooltip itself untestable in this tree (no GL interaction lane) so the gap is stated rather than implied, `90f3296`; T5 HUD legend swatches for both overlay classes + a `convergence` checkbox + the persistent "hover to inspect" hint, exhaustive-by-test, `c64c495`) | — |
 | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ✅ 5/5 | — |
 | [49-one-time-truth-in-the-scene.md](../archive/gui/49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ✅ 4/4 | — |
-| [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☐ 0/4 | will · T1-T4 · 2026-08-02 |
+| [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☑ 4/4 | — |
 | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | G11–G12: per-tid/region/kind focus, thread ghosting, camera-distance entity budget | 4 | 48 (landmarks, else free) | ☐ 0/4 | *free* |
 | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | G13: a GL-free 2D terrain surface — the no-GL branches gain a real view, the GL path gains a reading mode | 4 | none | ☐ 0/4 | *free* |
 
@@ -552,15 +551,16 @@ catalog's own 26-graph inventory and its five-phase build order.
 | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 | ☐ 0/6 | *free* |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | *free* |
 
-39 tasks now open across the three families (28 landed — 7 in representation
-via 44, 14 in instrument via 47/48/49, 7 in depiction via 54 (complete) — and
-12 + 27 still open in instrument/depiction). Sequencing across
+35 tasks now open across the three families (32 landed — 7 in representation
+via 44, 18 in instrument via 47/48/49/50, 7 in depiction via 54 (complete) — and
+8 + 27 still open in instrument/depiction). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
 the families do not block each other — with three overlaps that must be
 coordinated rather than duplicated. **Pick-id bands**: 47 T3, 59 T1. **The
-address-first step→place resolver**: 50, 57 T1. **The movable camera target**: 48,
-59 T5's per-scene framing. In each case whichever lands first owns the mechanism
+address-first step→place resolver**: 50 (landed — `space/locate.h`'s
+`scene_locate_off`/`scene_locate_step`), 57 T1 adopts it. **The movable camera
+target**: 48, 59 T5's per-scene framing. In each case whichever lands first owns the mechanism
 and the second adopts it; all six briefs say so in their own text. Landing
 [55](55-scene-render-quality.md) early pays off across both open families —
 [58](58-memory-data-cell-family.md) is where stacked translucency stops being

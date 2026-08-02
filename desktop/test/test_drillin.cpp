@@ -916,6 +916,157 @@ int main() {
         }
     }
 
+    // === T3 (50-two-way-brushing): the reverse-direction unguarded ordinal ====
+    // A two-tid trace groups into TWO trajectories (by_tid keyed on tid), each
+    // with its OWN per-tid ordinal `t` starting at 0 — so tid 1's and tid 2's
+    // vertices collide onto the SAME `t` values by construction. The single-tid
+    // fixture at "an exact PC vertex -> the operand TIMELINE at that step"
+    // (above) already pins the no-regression case: `traj.trajectories.size()
+    // == 1` there, so the ordinal fallback still fires and its expected step
+    // (2) is unchanged.
+    {
+        Recording rec = mk_rec(
+            std::string(kHdrExact) +
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194304}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194308}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194312}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194320}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194324}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194328}\n"
+            // A dataflow pass over the SAME six PCs, global step order (df_step
+            // carries no tid — a single linear value-flow trace, per 38's own
+            // correction that a tid-on-df_step convergence brief is dead).
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":2,\"off\":8,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":3,\"off\":16,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":4,\"off\":20,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":5,\"off\":24,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"end\",\"events\":13,\"truncated\":false,\"drops\":{"
+            "\"lost\":0,\"throttled\":false}}\n");
+        space::Projection p =
+            space::build_projection(space::regions_from_codeimage(rec));
+        space::TerrainModel terr = space::build_terrain(p, rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        check("T3 reverse/setup: two trajectories", traj.trajectories.size() == 2,
+              "got " + std::to_string(traj.trajectories.size()));
+        const uint32_t n = terr.w;
+
+        std::vector<PickVertex> order = pick_vertex_order(traj);
+        check("T3 reverse/setup: six pickable vertices", order.size() == 6,
+              "got " + std::to_string(order.size()));
+        // trajectory-then-point order, by_tid keyed ascending: tid 1's three
+        // vertices (index 0-2), then tid 2's three (index 3-5). Index 5 is
+        // tid 2's THIRD vertex — its own per-tid ordinal `t` is 2, the SAME
+        // ordinal tid 1's third vertex (index 2) also carries. The old bug:
+        // `link.step = pv.t` would open step 2 for BOTH, silently colliding.
+        check("T3 reverse/setup: index 5 is tid 2's third vertex (t==2)",
+              order[5].tid == 2 && order[5].t == 2,
+              "fixture assumption broke");
+        check("T3 reverse/setup: index 5's address is tid 2's third PC",
+              order[5].addr == 4194328,
+              "got 0x" + std::to_string(order[5].addr));
+
+        Streams s = decode_streams(rec);
+        check("T3 reverse/setup: df decoded", s.df.insn_off.size() == 6,
+              "fixture must decode six df_step entries");
+
+        auto link =
+            resolve_pick(terr, traj, "rec.asmtrace", vertex_pick(5, n),
+                        space::ConvergenceSet{}, 0, &s.df);
+        check("T3 reverse: resolves to a link", link.has_value(), "no link");
+        if (link) {
+            check("T3 reverse: opens the operand timeline",
+                  link->view == dt_view::timeline, "wrong view");
+            check("T3 reverse: opens at the ADDRESS-matched step (5), not "
+                  "the per-tid ordinal (2)",
+                  link->step.has_value() && *link->step == 5,
+                  "step wrong: got " +
+                      (link->step ? std::to_string(*link->step) : "none"));
+        }
+
+        // Same two-tid pick, but with NO df supplied at all: the ordinal is
+        // unsound (two trajectories) and there is no address route to fall
+        // back on, so this must land on the CANVAS at the vertex's own
+        // offset — never a fabricated step.
+        auto no_df_link =
+            resolve_pick(terr, traj, "rec.asmtrace", vertex_pick(5, n));
+        check("T3 reverse/no-df: resolves to a link", no_df_link.has_value(),
+              "no link");
+        if (no_df_link) {
+            check("T3 reverse/no-df: falls back to the canvas, not a "
+                  "fabricated timeline step",
+                  no_df_link->view == dt_view::canvas, "wrong view");
+            check("T3 reverse/no-df: canvas offset is addr - base",
+                  no_df_link->off.has_value() &&
+                      *no_df_link->off == 4194328 - 4194304,
+                  "offset wrong");
+        }
+
+        // A df that covers only tid 1's PCs (steps 0-2): tid 2's vertex 5 has
+        // no matching step ANYWHERE in df, so the address route finds
+        // nothing, the ordinal is unsound (two trajectories), and this must
+        // still fall back to the canvas rather than open step 2 (which would
+        // silently be tid 1's own third step).
+        {
+            Recording partial = mk_rec(
+                std::string(kHdrExact) +
+                "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,"
+                "\"version\":0,\"when\":1,\"bytes\":\"90\"}\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194304}"
+                "\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194308}"
+                "\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":1,\"off\":4194312}"
+                "\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194320}"
+                "\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194324}"
+                "\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"tid\":2,\"off\":4194328}"
+                "\n"
+                "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+                "\"ops\":[]}\n"
+                "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"rbase\":4194304,"
+                "\"ops\":[]}\n"
+                "{\"k\":\"df_step\",\"step\":2,\"off\":8,\"rbase\":4194304,"
+                "\"ops\":[]}\n"
+                "{\"k\":\"end\",\"events\":10,\"truncated\":false,\"drops\":{"
+                "\"lost\":0,\"throttled\":false}}\n");
+            space::Projection pp =
+                space::build_projection(space::regions_from_codeimage(partial));
+            space::TerrainModel tterr = space::build_terrain(pp, partial);
+            space::TrajectorySet ttraj = space::build_trajectories(partial);
+            Streams ss = decode_streams(partial);
+            check("T3 reverse/no-match: setup: df has only 3 steps",
+                  ss.df.insn_off.size() == 3,
+                  "got " + std::to_string(ss.df.insn_off.size()));
+
+            auto miss_link = resolve_pick(
+                tterr, ttraj, "rec.asmtrace", vertex_pick(5, tterr.w),
+                space::ConvergenceSet{}, 0, &ss.df);
+            check("T3 reverse/no-match: resolves to a link",
+                  miss_link.has_value(), "no link");
+            if (miss_link) {
+                check("T3 reverse/no-match: falls back to the canvas, not a "
+                      "fabricated step",
+                      miss_link->view == dt_view::canvas, "wrong view");
+                check("T3 reverse/no-match: canvas offset is addr - base",
+                      miss_link->off.has_value() &&
+                          *miss_link->off == 4194328 - 4194304,
+                      "offset wrong");
+            }
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d drill-in check(s) failed\n", failures);
         return 1;

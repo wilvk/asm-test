@@ -3,6 +3,7 @@
 #include "scene3d/goto.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "scene3d/camera.h"
 
@@ -122,6 +123,33 @@ bool scene_home_target(const space::TerrainModel &terr, float *u, float *v) {
     *u = static_cast<float>(su / static_cast<double>(n));
     *v = static_cast<float>(sv / static_cast<double>(n));
     return true;
+}
+
+bool scene_on_screen(const Camera &cam, float u, float v, float aspect,
+                     std::string *edge) {
+    float m[16];
+    cam.mvp(m, aspect);
+    // The plane at height 0 (a disclosure check, not a fidelity measurement —
+    // see this function's own doc comment in goto.h).
+    vec4 world = {u, 0.0f, v, 1.0f};
+    vec4 clip;
+    mat4x4_mul_vec4(clip, reinterpret_cast<vec4 *>(m), world);
+    if (clip[3] <= 0.0f) {
+        if (edge)
+            *edge = "behind";
+        return false;
+    }
+    const float ndc_x = clip[0] / clip[3];
+    const float ndc_y = clip[1] / clip[3];
+    const bool on =
+        ndc_x >= -1.0f && ndc_x <= 1.0f && ndc_y >= -1.0f && ndc_y <= 1.0f;
+    if (!on && edge) {
+        if (std::fabs(ndc_x) >= std::fabs(ndc_y))
+            *edge = ndc_x < 0.0f ? "left" : "right";
+        else
+            *edge = ndc_y < 0.0f ? "bottom" : "top";
+    }
+    return on;
 }
 
 } // namespace asmdesk::scene3d

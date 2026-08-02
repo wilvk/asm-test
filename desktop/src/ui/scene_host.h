@@ -64,6 +64,14 @@ struct SceneFrame {
     // step axis). See ui/shell.cpp's draw_scene_overview doc comment for the
     // axis-mismatch decision this field embodies.
     uint64_t follow_step = 0;
+    // 50 T2 (two-way-brushing): the flat views' Selection, projected through
+    // its ADDRESS onto this plane (space/locate.h's scene_locate_off/_step) —
+    // a spatial POINTER, not a third clock. `has_highlight` false means either
+    // nothing is selected in this recording or it could not be placed; the
+    // HUD states which (see ui/shell.cpp's own doc comment on the axis-
+    // mismatch decision this mirrors, T5/T6 above).
+    bool has_highlight = false;
+    uint32_t highlight_cell = 0;
 };
 
 // The abstract GL host. main.cpp constructs one (make_gl_scene_host), calls init()

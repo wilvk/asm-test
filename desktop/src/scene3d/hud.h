@@ -187,6 +187,21 @@ struct HudState {
     bool playing = false;
     bool req_play_toggle = false;
 
+    // 50 T2/T4 (two-way-brushing): the flat views' selection, located onto
+    // this plane by its ADDRESS — synced by the caller every frame from
+    // space::Located (SceneView::highlight), the HUD never resolves it
+    // itself. `has_highlight` false + a non-empty `highlight_reason` means
+    // the selection is active but could not be placed ("unplaceable, because
+    // X" — D7, never silently absent); both false/empty means nothing is
+    // selected in this recording at all.
+    bool has_highlight = false;
+    bool highlight_ambiguous = false;
+    std::string highlight_reason;
+    // T4: "frame the selection" — enabled only when has_highlight; the
+    // caller applies it to Camera::frame on the located cell and clears it,
+    // the same one-shot-intent pattern req_reset_view/req_goto already use.
+    bool req_frame_highlight = false;
+
     // Set true by draw_scene_hud when the HUD window holds keyboard focus this
     // frame (22-selection-and-search.md T2, F18). The caller ORs it with the 3D
     // viewport's focus to decide whether the arrow/dolly/reset camera keys act, so

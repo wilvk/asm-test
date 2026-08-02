@@ -134,6 +134,15 @@ class Scene {
     // per-frame-set, no-upload state.
     uint64_t follow_step = 0;
 
+    // 50 T2 (two-way-brushing): the flat views' selection, located onto this
+    // plane by its ADDRESS — a draw-time uniform like follow_step above, no
+    // upload. -1 = no highlight this frame (nothing selected in this
+    // recording, or it could not be placed). Set every frame before render();
+    // the terrain fragment shader rings this cell without altering its
+    // encoded height/kind/flags (a pointer, not a measurement — see
+    // shaders/embedded.h's kTerrainFrag).
+    int32_t highlight_cell = -1;
+
     // Draw the lit scene into the currently-bound framebuffer (viewport fbw*fbh).
     void render(const Camera &cam, int fbw, int fbh, const SceneLayers &layers);
 

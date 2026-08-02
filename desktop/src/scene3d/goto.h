@@ -10,7 +10,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
+#include "scene3d/camera.h" // Camera, scene_on_screen's param (50 T4)
 #include "scene3d/pick.h"
 #include "space/projection.h"
 #include "space/terrain.h"
@@ -75,6 +77,18 @@ bool scene_goto_region(const space::Projection &proj, size_t region_index,
 // capture. False when the recording places no code region at all (a data-only
 // or empty projection) — the caller keeps whatever camera it already has.
 bool scene_home_target(const space::TerrainModel &terr, float *u, float *v);
+
+// 50 T4 (two-way-brushing): does plane cell (u,v) project inside the camera's
+// current viewport, at plane height 0 — a disclosure check, not a fidelity
+// measurement (the terrain's real height at that cell varies per slice; this
+// answers "roughly where", which is all "off-screen, follow to see it" needs).
+// Pure math over Camera::mvp (no GL), so it is exercised headlessly. `edge`,
+// when non-null and the point is off-screen, names the side that clipped —
+// "left"/"right"/"top"/"bottom" (whichever axis clipped furthest), or
+// "behind" for a point behind the camera entirely — for a caller to point a
+// directional cue at.
+bool scene_on_screen(const Camera &cam, float u, float v, float aspect,
+                     std::string *edge = nullptr);
 
 } // namespace asmdesk::scene3d
 #endif // ASMDESK_SCENE3D_GOTO_H

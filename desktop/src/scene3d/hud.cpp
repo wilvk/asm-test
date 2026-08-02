@@ -387,6 +387,17 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::Checkbox("vehicle", &s.layers.vehicle);
     ImGui::SameLine();
     ImGui::Checkbox("contours", &s.layers.contours);
+    ImGui::SameLine();
+    ImGui::Checkbox("EDL", &s.layers.edl);
+    // T1 (55) step 3: "HUD-exposed" as a stated fact, not yet a live slider —
+    // Scene owns edl_strength/edl_radius_px directly (like y_scale/traj_scale_
+    // above it, neither of which is HUD-adjustable either) and the abstract
+    // SceneHost/SceneFrame seam has no channel for a per-frame float today;
+    // wiring a slider through it is a follow-on, not silently dropped.
+    ImGui::SameLine();
+    ImGui::TextColored(kDim, "(strength %.1f, radius %.0fpx)",
+                       static_cast<double>(kEdlStrengthDefault),
+                       static_cast<double>(kEdlRadiusPxDefault));
 
     // --- camera presets ----------------------------------------------------
     // 48 T4: two buttons, two honest meanings — "reset view" frames the
@@ -415,6 +426,26 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::TextColored(
         kDim, "%s",
         camera_here_text(terr.proj, s.cam_target_u, s.cam_target_v).c_str());
+
+    // 50 T2/T4: the flat views' selection, located onto this plane by its
+    // address. Graded, never hidden (D7): active-but-unplaceable states the
+    // reason verbatim; nothing selected says so plainly; a placed selection
+    // offers "frame the selection" (T4) and, when ambiguous (the same
+    // address revisited at several steps — a loop), says so rather than
+    // implying it is the one true occurrence.
+    if (s.has_highlight) {
+        if (ImGui::Button("frame the selection"))
+            s.req_frame_highlight = true;
+        if (s.highlight_ambiguous) {
+            ImGui::SameLine();
+            ImGui::TextColored(
+                kDim, "(this address recurs — cell is where, not when)");
+        }
+    } else if (!s.highlight_reason.empty()) {
+        ImGui::TextColored(kWarn, "selection: %s", s.highlight_reason.c_str());
+    } else {
+        ImGui::TextColored(kDim, "selection: nothing brushed in this recording");
+    }
 
     ImGui::Separator();
 

@@ -628,6 +628,12 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     GLint uc = glGetUniformLocation(prog, "uContourLevels");
     if (uc >= 0)
         glUniform1f(uc, contour_levels);
+    // 50 T2: only kTerrainFrag (the exact terrain) declares uHighlightCell —
+    // absent (loc -1, harmless) from the pick shader and prog_stat_, so this
+    // call is safe for every draw_terrain_common caller regardless of `prog`.
+    GLint uhc = glGetUniformLocation(prog, "uHighlightCell");
+    if (uhc >= 0)
+        glUniform1i(uhc, highlight_cell);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);

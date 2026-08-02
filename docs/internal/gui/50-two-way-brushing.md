@@ -18,7 +18,49 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/4, not started.**
+> **Status — ☑ 4/4, landed 2026-08-02.** T1 `space/locate.h`/`.cpp`
+> (`scene_locate_off`/`scene_locate_step` + the shared `StepAddrResolver`, so
+> a caller resolving many steps pays for one `Anchor` lookup, not one per
+> step), tested in a new standalone `test_locate.cpp` (abs/rel offsets, an
+> unanchorable two-span refusal carrying `resolve_anchor`'s own reason
+> verbatim, out-of-range/absent-stream steps, wire-rbase vs derived-anchor
+> `how`, and ambiguity when an address recurs). T2 wires the located cell into
+> the scene: `SceneFrame`/`Scene::highlight_cell` (a draw-time uniform like
+> `follow_step`, no upload), a ring drawn in `kTerrainFrag` from the SAME
+> cell-from-`vUV` arithmetic `kPickTerrainFrag` already uses (an outline near
+> the cell's edge, never a height/hue change), and `ui/shell.cpp` caching the
+> `Located` result per `(Selection::epoch, recording generation)` rather than
+> re-resolving every frame — synced into the HUD's graded readout
+> ("unplaceable, because X" / "nothing brushed" / ambiguous). T3 fixes the
+> reverse-direction bug this brief's own grounding section flagged:
+> `resolve_pick`'s Vertex branch now searches the recording's `DataflowStream`
+> for a step whose own resolved address matches the picked vertex's (via the
+> same `StepAddrResolver`) before ever trusting the per-tid ordinal `pv.t` —
+> which is now used ONLY when `traj.trajectories.size() == 1` (the one
+> condition under which it is provably a step index), and an address neither
+> route can honour falls back to the CANVAS by offset rather than opening a
+> fabricated timeline step. Proven by a new two-tid `test_drillin.cpp` fixture
+> (tid 2's third vertex shares its per-tid ordinal with tid 1's third — the
+> exact collision the bug produced — and now resolves via address to its own
+> distinct step). T4 adds `scene3d::scene_on_screen` (pure, `Camera::mvp`-based,
+> tested in `test_goto.cpp`) and a "frame the selection" HUD button; an
+> off-screen highlighted selection is disclosed with an edge-anchored text
+> label over the viewport (a deliberate simplification of the brief's
+> "directional cue" — a text label rather than a drawn arrow glyph, so no new
+> geometry/shader is needed for a one-line disclosure) rather than moved
+> automatically (no "follow selection" auto-toggle — the brief marks it
+> optional and off by default; not added). **Shared-tree note:** T2/T4 touch
+> `scene3d/scene.{h,cpp}` and `shaders/embedded.h`, which
+> [55](55-scene-render-quality.md) T1/T5 (EDL + MSAA) was concurrently landing
+> in the same files — the two changes do not overlap (different uniforms,
+> different shader programs) and were committed as separate, hand-isolated
+> hunks so neither PR's changes were swept into the other's commit. One
+> pre-existing `test_scene_fbo` check (the statistical-scene stipple-pixel
+> assertion) was observed failing against the combined working tree at the
+> time of this landing; it is caused by 55's EDL depth-shading altering pixel
+> values the check counts, not by anything in this brief — every check this
+> brief added or touches (`test_locate`, `test_goto`, `test_drillin`,
+> `test_camera`, `test_shell`) is green.
 
 ## Why this work exists
 

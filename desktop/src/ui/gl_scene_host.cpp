@@ -101,6 +101,9 @@ class GlSceneHost : public SceneHost {
         // carries it (slice_t), so this needs no new field, just passing it
         // through every frame like follow_step above.
         scene_.slice_step = f.slice_t;
+        // 50 T2: the located selection, the same draw-time-uniform pattern.
+        scene_.highlight_cell =
+            f.has_highlight ? static_cast<int32_t>(f.highlight_cell) : -1;
 
         GLint prev_fbo = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);

@@ -24,6 +24,7 @@
 #include "scene3d/hud.h"
 #include "scene3d/pick.h" // T1/T2 (47): PickHint, SceneView::hover_hint
 #include "space/converge.h"
+#include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
@@ -131,6 +132,16 @@ struct SceneView {
     // jump to the plane centre.
     float home_u = 0.5f, home_v = 0.5f;
     bool has_home = false;
+
+    // 50 T2 (two-way-brushing): the shared Selection, located onto this plane
+    // by its ADDRESS (space/locate.h) — recomputed only when the selection or
+    // the weave changes, never every frame regardless of picking activity.
+    // `highlight_epoch`/`highlight_gen` are the cache key (Selection::epoch,
+    // the recording's event_count()); UINT64_MAX on both means "never
+    // resolved yet", so the very first frame always resolves.
+    space::Located highlight;
+    uint64_t highlight_epoch = UINT64_MAX;
+    uint64_t highlight_gen = UINT64_MAX;
 };
 
 struct ShellState {

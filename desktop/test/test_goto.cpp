@@ -233,6 +233,33 @@ int main() {
               "scene_home_target must be deterministic for the same recording");
     }
 
+    // === 50 T4 (two-way-brushing): scene_on_screen ============================
+    {
+        Camera cam; // reset() default: three-quarter view of the plane centre
+        std::string edge;
+
+        // The camera's own target is, by construction, on-screen at its centre.
+        check("on_screen/target: the camera's own target is on-screen",
+              scene_on_screen(cam, cam.target[0], cam.target[2], 1.6f, &edge),
+              "edge=" + edge);
+
+        // A point far outside the plane's [0,1]^2 domain, well past the
+        // camera's frustum at this radius, must read as off-screen with a
+        // named edge — never silently "on" nor a crash.
+        edge.clear();
+        check("on_screen/far: a distant point is off-screen",
+              !scene_on_screen(cam, 50.0f, 50.0f, 1.6f, &edge),
+              "a point far outside the frustum was reported on-screen");
+        check("on_screen/far: names a real edge",
+              edge == "left" || edge == "right" || edge == "top" ||
+                  edge == "bottom" || edge == "behind",
+              "got: '" + edge + "'");
+
+        // A degenerate/zero aspect must not crash (Camera::proj's own guard
+        // substitutes 1.0); reaching the next check is the assertion.
+        scene_on_screen(cam, cam.target[0], cam.target[2], 0.0f);
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d goto check(s) failed\n", failures);
         return 1;

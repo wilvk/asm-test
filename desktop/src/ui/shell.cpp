@@ -950,6 +950,32 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.built = true;
     }
 
+    // 50 T2 (two-way-brushing): recompute the located highlight only when the
+    // selection or the weave changed — never every frame regardless of
+    // picking activity. Guarded on s.selection.rec == a.id (the existing
+    // cross-recording brushing rule, 22 T1): a selection brushed in a
+    // DIFFERENT open recording must not light this one.
+    {
+        const uint64_t gen = r.event_count();
+        if (s.selection.rec == a.id && s.selection.active()) {
+            if (sv.highlight_epoch != s.selection.epoch ||
+                sv.highlight_gen != gen) {
+                sv.highlight_epoch = s.selection.epoch;
+                sv.highlight_gen = gen;
+                sv.highlight = s.selection.off.has_value()
+                                  ? space::scene_locate_off(
+                                        sv.terr.proj, r, *s.selection.off)
+                                  : space::scene_locate_step(
+                                        sv.terr.proj, a.df,
+                                        *s.selection.step);
+            }
+        } else {
+            sv.highlight = space::Located{};
+            sv.highlight_epoch = UINT64_MAX;
+            sv.highlight_gen = UINT64_MAX;
+        }
+    }
+
     // The HUD (its own window): provenance chips, playhead, layer toggles, camera
     // presets, region legend. Pure ImGui — drawn even under the null backend. It
     // reports the user's intent back through sv.hud; we apply it here (04's rule:
@@ -963,6 +989,11 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.has_home = sv.has_home;
     sv.hud.cam_target_u = sv.cam.target[0];
     sv.hud.cam_target_v = sv.cam.target[2];
+    // 50 T2: sync the located highlight every frame — read by draw_scene_hud
+    // for the "frame the selection" gate and the graded readout below it.
+    sv.hud.has_highlight = sv.highlight.ok;
+    sv.hud.highlight_ambiguous = sv.highlight.ambiguous;
+    sv.hud.highlight_reason = sv.highlight.reason;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -976,8 +1007,16 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 48 T3: the "go to" row's resolved destination (address or region).
     if (sv.hud.req_goto)
         sv.cam.frame(sv.hud.goto_u, sv.hud.goto_v, sv.hud.goto_radius);
+    // 50 T4: "frame the selection" — the located cell's centre, the same
+    // cell-centre rounding resolve_pick/classify_cell already use.
+    if (sv.hud.req_frame_highlight && sv.highlight.ok && sv.terr.w > 0) {
+        const uint32_t n = sv.terr.w;
+        const float hu = (sv.highlight.cell % n + 0.5f) / static_cast<float>(n);
+        const float hv = (sv.highlight.cell / n + 0.5f) / static_cast<float>(n);
+        sv.cam.frame(hu, hv, sv.cam.radius);
+    }
     sv.hud.req_reset_view = sv.hud.req_default_view = sv.hud.req_top_down =
-        sv.hud.req_goto = false;
+        sv.hud.req_goto = sv.hud.req_frame_highlight = false;
     // 34 T3: play/pause the TERRAIN-TIME playhead — its own axis (trace-residency
     // steps), distinct from the execution step the flat views brush. Restart from
     // 0 when pressed at the end, then advance hud.t over terr.nsteps; the existing
@@ -1158,6 +1197,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.atmo = sv.atmo;                                    // T3
     f.sun = scene_sun_from_hud(sv.hud.t, sv.hud.nsteps);  // T5
     f.follow_step = sv.follow_step;                       // T5/T6
+    f.has_highlight = sv.highlight.ok;                     // 50 T2
+    f.highlight_cell = sv.highlight.cell;                  // 50 T2
 
     ImTextureID tex = s.scene_host->render(f);
     if (!tex) {
@@ -1190,6 +1231,39 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         ImGui::GetWindowDrawList(), sv.cam, vp_origin,
         ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
         sv.terr.nsteps, s.scene_host->traj_scale());
+
+    // T4 (50-two-way-brushing): a located selection off-screen is DISCLOSED —
+    // a small edge-anchored label naming the direction — rather than moved to
+    // (the follow toggle this brief marks optional-off-by-default would do
+    // that) or silently absent. Never fires for "behind" (degenerate/no
+    // camera set up yet); the ruler's own GL-path gate applies here too.
+    if (sv.highlight.ok && sv.terr.w > 0) {
+        const uint32_t n = sv.terr.w;
+        const float hu = (sv.highlight.cell % n + 0.5f) / static_cast<float>(n);
+        const float hv = (sv.highlight.cell / n + 0.5f) / static_cast<float>(n);
+        const float aspect =
+            fbh > 0 ? static_cast<float>(fbw) / static_cast<float>(fbh) : 1.0f;
+        std::string edge;
+        if (!scene3d::scene_on_screen(sv.cam, hu, hv, aspect, &edge) &&
+            edge != "behind") {
+            const float pad = 6.0f;
+            ImVec2 pos = vp_origin;
+            if (edge == "left")
+                pos = ImVec2(vp_origin.x + pad,
+                             vp_origin.y + static_cast<float>(fbh) * 0.5f - 8.0f);
+            else if (edge == "right")
+                pos = ImVec2(vp_origin.x + static_cast<float>(fbw) - 100.0f,
+                             vp_origin.y + static_cast<float>(fbh) * 0.5f - 8.0f);
+            else if (edge == "top")
+                pos = ImVec2(vp_origin.x + static_cast<float>(fbw) * 0.5f - 45.0f,
+                             vp_origin.y + pad);
+            else // "bottom"
+                pos = ImVec2(vp_origin.x + static_cast<float>(fbw) * 0.5f - 45.0f,
+                             vp_origin.y + static_cast<float>(fbh) - 20.0f);
+            ImGui::GetWindowDrawList()->AddText(
+                pos, IM_COL32(255, 235, 80, 255), "selection is off-screen");
+        }
+    }
 
     // Camera + pick, only while the pointer is over the viewport. A left-drag
     // orbits; the wheel dollies; a click that did NOT drag is a pick — read the
@@ -1322,8 +1396,13 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
                 uint32_t id = s.scene_host->pick(sv.cam, fbw, fbh, px, py);
                 const scene3d::PickBands bands = s.scene_host->pick_bands();
                 scene3d::Pick pk = scene3d::decode_pick(id, sv.terr.w, bands);
-                auto link = scene3d::resolve_pick(sv.terr, sv.traj, a.id, pk,
-                                                  sv.conv, sv.follow_step);
+                // T3 (50-two-way-brushing): `a.df` is the recording's latest
+                // dataflow pass — the SAME stream the trajectory's df_step
+                // vertices (if any) came from — so a Vertex pick's address
+                // route can search it rather than trust the per-tid ordinal.
+                auto link =
+                    scene3d::resolve_pick(sv.terr, sv.traj, a.id, pk, sv.conv,
+                                          sv.follow_step, &a.df);
                 if (link && !dt_nav_go(s.nav, *link))
                     s.status = s.nav.last_error;
             }

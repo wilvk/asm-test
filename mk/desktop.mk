@@ -602,7 +602,7 @@ desktop_app_objs = \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
-  $(BUILD)/desktop/$(1)/sp/mnemonic.o \
+  $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
@@ -1115,6 +1115,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_goto \
+                 $(BUILD)/desktop_test_locate \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
@@ -1401,7 +1402,7 @@ $(BUILD)/desktop_test_drillin: $(BUILD)/desktop/test/t/test_drillin.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
     $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/trajectory.o \
-    $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/converge.o $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
@@ -1440,7 +1441,22 @@ $(BUILD)/desktop_test_goto: $(BUILD)/desktop/test/t/test_goto.o \
     $(BUILD)/desktop/test/s3/goto.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/trajectory.o \
-    $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/converge.o $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The selection->plane resolver (50-two-way-brushing.md T1): space/locate.o +
+# projection.o (Anchor/resolve_anchor) + terrain.o (regions_from_codeimage, the
+# test fixtures' own region builder — pulls in its build_terrain's own closure,
+# the same canvas/diff/slice/nav quartet test_goto.cpp already needs for the
+# same reason) + the doc model (Recording, and doc/streams.o for DataflowStream
+# via decode_streams). No trajectory, no pick id space — locate.h never
+# touches them (D4).
+$(BUILD)/desktop_test_locate: $(BUILD)/desktop/test/t/test_locate.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
@@ -1463,6 +1479,7 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
@@ -1735,6 +1752,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/sp/trajectory.o \
     $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
     $(DESKTOP_TEST_IG) \

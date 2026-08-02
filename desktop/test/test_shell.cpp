@@ -429,6 +429,34 @@ int main() {
                   sv.hud.has_home == sv.has_home &&
                       sv.hud.home_u == sv.home_u && sv.hud.home_v == sv.home_v,
                   "draw_scene_overview must sync home_* into HudState every frame");
+
+            // 50 T2: a Selection.off in this abs-basis recording locates onto
+            // the plane and syncs into the HUD, headlessly (no GL needed —
+            // scene_locate_off is pure; only the shader ring itself is GL).
+            s3.selection.set(a->id, std::nullopt, uint64_t{1048576});
+            ImGui::NewFrame();
+            ImGui::Begin("t3b");
+            draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(igs)],
+                                *a);
+            ImGui::End();
+            ImGui::Render();
+            check("scene/selection locates onto the plane", sv.highlight.ok,
+                  sv.highlight.reason.c_str());
+            check("scene/HUD synced with the highlight",
+                  sv.hud.has_highlight == sv.highlight.ok,
+                  "draw_scene_overview must sync has_highlight into HudState");
+
+            // Clearing the selection must clear the cached highlight too, not
+            // leave a stale ring from the previous recording state.
+            s3.selection.clear();
+            ImGui::NewFrame();
+            ImGui::Begin("t3c");
+            draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(igs)],
+                                *a);
+            ImGui::End();
+            ImGui::Render();
+            check("scene/cleared selection clears the highlight", !sv.highlight.ok,
+                  "a cleared Selection must not leave a stale highlight");
         }
 
         // === 48 T4: camera_here_text — a pure function of (Projection, target) ===

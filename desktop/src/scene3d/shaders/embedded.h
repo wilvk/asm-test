@@ -47,6 +47,9 @@ uniform usampler2D uFlags;    // R32UI, n x n
 uniform usampler2D uKind;     // R8UI, n x n — T1: region kind per cell
 uniform int uZoning;          // T7: SceneLayers::zoning — 0 = plain amber ramp
 uniform float uContourLevels; // T3 (49): band count; <=0 disables banding
+uniform float uN;             // 50 T2: cell grid size, to find THIS fragment's cell
+uniform int uHighlightCell;   // 50 T2: the flat views' selection, located onto
+                              // this plane by its ADDRESS; -1 = no highlight
 out vec4 frag;
 const uint TORN = 1u;     // rubble: a KNOWN lower bound (capture truncated/torn)
 const uint STAT = 2u;
@@ -88,6 +91,23 @@ void main(){
     float band = fract(clamp(vHeight,0.0,1.0) * uContourLevels + 0.5);
     float line = 1.0 - smoothstep(0.0, 0.08, min(band, 1.0 - band));
     col = mix(col, col * 0.55, line);
+  }
+  // 50 T2: ring the located cell — an outline near its edge, never a height
+  // change or a hue replacement, so the cell's own density/kind stay
+  // readable underneath (a spatial POINTER, not a measurement). vUV is
+  // already this fragment's cell-space UV (the vertex shader's own (cell+
+  // 0.5)/uN); recomputing the integer cell from it is the SAME arithmetic
+  // pick.cpp's classify_cell and this file's OWN kPickTerrainFrag use.
+  if (uHighlightCell >= 0) {
+    ivec2 xy = ivec2(vUV * uN);
+    int cell = xy.y * int(uN) + xy.x;
+    if (cell == uHighlightCell) {
+      vec2 within = fract(vUV * uN);
+      float edge = min(min(within.x, 1.0 - within.x),
+                       min(within.y, 1.0 - within.y));
+      float ring = 1.0 - smoothstep(0.0, 0.14, edge);
+      col = mix(col, vec3(1.0, 0.95, 0.25), ring);
+    }
   }
   frag = vec4(col, 1.0);
 }
