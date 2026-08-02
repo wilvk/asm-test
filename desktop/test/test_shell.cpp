@@ -2807,6 +2807,52 @@ int main() {
                       p2.find("0x100000") == std::string::npos,
                       "pass 2 is span B alone");
             }
+            // Reaching a region WITHOUT knowing its pass ordinal: "show me span
+            // B" must not require the user to guess that B happens to live at
+            // pass 3. A region maps to the passes that cover it.
+            {
+                std::vector<size_t> a_ = df_passes_for_region(seg, 0x100000);
+                std::vector<size_t> b_ = df_passes_for_region(seg, 0x110000);
+                check("dfregion/region-A-passes",
+                      a_.size() == 2 && a_[0] == 0 && a_[1] == 1,
+                      "span A was armed for passes 0 and 1");
+                check("dfregion/region-B-passes", b_.size() == 1 && b_[0] == 2,
+                      "span B was armed for pass 2 alone");
+                // A region the recording never carried has no passes — an empty
+                // answer, never a fallback to pass 0.
+                check("dfregion/unknown-region-has-no-passes",
+                      df_passes_for_region(seg, 0xdead0000).empty(),
+                      "an unrecorded region must not resolve to a pass");
+                // The live default within a region is its LATEST pass, matching
+                // the pager's own follow-the-latest rule.
+                check("dfregion/latest-pass-of-A",
+                      df_latest_pass_for_region(seg, 0x100000) == 1,
+                      "A's latest pass is 1, not its first");
+                check("dfregion/latest-pass-of-B",
+                      df_latest_pass_for_region(seg, 0x110000) == 2,
+                      "B's only pass is 2");
+                // Selecting a region resolves to a df_pass value directly, so
+                // the pager's jump is testable rather than buried in a widget
+                // callback. Region B's latest pass IS the recording's latest,
+                // so choosing B is follow-the-latest (-1), not a pin that would
+                // then freeze a live capture on a pass that stops being newest.
+                int pin = 0;
+                check("dfregion/select-B-follows-latest",
+                      df_pass_pin_for_region(seg, 0x110000, &pin) && pin == -1,
+                      "B's latest pass is the recording's latest");
+                // Region A's latest pass is 1, behind the recording's latest,
+                // so choosing A must PIN it.
+                check("dfregion/select-A-pins-its-latest",
+                      df_pass_pin_for_region(seg, 0x100000, &pin) && pin == 1,
+                      "A's latest pass is 1 and must be pinned");
+                // A region no pass covers resolves to nothing: the caller must
+                // leave the current pass alone rather than jump somewhere.
+                int untouched = 7;
+                check("dfregion/select-unknown-is-a-no-op",
+                      !df_pass_pin_for_region(seg, 0xdead0000, &untouched) &&
+                          untouched == 7,
+                      "an unrecorded region must not move the pager");
+            }
         }
         // A single-region recording names no region: with nothing to disambiguate
         // the label would be chrome that never changes.

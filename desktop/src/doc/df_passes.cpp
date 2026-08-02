@@ -2,6 +2,7 @@
 #include "doc/df_passes.h"
 
 #include <algorithm>
+#include <cstdint> // SIZE_MAX — df_latest_pass_for_region's "no such pass"
 #include <cstdio>
 
 namespace asmdesk {
@@ -27,6 +28,33 @@ std::vector<uint64_t> df_pass_regions(const SegmentedDataflow &seg) {
     std::sort(v.begin(), v.end());
     v.erase(std::unique(v.begin(), v.end()), v.end());
     return v;
+}
+
+std::vector<size_t> df_passes_for_region(const SegmentedDataflow &seg,
+                                         uint64_t rbase) {
+    std::vector<size_t> v;
+    if (rbase == 0)
+        return v; // "no base stated" is not a region to look up
+    for (size_t p = 0; p < seg.passes.size(); p++) {
+        const std::vector<uint64_t> r = seg.passes[p].regions();
+        if (std::find(r.begin(), r.end(), rbase) != r.end())
+            v.push_back(p);
+    }
+    return v;
+}
+
+size_t df_latest_pass_for_region(const SegmentedDataflow &seg, uint64_t rbase) {
+    const std::vector<size_t> v = df_passes_for_region(seg, rbase);
+    return v.empty() ? SIZE_MAX : v.back();
+}
+
+bool df_pass_pin_for_region(const SegmentedDataflow &seg, uint64_t rbase,
+                            int *out) {
+    const size_t want = df_latest_pass_for_region(seg, rbase);
+    if (want == SIZE_MAX || out == nullptr)
+        return false;
+    *out = (want + 1 == seg.passes.size()) ? -1 : static_cast<int>(want);
+    return true;
 }
 
 std::string df_pass_desc(const SegmentedDataflow &seg, size_t p) {

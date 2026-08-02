@@ -2146,6 +2146,43 @@ static void shell_df_pass_pager(ShellState &s) {
                            "· %d passes over %zu regions — paging changes "
                            "region",
                            npasses, regs.size());
+        // Reach a region without knowing its ordinal: an `auto` walk decides how
+        // many times it re-arms on a span and in what order, so "which pass is
+        // span B" is a fact about the recording, not something to count to.
+        // Purely DERIVED — no new state: the selected entry is whatever region
+        // the applied pass covers, and picking another pins that region's
+        // LATEST pass, the same follow-the-latest rule the stepper uses.
+        const std::vector<uint64_t> mine = s.seg_df[i].passes[applied].regions();
+        const uint64_t curreg = mine.empty() ? 0 : mine.front();
+        char label[64];
+        std::snprintf(label, sizeof label, "0x%llx",
+                      (unsigned long long)curreg);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+        if (ImGui::BeginCombo("region", curreg ? label : "(unknown)")) {
+            for (uint64_t rb : regs) {
+                char item[64];
+                std::snprintf(item, sizeof item, "0x%llx",
+                              (unsigned long long)rb);
+                const std::vector<size_t> ps =
+                    df_passes_for_region(s.seg_df[i], rb);
+                int pin = 0;
+                if (ImGui::Selectable(item, rb == curreg) &&
+                    df_pass_pin_for_region(s.seg_df[i], rb, &pin))
+                    // The follow-latest-vs-pin rule lives in df_passes.cpp and
+                    // is asserted there; this widget must not carry a second
+                    // copy of it that could drift.
+                    s.df_pass[i] = pin;
+                // How much of the recording this region actually accounts for.
+                // A region present in one pass of twelve is a different claim
+                // from one present in eleven, and the count is the only thing
+                // that says which.
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%zu pass%s)", ps.size(),
+                                    ps.size() == 1 ? "" : "es");
+            }
+            ImGui::EndCombo();
+        }
     }
 }
 
