@@ -20,7 +20,103 @@
 > Authored 2026-08-02. If a cited file:line disagrees with the code when you
 > implement, the code wins — re-verify, then fix this doc in the same change.
 >
-> **Status — ☐ 0/3 (ARM32) + spike, not started.**
+> **Status — ☑ 2/3 (T1 + T2 landed); T3 (RISC-V) spike not run.**
+
+## Status (2026-08-02) — T1 + T2 landed
+
+**The ARM32 `df_guest` instance and the Author-mode dispatch flip are both
+landed and docker-verified** (`docker-cli` cli-smoke, including
+`asmtrace-golden-check`; `docker-desktop` desktop-test):
+
+- **T1 — DONE.** `src/dataflow_operands.c`'s `cs_target()` now maps
+  `ASMTEST_ARCH_ARM32` -> `CS_ARCH_ARM`/`CS_MODE_ARM`, and `add_mem_ops`
+  gained a `CS_ARCH_ARM` branch (`cs_arm_op`'s `arm_op_mem`: `base`/`index`/
+  `disp`, mirroring the arm64 branch's shape — `cs_arm_op` carries no `size`
+  field on the operand itself, so, exactly like the arm64 branch, `size` is
+  passed 0). `src/dataflow_emu.c` gained `DF_GUEST_ARM32`: `UC_ARCH_ARM`/
+  `UC_MODE_ARM` (A32, never Thumb), `cap_arm32_to_uc` (`ARM_REG_R0..R12`
+  contiguous + `SP`/`LR`/`PC`/`CPSR`), a 4-register AAPCS32 `{r0,r1,r2,r3}`
+  arg table, a GP-zero init that preserves CPSR's mode/T/IT bits (unlike
+  AArch64's NZCV, ARM32's CPSR packs processor mode alongside the flags), and
+  the shared `DF_CODE_BASE`/`DF_STACK_BASE` layout (already well inside the
+  32-bit address space, so no ARM32-specific bases were needed). Proven end
+  to end in `examples/test_dataflow_emu.c` (an ARM32 `add/mov/bx lr` chain,
+  `arm32_df_add`: the value fabric captures r2 = 7 + 5 = 12 at step0, r0 = 12
+  at step1, and the def-use edge 0->1).
+- **T1 code-vs-doc correction.** This doc's steps named `emu_arm32_t` /
+  `emu_arm32_regs_t` for the ring; the code already has a full ARM32 guest
+  handle predating this brief, spelled `emu_arm_t` / `emu_arm_regs_t` (not
+  `emu_arm32_*`) — `emu_arm_open`/`_call`/`_call_fp`/`_call_vec` and their
+  `emu_arm_regs_t` (r0..r15, cpsr, q0..q15) already existed in `src/emu.c` /
+  `include/asmtest_emu.h` before this brief touched them. Per this doc's own
+  "the code wins" rule, the new ring mirrors that existing naming:
+  `emu_arm_step_capture`/`_clear`/`_count`/`_dropped`/`_at`, a new
+  `arm_step_ring_t` scoped to `emu_arm_t` (mirroring `arm64_step_ring_t`
+  exactly), snapshotting the full `emu_arm_regs_t` BEFORE each executed
+  instruction — zero changes to `emu_t`/`emu_x86_regs_t`/`emu_arm64_t` or
+  their snapshot/restore paths. `emu_arm_run` (the shared run-and-capture
+  helper) now takes the whole `emu_arm_t *` handle rather than a bare
+  `uc_engine *`, mirroring `emu_arm64_run`'s own shape, so it can wire in the
+  ring. The **descriptor id** stays `emu_arm32_regs_t@arm/aapcs32` as this
+  doc specified (naming the architecture, not literally the C struct tag —
+  the schema doc says so explicitly to avoid the same confusion twice). A
+  `regstate` descriptor entry
+  ([asmtrace-schema.md](asmtrace-schema.md)) names `r0`..`r12`, `sp`, `lr`,
+  `pc`, `cpsr` — integer-only, no VFP/NEON deck, mirroring arm64's own scope.
+  New coverage in `examples/test_emu.c`
+  (`emu_arm.step_capture_records_prestates` / `_drops_oldest_and_counts` /
+  `_arming_survives_across_calls_on_same_handle`, mirroring `emu_arm64.*`).
+- **T1 golden.** `tools/asmtrace_record.c` gained `record_arm32` (mirroring
+  `record_arm64`), an `ARM32_DF_CHAIN` worked example (`add r2,r0,r1` /
+  `add r3,r2,r2` / `mov r0,r3` / `bx lr` — the same shape as
+  `ARM64_DF_CHAIN`), producing `arm32-df-chain.asmtrace` (`"arch":"arm"`) with
+  a baked `steps_cap=8` regstate ring, plus the D7 low-fidelity companion
+  `arm32-regstate-truncated.asmtrace` (`steps_cap=2`, two of four steps
+  evicted, `truncated`/`drops.lost` faithful) — both committed,
+  `asmtrace-golden-check` clean. `examples/test_operands.c`'s ARM32 branch
+  (previously asserting the stub "enumerates nothing") now asserts real
+  decode, mirroring its arm64 block; RISC-V's stub assertion is untouched.
+  **The only other golden churn** is the well-known R1-T1 `code.sha256`
+  fragility doc 32 already recorded (`abixray-make_pair-sysv`/`-win64`'s
+  64-byte code window shifted because new ARM32 functions moved `.text`) —
+  a one-line sha diff, not a content change, regenerated with the corpus.
+  Every other existing golden (x86-64, arm64, everything else) is
+  byte-identical.
+- **T2 — DONE.** `desktop/src/author_vm.cpp`'s `ASM_ARM32` row now has
+  `can_run = true`, with a note describing the same value-fabric shape
+  arm64's row states. `kAuthorArchLimit` and RISC-V's own row note narrowed
+  from "x86-64/AArch64-only in v1" to name only RISC-V as still unsupported
+  ("RISC-V is the only architecture without run/trace in v1") — updated
+  everywhere it was quoted verbatim in this tree: `author_vm.h`'s RULE 3
+  docstring, `desktop/test/test_author_vm.cpp`'s assertion on the row note,
+  and the comments in `desktop/src/ui/author_door.cpp` that named arm64
+  exclusively. `ui/author_door.cpp`'s `author_run_vf` now takes an
+  `asmtest_arch_t arch` parameter instead of hardcoding
+  `ASMTEST_ARCH_ARM64`/`EMU_ARCH_ARM64`, and `author_run`'s dispatch gate
+  widened from `s.arch == ASM_ARM64` to `s.arch == ASM_ARM64 || s.arch ==
+  ASM_ARM32` — `asm_arch_t` and `asmtest_arch_t`/`emu_arch_t` share the same
+  enum ordering (`X86_64=0, ARM64=1, RISCV64=2, ARM32=3`) so `s.arch` casts
+  straight through to the right `df_guest`. The capability panel
+  (`desktop/src/ui/capability_panel.cpp`) already read `author_arch_table()`
+  generically with no second hardcoded arch list, exactly as this doc
+  predicted — it now reports ARM32 automatically, no code change needed.
+  `author_recording`'s `vf` materialisation path was already arch-generic
+  (`arch_wire_name` already mapped `ASM_ARM32` -> `"arm"` before this brief),
+  so **no `recording_to_asmtrace` change was needed**, confirming this doc's
+  own prediction.
+- **T2 tests.** `desktop/test/test_author_vm.cpp`: the arch-gating table flip
+  (arm32 `can_run`, RISC-V now the sole refusal, the shared label's new
+  text), the four `author_apply_run_vf` fidelity branches exercised again
+  over arm32-shaped data (clean run, non-return-sentinel, truncated buffer,
+  producer setup failure — the same arch-agnostic fold function arm64 uses,
+  since there is no separate arm32 code path to diverge from it), and an
+  end-to-end `author_recording` -> `recording_to_asmtrace` -> `load_recording`
+  round-trip for a synthetic ARM32 fabric (`"arch":"arm"`, trace/df_step/
+  df_edge survive the round-trip, no fabricated `regstate`).
+
+**Not done:** T3 (RISC-V) — untouched, out of scope for this pass, gated on
+the Keystone spike this doc's own T3 describes. `kAuthorArchLimit` and the
+RISC-V row still refuse it, faithfully.
 
 ## Why this work exists
 

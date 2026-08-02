@@ -9,17 +9,23 @@ namespace asmdesk {
 const char *const kAuthorFaultCopy =
     "the emulator turned this into data; on real hardware this would have been "
     "a crash";
+// 60-arm32-riscv-author-mode.md T2: narrowed again now that arm32 runs too —
+// RISC-V is the only arch this label still names, verbatim wherever quoted
+// elsewhere (per doc 32's own instruction for its own label edit).
 const char *const kAuthorArchLimit =
-    "assembled, not run — run/trace is x86-64/AArch64-only in v1";
+    "assembled, not run — RISC-V is the only architecture without run/trace "
+    "in v1";
 const char *const kAuthorRenderOnly =
     "Author mode requires the full (GPL-2.0) build";
 
 const std::vector<author_arch_row> &author_arch_table() {
-    // v1's real limit: the value/replay tier runs two guests, x86-64 and
-    // arm64 (32-per-guest-value-producer.md R5 T3) — NOT the same result
-    // shape (see author_vm.h's RULE 3). The remaining two assemble (Keystone
-    // handles them) and stop there, with the reason on the row rather than in
-    // a footnote.
+    // v1's real limit: the value/replay tier runs three guests — x86-64,
+    // arm64, and (60-arm32-riscv-author-mode.md T2) arm32 — NOT the same
+    // result shape for all three (see author_vm.h's RULE 3): x86-64 alone
+    // runs through emu_call_traced; arm64 and arm32 both run through the
+    // per-guest value-fabric producer. RISC-V still only assembles (Keystone
+    // handles it where its build has the backend), with the reason on the
+    // row rather than in a footnote.
     static const std::vector<author_arch_row> t = {
         {ASM_X86_64, "x86-64", true, "assembles, runs, records"},
         {ASM_ARM64, "AArch64", true,
@@ -28,8 +34,11 @@ const std::vector<author_arch_row> &author_arch_table() {
          "x86-64 path only)"},
         {ASM_RISCV64, "RISC-V 64", false,
          "assembles only where the Keystone build has the RISC-V backend; "
-         "run/trace is x86-64/AArch64-only in v1"},
-        {ASM_ARM32, "ARM32", false, kAuthorArchLimit},
+         "RISC-V is the only architecture without run/trace in v1"},
+        {ASM_ARM32, "ARM32", true,
+         "assembles, runs, records a value fabric (def-use edges + per-step "
+         "operand values — no register file, no fault card: that is the "
+         "x86-64 path only), the same shape as AArch64's"},
     };
     return t;
 }
@@ -285,13 +294,16 @@ Recording author_recording(const author_result_t &r, int arch,
         ev["bytes"] = bytes;
         rec.by_kind["codeimage"].push_back(Event{"codeimage", ev, rec.next_seq++});
     }
-    // R5 T3: a per-guest VALUE FABRIC run (arm64) rides as `trace` + `df_step`
-    // + `df_edge` events — the SAME schema shape asmtrace_record.c's emulator
-    // producer writes (tools/asmtrace_record.c's record_arm64, the
-    // arm64-df-chain golden) — so this recording opens in the Loom / Slice /
-    // Timeline through the existing reader with NO desktop change. No
-    // `regstate` (the per-step register RING is x86-64-only, src/emu.c); no
-    // `mem` / `blame` (opt-in derived streams the Author door does not arm).
+    // R5 T3 / 60-arm32-riscv-author-mode.md T2: a per-guest VALUE FABRIC run
+    // (arm64 or arm32) rides as `trace` + `df_step` + `df_edge` events — the
+    // SAME schema shape asmtrace_record.c's emulator producer writes
+    // (tools/asmtrace_record.c's record_arm64/record_arm32, the
+    // arm64-df-chain / arm32-df-chain goldens) — so this recording opens in
+    // the Loom / Slice / Timeline through the existing reader with NO
+    // desktop change. No `regstate` (the Author door's per-step register
+    // RING wiring is x86-64-only; arm64/arm32 rings exist in src/emu.c but
+    // this door does not arm them); no `mem` / `blame` (opt-in derived
+    // streams the Author door does not arm).
     // Faithful and partial when the guest did not reach the sentinel (vf->ok ==
     // false) or a buffer truncated the capture: whatever WAS captured still
     // rides, verbatim, rather than being withheld until a "clean" run.

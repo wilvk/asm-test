@@ -3,8 +3,9 @@
 //
 // FULL BUILD ONLY (D4/D9): the engine calls — asmtest_assemble (Keystone),
 // emu_call_traced (Unicorn, x86-64), and asmtest_dataflow_emu_run_arch
-// (Unicorn, arm64's per-guest value-fabric producer, R5 T3) — compile in
-// behind ASMTEST_DESKTOP_CAN_AUTHOR, which only the app tree defines. The
+// (Unicorn, the arm64/arm32 per-guest value-fabric producer, R5 T3 /
+// 60-arm32-riscv-author-mode.md T2) — compile in behind
+// ASMTEST_DESKTOP_CAN_AUTHOR, which only the app tree defines. The
 // render-only viewer shows a static tile naming the licence boundary and
 // links neither engine.
 //
@@ -53,11 +54,16 @@ constexpr size_t kAuthorVfSteps = 1u << 16;
 constexpr size_t kAuthorVfRecs = 1u << 18;
 constexpr size_t kAuthorVfWide = 1u << 16;
 
-// The arm64 run: dispatches through the per-guest VALUE FABRIC producer
-// (src/dataflow_emu.c), never emu_call_traced (x86-64-only) — a value fabric
-// (def-use edges + per-step operand values), not an emu_result_t
-// register/fault snapshot. `r` is the already-successful assemble result.
-void author_run_vf(AuthorState &s, const asm_result_t &r) {
+// The arm64 / arm32 run: dispatches through the per-guest VALUE FABRIC
+// producer (src/dataflow_emu.c), never emu_call_traced (x86-64-only) — a
+// value fabric (def-use edges + per-step operand values), not an
+// emu_result_t register/fault snapshot. `r` is the already-successful
+// assemble result. `arch` selects the guest (60-arm32-riscv-author-mode.md
+// T2: ARM32 is the same shape as arm64, just a different guest — asm_arch_t
+// and asmtest_arch_t/emu_arch_t share the same numeric ordering for every
+// arch this door dispatches, so the caller's s.arch casts straight through).
+void author_run_vf(AuthorState &s, const asm_result_t &r,
+                   asmtest_arch_t arch) {
     asmtest_valtrace_t *vt =
         asmtest_valtrace_new(kAuthorVfSteps, kAuthorVfRecs, kAuthorVfWide);
     author_valuefabric_t vf;
@@ -70,8 +76,8 @@ void author_run_vf(AuthorState &s, const asm_result_t &r) {
     long args[6] = {0, 0, 0, 0, 0, 0};
     for (int i = 0; i < s.nargs && i < 6; i++)
         args[i] = s.args[i];
-    int rc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, r.bytes, r.len,
-                                           args, s.nargs, kAuthorMaxInsns, vt);
+    int rc = asmtest_dataflow_emu_run_arch(arch, r.bytes, r.len, args,
+                                           s.nargs, kAuthorMaxInsns, vt);
     vf.ran = rc >= 0;
     if (vf.ran) {
         vf.ok = rc == 0;
@@ -81,8 +87,8 @@ void author_run_vf(AuthorState &s, const asm_result_t &r) {
         if (emu_disas_available())
             for (size_t i = 0; i < vt->steps_len; i++) {
                 char dis[160] = "";
-                emu_disas(EMU_ARCH_ARM64, r.bytes, r.len, EMU_CODE_BASE,
-                          vt->insn_off[i], dis, sizeof dis);
+                emu_disas(static_cast<emu_arch_t>(arch), r.bytes, r.len,
+                          EMU_CODE_BASE, vt->insn_off[i], dis, sizeof dis);
                 vf.disasm[i] = dis;
             }
         vf.recs.assign(vt->recs, vt->recs + vt->recs_len);
@@ -118,7 +124,7 @@ void author_run(AuthorState &s) {
     s.image_sha.clear();
     s.frozen_nargs = 0;
     s.image_base = EMU_CODE_BASE;
-    s.vf = author_valuefabric_t{}; // clear any earlier arm64 run's fabric
+    s.vf = author_valuefabric_t{}; // clear any earlier arm64/arm32 run's fabric
     if (r.ok && r.bytes != nullptr && r.len > 0)
         s.image.assign(r.bytes, r.bytes + r.len);
     if (!r.ok) {
@@ -135,10 +141,14 @@ void author_run(AuthorState &s) {
         return;
     }
 
-    if (s.arch == ASM_ARM64) {
-        // R5 T3: the arm64 guest runs through the per-guest VALUE FABRIC
-        // producer, never emu_call_traced (x86-64-only, below).
-        author_run_vf(s, r);
+    if (s.arch == ASM_ARM64 || s.arch == ASM_ARM32) {
+        // R5 T3 / 60-arm32-riscv-author-mode.md T2: both non-x86-64 runnable
+        // guests run through the per-guest VALUE FABRIC producer, never
+        // emu_call_traced (x86-64-only, below). asm_arch_t and
+        // asmtest_arch_t share the same numeric ordering for x86-64/arm64/
+        // riscv64/arm32 (both enums declare them in that order), so the cast
+        // carries s.arch straight through to the right df_guest.
+        author_run_vf(s, r, static_cast<asmtest_arch_t>(s.arch));
         asmtest_asm_free(&r);
         return;
     }
@@ -323,9 +333,10 @@ void draw_author_door(AuthorState &s) {
         ImGuiFileDialog::Instance()->Close();
     }
     if (ImGui::Button("Save .asmtrace##author")) {
-        // R5 T3: an arm64 run's value fabric (s.vf) rides along too, so the
-        // saved recording carries its trace/df_step/df_edge events and opens
-        // in the Loom / Slice / Timeline like any other recording.
+        // R5 T3 / 60-arm32-riscv-author-mode.md T2: an arm64/arm32 run's
+        // value fabric (s.vf) rides along too, so the saved recording
+        // carries its trace/df_step/df_edge events and opens in the Loom /
+        // Slice / Timeline like any other recording.
         Recording rec =
             author_recording(s.result, s.arch, s.image, s.image_base,
                              s.result.ran_value_fabric ? &s.vf : nullptr);
@@ -343,9 +354,10 @@ void draw_author_door(AuthorState &s) {
         ImGui::TextWrapped("%s", s.save_status.c_str());
 
     if (r.ran_value_fabric) {
-        // R5 T3: the arm64 result SHAPE — def-use edges + per-step operand
-        // values, never a register file or a fault card (D7: this producer
-        // does not capture either, unlike the x86-64 emu_result_t path below).
+        // R5 T3 / 60-arm32-riscv-author-mode.md T2: the arm64/arm32 result
+        // SHAPE — def-use edges + per-step operand values, never a register
+        // file or a fault card (D7: this producer does not capture either,
+        // unlike the x86-64 emu_result_t path below).
         ImGui::Separator();
         ImGui::Text("value fabric: %zu step(s), %zu def-use edge(s)",
                     r.vf_steps, r.vf_edges);

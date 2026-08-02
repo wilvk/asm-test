@@ -26,7 +26,7 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | Doc | Why it stays |
 > |---|---|
 > | [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) | gaps **L1, L4** are still open (arm64 live-dataflow leg, the Darwin `libasmtest_dataflow` build). L2/L3/L6/L7 closed as docs 40/41/37-T4/39; L5 cut as doc 60. |
-| [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ARM32 is unblocked and ☐ 0/2 (T1 guest, T2 Author dispatch); RISC-V (T3) is gated on an unreleased-Keystone spike, not yet run. |
+> | [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md) | gap **L5** — ARM32 (T1 guest, T2 Author dispatch) ☑ **2/2 landed**; RISC-V (T3) is gated on an unreleased-Keystone spike, not yet run. |
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48 and 50 landed 2026-08-02, 51–52 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
@@ -491,17 +491,32 @@ Authored 2026-07-29. ✅ 3/3 · —.
 run/trace in Author mode** (gap **L5** from
 [38](38-live-feed-completion-roadmap.md)): another `df_guest` instance, per doc
 32/R5's own closing line. Cut 2026-08-02 as its own per-gap brief, following the
-39/40/41 pattern. Scoping found the two targets are **not symmetric**: ARM32 is
-fully unblocked today (Keystone/Unicorn/Capstone all already build it; only the
-operand enumerator's ARM32 memory-operand branch is missing) and is
-doc-32-shaped end to end — T1 the `df_guest_arm32` instance + `emu_arm32_t` ring
-+ enumerator arm + golden, T2 the Author dispatch flip. RISC-V (T3) carries a
+39/40/41 pattern. Scoping found the two targets are **not symmetric**: ARM32 was
+fully unblocked (Keystone/Unicorn/Capstone all already built it; only the
+operand enumerator's ARM32 memory-operand branch was missing) and landed
+doc-32-shaped end to end — **T1 DONE**: `DF_GUEST_ARM32` (`src/dataflow_emu.c`)
++ the `cs_target()`/`add_mem_ops` `CS_ARCH_ARM` enumerator arm
+(`src/dataflow_operands.c`) + a per-step ring on the pre-existing `emu_arm_t`
+handle (`emu_arm_step_capture`/`_clear`/`_count`/`_dropped`/`_at`, mirroring
+`emu_arm64_*` — code-vs-doc note: the existing guest type is spelled
+`emu_arm_t`/`emu_arm_regs_t`, not `emu_arm32_*`, predating this brief) + the
+`emu_arm32_regs_t@arm/aapcs32` `regstate` descriptor + the
+`arm32-df-chain.asmtrace`/`arm32-regstate-truncated.asmtrace` goldens,
+`asmtrace-golden-check` clean (one documented R1-T1 `code.sha256` churn on
+`abixray-make_pair-*`, the same known fragility doc 32 hit). **T2 DONE**: the
+`author_arch_table()` `ASM_ARM32` row flips `can_run=true`, dispatching
+through the same per-guest value-fabric producer arm64 uses
+(`ui/author_door.cpp`'s `author_run_vf` now arch-parameterized); the shared
+`kAuthorArchLimit` label and RISC-V's own row note narrow to name only
+RISC-V, updated everywhere quoted; the capability panel already read the
+table generically, so it picked up ARM32 with no code change, confirming
+this doc's own prediction. RISC-V (T3) carries a
 real, previously-unsurfaced dependency gap: this repo's Keystone pin is 0.9.2
 (Feb 2019, upstream's newest **release**), and `KS_ARCH_RISCV` exists only on
 upstream's unreleased `master` — a spike (pin a commit, verify it builds and
 that the RISC-V backend assembles *correct* bytes under Unicorn, not merely
 that `ks_asm` returns success) gates T3 before it can be scoped as ordinary
-mirroring. ☐ 0/3 (T1/T2 not started; T3 spike not run). · will · T1-T3 · 2026-08-02.
+mirroring. ☑ 2/3 (T1+T2 landed 2026-08-02; T3 spike not run). · *free* · T3 · 2026-08-02.
 
 [42-loom-reweave-consumption.md](../archive/gui/42-loom-reweave-consumption.md) — **consume the
 Reweave request** (review #20): wires the fully-built-but-unreachable

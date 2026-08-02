@@ -15,17 +15,18 @@
 //     that tells the user what to do.
 //  2. **A fault is a CARD, not an error.** The emulator turned a crash into
 //     data; the door renders kind + address + registers rather than a toast.
-//  3. **v1 runs the x86-64 AND arm64 guests, each faithfully, and says so
-//     per-arch.** The remaining two arches assemble and show bytes with a
-//     labelled limit — never a greyed button with no explanation, and never a
-//     silent wrong run. The two runnable guests do not share a result SHAPE:
-//     x86-64 runs through `emu_call_traced` (an `emu_result_t` register/fault
-//     snapshot); arm64 runs through the per-guest value-fabric producer
-//     (`src/dataflow_emu.c`, 32-per-guest-value-producer.md R5 T3) — def-use
-//     edges + per-step operand values, with NO register file and NO fault
-//     kind/address to show. The door renders each shape as what it actually is
-//     (`author_result_t::ran` vs `::ran_value_fabric`) rather than forcing one
-//     onto the other (D7).
+//  3. **v1 runs the x86-64, arm64, AND (60-arm32-riscv-author-mode.md T2)
+//     arm32 guests, each faithfully, and says so per-arch.** The remaining
+//     arch (RISC-V) assembles and shows bytes with a labelled limit — never a
+//     greyed button with no explanation, and never a silent wrong run. The
+//     three runnable guests do not share a result SHAPE: x86-64 runs through
+//     `emu_call_traced` (an `emu_result_t` register/fault snapshot); arm64
+//     and arm32 both run through the per-guest value-fabric producer
+//     (`src/dataflow_emu.c`, 32-per-guest-value-producer.md R5 T3 / doc 60
+//     T1) — def-use edges + per-step operand values, with NO register file
+//     and NO fault kind/address to show. The door renders each shape as what
+//     it actually is (`author_result_t::ran` vs `::ran_value_fabric`) rather
+//     than forcing one onto the other (D7).
 #ifndef ASMDESK_AUTHOR_VM_H
 #define ASMDESK_AUTHOR_VM_H
 
