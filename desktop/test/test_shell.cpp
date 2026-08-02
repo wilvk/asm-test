@@ -594,6 +594,28 @@ int main() {
         ImGui::DestroyContext();
     }
 
+    // T4 (47-scene-inspect-and-pickable-overlays): UNTESTED CLAIM, STATED
+    // RATHER THAN IMPLIED (per the brief's own Tests section). The hover
+    // tooltip lives entirely inside draw_scene_overview's `if (s.scene_host
+    // != nullptr && s.scene_host->ready())` branch — the interactive-viewport
+    // path that needs a real GL texture to blit and a real InvisibleButton to
+    // hover. Under s.scene_host == nullptr (this file's entire null backend,
+    // scene/no-host-by-default asserted above) draw_scene_overview returns at
+    // the placard branch BEFORE that code is ever reached — there is no path
+    // by which this binary can drive a hover. The `desktop-ui-test`
+    // (imgui_test_engine) camera test above this doc's own T4 wiring
+    // ("keyboard_orbit_reset_topdown", test_ui.cpp) drives the SAME
+    // draw_scene_overview under the SAME null backend for the identical
+    // reason (no mouse simulation over a GL texture either) — so no test lane
+    // in this tree can exercise the tooltip end-to-end. What IS covered,
+    // exhaustively, is the pure data the tooltip does nothing but format:
+    // every PickHint field/branch is golden-tested in test_drillin.cpp (T2),
+    // and the tooltip's own rendering is a direct, unconditional field-by-
+    // field TextUnformatted/TextColored — no branch of its own beyond
+    // "fidelity non-empty" and "target empty", both already covered by that
+    // golden text. A real end-to-end pixel/interaction proof would need a
+    // GL-backed interaction lane this tree does not have.
+
     // 36 T4: placement_chips is PURE, so each fidelity-chrome branch is asserted
     // directly (no ImGui frame needed) — deleting any one branch fails a named
     // check here, which the golden-driven cases above cannot fully cover (no

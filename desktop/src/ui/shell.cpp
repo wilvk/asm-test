@@ -1215,6 +1215,44 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             }
         }
 
+        // T4 (47-scene-inspect-and-pickable-overlays): the hover readout —
+        // "what is this, and where would a click send me?" before any
+        // navigation happens. Reads the CACHED sv.hover_hint (T2's PickHint,
+        // resolved above) every frame the pointer sits over the viewport, not
+        // just the frame the throttled pick re-ran on, so the tooltip tracks
+        // the cursor smoothly between re-picks. Suppressed during a drag —
+        // the hint reflects wherever the pointer was BEFORE the drag/orbit/pan
+        // started (T1's throttle stops re-picking mid-drag), so showing it
+        // while the view is spinning would read as a stale, misleading claim.
+        // Text-only (no icons/shapes), so it survives 2.0x DPI and the CVD
+        // palette unchanged. Background (hint.empty) shows nothing — there is
+        // nothing to say about "nothing under the cursor" beyond the absence
+        // of a tooltip itself.
+        if (!sv.nav_dragging && !sv.hover_hint.empty) {
+            const scene3d::PickHint &h = sv.hover_hint;
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(h.what.c_str());
+            if (!h.where.empty())
+                ImGui::TextUnformatted(h.where.c_str());
+            if (!h.quantity.empty())
+                ImGui::TextUnformatted(h.quantity.c_str());
+            if (!h.fidelity.empty())
+                ImGui::TextColored(dt_warn_col(), "%s", h.fidelity.c_str());
+            const std::string click_line =
+                h.target.empty() ? "click -> nothing here"
+                                 : "click -> " + h.target;
+            ImGui::TextColored(dt_dim_col(), "%s", click_line.c_str());
+            ImGui::EndTooltip();
+        }
+
+        // T4: the click-release below already suppresses navigation whenever
+        // resolve_pick returns nullopt (padding, background, an out-of-range
+        // pick) — EXACTLY the same set of cases resolve_pick_hint reports as
+        // target=="" (T2's anti-drift tests assert the two can never
+        // disagree), so a padding/background click is already a documented
+        // no-op here, not a silent nothing-happened. No separate hint.target
+        // check is needed; the existing `if (link && ...)` guard below IS
+        // that check, transitively.
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !sv.nav_dragging) {
             ImVec2 origin = ImGui::GetItemRectMin();
             int px = static_cast<int>(io.MousePos.x - origin.x);
