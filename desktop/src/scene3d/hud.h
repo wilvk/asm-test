@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "imgui.h" // 49 T4: ImDrawList/ImVec2 in draw_trajectory_ruler's signature
+#include "scene3d/camera.h" // 49 T4: draw_trajectory_ruler's projection
 #include "scene3d/scene.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -41,6 +43,50 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
 // (Ok) when there is no basis to report.
 PlacementChip basis_chip(const space::TerrainModel &terr,
                          const space::TrajectorySet &traj);
+
+// 49 T3: one swatch per terrain-shader colour branch, as PURE DATA so the
+// legend is EXHAUSTIVE BY TEST — a shader branch (kTerrainFrag, embedded.h)
+// with no entry here is a colour the user cannot decode, and this list is
+// what a test walks to catch that. `rgb` mirrors the GLSL literal it
+// documents, with a keep-in-sync comment at each use — the same convention
+// TORN/STAT/CHURN already follow against TerrainFlag. Deliberately excludes
+// TF_READ/TF_WRITE: kTerrainFrag does not branch on them (no distinct colour
+// to key).
+struct EncodingSwatch {
+    space::TerrainFlag flag;
+    std::string label;
+    float rgb[3];
+};
+std::vector<EncodingSwatch> terrain_encoding_swatches();
+
+// 49 T3: the raw scale a height contour band is worth, formatted for the
+// legend — "no data at this slice" when max_full_heat is 0. Pure so the
+// wording is testable without an ImGui frame.
+std::string height_scale_note(uint64_t max_full_heat);
+
+// 49 T4: tick values for the trajectory-time ruler, `0..nsteps` inclusive at
+// a step no finer than `nsteps / max_ticks` — pure so the tick set is
+// golden-testable without a camera-projected draw. Empty when nsteps == 0
+// (the ruler is skipped entirely).
+std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps,
+                                            int max_ticks = 10);
+
+// 49 T4: the one-line statement of the two vertical meanings — a single
+// source of truth between the draw call and the test that wording didn't
+// silently drift or vanish.
+std::string vertical_axes_note();
+
+// 49 T4: draw the trajectory-time ruler into the 3D VIEWPORT (not the HUD
+// window) — ticks 0..nsteps, projected through `cam` at world (0, tick *
+// traj_scale, 0) (the plane's own origin corner) into `origin`/`size`'s
+// screen rect, captioned for the trajectory axis ONLY (never the terrain
+// playhead — the two clocks stay visually separate, per the HUD note above).
+// No-op when nsteps == 0. The caller (draw_scene_overview) only reaches this
+// after a real GL frame rendered, so a null backend never calls it — the
+// graceful degradation the pane already practises for the whole viewport.
+void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
+                           ImVec2 origin, ImVec2 size, uint64_t nsteps,
+                           float traj_scale);
 
 struct HudState {
     uint64_t t = 0;      // playhead: the inclusive terrain slice [0, t]

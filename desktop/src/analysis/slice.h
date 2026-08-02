@@ -53,5 +53,36 @@ dt_slice dt_slice_forward(const std::vector<dt_edge> &edges, uint32_t nsteps,
 dt_slice dt_slice_backward(const std::vector<dt_edge> &edges, uint32_t nsteps,
                            uint32_t origin);
 
+// 54-3d-catalog-phase0-plumbing.md T5: def-use GENERATION — how many hops from
+// `origin` a step is — for a scene layer that wants to render "how far", not
+// just "reachable". `dt_slice_forward`/`_backward` give the reachable set and
+// throw the distance away; this keeps it.
+struct dt_walk {
+    std::vector<uint32_t> steps; // ascending, deduped — same set dt_slice gives
+    std::vector<int32_t> depth;  // parallel to `steps`: first-reach BFS depth,
+                                 // NEGATIVE for the backward direction (so a
+                                 // caller walking both directions from one
+                                 // origin can plot them on one signed axis)
+    int32_t depth_min = 0, depth_max = 0; // the min/max of `depth`, not of the
+                                           // unsigned hop count
+    // The walk was cut off by `max_depth` before reaching the fixpoint: the
+    // rim is a LOWER BOUND, not a boundary the graph actually has, and every
+    // consumer must render it as one (frayed, not a hard edge). A field, not
+    // an inference from `depth_max == max_depth`, because a graph whose TRUE
+    // diameter from origin is exactly max_depth would make that inference
+    // wrong.
+    bool bounded = false;
+};
+
+// Same origin/nsteps contract as dt_slice_forward/backward: an out-of-range
+// origin yields an EMPTY walk, never a single {origin} entry. `forward`
+// selects direction exactly as it does for `closure()`'s callers above.
+// `max_depth` (hop count, >= 0) caps how far the BFS expands; pass a value
+// >= nsteps for the unbounded case (a visited-once BFS never needs more than
+// nsteps-1 hops to reach every reachable step, so any such value gives the
+// same `steps` as dt_slice_forward/backward — asserted in test_slice.cpp).
+dt_walk dt_walk_depth(const std::vector<dt_edge> &edges, uint32_t nsteps,
+                      uint32_t origin, bool forward, int32_t max_depth);
+
 } // namespace asmdesk
 #endif // ASMDESK_ANALYSIS_SLICE_H

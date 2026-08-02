@@ -479,6 +479,27 @@ Terrain TerrainModel::slice(uint64_t t) const {
     return out;
 }
 
+uint64_t TerrainModel::max_full_heat(uint64_t t) const {
+    if (!basis_error.empty())
+        return 0; // refused: slice() itself would return a flat plane too
+    uint64_t maxh = 0;
+    for (const CodeCell &cc : code) {
+        size_t hits = static_cast<size_t>(
+            std::upper_bound(cc.steps.begin(), cc.steps.end(), t) -
+            cc.steps.begin());
+        if (hits > 0)
+            maxh = std::max(maxh, static_cast<uint64_t>(hits));
+    }
+    for (const DataCell &dc : data) {
+        size_t idx = static_cast<size_t>(
+            std::upper_bound(dc.steps.begin(), dc.steps.end(), t) -
+            dc.steps.begin());
+        if (idx > 0)
+            maxh = std::max(maxh, dc.cum_size[idx - 1]);
+    }
+    return maxh;
+}
+
 Terrain TerrainModel::coarse_slice() const {
     // A flat plane the size of the projection, no per-cell work: the degrade
     // target for an over-budget scrub (T4). Carries the torn flag globally so the

@@ -29,6 +29,35 @@ static void eq(const std::string &what, const dt_slice &got,
         fail(what, "got " + show(got.steps) + ", want " + show(want));
 }
 
+static std::string show(const std::vector<int32_t> &v) {
+    std::string s = "{";
+    for (size_t i = 0; i < v.size(); i++)
+        s += (i ? "," : "") + std::to_string(v[i]);
+    return s + "}";
+}
+
+static void eq_u32(const std::string &what, const std::vector<uint32_t> &got,
+                   const std::vector<uint32_t> &want) {
+    if (got != want)
+        fail(what, "got " + show(got) + ", want " + show(want));
+}
+
+static void check_true(const std::string &what, bool cond) {
+    if (!cond)
+        fail(what, "got false, want true");
+}
+
+static void check_false(const std::string &what, bool cond) {
+    if (cond)
+        fail(what, "got true, want false");
+}
+
+static void check_eq_int(const std::string &what, int32_t got, int32_t want) {
+    if (got != want)
+        fail(what, "got " + std::to_string(got) + ", want " +
+                       std::to_string(want));
+}
+
 int main() {
     // The doc's fixture: 6 steps, edges 0->2, 1->2, 2->4, 3->4, 4->5.
     const std::vector<dt_edge> g = {{0, 2}, {1, 2}, {2, 4}, {3, 4}, {4, 5}};
@@ -74,6 +103,108 @@ int main() {
     }
     if (dt_slice{}.contains(0))
         fail("contains on an empty slice", "an empty slice contains nothing");
+
+    // --- 54 T5: dt_walk_depth ------------------------------------------------
+    // A diamond with one longer alternate path (1->4->3) alongside the two
+    // short ones (0->1->3, 0->2->3): node 3 is reachable at hop 2 via 1 or 2,
+    // AND at hop 3 via 1->4->3. First-reach BFS must report 2, not 3 — a
+    // last-write-wins bug would report whichever of 2's/4's edges is
+    // processed last.
+    const std::vector<dt_edge> diamond = {{0, 1}, {0, 2}, {1, 3},
+                                          {2, 3}, {1, 4}, {4, 3}};
+    {
+        dt_walk w = dt_walk_depth(diamond, 5, 0, true, 10);
+        eq_u32("diamond: steps", w.steps, {0, 1, 2, 3, 4});
+        std::vector<int32_t> want_depth = {0, 1, 1, 2, 2};
+        if (w.depth != want_depth)
+            fail("diamond: first-reach depth (not last-reach)",
+                 "got " + show(w.depth) + ", want " + show(want_depth));
+        check_eq_int("diamond: depth_min", w.depth_min, 0);
+        check_eq_int("diamond: depth_max", w.depth_max, 2);
+        check_false("diamond: unbounded walk is not bounded", w.bounded);
+    }
+
+    // A cycle terminates (BFS visited-once, same graph test_slice's own cycle
+    // test uses) and the unbounded walk's step set matches dt_slice_forward.
+    {
+        dt_walk w = dt_walk_depth(cyc, 4, 0, true, 10);
+        std::vector<int32_t> want_depth = {0, 1, 2, 3};
+        if (w.depth != want_depth)
+            fail("cycle: depth", "got " + show(w.depth) + ", want " +
+                                     show(want_depth));
+        check_false("cycle: unbounded walk terminates, not bounded",
+                    w.bounded);
+    }
+
+    // max_depth truncates the walk AND sets bounded, before the true fixpoint.
+    {
+        dt_walk w = dt_walk_depth(g, n, 1, true, 1);
+        eq_u32("max_depth=1 from 1: steps", w.steps, {1, 2});
+        std::vector<int32_t> want_depth = {0, 1};
+        if (w.depth != want_depth)
+            fail("max_depth=1 from 1: depth",
+                 "got " + show(w.depth) + ", want " + show(want_depth));
+        check_true("max_depth=1 from 1: bounded (4 was cut off)", w.bounded);
+    }
+
+    // A walk that lands exactly on max_depth with NO further edges reached
+    // the true fixpoint — bounded must stay false, not follow from
+    // depth_max == max_depth alone (5 is g's sink: no outgoing edges).
+    {
+        dt_walk w = dt_walk_depth(g, n, 5, true, 0);
+        eq_u32("max_depth=0 from sink 5: steps", w.steps, {5});
+        check_false(
+            "max_depth=0 from sink 5: NOT bounded (fixpoint, not a cut)",
+            w.bounded);
+    }
+
+    // Backward direction stores NEGATIVE depth, so both directions from one
+    // origin plot on a single signed axis.
+    {
+        dt_walk w = dt_walk_depth(g, n, 4, false, 10);
+        eq_u32("backward(4): steps", w.steps, {0, 1, 2, 3, 4});
+        std::vector<int32_t> want_depth = {-2, -2, -1, -1, 0};
+        if (w.depth != want_depth)
+            fail("backward(4): negative depth",
+                 "got " + show(w.depth) + ", want " + show(want_depth));
+        check_eq_int("backward(4): depth_min", w.depth_min, -2);
+        check_eq_int("backward(4): depth_max", w.depth_max, 0);
+    }
+
+    // Out-of-range origin: an EMPTY walk, never {origin} — same rule as
+    // dt_slice.
+    {
+        dt_walk w = dt_walk_depth(g, n, 6, true, 10);
+        eq_u32("out-of-range origin: empty walk", w.steps, {});
+        check_false("out-of-range origin: not bounded", w.bounded);
+    }
+
+    // An empty edge set yields {origin} at depth 0, exactly like dt_slice.
+    {
+        dt_walk w = dt_walk_depth({}, n, 3, true, 10);
+        eq_u32("empty graph: {origin}", w.steps, {3});
+        std::vector<int32_t> want_depth = {0};
+        if (w.depth != want_depth)
+            fail("empty graph: depth 0",
+                 "got " + show(w.depth) + ", want " + show(want_depth));
+    }
+
+    // The unbounded walk's step set must not quietly disagree with
+    // dt_slice_forward/backward about REACHABILITY, over several origins.
+    for (uint32_t origin : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        dt_walk fw = dt_walk_depth(g, n, origin, true, 10);
+        dt_slice fs = dt_slice_forward(g, n, origin);
+        if (fw.steps != fs.steps)
+            fail("forward(" + std::to_string(origin) +
+                     ") walk vs. slice set-equality",
+                 "walk " + show(fw.steps) + ", slice " + show(fs.steps));
+        dt_walk bw = dt_walk_depth(g, n, origin, false, 10);
+        dt_slice bs = dt_slice_backward(g, n, origin);
+        if (bw.steps != bs.steps)
+            fail("backward(" + std::to_string(origin) +
+                     ") walk vs. slice set-equality",
+                 "walk " + show(bw.steps) + ", slice " + show(bs.steps));
+    }
 
     if (failures) {
         std::fprintf(stderr, "%d slice check(s) failed\n", failures);

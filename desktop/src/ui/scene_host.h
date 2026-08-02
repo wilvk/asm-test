@@ -88,6 +88,11 @@ class SceneHost {
     // geometry uploaded by the most recent render(). 0 == background / none.
     virtual uint32_t pick(const scene3d::Camera &cam, int fbw, int fbh, int x,
                           int y) = 0;
+
+    // T4 (49): the world-Y-per-step scale the last render()'s trajectory
+    // upload used (0 before any upload) — the HUD ruler needs it to place
+    // ticks at the same world Y the trajectory geometry sits at.
+    virtual float traj_scale() const = 0;
 };
 
 } // namespace asmdesk

@@ -17,7 +17,25 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/4, not started.**
+> **Status — ✅ 4/4, landed 2026-08-02.** T1 `slice_step` clips the worldline
+> (dim, never discard — `uTimeCutY`/`uHasTimeCut` in `kTrajFrag`), applied to
+> the trajectory lines and `access_spurs_`; `conv_arcs_` deliberately excluded
+> (a mark carries two times, T1 step 5); `uHasTimeCut=0` once the playhead
+> reaches the end, so the whole-recording view is byte-identical to the
+> pre-brief render. T2 generalises `find_head` into `find_vertex` (exact vs.
+> at-or-before) and adds a distinct beacon-amber execution-front glyph, gated
+> on `layers.exact`, never snapped when nothing qualifies. T3 adds
+> `uContourLevels` iso-density bands to `kTerrainFrag` (phase-shifted +0.5 so
+> the always-1.0 brightest cell in any slice never lands exactly on a line —
+> a real bug the GL smoke suite caught and this fix closed) plus a pure
+> `terrain_encoding_swatches()` legend (exhaustive-by-test over
+> TORN/STAT/CHURN/UNKNOWN) and `TerrainModel::max_full_heat` for the raw
+> scale a band is worth. T4 adds `vertical_axes_note`, pure
+> `trajectory_axis_ticks`, and `draw_trajectory_ruler` (HUD TU, projected via
+> `Camera::mvp` into the 3D viewport, skipped under the null backend the same
+> way the viewport image already is). `docker-desktop` green end to end
+> (`test_shell`, `test_terrain`, `test_scene_fbo` GL smoke, `test_ui` 28/28,
+> `desktop-engine-boundary-check` — D4 intact).
 
 ## Why this work exists
 

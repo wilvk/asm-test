@@ -1147,6 +1147,16 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
                vp_origin.y + static_cast<float>(fbh)),
         ImVec2(0, 1), ImVec2(1, 0));
 
+    // T4 (49): the trajectory-time ruler, over the viewport image — reached
+    // ONLY on this real-GL path (a null backend returns above, before `tex`
+    // exists, so the ruler's absence there is the SAME graceful degradation
+    // the rest of this pane already practises; the HUD's axis note above
+    // still reads either way).
+    scene3d::draw_trajectory_ruler(
+        ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+        ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+        sv.terr.nsteps, s.scene_host->traj_scale());
+
     // Camera + pick, only while the pointer is over the viewport. A left-drag
     // orbits; the wheel dollies; a click that did NOT drag is a pick — read the
     // id under the cursor and drill OUT to the flat 2D view through 04's router

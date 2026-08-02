@@ -134,6 +134,15 @@ struct TerrainModel {
     // The whole recording (t past the last step).
     Terrain full() const { return slice(UINT64_MAX); }
 
+    // 49 T3: the raw (pre-log, pre-normalise) magnitude behind the slice's
+    // brightest cell — a code cell's hit count or a data cell's cumulative
+    // access size, whichever is larger, at the inclusive slice [0, t]. This
+    // is what a contour band is WORTH: Terrain::height is log1p'd and then
+    // normalised to [0,1] at GL upload (scene.cpp's set_terrain), so neither
+    // alone states the scale a legend needs. 0 for an empty slice or a
+    // refused (basis_error) terrain.
+    uint64_t max_full_heat(uint64_t t) const;
+
     // The degrade-to-coarse plane for the 3D scrub (23-graded-truth-layer.md T4):
     // a FLAT plane (no per-cell binary searches over the potentially huge
     // code/data cell lists), carrying the torn flag so it is never a silent zero.

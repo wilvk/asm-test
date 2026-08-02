@@ -97,6 +97,10 @@ class GlSceneHost : public SceneHost {
         // never gated on the upload condition above.
         scene_.set_atmosphere(f.atmo);
         scene_.follow_step = f.follow_step;
+        // T1 (49): the terrain-residency playhead — SceneFrame already
+        // carries it (slice_t), so this needs no new field, just passing it
+        // through every frame like follow_step above.
+        scene_.slice_step = f.slice_t;
 
         GLint prev_fbo = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
@@ -117,6 +121,8 @@ class GlSceneHost : public SceneHost {
         // ImGui renderer's target (the default framebuffer) survives the pick pass.
         return scene_.pick(cam, fbw, fbh, x, y);
     }
+
+    float traj_scale() const override { return scene_.traj_scale(); }
 
     ~GlSceneHost() override { free_fbo(); }
 

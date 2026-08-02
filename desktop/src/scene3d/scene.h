@@ -44,6 +44,10 @@ struct SceneLayers {
     bool weather = true;   // T3: the fidelity weather sky quad
     bool ghost_fog = true; // T4: the separate stippled statistical terrain
     bool vehicle = true;   // T6: the followed-citizen head + comet tail
+    // T3 (49-one-time-truth): iso-density contour bands on the terrain — a
+    // re-encoding of vHeight (D7: adds no claim), so a HUD toggle can turn it
+    // off without hiding data. Default on.
+    bool contours = true;
 };
 
 class Scene {
@@ -65,6 +69,18 @@ class Scene {
     float time_scale = 0.0f;
     uint32_t nsteps = 0;
     float y_scale = 0.35f; // terrain height exaggeration (uYScale)
+
+    // T1 (49-one-time-truth): the terrain-residency playhead (SceneFrame::slice_t),
+    // set per frame like follow_step already is — a draw-time uniform, no upload.
+    // Named for the axis it walks, `slice_step`, never `head`/`step`/`t`, so the
+    // two clocks (this one and follow_step, T5/T6's OWN axis below) stay
+    // distinguishable at every call site. render() clips the trajectory/spur draw
+    // to this playhead: `[0, slice_step]` renders full-bright, past it dims (never
+    // discards — the data is real, just not yet reached in this view). Defaults
+    // to UINT64_MAX ("no cut yet configured"), never 0 — a caller that never sets
+    // this field (every render() before this brief, and every existing GL test)
+    // must see today's whole-recording render, not a retroactively clipped one.
+    uint64_t slice_step = UINT64_MAX;
 
     // Upload a terrain slice: heights are normalised to [0,1] internally (so the
     // frag shader's clamp(vHeight,0,1) reads a hot cell as brighter than a cold
@@ -132,6 +148,10 @@ class Scene {
 
     void shutdown();
     uint32_t grid_n() const { return n_; }
+    // T4 (49): the world-Y-per-step scale the last set_trajectories() upload
+    // used (0 before any upload) — the HUD ruler needs it to place its ticks
+    // at the SAME world Y the trajectory geometry itself sits at.
+    float traj_scale() const { return traj_scale_; }
 
   private:
     bool ready_ = false;
@@ -167,6 +187,13 @@ class Scene {
     // negligible per-frame cost; this is NOT the trajectory VBO schema the
     // doc asks to leave alone).
     unsigned vao_head_ = 0, vbo_head_ = 0;
+    // T2 (49): the execution-front glyph — same shape as vao_head_/vbo_head_
+    // (a second one-vertex buffer is the same negligible cost), but a
+    // DIFFERENT mark on a DIFFERENT clock: the front sits at the last placed
+    // vertex at-or-before slice_step (terrain-residency time), the vehicle at
+    // the exact vertex named by follow_step (its own per-tid axis). Distinct
+    // GL objects so the two glyphs' lifecycles never alias.
+    unsigned vao_front_ = 0, vbo_front_ = 0;
 
     struct Line {
         unsigned vao = 0, vbo = 0;
@@ -205,16 +232,28 @@ class Scene {
     // SceneLayers::zoning off changes only the tint, never the pick pass
     // (which does not declare uZoning at all).
     void draw_terrain_common(unsigned prog, const float mvp[16],
-                             bool zoning = true);
+                             bool zoning = true, float contour_levels = 0.0f);
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
-    // T6: locate the followed citizen's head vertex for the CURRENT
-    // follow_step — the first exact (non-statistical) trajectory (lowest tid,
-    // matching by_tid's ascending iteration in trajectory.cpp) carrying a
-    // PLACED vertex at follow_step. false when nothing matches (an unplaced
-    // or absent step): the caller then draws no vehicle. `out_line` is the
-    // matching Line's index in traj_lines_ (for the comet-tail uniform).
-    bool find_head(float out_pos[3], int *out_line) const;
+    // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)
+    // trajectory by either axis — the first trajectory (lowest tid, matching
+    // by_tid's ascending iteration in trajectory.cpp) that yields a match.
+    // `exact` true: the EXACT match `find_head` always used (follow_step, the
+    // vehicle's own per-tid axis) — a placed vertex with pt_t == target, false
+    // when nothing matches or the match is unplaced. `exact` false: the LAST
+    // placed vertex with pt_t <= target (slice_step, the terrain-residency
+    // playhead) — the execution front. `out_line` is the matching Line's
+    // index in traj_lines_ (for the comet-tail uniform / glyph colour).
+    bool find_vertex(bool exact, uint64_t target, float out_pos[3],
+                     int *out_line) const;
+    bool find_head(float out_pos[3], int *out_line) const {
+        return find_vertex(/*exact=*/true, follow_step, out_pos, out_line);
+    }
+    // T2 (49): the execution front — the last placed vertex at-or-before
+    // slice_step, i.e. exactly the boundary T1's dim/no-dim cut draws at.
+    bool find_front(float out_pos[3], int *out_line) const {
+        return find_vertex(/*exact=*/false, slice_step, out_pos, out_line);
+    }
     // Render the id pass into the internal pick FBO (leaves it bound); returns the
     // previously-bound draw framebuffer so the caller can restore it after reading.
     int render_pick_into_fbo(const Camera &cam, int fbw, int fbh);

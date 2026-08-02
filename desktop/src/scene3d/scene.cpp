@@ -42,6 +42,10 @@ namespace {
 constexpr GLuint kAttrPos = 0; // "cell" (terrain) / "pos" (trajectory)
 constexpr GLuint kAttrVid = 1; // "vid" (pick points)
 constexpr GLuint kFragId = 0;  // "fragid" (pick targets)
+// T3 (49): the terrain's iso-density contour band count — enough bands to
+// read as a height key without turning the ramp to noise at Phase-A's grid
+// sizes.
+constexpr float kContourLevels = 12.0f;
 
 GLuint compile(GLenum type, const char *src, std::string &err) {
     GLuint sh = glCreateShader(type);
@@ -510,7 +514,7 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
 }
 
 void Scene::draw_terrain_common(unsigned prog, const float mvp[16],
-                                bool zoning) {
+                                bool zoning, float contour_levels) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex_height_);
@@ -535,6 +539,11 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16],
     GLint uz = glGetUniformLocation(prog, "uZoning");
     if (uz >= 0)
         glUniform1i(uz, zoning ? 1 : 0);
+    // T3 (49): <=0 disables banding — absent from the pick shader (loc -1,
+    // harmless) and from prog_stat_ (the ghost-fog terrain never bands).
+    GLint uc = glGetUniformLocation(prog, "uContourLevels");
+    if (uc >= 0)
+        glUniform1f(uc, contour_levels);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
@@ -584,26 +593,51 @@ void Scene::draw_sky() {
     glDepthMask(GL_TRUE);
 }
 
-bool Scene::find_head(float out_pos[3], int *out_line) const {
+bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
+                        int *out_line) const {
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
         const Line &l = traj_lines_[li];
         if (l.statistical)
-            continue; // T6: only an exact trajectory can host a vehicle
+            continue; // T6: only an exact trajectory can host a vehicle/front
         // pt_t is ascending (TrajPoint.t is a monotonic per-tid counter,
         // space/types.h) — a linear scan is fine at Phase-A's cell/vertex
         // counts and keeps this branch trivially readable; binary_search
         // would need a paired index lookup for no real win here.
-        for (size_t i = 0; i < l.pt_t.size(); ++i) {
-            if (l.pt_t[i] != follow_step)
-                continue;
-            if (!l.pt_placed[i])
-                return false; // T6: an unplaced target step draws NOTHING
-            out_pos[0] = l.pt_pos[i * 3 + 0];
-            out_pos[1] = l.pt_pos[i * 3 + 1];
-            out_pos[2] = l.pt_pos[i * 3 + 2];
-            if (out_line)
-                *out_line = static_cast<int>(li);
-            return true;
+        if (exact) {
+            for (size_t i = 0; i < l.pt_t.size(); ++i) {
+                if (l.pt_t[i] != target)
+                    continue;
+                if (!l.pt_placed[i])
+                    return false; // T6: an unplaced target step draws NOTHING
+                out_pos[0] = l.pt_pos[i * 3 + 0];
+                out_pos[1] = l.pt_pos[i * 3 + 1];
+                out_pos[2] = l.pt_pos[i * 3 + 2];
+                if (out_line)
+                    *out_line = static_cast<int>(li);
+                return true;
+            }
+        } else {
+            // T2 (49): the last PLACED vertex with pt_t <= target — the
+            // execution front. No placed vertex at or before target => no
+            // glyph (never a snapped one, matching find_head's own rule).
+            bool found = false;
+            size_t best = 0;
+            for (size_t i = 0; i < l.pt_t.size(); ++i) {
+                if (l.pt_t[i] > target)
+                    break;
+                if (l.pt_placed[i]) {
+                    found = true;
+                    best = i;
+                }
+            }
+            if (found) {
+                out_pos[0] = l.pt_pos[best * 3 + 0];
+                out_pos[1] = l.pt_pos[best * 3 + 1];
+                out_pos[2] = l.pt_pos[best * 3 + 2];
+                if (out_line)
+                    *out_line = static_cast<int>(li);
+                return true;
+            }
         }
     }
     return false;
@@ -625,7 +659,8 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     glEnable(GL_DEPTH_TEST);
 
     if (layers.terrain)
-        draw_terrain_common(prog_terrain_, mvp, layers.zoning);
+        draw_terrain_common(prog_terrain_, mvp, layers.zoning,
+                           layers.contours ? kContourLevels : 0.0f);
 
     // T4: the ghost-fog terrain, after the exact terrain — depth-tested but
     // depth-write off (so it never occludes anything BEHIND it either) and
@@ -647,6 +682,15 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     const bool have_head =
         layers.vehicle && find_head(head_pos, &head_line);
 
+    // T2 (49): locate the execution front — the exact trajectory's own
+    // boundary at slice_step, a DIFFERENT clock from the vehicle's
+    // follow_step (see find_vertex's doc comment). Gated on `exact` (it marks
+    // a point on that layer), never on `vehicle`. Its own colour (never a
+    // per-tid one), so which line it fell on is not needed.
+    float front_pos[3] = {0, 0, 0};
+    const bool have_front =
+        layers.exact && find_front(front_pos, nullptr);
+
     // Trajectories over the terrain.
     glUseProgram(prog_traj_);
     glUniformMatrix4fv(glGetUniformLocation(prog_traj_, "uMVP"), 1, GL_FALSE,
@@ -659,8 +703,16 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     GLint uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
     GLint uHeadY = glGetUniformLocation(prog_traj_, "uHeadY");
     GLint uTailHalf = glGetUniformLocation(prog_traj_, "uTailHalf");
+    GLint uTimeCutY = glGetUniformLocation(prog_traj_, "uTimeCutY");
+    GLint uHasTimeCut = glGetUniformLocation(prog_traj_, "uHasTimeCut");
     const float head_y = static_cast<float>(follow_step) * traj_scale_;
     const float tail_half = 3.0f * traj_scale_; // ~3 steps either side
+    // T1 (49): clip the path to the terrain playhead — no cut (byte-identical
+    // to the pre-49 render) once slice_step reaches the end of the recording.
+    const bool has_time_cut = slice_step < nsteps;
+    const float time_cut_y = static_cast<float>(slice_step) * traj_scale_;
+    glUniform1f(uTimeCutY, time_cut_y);
+    glUniform1i(uHasTimeCut, has_time_cut ? 1 : 0);
     glLineWidth(2.0f);
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
         const Line &l = traj_lines_[li];
@@ -689,6 +741,11 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     }
     // Convergence arcs last, so the hint rides over the paths it links. Solid (never
     // stippled — a stipple is the statistical mark) and thick, so it pops.
+    // T1 (49) step 5: EXCLUDED from the time cut — an arc carries two times
+    // (t_a, t_b) and dimming it against slice_step alone would misstate which
+    // side is in the past, so it renders unclipped either side of the
+    // playhead.
+    glUniform1i(uHasTimeCut, 0);
     if (layers.convergence && conv_arcs_.count) {
         glUniform4fv(uColor, 1, conv_arcs_.color);
         glUniform1i(uStipple, 0);
@@ -723,6 +780,33 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
         glUniform4fv(uColor, 1, hc ? hc : white);
         glUniform1f(glGetUniformLocation(prog_traj_, "uPointSize"), 10.0f);
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glDisable(GL_PROGRAM_POINT_SIZE);
+        glBindVertexArray(0);
+    }
+
+    // T2 (49): the execution-front glyph — the path's leading edge AT the
+    // playhead, a visible point rather than an inference from where the dim
+    // starts. A fixed accent colour and a different size from the vehicle
+    // (never the tid palette, never white) so the two marks read as distinct
+    // even when both are on screen at once.
+    if (have_front) {
+        if (!vao_front_) {
+            glGenVertexArrays(1, &vao_front_);
+            glGenBuffers(1, &vbo_front_);
+        }
+        glBindVertexArray(vao_front_);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_front_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(front_pos), front_pos,
+                    GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glUniform1i(uStipple, 0);
+        glUniform1i(uHasHead, 0);
+        const float front_color[4] = {1.0f, 0.65f, 0.15f, 1.0f}; // beacon amber
+        glUniform4fv(uColor, 1, front_color);
+        glUniform1f(glGetUniformLocation(prog_traj_, "uPointSize"), 7.0f);
         glEnable(GL_PROGRAM_POINT_SIZE);
         glDrawArrays(GL_POINTS, 0, 1);
         glDisable(GL_PROGRAM_POINT_SIZE);
@@ -848,6 +932,10 @@ void Scene::shutdown() {
         glDeleteBuffers(1, &vbo_head_);
     if (vao_head_)
         glDeleteVertexArrays(1, &vao_head_);
+    if (vbo_front_)
+        glDeleteBuffers(1, &vbo_front_);
+    if (vao_front_)
+        glDeleteVertexArrays(1, &vao_front_);
     if (tex_pick_)
         glDeleteTextures(1, &tex_pick_);
     if (rbo_pick_depth_)
@@ -861,6 +949,7 @@ void Scene::shutdown() {
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
     tex_kind_ = tex_height_stat_ = tex_flags_stat_ = 0;
     vbo_sky_ = vao_sky_ = vbo_head_ = vao_head_ = 0;
+    vbo_front_ = vao_front_ = 0;
     has_stat_terrain_ = false;
     tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;

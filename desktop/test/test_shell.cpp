@@ -3,6 +3,7 @@
 // truncated / dropped / torn recording, null for a clean one. Then draw_shell is
 // driven for 3 null-backend frames over a Workspace of the fixtures to prove no
 // path crashes without a display. No GLFW, no GL, no engines.
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -675,6 +676,69 @@ int main() {
                           std::string::npos,
                   bc.text.c_str());
         }
+    }
+
+    // 49 T3/T4 (one-time-truth): the encodings legend + axis note + ruler
+    // ticks are all PURE, so their content is asserted directly — no ImGui
+    // frame, no camera-projected draw.
+    {
+        // T3: the legend is EXHAUSTIVE BY TEST — exactly the four TerrainFlag
+        // bits kTerrainFrag (embedded.h) branches on, no more, no fewer. A
+        // shader branch added without a matching swatch here fails this
+        // check, which is the whole point (hud.h's own doc comment).
+        auto swatches = scene3d::terrain_encoding_swatches();
+        auto has_flag = [&](space::TerrainFlag f) {
+            for (const auto &sw : swatches)
+                if (sw.flag == f)
+                    return true;
+            return false;
+        };
+        check("encodings legend: exactly four swatches", swatches.size() == 4,
+              ("got " + std::to_string(swatches.size())).c_str());
+        check("encodings legend: covers TF_CHURN", has_flag(space::TF_CHURN),
+              "no churn/scaffold swatch");
+        check("encodings legend: covers TF_TORN", has_flag(space::TF_TORN),
+              "no torn/rubble swatch");
+        check("encodings legend: covers TF_STAT", has_flag(space::TF_STAT),
+              "no statistical swatch");
+        check("encodings legend: covers TF_UNKNOWN",
+              has_flag(space::TF_UNKNOWN), "no fog-of-war swatch");
+        check("encodings legend: never covers TF_READ/TF_WRITE (unbranched)",
+              !has_flag(space::TF_READ) && !has_flag(space::TF_WRITE),
+              "the terrain shader does not key a colour off read/write");
+
+        // T3: the height-scale note states the raw magnitude, or says there
+        // is none.
+        check("height scale note: states the raw magnitude",
+              scene3d::height_scale_note(3).find("3") != std::string::npos,
+              scene3d::height_scale_note(3).c_str());
+        check("height scale note: an empty slice says so, not \"0\"",
+              scene3d::height_scale_note(0).find("no data") !=
+                  std::string::npos,
+              scene3d::height_scale_note(0).c_str());
+
+        // T4: the axis note is non-empty (the single source of truth between
+        // the draw call and this check that the wording did not vanish).
+        check("vertical axes note: non-empty",
+              !scene3d::vertical_axes_note().empty(), "note text is empty");
+
+        // T4: ticks span exactly [0, nsteps], and the ruler is skipped
+        // entirely (empty ticks) when there is no time axis to ruler.
+        {
+            auto ticks = scene3d::trajectory_axis_ticks(37);
+            check("axis ticks: first tick is 0", !ticks.empty() &&
+                                                     ticks.front() == 0,
+                  "the ruler must start at the recording's own beginning");
+            check("axis ticks: last tick is nsteps",
+                  !ticks.empty() && ticks.back() == 37,
+                  "the ruler must reach the recording's real extent");
+            check("axis ticks: ascending", std::is_sorted(ticks.begin(),
+                                                          ticks.end()),
+                  "ticks must be monotonic for a ruler to read correctly");
+        }
+        check("axis ticks: empty when nsteps == 0",
+              scene3d::trajectory_axis_ticks(0).empty(),
+              "a zero-step recording has no time axis to ruler");
     }
 
     // --- 19 (dockable panes keystone): the docked shell draws REAL kPane* panes -

@@ -141,6 +141,14 @@ int main() {
         check("exactly three non-zero code cells", nonzero(full) == 3,
               "got " + std::to_string(nonzero(full)));
 
+        // 49 T3: max_full_heat is the RAW (pre-log) magnitude a contour band
+        // is worth — B0's 3 hits is the brightest cell over the full slice.
+        check("max_full_heat over the full recording is B0's 3 hits",
+              m.max_full_heat(UINT64_MAX) == 3,
+              "got " + std::to_string(m.max_full_heat(UINT64_MAX)));
+        check("max_full_heat is 0 for a default-built (empty) model",
+              TerrainModel{}.max_full_heat(0) == 0, "an empty model has heat");
+
         // No survey, no mem, no truncation, no churn — every provenance chip is
         // in its coarse-but-faithful state, never a silent zero.
         check("no statistical layer without survey", !m.has_stat,
@@ -204,12 +212,18 @@ int main() {
               near(t0.height[cA0], std::log1p(1.0f)) &&
                   t0.height[cA1] == 0.0f && t0.height[cB0] == 0.0f,
               "the playhead at 0 must show one hit at A0 and nothing else");
+        check("max_full_heat at t=0 is A0's single hit",
+              m.max_full_heat(0) == 1,
+              "got " + std::to_string(m.max_full_heat(0)));
         Terrain t2 = m.slice(2); // steps 0,1,2: A0 x2, A1 x1, B0 x0
         check("t=2 accumulates A0 twice and A1 once, B0 not yet",
               near(t2.height[cA0], std::log1p(2.0f)) &&
                   near(t2.height[cA1], std::log1p(1.0f)) &&
                   t2.height[cB0] == 0.0f,
               "the prefix at step 2 is wrong");
+        check("max_full_heat at t=2 is A0's two hits (B0 not yet)",
+              m.max_full_heat(2) == 2,
+              "got " + std::to_string(m.max_full_heat(2)));
 
         // === T2 (44-faithful-city-phase-a): fog-of-war is per-slice ==========
         // B0's cell is IN-DOMAIN (it is code region 2's cell — hit at steps
@@ -478,6 +492,9 @@ int main() {
               "a stream mixing rel and abs cannot be placed on one plane");
         check("a refused terrain is flat, not wrong", nonzero(m.full()) == 0,
               "no density may be drawn over an unresolvable basis");
+        check("max_full_heat is 0 for a mixed-basis refusal",
+              m.max_full_heat(UINT64_MAX) == 0,
+              "a refused terrain must report no raw scale either");
         steps_explained("F", m);
     }
 

@@ -46,6 +46,7 @@ in vec2 vUV;
 uniform usampler2D uFlags;    // R32UI, n x n
 uniform usampler2D uKind;     // R8UI, n x n — T1: region kind per cell
 uniform int uZoning;          // T7: SceneLayers::zoning — 0 = plain amber ramp
+uniform float uContourLevels; // T3 (49): band count; <=0 disables banding
 out vec4 frag;
 const uint TORN = 1u;     // rubble: a KNOWN lower bound (capture truncated/torn)
 const uint STAT = 2u;
@@ -74,7 +75,21 @@ void main(){
   if ((f & UNKNOWN) != 0u)
     base = mix(base, vec3(0.02,0.02,0.03), 0.85); // sunken fog-of-war pit
   float torn = ((f & TORN) != 0u) ? 1.0 : 0.0;
-  frag = vec4(mix(base, vec3(1.0,0.15,0.15), torn*0.7), 1.0); // rubble = red gash
+  vec3 col = mix(base, vec3(1.0,0.15,0.15), torn*0.7); // rubble = red gash
+  // T3 (49): iso-density contour bands re-encode vHeight — never drawn on a
+  // flat/zero cell (no measured level to band) or a fog-of-war/off-domain
+  // cell (UNKNOWN already covers "no value"; a band there would imply one).
+  // The +0.5 phase offset is deliberate: height is normalised so the
+  // BRIGHTEST cell in any slice sits at EXACTLY 1.0, and an unshifted
+  // fract(1.0*levels) is exactly 0 for any integer level count — every
+  // terrain's single hottest cell would otherwise always land ON a line and
+  // read as darkened. Shifting the phase puts 0.0 and 1.0 mid-band instead.
+  if (uContourLevels > 0.0 && (f & UNKNOWN) == 0u && vHeight > 0.0) {
+    float band = fract(clamp(vHeight,0.0,1.0) * uContourLevels + 0.5);
+    float line = 1.0 - smoothstep(0.0, 0.08, min(band, 1.0 - band));
+    col = mix(col, col * 0.55, line);
+  }
+  frag = vec4(col, 1.0);
 }
 )GLSL";
 
@@ -98,6 +113,12 @@ void main(){
 }
 )GLSL";
 
+// T1 (49-one-time-truth): uTimeCutY/uHasTimeCut clip the path to the terrain
+// playhead — DIM past the cut, never discard (the vertices beyond it are real
+// recorded data; hiding them would claim the recording ends there). Applied
+// FIRST, before the existing stipple/comet branches, so a statistical path
+// still dashes on both sides of the cut and the comet tail still layers over
+// the (possibly dimmed) base colour unchanged.
 inline const char *kTrajFrag = R"GLSL(#version 130
 in float vY;
 uniform vec4 uColor;
@@ -105,15 +126,20 @@ uniform int uStipple;         // 1 = statistical: never a solid exact tube
 uniform int uHasHead;         // T6: 1 on the followed trajectory's draw call
 uniform float uHeadY;         // T6: the head's world Y (followed_t * scale)
 uniform float uTailHalf;      // T6: half-width of the brightened tail band
+uniform float uTimeCutY;      // T1 (49): the terrain playhead's world Y
+uniform int uHasTimeCut;      // T1 (49): 0 when the playhead is at the end
 out vec4 frag;
 void main(){
+  vec4 c = uColor;
+  if (uHasTimeCut == 1 && vY > uTimeCutY) {
+    c.rgb *= 0.35; // dim, not discard: "recorded, not yet reached in this view"
+  }
   if (uStipple == 1) {
     float d = mod(gl_FragCoord.x + gl_FragCoord.y, 8.0);
     if (d < 4.0) discard;     // dashed screen-space pattern
   }
-  vec4 c = uColor;
   if (uHasHead == 1 && abs(vY - uHeadY) < uTailHalf) {
-    c = vec4(mix(uColor.rgb, vec3(1.0), 0.6), max(uColor.a, 0.95)); // comet tail
+    c = vec4(mix(c.rgb, vec3(1.0), 0.6), max(c.a, 0.95)); // comet tail
   }
   frag = c;
 }

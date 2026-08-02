@@ -15,12 +15,13 @@ rules follow [../implementations/](../implementations/README.md) — read
 > **Archived 2026-08-01 — this directory now holds only the docs with open
 > work.** Per the [archive rule](../README.md), the **43 briefs whose tasks are
 > all complete** moved to [`../archive/gui/`](../archive/gui/) — that is the
-> whole numbered family 01–37, 39–42, 44 and 45, every one of them ✅/☑ with all
-> tasks landed. The tables and prose below still describe every doc, with the
-> completed ones linked into the archive, so this file remains the single
+> whole numbered family 01–37, 39–42, 44, 45 and 49, every one of them ✅/☑ with
+> all tasks landed. The tables and prose below still describe every doc, with
+> the completed ones linked into the archive, so this file remains the single
 > inventory and dependency map for the family. **The documents below stay here**,
 > because each still points at unbuilt work (updated 2026-08-02 with the
-> instrument family 46–52 and the depiction family 53–59):
+> instrument family 46–52 and the depiction family 53–59; 49 landed the same
+> day and moved to the archive):
 >
 > | Doc | Why it stays |
 > |---|---|
@@ -29,7 +30,6 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52, all ☐ not started. |
 > | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | ☐ 0/5 — hover readout, pick preview, pickable convergence arcs / access spurs. |
 > | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | ☐ 0/5 — camera pan/recentre, address & region goto, landmark home, discoverable controls. |
-> | [49-one-time-truth-in-the-scene.md](49-one-time-truth-in-the-scene.md) | ☐ 0/4 — clip the worldline to the playhead, mark the execution front, make height readable. |
 > | [50-two-way-brushing.md](50-two-way-brushing.md) | ☐ 0/4 — light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
 > | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | ☐ 0/4 — a GL-free 2D terrain surface: the no-GL branches gain a real view and the GL path gains a reading mode. |
@@ -536,7 +536,7 @@ the catalog nor the city doc acted on.
 | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 13-gap table (G1–G13), sequencing, and the one fidelity decision the family turns on — *cross-axis brushing goes through the ADDRESS, never an ordinal* (**roadmap, not a brief**) | — | 10, 44 | roadmap · cuts 47–52 | — |
 | [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | G1–G3: throttled hover pick + cell→content index, `resolve_pick_hint`, pickable convergence arcs / access spurs, hover readout, HUD legend | 5 | none | ☐ 0/5 | *free* |
 | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ☐ 0/5 | *free* |
-| [49-one-time-truth-in-the-scene.md](49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ☐ 0/4 | will · T1–T4 · 2026-08-02 |
+| [49-one-time-truth-in-the-scene.md](../archive/gui/49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ✅ 4/4 | — |
 | [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☐ 0/4 | *free* |
 | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | G11–G12: per-tid/region/kind focus, thread ghosting, camera-distance entity budget | 4 | 48 (landmarks, else free) | ☐ 0/4 | *free* |
 | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | G13: a GL-free 2D terrain surface — the no-GL branches gain a real view, the GL path gains a reading mode | 4 | none | ☐ 0/4 | *free* |
@@ -555,7 +555,9 @@ catalog's own 26-graph inventory and its five-phase build order.
 | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 | ☐ 0/6 | *free* |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | *free* |
 
-60 tasks across the three families (7 landed, 26 + 34 open). Sequencing across
+56 tasks now open across the three families (11 landed — 7 in representation
+via 44, 4 in instrument via 49 — and 22 + 34 still open in instrument/
+depiction). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
 the families do not block each other — with three overlaps that must be
@@ -565,7 +567,7 @@ address-first step→place resolver**: 50, 57 T1. **The movable camera target**:
 and the second adopts it; all six briefs say so in their own text. Landing
 [55](55-scene-render-quality.md) early pays off across both open families —
 [58](58-memory-data-cell-family.md) is where stacked translucency stops being
-decorative, and [49](49-one-time-truth-in-the-scene.md)'s height readability is the
+decorative, and [49](../archive/gui/49-one-time-truth-in-the-scene.md)'s height readability was the
 same problem 55 T3 solves in the shader.
 
 **The faithful city (docs 43–44, 2026-07-31): a new numbered family, not part of

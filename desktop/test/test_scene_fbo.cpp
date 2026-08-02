@@ -394,6 +394,20 @@ static void pure_scene_checks() {
             projected >= 2,
             ("only " + std::to_string(projected) + " projected").c_str());
     }
+
+    // T1 (49): slice_step reaches the scene unchanged, and defaults to the
+    // "unconfigured, no cut" sentinel — asserted here (no GL context needed)
+    // so this survives even where the GL smoke below self-skips.
+    {
+        Scene s;
+        check("Scene::slice_step defaults to UINT64_MAX (no cut configured)",
+              s.slice_step == UINT64_MAX, "a default-constructed Scene must "
+                                          "not retroactively clip a caller "
+                                          "that never touches slice_step");
+        s.slice_step = 42;
+        check("Scene::slice_step is a plain settable field",
+              s.slice_step == 42, "the value did not round-trip");
+    }
 }
 
 // ---- the GL half ------------------------------------------------------------
@@ -1035,6 +1049,113 @@ int main() {
               pixels_differ(capture(scene, cam, cf, v_on),
                             capture(scene, cam, cf, v_off)) == 0,
               "a follow_step naming no placed vertex still drew something");
+    }
+
+    // --- T1 (49-one-time-truth): the worldline clips (dims, NEVER discards) -
+    // at the terrain playhead. At the end of the recording the cut is a no-op
+    // (byte-identical to the pre-49 render); at half, the tail past the cut
+    // dims but stays on screen.
+    {
+        Recording rec = load(ndjson_hotcold());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        check("T1 GL: hotcold recording has a real step extent",
+              terr.nsteps > 1, "no steps to clip");
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+        scene.follow_step = 999999; // no vehicle glyph in this frame
+
+        SceneLayers layers; // terrain + exact, defaults
+
+        scene.slice_step = terr.nsteps; // at the end: step 4's no-op
+        std::vector<unsigned char> px_end = capture(scene, cam, cf, layers);
+        scene.slice_step = terr.nsteps / 2; // half: the tail must dim
+        std::vector<unsigned char> px_half = capture(scene, cam, cf, layers);
+
+        size_t dimmed = 0, driven_dark = 0;
+        for (size_t i = 0; i + 3 < px_end.size(); i += 4) {
+            float le = lum(&px_end[i]);
+            float lh = lum(&px_half[i]);
+            if (le > 40.0f) { // a clearly-lit path/spur pixel in the baseline
+                if (lh < le - 5.0f)
+                    dimmed++;
+                if (lh <= 8.0f) // ~ the background clear colour's luminance
+                    driven_dark++;
+            }
+        }
+        check("T1 GL: at least one path pixel dims under a half playhead",
+              dimmed > 0, "no dimming observed — is uTimeCutY reaching the "
+                         "shader?");
+        check("T1 GL: a dimmed pixel is never driven to background (dim, "
+              "never discard)",
+              driven_dark == 0,
+              "a clipped pixel went dark enough to read as background");
+
+        scene.slice_step = terr.nsteps + 5; // past the end too
+        std::vector<unsigned char> px_past_end =
+            capture(scene, cam, cf, layers);
+        check("T1 GL: the cut is a no-op once slice_step reaches the end",
+              px_past_end == px_end,
+              "a playhead past the recording must render byte-identically "
+              "to one at it");
+
+        scene.slice_step = UINT64_MAX; // reset to the "unconfigured" default
+    }
+
+    // --- T2 (49-one-time-truth): the execution-front glyph marks the ---------
+    // playhead's own boundary — a DIFFERENT clock and colour from the T6
+    // followed-citizen vehicle.
+    {
+        Recording rec = load(ndjson_hotcold());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        check("T2 GL: hotcold recording has a real step extent",
+              terr.nsteps > 1, "not enough steps to place a mid-recording "
+                              "front");
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+        scene.follow_step = 999999; // no vehicle glyph confusing this count
+
+        // The front glyph's own fixed colour (1.0, 0.65, 0.15) — distinct
+        // from every tid hue in tid_color's palette, the vehicle's white
+        // fallback, the torn-red gash and the convergence-arc magenta.
+        auto count_amber = [&](const SceneLayers &layers) {
+            std::vector<unsigned char> px = capture(scene, cam, cf, layers);
+            int n = 0;
+            for (size_t i = 0; i + 3 < px.size(); i += 4) {
+                const unsigned char *p = &px[i];
+                if (p[0] > 220 && p[1] > 130 && p[1] < 200 && p[2] < 90)
+                    n++;
+            }
+            return n;
+        };
+
+        scene.slice_step = terr.nsteps / 2; // a mid-recording playhead
+        SceneLayers on;  // exact = true (default): the front glyph gates on it
+        SceneLayers off;
+        off.exact = false;
+        check("T2 GL: the execution front marks the playhead (amber "
+              "present)",
+              count_amber(on) > 0,
+              "no front-glyph pixels at a mid playhead");
+        check("T2 GL: the front glyph is gated on the exact layer",
+              count_amber(off) == 0,
+              "the front glyph drew with the exact layer off");
+
+        // No trajectory at all => no qualifying vertex => no glyph, never a
+        // snapped one (mirrors 44-T6's own rule for the vehicle).
+        scene.set_trajectories(space::TrajectorySet{}, terr.proj);
+        check("T2 GL: no trajectory data, no front glyph",
+              count_amber(on) == 0,
+              "a front glyph appeared with no trajectory to place it on");
+
+        scene.slice_step = UINT64_MAX; // reset to the "unconfigured" default
     }
 
     // ===== 3. the T7 GOLDEN SCENES, rendered ================================

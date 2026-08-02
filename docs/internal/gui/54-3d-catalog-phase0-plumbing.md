@@ -15,7 +15,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 2/7.** T3, T4 landed. T5–T7 next (claimed, in progress); T1–T2
+> **Status — ◐ 3/7.** T3–T5 landed. T6–T7 next (claimed, in progress); T1–T2
 > (terrain-touching) deliberately left open — see the brief's own T1/T2 vs.
 > T3–T7 split and the [README](README.md) claim row.
 
