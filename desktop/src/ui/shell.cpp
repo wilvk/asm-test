@@ -920,8 +920,17 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     if (!sv.built) {
         std::vector<space::Region> regs = space::regions_from_codeimage(r);
         sv.has_regions = !regs.empty();
-        sv.terr =
-            space::build_terrain(space::build_projection(std::move(regs)), r);
+        // 54 T1: observed-data-span extension — an access no codeimage region
+        // maps still places, as an Unknown "observed data" span rather than a
+        // dropped point. `existing` is `regs` as built so far (code only), so
+        // an observed address inside a code region never creates a shadow span.
+        std::string span_note;
+        std::vector<space::Region> obs =
+            space::observed_data_spans(r, regs, &span_note);
+        regs.insert(regs.end(), obs.begin(), obs.end());
+        space::Projection proj = space::build_projection(std::move(regs));
+        proj.data_span_note = std::move(span_note);
+        sv.terr = space::build_terrain(std::move(proj), r);
         // 36 T2: the terrain's Projection anchors a rel PC path onto the plane
         // (build_terrain moved it into sv.terr.proj above; the terrain is built
         // first precisely so it is available here).

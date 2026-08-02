@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "doc/recording.h"
 #include "space/types.h"
 
 namespace asmdesk::space {
@@ -58,6 +59,39 @@ struct Anchor {
 // anchors; zero or two-or-more refuse with a reason (the two-span reason names
 // each hex base). Non-code regions never make an anchor ambiguous.
 Anchor resolve_anchor(const std::vector<Region> &regions);
+
+// 54 T1: the gap that closes one observed-data span and opens the next — one
+// page (4096 bytes), the granularity the OS actually allocates in, and
+// therefore the smallest gap that is not evidence of a distinct object.
+inline constexpr uint64_t kObservedSpanGap = 4096;
+// 54 T1: the cap on emitted observed-data spans. When a scatter of touches
+// would produce more, the nearest neighbours are merged (never dropped) and
+// data_span_note says so.
+inline constexpr size_t kObservedSpanCap = 4096;
+
+// Cluster the addresses a recording OBSERVED touching into compacted spans, so
+// an access that no codeimage region maps still places on the plane. Every span
+// is Region::Kind::Unknown and labelled "observed data" — the recording states
+// that these bytes were touched, and NOTHING about what they are (not an
+// allocation extent: the real object may start before and end after).
+//
+// Address sources, in this order: raw `mem` events' `ea`, and
+// `DataflowStream::recs`' `ValRec.addr` where `space == "abs"` (an `"off"`
+// record is region-relative and must go through the anchor first, so it is
+// skipped here, counted in the note, never placed raw).
+//
+// Spans are opened/closed by `kObservedSpanGap`, rounded out to page
+// boundaries, then clipped against `existing` so an observed address inside a
+// known region never creates a shadow span (overlap is a precondition
+// violation for build_projection). If clipping still leaves more than
+// `kObservedSpanCap` spans, the nearest neighbours are merged until it fits —
+// never silently dropped. `note`, when non-null, is always assigned exactly
+// once: a human-readable summary (span/address counts, the threshold, whether
+// the cap merged), or the empty string when the recording carried no observed
+// addresses at all.
+std::vector<Region> observed_data_spans(const Recording &rec,
+                                        const std::vector<Region> &existing,
+                                        std::string *note = nullptr);
 
 // Region-kind colour + legend name, carried through for the HUD legend (T1 step
 // 4). Pure data: the renderer (T4) turns it into GL; this returns only floats

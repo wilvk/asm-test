@@ -1358,11 +1358,14 @@ $(BUILD)/desktop_test_slice: $(BUILD)/desktop/test/t/test_slice.o \
     $(BUILD)/desktop/test/an/slice.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# The projection (10-spacetime-3d-overview.md T1) links space/projection.o and
+# The projection (10-spacetime-3d-overview.md T1) links space/projection.o +
+# doc/recording.o + doc/streams.o (54 T1's observed_data_spans reads `mem` and
+# DataflowStream::recs through the real loader/decoder, not a re-parse) and
 # NOTHING else — the same engine-free closure proof test_slice makes above, now
 # for the address-space terrain plane.
 $(BUILD)/desktop_test_projection: $(BUILD)/desktop/test/t/test_projection.o \
-    $(BUILD)/desktop/test/sp/projection.o
+    $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/doc/recording.o $(BUILD)/desktop/test/doc/streams.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The terrain (10-spacetime-3d-overview.md T2) links space/terrain.o +
@@ -1377,11 +1380,12 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
 
 # The trajectory builder (10-spacetime-3d-overview.md T3) links space/trajectory.o
 # + space/projection.o (it projects abs vertices to prove they land on the plane)
-# + doc/recording.o (it loads NDJSON fixtures) and NOTHING else — no ImGui, no
-# GL, no engine — the same engine-free closure proof test_projection makes.
+# + doc/recording.o (it loads NDJSON fixtures) + doc/streams.o (54 T1's
+# observed_data_spans, reached from projection.o) and NOTHING else — no ImGui,
+# no GL, no engine — the same engine-free closure proof test_projection makes.
 $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/projection.o \
-    $(BUILD)/desktop/test/doc/recording.o
+    $(BUILD)/desktop/test/doc/recording.o $(BUILD)/desktop/test/doc/streams.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The drill-in router + the two fidelity invariants (10-spacetime-3d-overview.md T6)

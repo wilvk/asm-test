@@ -385,9 +385,16 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
 
     // --- rich rung: per-cell ordered data accesses (gated on `mem`) -----------
     if (m.mem_present) {
+        // Direction for the T2 split sums: exactly "r" or "w" count into their
+        // own running total; anything else (an absent or unrecognised `rw`
+        // token) counts into cum_size only — the "unknown is not zero"
+        // invariant, kept separate from rwbit below, which is the PRE-EXISTING
+        // (and unchanged) TF_READ/TF_WRITE approximation that folds an unknown
+        // token into READ.
+        enum Dir : uint8_t { kDirNone = 0, kDirRead = 1, kDirWrite = 2 };
         std::map<uint32_t,
-                 std::vector<std::tuple<uint64_t, uint64_t, uint32_t>>>
-            acc; // cell -> (step, size, rw-bit)
+                 std::vector<std::tuple<uint64_t, uint64_t, uint32_t, uint8_t>>>
+            acc; // cell -> (step, size, rw-bit, direction)
         for (const Event &e : rec.by_kind.at("mem")) {
             uint64_t st = e.body.value("step", uint64_t{0});
             uint64_t ea = e.body.value("ea", uint64_t{0});
@@ -398,7 +405,10 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
             if (!ok)
                 continue;
             uint32_t rwbit = (rw == "w") ? TF_WRITE : TF_READ;
-            acc[c].push_back({st, sz, rwbit});
+            uint8_t dir = (rw == "w")   ? kDirWrite
+                          : (rw == "r") ? kDirRead
+                                        : kDirNone;
+            acc[c].push_back({st, sz, rwbit, dir});
         }
         m.data.reserve(acc.size());
         for (auto &kv : acc) {
@@ -408,14 +418,26 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
             });
             TerrainModel::DataCell dc;
             dc.cell = kv.first;
-            uint64_t cum = 0;
+            uint64_t cum = 0, cum_r = 0, cum_w = 0;
             uint32_t rwm = 0;
             for (const auto &t : v) {
                 dc.steps.push_back(std::get<0>(t));
                 cum += std::get<1>(t);
                 rwm |= std::get<2>(t);
+                switch (std::get<3>(t)) {
+                case kDirRead:
+                    cum_r += std::get<1>(t);
+                    break;
+                case kDirWrite:
+                    cum_w += std::get<1>(t);
+                    break;
+                default:
+                    break; // neither: counted in cum_size only
+                }
                 dc.cum_size.push_back(cum);
                 dc.cum_rw.push_back(rwm);
+                dc.cum_read_size.push_back(cum_r);
+                dc.cum_write_size.push_back(cum_w);
             }
             m.data.push_back(std::move(dc));
         }

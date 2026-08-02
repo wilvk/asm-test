@@ -15,12 +15,19 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 5/7.** T3–T7 landed (2026-08-02) — the full non-terrain half
-> of the brief's own suggested T1+T2 / T3–T7 split. T1 (observed-data-span
-> projection) and T2 (read/write prefix-sum split) remain: both touch
-> `space/terrain.{h,cpp}` and are unclaimed — see the [README](README.md)
-> claim row. T1 is still "the single highest-leverage task in either open
-> family" (README) and is unblocked by anything here.
+> **Status — ✅ 7/7.** T3–T7 landed 2026-08-02; T1 (observed-data-span
+> projection) and T2 (read/write prefix-sum split) landed the same day,
+> completing the brief. T1 adds `space::observed_data_spans` (clustered,
+> page-rounded, clipped against `existing`, capped-not-dropped) plus
+> `Projection::data_span_note`, wired into `shell.cpp`'s scene weave right
+> before `build_projection` and surfaced in the HUD beside `mem_note`; a
+> recording with no `mem` and no `abs`-space dataflow value stays
+> byte-identical (no existing golden carries either, so nothing churned).
+> T2 adds `DataCell::cum_read_size`/`cum_write_size`, parallel prefix sums
+> alongside the existing `cum_size`/`cum_rw`, with an access whose `rw` token
+> is neither `"r"` nor `"w"` counted into the total and into neither
+> direction. Both are tested in `test_projection.cpp`/`test_terrain.cpp`;
+> `desktop-test` is green in full, including the GL `test_scene_fbo` smoke.
 
 ## Why this work exists
 

@@ -410,6 +410,13 @@ int main() {
             check("scene/abs draws no placement chip (fully placed abs path)",
                   abs_chips.empty(),
                   "an abs recording raised a placement chip");
+
+            // 54 T1: this golden carries no `mem` and no abs df values, so
+            // observed_data_spans() must add nothing — the projection this
+            // recording weaves stays byte-identical to before T1.
+            check("scene/no mem => no observed-data span note",
+                  sv.terr.proj.data_span_note.empty(),
+                  "an observed-data note appeared with nothing to observe");
         }
 
         // 36 T4: drive the pane for the LIVE dataflow golden and assert the df

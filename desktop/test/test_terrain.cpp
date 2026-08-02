@@ -95,6 +95,7 @@ static const uint64_t A1 = 0x400010; // region 1, hit once
 static const uint64_t B0 = 0x500000; // region 2, hit three times
 static const uint64_t D0 = 0x600000; // a data address (mem / survey)
 static const uint64_t D1 = 0x600008;
+static const uint64_t D2 = 0x600010; // 54 T2: an access with an unknown `rw`
 
 int main() {
     // === Fixture A: coarse rung — 3 offsets in 2 regions ===================
@@ -394,7 +395,9 @@ int main() {
             "\n"
             "{\"k\":\"mem\",\"step\":1,\"ea\":6291464,\"size\":4,\"rw\":\"r\"}"
             "\n"
-            "{\"k\":\"end\",\"events\":6,\"truncated\":false,"
+            "{\"k\":\"mem\",\"step\":1,\"ea\":6291472,\"size\":2,\"rw\":\"x\"}"
+            "\n"
+            "{\"k\":\"end\",\"events\":7,\"truncated\":false,"
             "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
         std::vector<Region> regs = regions_from_codeimage(rec);
         Region data;
@@ -425,6 +428,52 @@ int main() {
               near(full.height[cD1], std::log1p(4.0f)) &&
                   (full.flags[cD1] & TF_READ) && !(full.flags[cD1] & TF_WRITE),
               "D1 rich-rung state wrong");
+
+        // 54 T2: the read/write prefix-sum split.
+        auto data_cell = [&](uint32_t cell) -> const TerrainModel::DataCell * {
+            for (const auto &dc : m.data)
+                if (dc.cell == cell)
+                    return &dc;
+            return nullptr;
+        };
+        const auto *dcD0 = data_cell(cD0);
+        const auto *dcD1 = data_cell(cD1);
+        check("D0 split sums exist", dcD0 != nullptr, "no DataCell at D0");
+        if (dcD0) {
+            uint64_t r = dcD0->cum_read_size.back(), w = dcD0->cum_write_size.back();
+            check("D0 read/write split is 8 read + 8 write",
+                  r == 8 && w == 8,
+                  "got read=" + std::to_string(r) + " write=" + std::to_string(w));
+            check("D0 split sums to cum_size at every index",
+                  dcD0->cum_read_size.size() == dcD0->cum_size.size() &&
+                      [&] {
+                          for (size_t i = 0; i < dcD0->cum_size.size(); ++i)
+                              if (dcD0->cum_read_size[i] + dcD0->cum_write_size[i] !=
+                                  dcD0->cum_size[i])
+                                  return false;
+                          return true;
+                      }(),
+                  "read+write must equal cum_size at every index");
+        }
+        check("D1 split sums exist", dcD1 != nullptr, "no DataCell at D1");
+        if (dcD1)
+            check("D1 is a pure 4-byte read split",
+                  dcD1->cum_read_size.back() == 4 &&
+                      dcD1->cum_write_size.back() == 0,
+                  "got read=" + std::to_string(dcD1->cum_read_size.back()) +
+                      " write=" + std::to_string(dcD1->cum_write_size.back()));
+
+        bool okD2 = false;
+        uint32_t cD2 = cell_at(p, D2, &okD2);
+        const auto *dcD2 = okD2 ? data_cell(cD2) : nullptr;
+        check("D2 (unknown rw) split sums exist", dcD2 != nullptr,
+              "no DataCell at D2");
+        if (dcD2) {
+            check("D2's unknown-direction access counts in cum_size only",
+                  dcD2->cum_size.back() == 2 && dcD2->cum_read_size.back() == 0 &&
+                      dcD2->cum_write_size.back() == 0,
+                  "an unrecognised rw token must land in neither direction");
+        }
 
         // Rich rung time-slices too: at t=0 only the first (write) access is in.
         Terrain t0 = m.slice(0);
@@ -812,6 +861,73 @@ int main() {
         check("N: kind_by_cell is byte-stable across slice(t) calls",
               m.kind_by_cell == before,
               "slice(t) must never mutate the slice-invariant kind map");
+    }
+
+    // === Fixture O: 54 T1 — observed_data_spans places an unmapped access ===
+    // A mem access at an address no codeimage/data region covers: without the
+    // extension it projects nowhere and no DataCell can ever exist; with the
+    // spans appended to the region set before build_projection, the SAME
+    // recording places exactly one DataCell (assert the count, per the brief).
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"
+            "{\"k\":\"mem\",\"step\":0,\"ea\":104857600,\"size\":8,\"rw\":\"w\"}"
+            "\n"
+            "{\"k\":\"end\",\"events\":3,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        std::vector<Region> regs = regions_from_codeimage(rec);
+
+        {
+            Projection p = build_projection(regs);
+            TerrainModel m = build_terrain(p, rec);
+            check("O: without observed spans, the unmapped access places no "
+                  "cell",
+                  m.data.empty(),
+                  "got " + std::to_string(m.data.size()) + " data cells");
+        }
+        {
+            std::string note;
+            std::vector<Region> obs = observed_data_spans(rec, regs, &note);
+            check("O: exactly one observed span for one isolated access",
+                  obs.size() == 1, "got " + std::to_string(obs.size()));
+            check("O: every observed span is labelled Unknown/observed data",
+                  !obs.empty() && obs[0].kind == Region::Unknown &&
+                      obs[0].label == "observed data",
+                  "an observed span must never claim allocation structure");
+            check("O: the span note explains the derivation", !note.empty(),
+                  "note must be non-empty once a span was derived");
+
+            std::vector<Region> regs2 = regs;
+            regs2.insert(regs2.end(), obs.begin(), obs.end());
+            Projection p2 = build_projection(regs2);
+            TerrainModel m2 = build_terrain(p2, rec);
+            check("O: with observed spans, the same access places one cell",
+                  m2.data.size() == 1,
+                  "got " + std::to_string(m2.data.size()) + " data cells");
+        }
+        {
+            // No mem, no abs df values: byte-identical to no observed spans.
+            Recording rec2 = mk_rec(
+                "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-region\","
+                "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+                "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,"
+                "\"version\":0,\"when\":1,\"bytes\":\"90\"}\n"
+                "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"
+                "{\"k\":\"end\",\"events\":2,\"truncated\":false,"
+                "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+            std::vector<Region> r2 = regions_from_codeimage(rec2);
+            std::string note2 = "sentinel";
+            std::vector<Region> obs2 = observed_data_spans(rec2, r2, &note2);
+            check("O: no mem/abs-df events yields no observed spans",
+                  obs2.empty(), "got " + std::to_string(obs2.size()));
+            check("O: the note is cleared (not left stale) when there is "
+                  "nothing to derive",
+                  note2.empty(), "got: " + note2);
+        }
     }
 
     if (failures) {

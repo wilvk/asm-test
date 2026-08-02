@@ -39,6 +39,13 @@ struct Projection {
     // address<->domain lookup both project() and unproject() need.
     std::vector<uint64_t> domain_off;
 
+    // 54 T1: how the `observed data` regions (space/projection.h's
+    // observed_data_spans) were derived — span count, source address count, the
+    // gap threshold, and whether the cap merged any. Empty when the recording
+    // carried no observed-touch addresses (nothing to explain). The HUD surfaces
+    // it exactly like TerrainModel::mem_note.
+    std::string data_span_note;
+
     // maps an absolute address to a plane cell (u,v) in [0,1]^2; false if the
     // address is mapped by no region.
     bool project(uint64_t addr, float *u, float *v) const;

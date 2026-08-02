@@ -7,6 +7,8 @@
 #include <string>
 #include <utility>
 
+#include "doc/streams.h"
+
 namespace asmdesk::space {
 
 namespace {
@@ -152,6 +154,164 @@ bool Anchor::place(uint64_t off, uint64_t *abs) const {
         return false;
     *abs = base + off;
     return true;
+}
+
+namespace {
+
+constexpr uint64_t kPageSize = 4096;
+
+uint64_t page_floor(uint64_t a) { return (a / kPageSize) * kPageSize; }
+uint64_t page_ceil(uint64_t a) {
+    return ((a + kPageSize - 1) / kPageSize) * kPageSize;
+}
+
+struct Span {
+    uint64_t lo, hi; // [lo, hi)
+};
+
+// Merge spans that touch or overlap once sorted ascending by lo — the
+// clustering pass and the page-rounding pass can each independently produce
+// adjacency the other did not see, and build_projection's non-overlap
+// precondition must hold on the final list.
+std::vector<Span> merge_adjacent(std::vector<Span> spans) {
+    std::vector<Span> out;
+    for (const Span &sp : spans) {
+        if (!out.empty() && sp.lo <= out.back().hi)
+            out.back().hi = std::max(out.back().hi, sp.hi);
+        else
+            out.push_back(sp);
+    }
+    return out;
+}
+
+// Clip `sp` against every region in `existing`, returning the (possibly empty,
+// possibly two-piece) remainder. `existing` regions do not overlap each other
+// (build_projection's own precondition), so each clip is independent.
+std::vector<Span> clip_existing(Span sp, const std::vector<Region> &existing) {
+    std::vector<Span> pieces{sp};
+    for (const Region &r : existing) {
+        uint64_t rlo = r.base, rhi = r.base + r.len;
+        std::vector<Span> next;
+        for (const Span &p : pieces) {
+            if (rhi <= p.lo || rlo >= p.hi) {
+                next.push_back(p); // no overlap with this region
+                continue;
+            }
+            if (rlo > p.lo)
+                next.push_back({p.lo, rlo});
+            if (rhi < p.hi)
+                next.push_back({rhi, p.hi});
+            // rlo <= p.lo && rhi >= p.hi: region swallows p whole — no piece.
+        }
+        pieces = std::move(next);
+    }
+    return pieces;
+}
+
+} // namespace
+
+std::vector<Region> observed_data_spans(const Recording &rec,
+                                        const std::vector<Region> &existing,
+                                        std::string *note) {
+    // The address sources, in this stated order.
+    std::vector<uint64_t> addrs;
+    size_t mem_addrs = 0, df_abs_addrs = 0, df_off_skipped = 0;
+    if (auto it = rec.by_kind.find("mem"); it != rec.by_kind.end()) {
+        for (const Event &e : it->second) {
+            addrs.push_back(e.body.value("ea", uint64_t{0}));
+            mem_addrs++;
+        }
+    }
+    for (const ValRec &v : decode_streams(rec).df.recs) {
+        if (v.space == "abs") {
+            addrs.push_back(v.addr);
+            df_abs_addrs++;
+        } else if (v.space == "off") {
+            df_off_skipped++; // region-relative: not placeable raw (36/37 anchor
+                              // it instead), and never guessed here
+        }
+    }
+
+    if (note)
+        note->clear();
+    if (addrs.empty())
+        return {};
+
+    std::sort(addrs.begin(), addrs.end());
+    addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
+
+    // Cluster: open a span at the first address, extend while the next address
+    // is within the gap threshold, close and start a new one otherwise.
+    std::vector<Span> spans;
+    spans.push_back({addrs[0], addrs[0] + 1});
+    for (size_t i = 1; i < addrs.size(); ++i) {
+        Span &cur = spans.back();
+        if (addrs[i] <= cur.hi + kObservedSpanGap)
+            cur.hi = addrs[i] + 1;
+        else
+            spans.push_back({addrs[i], addrs[i] + 1});
+    }
+
+    // Round each span out to page boundaries, then re-merge anything the
+    // rounding brought into contact.
+    for (Span &sp : spans) {
+        sp.lo = page_floor(sp.lo);
+        sp.hi = page_ceil(sp.hi);
+    }
+    spans = merge_adjacent(spans);
+
+    // Subtract existing regions so an observed address inside a known region
+    // never creates a shadow span.
+    std::vector<Span> clipped;
+    for (const Span &sp : spans) {
+        for (const Span &p : clip_existing(sp, existing))
+            if (p.hi > p.lo)
+                clipped.push_back(p);
+    }
+
+    // Cap the span count: merge the nearest neighbours (smallest gap) until it
+    // fits, never drop one.
+    bool capped = false;
+    while (clipped.size() > kObservedSpanCap) {
+        size_t best = 0;
+        uint64_t best_gap = UINT64_MAX;
+        for (size_t i = 0; i + 1 < clipped.size(); ++i) {
+            uint64_t gap = clipped[i + 1].lo - clipped[i].hi;
+            if (gap < best_gap) {
+                best_gap = gap;
+                best = i;
+            }
+        }
+        clipped[best].hi = clipped[best + 1].hi;
+        clipped.erase(clipped.begin() + best + 1);
+        capped = true;
+    }
+
+    std::vector<Region> out;
+    out.reserve(clipped.size());
+    for (const Span &sp : clipped) {
+        Region r;
+        r.base = sp.lo;
+        r.len = sp.hi - sp.lo;
+        r.kind = Region::Unknown;
+        r.label = "observed data";
+        out.push_back(std::move(r));
+    }
+
+    if (note) {
+        char buf[320];
+        std::snprintf(
+            buf, sizeof buf,
+            "observed data: %zu span%s from %zu observed address%s (%zu mem, "
+            "%zu dataflow-abs, %zu dataflow-off skipped), %llu-byte gap "
+            "threshold%s",
+            out.size(), out.size() == 1 ? "" : "s", addrs.size(),
+            addrs.size() == 1 ? "" : "es", mem_addrs, df_abs_addrs,
+            df_off_skipped, (unsigned long long)kObservedSpanGap,
+            capped ? " (cap merged the nearest spans)" : "");
+        *note = buf;
+    }
+    return out;
 }
 
 bool Projection::project(uint64_t addr, float *u, float *v) const {

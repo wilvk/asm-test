@@ -123,6 +123,15 @@ struct TerrainModel {
         std::vector<uint64_t> steps;    // ascending `mem` steps
         std::vector<uint64_t> cum_size; // parallel prefix sum of `size`
         std::vector<uint32_t> cum_rw;   // parallel prefix OR of READ/WRITE bits
+        // 54 T2: cum_size split by direction, so "how much was read here" and
+        // "how much was written here" are separately answerable. Parallel to
+        // cum_size; cum_read_size[i] + cum_write_size[i] == cum_size[i] at every
+        // index EXCEPT when an access's `rw` token is neither "r" nor "w" — that
+        // access still counts into cum_size but into NEITHER direction (the
+        // "unknown is not zero" invariant made arithmetic; L7 renders that gap as
+        // an absent surface, never a flat one).
+        std::vector<uint64_t> cum_read_size;
+        std::vector<uint64_t> cum_write_size;
     };
     std::vector<CodeCell> code;
     std::vector<DataCell> data;

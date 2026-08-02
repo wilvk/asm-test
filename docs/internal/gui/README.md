@@ -15,13 +15,13 @@ rules follow [../implementations/](../implementations/README.md) — read
 > **Archived 2026-08-01 — this directory now holds only the docs with open
 > work.** Per the [archive rule](../README.md), the **43 briefs whose tasks are
 > all complete** moved to [`../archive/gui/`](../archive/gui/) — that is the
-> whole numbered family 01–37, 39–42, 44, 45 and 49, every one of them ✅/☑ with
-> all tasks landed. The tables and prose below still describe every doc, with
+> whole numbered family 01–37, 39–42, 44, 45, 49 and 54, every one of them ✅/☑
+> with all tasks landed. The tables and prose below still describe every doc, with
 > the completed ones linked into the archive, so this file remains the single
 > inventory and dependency map for the family. **The documents below stay here**,
 > because each still points at unbuilt work (updated 2026-08-02 with the
-> instrument family 46–52 and the depiction family 53–59; 49 landed the same
-> day and moved to the archive):
+> instrument family 46–52 and the depiction family 53–59; 49 and 54 landed the
+> same day and moved to the archive):
 >
 > | Doc | Why it stays |
 > |---|---|
@@ -33,8 +33,7 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [50-two-way-brushing.md](50-two-way-brushing.md) | ☐ 0/4 — light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
 > | [52-flat-terrain-surface.md](52-flat-terrain-surface.md) | ☐ 0/4 — a GL-free 2D terrain surface: the no-GL branches gain a real view and the GL path gains a reading mode. |
-> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Cuts docs 54–59, all ☐ not started. |
-> | [54-3d-catalog-phase0-plumbing.md](54-3d-catalog-phase0-plumbing.md) | ◐ 5/7 — the seven shared changes 12 of the catalog's graphs are gated on; T3–T7 landed 2026-08-02, T1 (makes the terrain's data half reachable at all) and T2 remain, both unclaimed. |
+> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; docs 55–59 all ☐ not started. |
 > | [55-scene-render-quality.md](55-scene-render-quality.md) | ☐ 0/6 — eye-dome lighting, depth-dependent halos, contour bands + height key, order-independent translucency, MSAA, portable line width. |
 > | [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | ☐ 0/5 — the layer registry, confidence terrain, per-module skyline, opcode-class terrain, misprediction survey layer. |
 > | [57-causal-layers.md](57-causal-layers.md) | ☐ 0/5 — one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge. |
@@ -548,15 +547,15 @@ catalog's own 26-graph inventory and its five-phase build order.
 | Doc | Area | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|
 | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 26-graph inventory with each gate re-verified, the GL-effects survey and its baseline gate, the city-phase mapping, and what a Phase-4/5 cut would contain (**roadmap, not a brief**) | — | 10, 43, 46 | roadmap · cuts 54–59 | — |
-| [54-3d-catalog-phase0-plumbing.md](54-3d-catalog-phase0-plumbing.md) | observed-data-span projection (**makes the terrain's data half reachable at all**), read/write prefix-sum split, `Event::seq` on `SyscallRow`, engine-free `mnemonic_class`, BFS-depth dataflow walk, `dt_link` invocation field, the `HotEdge` sourcing decision | 7 | none | ◐ 5/7 (T3–T7 landed 2026-08-02; T1–T2 open) | will · T1-T2 · 2026-08-02 |
+| [54-3d-catalog-phase0-plumbing.md](../archive/gui/54-3d-catalog-phase0-plumbing.md) | observed-data-span projection (**makes the terrain's data half reachable at all**), read/write prefix-sum split, `Event::seq` on `SyscallRow`, engine-free `mnemonic_class`, BFS-depth dataflow walk, `dt_link` invocation field, the `HotEdge` sourcing decision | 7 | none | ✅ 7/7 | — |
 | [55-scene-render-quality.md](55-scene-render-quality.md) | eye-dome lighting, depth-dependent halos, `fwidth` contour bands + height key, order-independent translucency (WBOIT + dithered fallback), MSAA, portable line width + the GLSL-version question | 6 | none | ☐ 0/6 | *free* |
 | [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | L1–L4: the layer registry, confidence terrain + coverage-window mask, per-module residency skyline, opcode-class code terrain, misprediction survey layer | 5 | 54 T4 (T4), 54 T7 (T5) | ☐ 0/5 | *free* |
 | [57-causal-layers.md](57-causal-layers.md) | L5, L6, L11, L14: one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge | 5 | 54 T3 (T2), 54 T5 (T3); 56 T1 | ☐ 0/5 | *free* |
 | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 | ☐ 0/6 | *free* |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | *free* |
 
-51 tasks now open across the three families (16 landed — 7 in representation
-via 44, 4 in instrument via 49, 5 in depiction via 54 T3–T7 — and 22 + 29
+49 tasks now open across the three families (18 landed — 7 in representation
+via 44, 4 in instrument via 49, 7 in depiction via 54 (complete) — and 22 + 27
 still open in instrument/depiction). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
@@ -696,7 +695,7 @@ throughout. Status and claims are in the instrument table above.
 **The 3D catalog as a build plan (docs 53–59, 2026-08-02): the third 3D family,
 cut from the catalog's own 26-graph inventory.**
 [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) is the roadmap;
-[54](54-3d-catalog-phase0-plumbing.md)–[59](59-standalone-scenes.md) are its six
+[54](../archive/gui/54-3d-catalog-phase0-plumbing.md)–[59](59-standalone-scenes.md) are its six
 briefs. [43](43-faithful-city-roadmap.md) says to cut future 3D briefs from the
 city doc rather than the raw catalog, and 53§1 explains where that stops holding:
 **the city phases are grouped by metaphor, the work is gated by data**, so a brief
@@ -714,8 +713,9 @@ and the `mem` scan drops any access no region maps
 ([terrain.cpp:397-399](../../../desktop/src/space/terrain.cpp#L397)) — so
 `DataCell`, `cum_size`, `cum_rw`, `TF_READ` and `TF_WRITE` are all code that exists,
 is tested against hand-built projections, and can never fire from the UI.
-[54](54-3d-catalog-phase0-plumbing.md) T1 is therefore the single
-highest-leverage task in either open family. The other new work is
+[54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 was therefore the
+single highest-leverage task in either open family — and landed the same day
+as this analysis (2026-08-02), alongside T2. The other new work is
 [55](55-scene-render-quality.md), from an online survey of what would materially
 improve these scenes at this app's narrow GL baseline (GL 3.0 / GLSL 130 on Linux,
 3.2 core / GLSL 150 on Apple, no glad/glew): **eye-dome lighting** (the depth cue
