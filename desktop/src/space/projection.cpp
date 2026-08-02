@@ -397,4 +397,41 @@ RegionStyle region_style(Region::Kind kind) {
     return {0.55f, 0.55f, 0.60f, "unknown"}; // -Wreturn-type: unreachable
 }
 
+// 51 T2: see projection.h for the rule and its exactness argument. Kept in
+// THIS TU because d2xy/domain_shift live here — re-deriving either one beside
+// a caller would be a second copy of load-bearing math, which is exactly what
+// project()/unproject() were centralised to avoid.
+std::vector<uint32_t> region_cells(const Projection &proj,
+                                   size_t region_index) {
+    std::vector<uint32_t> out;
+    if (region_index >= proj.regions.size() ||
+        proj.domain_off.size() < proj.regions.size() + 1)
+        return out;
+    const uint64_t lo = proj.domain_off[region_index];
+    const uint64_t hi = proj.domain_off[region_index + 1];
+    if (hi <= lo)
+        return out; // a zero-length region owns no cells
+    const uint64_t total = proj.domain_off.back();
+    const uint32_t n = uint32_t(1) << proj.order;
+    const uint32_t shift = domain_shift(proj.order, total);
+    // The domain range maps to the CONTIGUOUS Hilbert-index run
+    // [lo >> shift, (hi-1) >> shift] — project() computes exactly this index
+    // for a single address, so walking the run visits every cell any address
+    // of this region can land in, and no other.
+    const uint64_t h_lo = lo >> shift;
+    const uint64_t h_hi = (hi - 1) >> shift;
+    out.reserve(static_cast<size_t>(h_hi - h_lo + 1));
+    for (uint64_t h = h_lo; h <= h_hi; h++) {
+        uint32_t x = 0, y = 0;
+        d2xy(n, h, &x, &y);
+        out.push_back(y * n + x);
+    }
+    // Ascending, no duplicates: consecutive Hilbert indices are distinct
+    // cells, but the caller is promised a sorted set, and sorting a run of
+    // at most `plane` entries is cheap next to the walk that produced it.
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 } // namespace asmdesk::space

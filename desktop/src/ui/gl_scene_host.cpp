@@ -100,6 +100,11 @@ class GlSceneHost : public SceneHost {
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below
+            // 51 T2: a new/grown weave means a new Projection, so the focus
+            // mask below must be re-derived even if the focused region index
+            // did not change. -2 is "no mask uploaded yet" (distinct from -1,
+            // a live "no region focused").
+            up_focus_region_ = -2;
         }
         if (f.slice_t != up_t_) {
             scene_.nsteps = static_cast<uint32_t>(f.terr->nsteps);
@@ -126,6 +131,19 @@ class GlSceneHost : public SceneHost {
         // 50 T2: the located selection, the same draw-time-uniform pattern.
         scene_.highlight_cell =
             f.has_highlight ? static_cast<int32_t>(f.highlight_cell) : -1;
+        // 51 T1/T2: the subject filter. The tid/kind halves are pure
+        // draw-time uniforms; the region half needs the per-cell mask, which
+        // depends only on (Projection, region index) and is therefore
+        // uploaded on ITS OWN gate — never on a playhead scrub, and never per
+        // frame.
+        scene_.focus = f.focus;
+        if (f.focus.region != up_focus_region_) {
+            if (f.focus.region >= 0 && f.focus_mask && !f.focus_mask->empty())
+                scene_.set_focus_mask(*f.focus_mask, f.terr->w, f.terr->h);
+            else
+                scene_.clear_focus_mask();
+            up_focus_region_ = f.focus.region;
+        }
 
         GLint prev_fbo = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
@@ -211,6 +229,9 @@ class GlSceneHost : public SceneHost {
     uint64_t up_gen_ = 0;
     uint64_t up_t_ = 0;
     bool have_upload_ = false;
+    // 51 T2: which region index the focus mask currently uploaded is for.
+    // -2 == nothing uploaded yet (distinct from -1, "no region focused").
+    int32_t up_focus_region_ = -2;
 };
 
 } // namespace

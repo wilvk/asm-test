@@ -88,6 +88,17 @@ struct SceneFrame {
     // mismatch decision this mirrors, T5/T6 above).
     bool has_highlight = false;
     uint32_t highlight_cell = 0;
+    // 51 T1/T2 (scene-focus-and-scale): the SUBJECT filter — which thread /
+    // region / kinds is being read. A draw-time value like `layers` above; the
+    // host copies it straight onto the Scene each frame, no upload.
+    scene3d::SceneFocus focus;
+    // 51 T2: the focused region's per-cell mask (scene3d::build_focus_mask) —
+    // the one part of the filter a fragment shader cannot derive, since a
+    // Hilbert footprint is a real cell SET, not a rectangle. Owned by the
+    // shell and rebuilt ONLY when the focused region (or the weave) changes,
+    // so it costs nothing on a playhead scrub. nullptr or empty => no region
+    // focused, and the host clears the filter rather than uploading zeroes.
+    const std::vector<uint8_t> *focus_mask = nullptr;
 };
 
 // The abstract GL host. main.cpp constructs one (make_gl_scene_host), calls init()
