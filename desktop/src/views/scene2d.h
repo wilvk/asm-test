@@ -94,9 +94,9 @@ struct Scene2dRegionLabel {
 
 struct Scene2dPlan {
     bool has_plane = false; // false => terr.w == 0; nothing else below is valid
-    uint32_t w = 0, h = 0;   // the SOURCE terrain grid (== proj plane side)
+    uint32_t w = 0, h = 0;  // the SOURCE terrain grid (== proj plane side)
     uint32_t downsample = 1; // source cells per block edge; 1 = no down-sample
-    uint32_t grid_w = 0, grid_h = 0; // block grid = ceil(w/downsample) each
+    uint32_t grid_w = 0, grid_h = 0;  // block grid = ceil(w/downsample) each
     std::vector<Scene2dBlock> blocks; // row-major, grid_w*grid_h entries
     std::vector<Scene2dPath> paths;
     std::vector<Scene2dMark> marks;

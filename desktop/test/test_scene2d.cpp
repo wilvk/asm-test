@@ -107,8 +107,8 @@ int main() {
             {"stat only", 0.5f, TF_STAT, k(Region::Heap)},
             {"unknown only", 0.0f, TF_UNKNOWN, k(Region::Mmap)},
             {"torn only", 0.8f, TF_TORN, k(Region::Code)},
-            {"torn+unknown+stat+churn", 0.9f, TF_TORN | TF_UNKNOWN | TF_STAT | TF_CHURN,
-             k(Region::Code)},
+            {"torn+unknown+stat+churn", 0.9f,
+             TF_TORN | TF_UNKNOWN | TF_STAT | TF_CHURN, k(Region::Code)},
             {"off-domain clamp", 0.0f, 0u, kKindByCellNone},
         };
         for (const Case &c : cases) {
@@ -129,11 +129,10 @@ int main() {
         // acceptance: "its branch order matches the shader's"): torn reads
         // as torn even under every other flag; an unknown-but-not-torn cell
         // reads as unknown even under stat+churn.
-        CellPaint torn_all = cell_paint(0.9f, TF_TORN | TF_UNKNOWN | TF_STAT | TF_CHURN,
-                                        Region::Code);
+        CellPaint torn_all = cell_paint(
+            0.9f, TF_TORN | TF_UNKNOWN | TF_STAT | TF_CHURN, Region::Code);
         check("torn dominates the combined why()",
-              std::string(torn_all.why).find("torn") == 0,
-              torn_all.why);
+              std::string(torn_all.why).find("torn") == 0, torn_all.why);
         CellPaint unknown_stat_churn =
             cell_paint(0.5f, TF_UNKNOWN | TF_STAT | TF_CHURN, Region::Code);
         check("unknown dominates over stat+churn in why()",
@@ -162,8 +161,8 @@ int main() {
         slice.w = slice.h = 4;
         slice.height.assign(16, 0.0f);
         slice.flags.assign(16, 0u);
-        slice.height[0] = 1.0f;              // cell (0,0): tall, no flags
-        slice.flags[3] = TF_TORN;            // cell (3,0): torn, otherwise quiet
+        slice.height[0] = 1.0f;   // cell (0,0): tall, no flags
+        slice.flags[3] = TF_TORN; // cell (3,0): torn, otherwise quiet
         slice.height[3] = 0.2f;
 
         TrajectorySet traj;
@@ -175,12 +174,13 @@ int main() {
         Scene2dPlan plan = build_scene2d_plan(terr, slice, traj, conv,
                                               /*playhead_t=*/0,
                                               /*max_blocks_per_edge=*/1);
-        check("plan has a plane", plan.has_plane, "4x4 terrain must have a plane");
+        check("plan has a plane", plan.has_plane,
+              "4x4 terrain must have a plane");
         check("single block at downsample 4",
               plan.grid_w == 1 && plan.grid_h == 1 && plan.downsample == 4,
               "grid " + std::to_string(plan.grid_w) + "x" +
-                  std::to_string(plan.grid_h) + " ds=" +
-                  std::to_string(plan.downsample));
+                  std::to_string(plan.grid_h) +
+                  " ds=" + std::to_string(plan.downsample));
         check("exactly one block emitted", plan.blocks.size() == 1,
               std::to_string(plan.blocks.size()));
         if (plan.blocks.size() == 1) {
@@ -272,7 +272,8 @@ int main() {
                           std::fabs(path.points[2].v - va1) < 1e-4f,
                       "point 2 mislocated or unplaced");
                 check("point 0 (t=0) is not past the t=5 playhead",
-                      !path.points[0].past_playhead, "t=0 must not be past t=5");
+                      !path.points[0].past_playhead,
+                      "t=0 must not be past t=5");
                 check("point 3 (t=10) is past the t=5 playhead — dimmed, not "
                       "dropped",
                       path.points[3].placed && path.points[3].past_playhead,
@@ -324,19 +325,20 @@ int main() {
             threed_pick.kind = scene3d::Pick::Cell; // independently of scene2d
             threed_pick.cell = expect_cell;
 
-            std::optional<dt_link> flat_link =
-                scene3d::resolve_pick(terr, traj, "rec.asmtrace", flat_pick, conv);
+            std::optional<dt_link> flat_link = scene3d::resolve_pick(
+                terr, traj, "rec.asmtrace", flat_pick, conv);
             std::optional<dt_link> threed_link = scene3d::resolve_pick(
                 terr, traj, "rec.asmtrace", threed_pick, conv);
-            check("both picks resolve", flat_link.has_value() && threed_link.has_value(),
+            check("both picks resolve",
+                  flat_link.has_value() && threed_link.has_value(),
                   "a code cell must resolve to a link");
             if (flat_link && threed_link) {
                 check("identical view", flat_link->view == threed_link->view,
                       "view differs");
                 check("identical offset", flat_link->off == threed_link->off,
                       "off differs");
-                check("identical recording id", flat_link->rec == threed_link->rec,
-                      "rec differs");
+                check("identical recording id",
+                      flat_link->rec == threed_link->rec, "rec differs");
             }
 
             scene3d::PickHint flat_hint =
@@ -344,15 +346,18 @@ int main() {
             scene3d::PickHint threed_hint =
                 scene3d::resolve_pick_hint(terr, traj, conv, threed_pick);
             check("identical hover hint target",
-                  flat_hint.target == threed_hint.target, "hint target differs");
+                  flat_hint.target == threed_hint.target,
+                  "hint target differs");
         }
 
-        check("an out-of-range fraction refuses", [&] {
-            uint32_t c = 0;
-            return !scene2d_pick_cell(plan, 1.0f, 0.5f, &c) &&
-                   !scene2d_pick_cell(plan, -0.01f, 0.5f, &c);
-        }(),
-              "a fraction outside [0,1) must not resolve to a cell");
+        check(
+            "an out-of-range fraction refuses",
+            [&] {
+                uint32_t c = 0;
+                return !scene2d_pick_cell(plan, 1.0f, 0.5f, &c) &&
+                       !scene2d_pick_cell(plan, -0.01f, 0.5f, &c);
+            }(),
+            "a fraction outside [0,1) must not resolve to a cell");
         {
             uint32_t c = 0;
             check("has_plane=false refuses regardless of fraction",

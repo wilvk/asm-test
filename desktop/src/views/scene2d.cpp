@@ -83,9 +83,10 @@ Scene2dPlan build_scene2d_plan(const space::TerrainModel &terr,
     Scene2dPlan plan;
     plan.w = terr.w;
     plan.h = terr.h;
-    plan.has_plane = terr.w > 0 && terr.h > 0 &&
-                     slice.height.size() == static_cast<size_t>(terr.w) * terr.h &&
-                     slice.flags.size() == slice.height.size();
+    plan.has_plane =
+        terr.w > 0 && terr.h > 0 &&
+        slice.height.size() == static_cast<size_t>(terr.w) * terr.h &&
+        slice.flags.size() == slice.height.size();
     if (!plan.has_plane)
         return plan;
 
@@ -142,7 +143,8 @@ Scene2dPlan build_scene2d_plan(const space::TerrainModel &terr,
                 uint64_t addr = 0;
                 const space::Region *r = nullptr;
                 if (terr.proj.unproject(ru, rv, &addr, &r) && r)
-                    blk.region = static_cast<int32_t>(r - terr.proj.regions.data());
+                    blk.region =
+                        static_cast<int32_t>(r - terr.proj.regions.data());
             }
             plan.blocks.push_back(blk);
         }
@@ -219,8 +221,10 @@ bool scene2d_pick_cell(const Scene2dPlan &plan, float frac_x, float frac_y,
         return false;
     if (frac_x < 0.0f || frac_x >= 1.0f || frac_y < 0.0f || frac_y >= 1.0f)
         return false;
-    uint32_t bx = static_cast<uint32_t>(frac_x * static_cast<float>(plan.grid_w));
-    uint32_t by = static_cast<uint32_t>(frac_y * static_cast<float>(plan.grid_h));
+    uint32_t bx =
+        static_cast<uint32_t>(frac_x * static_cast<float>(plan.grid_w));
+    uint32_t by =
+        static_cast<uint32_t>(frac_y * static_cast<float>(plan.grid_h));
     bx = std::min(bx, plan.grid_w - 1);
     by = std::min(by, plan.grid_h - 1);
     // The SAME top-left-of-block arithmetic build_scene2d_plan used for its

@@ -142,6 +142,14 @@ struct SceneView {
     space::Located highlight;
     uint64_t highlight_epoch = UINT64_MAX;
     uint64_t highlight_gen = UINT64_MAX;
+
+    // 52 T3 (flat-terrain-surface.md): the GL-free flat surface's own
+    // "reading mode" toggle for the GL path — a plain per-recording bool
+    // (not routed through scene3d::HudState, which is mid-edit elsewhere on
+    // this tree) so checking it swaps the flat surface in for the viewport
+    // image; the three degraded branches draw the surface unconditionally,
+    // regardless of this flag.
+    bool flat_view = false;
 };
 
 struct ShellState {

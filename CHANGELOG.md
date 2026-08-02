@@ -48,6 +48,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     here" readout names the region and address under the camera target.
   - The HUD's collapsible "controls" block is generated from the `CamKey`
     enum so an unadvertised key fails a test, not a silent drift.
+- **A GL-free flat terrain surface for the 3D pane** (docs/internal/gui/
+  52-flat-terrain-surface.md). The 3D overview's spatial channel was
+  unavailable wherever GL was absent (headless tests, the null backend, a
+  driver whose shader will not build) and had no perspective-free reading
+  mode even with GL, despite the pane's own rule that precise reading is a 2D
+  job:
+  - `views/scene2d.{h,cpp}`'s `cell_paint()` mirrors `kTerrainFrag`'s branch
+    chain exactly (kind hue via `space::region_style()` -> height mix ->
+    churn -> stat -> unknown -> torn), cited back from `embedded.h` as the
+    keep-in-sync C++ mirror so the two renderers cannot silently disagree
+    about a cell's fidelity state.
+  - `build_scene2d_plan()` folds a terrain slice into down-sampled blocks
+    (max height, OR'd flags — a torn or statistical cell is never dropped to
+    binning, and the factor is stated on screen), breaks trajectory strips at
+    unplaced vertices instead of interpolating across them, and dims — never
+    drops — path points past the terrain-time playhead, the same rule 49's
+    worldline clipping uses.
+  - The three previously GL-only degraded branches (no `scene_host`, not
+    `ready()`, no frame texture) now draw the flat surface beside their
+    existing placard; a new "flat surface" toggle swaps it in for the
+    viewport on a working GL driver. Hover and click route through
+    `scene2d_pick_cell` into the SAME `scene3d::resolve_pick` /
+    `resolve_pick_hint` the 3D pick path uses, so a flat pick and a 3D pick
+    of the same cell can never disagree — proven directly in the new
+    `test_scene2d.cpp`.
+  - Region-transition boundaries and labels, a compacted-domain-edge mark
+    (padding is drawn as nothing, never a dark cell), and a scale strip
+    (`scene3d::height_scale_note`) round out the surface as a real reading
+    instrument, not just a fallback.
 - **Launch a process and trace it from birth, and target a running one by
   window-pick** (docs/internal/archive/gui/45-launch-and-window-target.md). Two new
   ways onto a live target, alongside attach-by-PID:

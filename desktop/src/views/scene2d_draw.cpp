@@ -53,7 +53,7 @@ void add_dashed_line(ImDrawList *dl, ImVec2 a, ImVec2 b, ImU32 col,
         const float t2 = std::min(t + seg, len);
         if (on)
             dl->AddLine(ImVec2(a.x + ux * t, a.y + uy * t),
-                       ImVec2(a.x + ux * t2, a.y + uy * t2), col, thickness);
+                        ImVec2(a.x + ux * t2, a.y + uy * t2), col, thickness);
         t = t2;
         on = !on;
     }
@@ -90,8 +90,9 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
         avail.x = 32.0f;
     if (avail.y < 32.0f)
         avail.y = 32.0f;
-    float cell_px = std::floor(std::min(avail.x / static_cast<float>(plan.grid_w),
-                                        avail.y / static_cast<float>(plan.grid_h)));
+    float cell_px =
+        std::floor(std::min(avail.x / static_cast<float>(plan.grid_w),
+                            avail.y / static_cast<float>(plan.grid_h)));
     if (cell_px < 1.0f)
         cell_px = 1.0f;
     const float drawn_w = cell_px * static_cast<float>(plan.grid_w);
@@ -128,19 +129,25 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
         if (b.bx + 1 < plan.grid_w) {
             const Scene2dBlock &rn = plan.blocks[idx + 1];
             if (rn.region != b.region) {
-                const float x = origin.x + static_cast<float>(b.bx + 1) * cell_px;
-                dl->AddLine(ImVec2(x, origin.y + static_cast<float>(b.by) * cell_px),
-                           ImVec2(x, origin.y + static_cast<float>(b.by + 1) * cell_px),
-                           IM_COL32(255, 255, 255, 70));
+                const float x =
+                    origin.x + static_cast<float>(b.bx + 1) * cell_px;
+                dl->AddLine(
+                    ImVec2(x, origin.y + static_cast<float>(b.by) * cell_px),
+                    ImVec2(x,
+                           origin.y + static_cast<float>(b.by + 1) * cell_px),
+                    IM_COL32(255, 255, 255, 70));
             }
         }
         if (b.by + 1 < plan.grid_h) {
             const Scene2dBlock &dn = plan.blocks[idx + plan.grid_w];
             if (dn.region != b.region) {
-                const float y = origin.y + static_cast<float>(b.by + 1) * cell_px;
-                dl->AddLine(ImVec2(origin.x + static_cast<float>(b.bx) * cell_px, y),
-                           ImVec2(origin.x + static_cast<float>(b.bx + 1) * cell_px, y),
-                           IM_COL32(255, 255, 255, 70));
+                const float y =
+                    origin.y + static_cast<float>(b.by + 1) * cell_px;
+                dl->AddLine(
+                    ImVec2(origin.x + static_cast<float>(b.bx) * cell_px, y),
+                    ImVec2(origin.x + static_cast<float>(b.bx + 1) * cell_px,
+                           y),
+                    IM_COL32(255, 255, 255, 70));
             }
         }
     }
@@ -157,7 +164,8 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
                 have_prev = false; // break the strip; never interpolate
                 continue;
             }
-            const ImVec2 cur(origin.x + pt.u * drawn_w, origin.y + pt.v * drawn_h);
+            const ImVec2 cur(origin.x + pt.u * drawn_w,
+                             origin.y + pt.v * drawn_h);
             if (have_prev) {
                 // 49's dim-never-discard rule, applied identically here: a
                 // segment touching a not-yet-reached vertex is dimmed, not
@@ -182,10 +190,9 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
         const std::vector<scene3d::OverlaySwatch> sw =
             scene3d::overlay_encoding_swatches();
         const ImU32 conv_col =
-            sw.size() > 0
-                ? ImGui::ColorConvertFloat4ToU32(
-                      ImVec4(sw[0].rgb[0], sw[0].rgb[1], sw[0].rgb[2], 0.9f))
-                : IM_COL32(255, 60, 220, 230);
+            sw.size() > 0 ? ImGui::ColorConvertFloat4ToU32(ImVec4(
+                                sw[0].rgb[0], sw[0].rgb[1], sw[0].rgb[2], 0.9f))
+                          : IM_COL32(255, 60, 220, 230);
         const ImU32 spur_col =
             sw.size() > 1
                 ? ImGui::ColorConvertFloat4ToU32(
@@ -225,7 +232,8 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
                 if (!hint.quantity.empty())
                     ImGui::TextUnformatted(hint.quantity.c_str());
                 if (!hint.fidelity.empty())
-                    ImGui::TextColored(dt_warn_col(), "%s", hint.fidelity.c_str());
+                    ImGui::TextColored(dt_warn_col(), "%s",
+                                       hint.fidelity.c_str());
                 const std::string click_line = hint.target.empty()
                                                    ? "click -> nothing here"
                                                    : "click -> " + hint.target;
