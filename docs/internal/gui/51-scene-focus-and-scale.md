@@ -16,30 +16,95 @@
 > [48](48-scene-navigation-and-goto.md)'s landmark anchor when present and on the
 > plane centre otherwise. No producer change, no schema change, no new dep.
 >
-> Authored 2026-08-02 against HEAD `f110150`. If a cited file:line disagrees with
-> the code when you implement, the code wins — re-verify, then fix this doc in the
-> same change.
+> Authored 2026-08-02 against HEAD `f110150`; **implemented 2026-08-03**, and
+> every file:line below re-verified against the tree as it stands after that
+> landing (several had drifted — 56 grew `SceneLayers` past nine bools, and the
+> `shell.cpp` degrade block moved — so they are corrected in place here). If a
+> citation disagrees with the code when you read it, the code wins — re-verify,
+> then fix this doc in the same change.
 >
-> **Status — ☐ 0/4, not started.**
+> **Status — ✅ 4/4, landed 2026-08-03.**
+>
+> **T1** — `Scene::Line` carries `tid`, and the subject filter's rules moved to a
+> new PURE unit, `scene3d/focus.{h,cpp}`: `SceneFocus` (tid / region / kind_mask
+> / the `drop_unfocused` LOD escape), `focus_line_alpha()` (the ghost rule),
+> `tid_palette()` (the per-tid colour table, MOVED here out of `scene.cpp`'s
+> anonymous namespace so the HUD swatch and the drawn worldline are ONE table
+> rather than a synced copy) and `thread_roster()` (one row per trajectory,
+> including the `"present, no placed path"` row for a tid the plane cannot draw).
+> `render()` scales `uColor.a` by `focus_line_alpha` — ghost, never hide, and the
+> literal `1.0f` when nothing is focused, so an unfocused render is byte-identical
+> to the pre-51 one (asserted in pixels). The HUD gained the roster, with the
+> statistical row rendered disabled and a tooltip stating why a survey is not a
+> thread.
+>
+> **T2** — `space::region_cells()` (new, in `projection.cpp` beside the
+> `d2xy`/`domain_shift` math it must not duplicate) answers "which cells are this
+> region's" EXACTLY, by walking the region's compacted-domain range through the
+> same Hilbert index mapping `project()` uses. `scene3d::build_focus_mask()` turns
+> that into the per-cell R8UI mask `Scene::set_focus_mask()` uploads — the one
+> part a fragment shader cannot derive, since a Hilbert footprint is a real cell
+> SET, not a rectangle. `kTerrainFrag` gained `uKindMask` / `uHasFocusRegion` /
+> `uFocusMask`; the HUD gained kind checkboxes (routed through `region_style()`,
+> so the filter UI and the plane share one palette) and a region combo listing
+> verbatim labels. `subject_filter_note()` is the "showing 2 of 6 kinds" chip,
+> drawn in `dt_warn_col()` whenever anything is filtered.
+>
+> **T3** — the desaturation is applied in `kTerrainFrag` *before* every `TF_*`
+> branch, commented as load-bearing, and it flattens toward a **0.12 grey floor,
+> never toward black**, so a filtered-out cell can never look like the near-black
+> fog-of-war `TF_UNKNOWN` pit. `views/scene2d.h`'s `cell_paint()` mirror is
+> deliberately NOT extended, and `embedded.h`'s own keep-in-sync note now says why
+> (a filter must not change the fidelity state `cell_paint` answers). Tested three
+> ways: byte-equality on `Terrain::flags`/`height` and on the `TrajectorySet`
+> across a full filter round trip; a GL check that a *filtered* torn cell is still
+> red; and a GL check that the pick pass is untouched (a desaturated cell is
+> exactly as clickable).
+>
+> **T4** — `scene3d/lod.h`, header-only, reusing `should_degrade()` itself rather
+> than a copy of the predicate: `lod_tier(radius, entity_count)`, `lod_apply()`,
+> `lod_dropped()`, `lod_placard()`. Applied in `ui/shell.cpp` — so **`scene.cpp`
+> needed no LOD change at all** — and announced twice: beside `scrub_degrade_note()`
+> in the pane, and at the layer toggles in the HUD, where a reader who ticked a box
+> and sees nothing would actually go looking.
+>
+> **Shape notes, where the landing differs from this brief's sketch.**
+> (a) The brief asks for three loose public `Scene` fields (`focus_tid`,
+> `kind_mask`, `focus_region`); one `SceneFocus focus` member landed instead, with
+> the rules in a pure TU — the same split `SceneLayers`/`layers.h` already uses,
+> and a much smaller footprint in the heavily-contended `scene.cpp`.
+> (b) T4's "non-focused trajectories drop out" applies **only when a thread is
+> actually focused**: with no subject chosen, no worldline is "non-subject", and
+> the budget must not pick a subject on the reader's behalf.
+> (c) `exact` survives the FAR tier by design, and a test asserts no tier may ever
+> keep the statistical stipple while dropping the exact paths — the appearance
+> collision T4 step 3 names, in its strongest structural form.
+>
+> **Gap, stated rather than implied.** The roster's "present in the recording's
+> topology" is scoped to the `TrajectorySet`: a tid that appears ONLY in a
+> `topo`/thread event and produced no `Trajectory` at all still has no row. Closing
+> that needs the roster to read the `Recording`, which would cost it its purity;
+> it is left for whichever brief next needs a per-thread view of the topology.
 
 ## Why this work exists
 
 Two different scale problems share one root: the scene has no notion of a
 *subject*, so it can only draw everything at equal weight.
 
-**Focus.** `SceneLayers` is nine bools ([scene.h:36-47](../../../desktop/src/scene3d/scene.h#L36))
+**Focus.** `SceneLayers` was nine bools when this was written and is fifteen
+today ([scene.h:41](../../../desktop/src/scene3d/scene.h#L41))
 and every one of them is a *class* switch — terrain, exact, statistical, access
 marks, convergence, zoning, weather, ghost fog, vehicle. There is no way to say
 "this thread", "this region", "this kind". On a multi-thread capture every path is
 drawn identically and the one you care about is somewhere in the bundle. The
 renderer cannot even express the distinction: `Scene::Line`
-([scene.h:171-185](../../../desktop/src/scene3d/scene.h#L171)) retains a colour, a
+([scene.h:379](../../../desktop/src/scene3d/scene.h#L379)) retains a colour, a
 statistical flag and per-vertex facts, but **no `tid`** — so `render()` could not
 ghost the other threads if it wanted to.
 
 **Scale.** The existing degrade path is time-budgeted, not density-budgeted:
 `kScrubCellBudget` / `should_degrade` / `coarse_slice`
-([shell.cpp:1001-1012](../../../desktop/src/ui/shell.cpp#L1001)) exist to keep a
+([shell.cpp:1116-1131](../../../desktop/src/ui/shell.cpp#L1116)) exist to keep a
 slow *slice* off the UI thread and are a good, proven idiom. Nothing handles a
 dense *frame*. A Hilbert order-12 plane is 4096×4096 ≈ 16.7M cells; both source
 docs name occlusion at scale as the top rendering risk and neither proposes a
@@ -52,24 +117,25 @@ interested in is what lets you drop the rest without lying about it.
 ## What already exists (verified 2026-08-02 against `f110150`)
 
 - **The degrade idiom is proven and labelled.** `coarse_slice()`
-  ([terrain.h:137-144](../../../desktop/src/space/terrain.h#L137)) is a flat plane
+  ([terrain.h:199](../../../desktop/src/space/terrain.h#L199)) is a flat plane
   that *carries the torn flag* and is announced by `scrub_degrade_note()`
-  ([shell.cpp:1013-1014](../../../desktop/src/ui/shell.cpp#L1013)) — degrading
+  ([shell.cpp:1134](../../../desktop/src/ui/shell.cpp#L1134)) — degrading
   hides nothing because the coarse rung is the same labelled rung the terrain
   shows normally. T4 generalises this shape; it does not invent a new one.
 - **One `Line` per trajectory already exists**, one per tid, built in
   `set_trajectories` ([scene.cpp](../../../desktop/src/scene3d/scene.cpp)) — the
   per-thread split is already in the geometry, only the identity is missing.
 - **`Trajectory::tid` and `TrajPoint::tid`** are carried end to end
-  ([trajectory.h:48-52](../../../desktop/src/space/trajectory.h#L48),
-  [types.h:60](../../../desktop/src/space/types.h#L60)), so T1 is plumbing an
+  ([trajectory.h:48](../../../desktop/src/space/trajectory.h#L48),
+  [types.h:67](../../../desktop/src/space/types.h#L67)), so T1 is plumbing an
   existing fact into the renderer, not deriving a new one.
 - **`Projection.regions` is the region list**, sorted and non-overlapping, with
-  `label` and `kind` ([types.h:30-40](../../../desktop/src/space/types.h#L30)) —
+  `label` and `kind` ([types.h:19](../../../desktop/src/space/types.h#L19),
+  [types.h:31](../../../desktop/src/space/types.h#L31)) —
   the subject list a region filter needs.
-- **`kind_by_cell`** ([terrain.h:87](../../../desktop/src/space/terrain.h#L87)) is
+- **`kind_by_cell`** ([terrain.h:96](../../../desktop/src/space/terrain.h#L96)) is
   already uploaded as an R8UI texture by 44's `set_zoning`
-  ([scene.h:78-79](../../../desktop/src/scene3d/scene.h#L78)) — a kind filter is a
+  ([scene.h:150](../../../desktop/src/scene3d/scene.h#L150)) — a kind filter is a
   shader comparison against a texture that is already bound, costing nothing.
 - **`Camera::radius`** with its `kMinRadius`/`kMaxRadius` clamps
   ([camera.h:40-41](../../../desktop/src/scene3d/camera.h#L40)) is the natural LOD
@@ -77,17 +143,17 @@ interested in is what lets you drop the rest without lying about it.
 
 ## Tasks
 
-### T1 — `Scene::Line` learns its tid; ghost the rest (M)
+### T1 — `Scene::Line` learns its tid; ghost the rest (M) — ✅
 
 **Goal.** One thread can be brought forward without the others being hidden.
 
 **Steps.**
 1. `scene3d/scene.h`: add `int32_t tid = -1;` to `Scene::Line`
-   ([scene.h:171](../../../desktop/src/scene3d/scene.h#L171)) and populate it in
+   ([scene.h:388](../../../desktop/src/scene3d/scene.h#L388)) and populate it in
    `set_trajectories` from `Trajectory::tid`.
 2. Add a public `int32_t focus_tid = -1;` (draw-time, no upload, matching the
    `follow_step` convention) and, in the trajectory draw loop
-   ([scene.cpp:670-690](../../../desktop/src/scene3d/scene.cpp#L670)), scale
+   ([scene.cpp:1341](../../../desktop/src/scene3d/scene.cpp#L1341)), scale
    `uColor.a` down for lines whose tid differs — **ghost, never hide**. A hidden
    path claims the thread did not run; a ghosted one says "still there, not the
    subject". Same reasoning as [49](49-one-time-truth-in-the-scene.md)'s
@@ -110,7 +176,7 @@ of `TrajectorySet` — golden-test it, including the no-placed-path row.
 **Done when.** A thread can be focused; no thread can be made invisible; the
 statistical layer is never focusable.
 
-### T2 — Region and kind filters on the plane (M)
+### T2 — Region and kind filters on the plane (M) — ✅
 
 **Goal.** "Show me only the heap", "only this library", without pretending the
 rest is empty.
@@ -144,7 +210,7 @@ so in the test file if it self-skips.
 **Done when.** Filters change only presentation channels, never heights or flags,
 and an active filter is always announced.
 
-### T3 — Filters compose with, and never launder, fidelity (S)
+### T3 — Filters compose with, and never launder, fidelity (S) — ✅
 
 **Goal.** Subject filtering cannot be mistaken for fidelity filtering.
 
@@ -170,7 +236,7 @@ model, which a review plus a test on `flags` byte-equality can both cover).
 **Done when.** No filter setting can make a fidelity state unreadable or make two
 different fidelity states look alike.
 
-### T4 — A camera-distance entity budget (M)
+### T4 — A camera-distance entity budget (M) — ✅
 
 **Goal.** A dense recording degrades legibly and audibly rather than becoming a
 haze or a frame cliff.

@@ -9,13 +9,23 @@
 // view matrix carries the eye to the origin; and the full MVP projects the
 // look-at target to the centre of the screen (NDC ~ 0,0) — an end-to-end matrix
 // check with no GL in sight.
+//
+// 51 T4 (scene-focus-and-scale.md) adds the camera-distance ENTITY BUDGET to
+// this file, because the tier is a function of Camera::radius and belongs
+// beside the axis it reads. scene3d/lod.h is header-only over a POD, so this
+// binary still links nothing but its own object.
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 #include "scene3d/camera.h"
+#include "scene3d/lod.h"
 
 using asmdesk::scene3d::Camera;
+using asmdesk::scene3d::LodTier;
+using asmdesk::scene3d::SceneLayers;
 
 static int failures;
 
@@ -24,6 +34,12 @@ static void check(const char *what, bool cond, const char *why) {
         std::fprintf(stderr, "FAIL %s: %s\n", what, why);
         failures++;
     }
+}
+
+// 51 T4: a std::string overload, so a failing LOD check can quote the placard
+// text it actually read back.
+static void check(const std::string &what, bool cond, const std::string &why) {
+    check(what.c_str(), cond, why.c_str());
 }
 
 static float dist(const float a[3], const float b[3]) {
@@ -309,6 +325,165 @@ int main() {
             camera_key(c, CamKey::PanRight);
         check("key/pan-right clamps at the ceiling", c.target[0] <= 1.0f + 1e-6f,
               "keyboard pan must honour the [0,1] clamp");
+    }
+
+    // === 51 T4 — the camera-distance entity budget ===========================
+    using asmdesk::scene3d::kLodEntityBudget;
+    using asmdesk::scene3d::kLodFarRadius;
+    using asmdesk::scene3d::kLodMidRadius;
+    using asmdesk::scene3d::lod_apply;
+    using asmdesk::scene3d::lod_dropped;
+    using asmdesk::scene3d::lod_drops_unfocused;
+    using asmdesk::scene3d::lod_placard;
+    using asmdesk::scene3d::lod_tier;
+    using asmdesk::scene3d::lod_tier_name;
+    const uint64_t dense = kLodEntityBudget + 1;
+
+    {
+        // An entity count UNDER budget is always NEAR, however far the camera
+        // stands off: distance alone is not a reason to draw less.
+        for (float r = Camera::kMinRadius; r <= Camera::kMaxRadius; r += 0.25f)
+            check("lod: under budget is always NEAR",
+                  lod_tier(r, kLodEntityBudget) == LodTier::Near,
+                  "a sparse frame degraded at radius");
+        check("lod: an empty frame is NEAR",
+              lod_tier(Camera::kMaxRadius, 0) == LodTier::Near,
+              "nothing on the plane must never degrade");
+    }
+    {
+        // Exact boundaries: the thresholds are inclusive at the lower edge, so
+        // radius == kLodMidRadius is already MID.
+        check("lod: just inside the MID threshold is still NEAR",
+              lod_tier(kLodMidRadius - 0.01f, dense) == LodTier::Near,
+              "MID engaged early");
+        check("lod: at the MID threshold the tier is MID",
+              lod_tier(kLodMidRadius, dense) == LodTier::Mid,
+              "MID did not engage at its own threshold");
+        check("lod: just inside the FAR threshold is still MID",
+              lod_tier(kLodFarRadius - 0.01f, dense) == LodTier::Mid,
+              "FAR engaged early");
+        check("lod: at the FAR threshold the tier is FAR",
+              lod_tier(kLodFarRadius, dense) == LodTier::Far,
+              "FAR did not engage at its own threshold");
+    }
+    {
+        // Monotonic in radius: dollying OUT never re-adds a class, so a drop
+        // cannot flicker back in mid-gesture.
+        int last = 0;
+        bool monotonic = true;
+        for (float r = Camera::kMinRadius; r <= Camera::kMaxRadius;
+             r += 0.05f) {
+            const int t = static_cast<int>(lod_tier(r, dense));
+            if (t < last)
+                monotonic = false;
+            last = t;
+        }
+        check("lod: the tier is monotonic in radius", monotonic,
+              "dollying out re-added a class");
+    }
+    {
+        // NEAR draws exactly what was requested — byte-identical layers.
+        SceneLayers want;
+        want.access_marks = true;
+        const SceneLayers got = lod_apply(want, LodTier::Near);
+        check("lod: NEAR is byte-identical to the request",
+              std::memcmp(&got, &want, sizeof want) == 0,
+              "NEAR changed a layer");
+        check("lod: NEAR discloses nothing",
+              lod_placard(want, LodTier::Near, false).empty(),
+              "a placard appeared with nothing dropped");
+        check("lod: NEAR drops no class",
+              lod_dropped(want, LodTier::Near, true).empty(),
+              "NEAR reported a drop");
+    }
+    {
+        // MID: the two low-weight classes, and non-subject worldlines ONLY
+        // when a subject was actually chosen.
+        SceneLayers want;
+        const SceneLayers mid = lod_apply(want, LodTier::Mid);
+        check("lod: MID drops the access spurs", !mid.access_marks,
+              "the densest overlay survived MID");
+        check("lod: MID keeps the terrain and the exact paths",
+              mid.terrain && mid.exact, "MID removed the plane or its paths");
+        check("lod: MID keeps the convergence arcs (the cross-thread finding)",
+              mid.convergence, "MID dropped a high-weight class");
+        check("lod: MID drops non-subject worldlines when a thread is focused",
+              lod_drops_unfocused(LodTier::Mid, true),
+              "a focused MID frame kept every worldline");
+        check("lod: with NO subject chosen no worldline is 'non-subject'",
+              !lod_drops_unfocused(LodTier::Mid, false) &&
+                  !lod_drops_unfocused(LodTier::Far, false),
+              "the budget chose a subject on the reader's behalf");
+    }
+    {
+        SceneLayers want;
+        const SceneLayers far = lod_apply(want, LodTier::Far);
+        check("lod: FAR keeps the plane itself", far.terrain,
+              "FAR removed the terrain — there would be nothing to read");
+        check("lod: FAR drops the survey overlays",
+              !far.statistical && !far.ghost_fog && !far.mispred,
+              "a statistical overlay survived FAR");
+        check("lod: FAR drops the module canopies and the vehicle",
+              !far.canopy && !far.vehicle, "an overlay survived FAR");
+        // T4 step 3 — PROVENANCE SURVIVES LOD, in its strongest structural
+        // form: no tier may ever leave the statistical stipple on screen
+        // WITHOUT the exact paths it could be mistaken for. Two ways of
+        // drawing less must not converge on one appearance.
+        for (LodTier t : {LodTier::Near, LodTier::Mid, LodTier::Far}) {
+            const SceneLayers got = lod_apply(want, t);
+            check(std::string("lod: ") + lod_tier_name(t) +
+                      " never keeps the survey while dropping the exact paths",
+                  !(got.statistical && !got.exact),
+                  "the stipple would be the only path-like mark on screen");
+        }
+    }
+    {
+        // The placard: every dropped class is NAMED. A silent drop reads as
+        // "there was nothing there" — the failure the degrade idiom exists to
+        // prevent, so it is a test, not a guideline.
+        SceneLayers want;
+        const std::string mid = lod_placard(want, LodTier::Mid, true);
+        check("lod: the MID placard names the tier",
+              mid.rfind("MID", 0) == 0, "placard was: " + mid);
+        check("lod: the MID placard names the dropped spurs",
+              mid.find("access spurs") != std::string::npos,
+              "placard was: " + mid);
+        check("lod: the MID placard names the dropped worldlines",
+              mid.find("non-subject worldlines") != std::string::npos,
+              "placard was: " + mid);
+        check("lod: the MID placard says how to get the data back",
+              mid.find("Dolly in") != std::string::npos,
+              "placard was: " + mid);
+        check("lod: the MID placard states exact provenance survives",
+              mid.find("never redrawn in the statistical stipple") !=
+                  std::string::npos,
+              "placard was: " + mid);
+
+        const std::string far = lod_placard(want, LodTier::Far, false);
+        check("lod: the FAR placard names the tier", far.rfind("FAR", 0) == 0,
+              "placard was: " + far);
+        for (const char *cls :
+             {"access spurs", "statistical residency paths",
+              "ghost-fog survey terrain", "module canopies",
+              "misprediction survey", "convergence arcs",
+              "followed-citizen head"})
+            check(std::string("lod: the FAR placard names '") + cls + "'",
+                  far.find(cls) != std::string::npos, "placard was: " + far);
+        check("lod: with no subject, FAR does not claim a worldline drop",
+              far.find("non-subject worldlines") == std::string::npos,
+              "placard was: " + far);
+
+        // A class the READER already switched off is not a budget drop, and
+        // must not be reported as one (the two causes must stay tellable
+        // apart).
+        SceneLayers off;
+        off.access_marks = false;
+        off.convergence = false;
+        const std::string p = lod_placard(off, LodTier::Far, false);
+        check("lod: an already-off class is not reported as a budget drop",
+              p.find("access spurs") == std::string::npos &&
+                  p.find("convergence arcs") == std::string::npos,
+              "placard was: " + p);
     }
 
     if (failures) {

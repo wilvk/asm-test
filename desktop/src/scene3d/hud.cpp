@@ -471,6 +471,13 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // happen to be switched on right now.
     ImGui::TextColored(kDim, "%s", translucency_mode_note());
 
+    // --- 51 T4: the camera-distance entity budget's placard -----------------
+    // Empty at NEAR. Otherwise it names the tier and every class the budget
+    // removed, in the same colour and the same spirit as scrub_degrade_note()
+    // — a silent drop reads as "there was nothing there".
+    if (!s.lod_note.empty())
+        ImGui::TextColored(kWarn, "%s", s.lod_note.c_str());
+
     // --- 51 T1/T2: SUBJECT — which thread / region / kind is being read -----
     // Kept visually separate from "layers:" above, and captioned with the one
     // line that keeps the two axes apart (T3 step 3).
