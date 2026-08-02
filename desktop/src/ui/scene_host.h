@@ -25,6 +25,7 @@
 #include "space/converge.h"
 #include "space/crossing.h" // T2 (57): CrossingLayer, SceneFrame::crossings
 #include "space/blameforest.h" // T4 (57): BlameForest, SceneFrame::blame
+#include "space/ridge.h"       // T5 (57): PathRidge, SceneFrame::ridge
 #include "space/taint.h"    // T3 (57): TaintFront, SceneFrame::taint
 #include "space/mispred.h"  // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
@@ -68,6 +69,10 @@ struct SceneFrame {
     const space::CrossingLayer *crossings = nullptr; // T2
     const space::TaintFront *taint = nullptr;        // T3
     const space::BlameForest *blame = nullptr;       // T4
+    const space::PathRidge *ridge = nullptr;         // T5
+    // T5: the survey fallback, carried BESIDE the exact ridge rather than
+    // inside it — two pointers, so the host cannot accidentally merge them.
+    const space::RidgeSurvey *ridge_survey = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

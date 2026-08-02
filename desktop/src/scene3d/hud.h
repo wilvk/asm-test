@@ -285,6 +285,22 @@ struct HudState {
     uint32_t blame_born_untraced = 0;
     uint32_t blame_max_weight = 0;
     std::string blame_off_plane_note;
+
+    // T5: the dominant-path ridge. `ridge_caps` is the count of blocks whose
+    // successor was never recorded — an UNKNOWN continuation, stated, because
+    // a capped ridge and a ridge that simply ends look identical otherwise.
+    std::string ridge_disabled_reason;
+    bool ridge_truncated = false;
+    uint32_t ridge_caps = 0;
+    uint32_t ridge_forks = 0;
+    uint32_t ridge_off_plane = 0;
+    uint32_t ridge_unattributed_insns = 0;
+    uint32_t ridge_blocks_unvisited = 0;
+    // The SURVEY fallback's own count and sampler — reported separately from
+    // everything above, because it is a different kind of evidence and this
+    // HUD must never let the two totals read as one number.
+    uint32_t ridge_survey_edges = 0;
+    std::string ridge_survey_sampler;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

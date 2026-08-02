@@ -755,6 +755,53 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                    s.blame_off_plane_note.c_str());
         }
     }
+    // T5 (57): the dominant-path ridge. The AGGREGATE disclaimer is
+    // unconditional while the layer is on: a bright tube threaded through a
+    // chain of blocks is exactly the shape a reader takes for "one run went
+    // this way", and it is not that claim.
+    if (s.layers.ridge) {
+        if (!s.ridge_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "ridge: %s",
+                               s.ridge_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "%s",
+                               space::PathRidge::aggregate_note());
+            if (s.ridge_caps > 0)
+                ImGui::TextColored(kWarn, "%u block(s): %s", s.ridge_caps,
+                                   space::PathRidge::cap_note());
+            if (s.ridge_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "ridge: the trace is truncated — every transition count "
+                    "is a stated lower bound");
+            if (s.ridge_unattributed_insns > 0)
+                ImGui::TextColored(
+                    kDim,
+                    "%u instruction(s) seen before any recorded block — "
+                    "counted, never attributed by containment",
+                    s.ridge_unattributed_insns);
+            if (s.ridge_blocks_unvisited > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u recorded block(s) the instruction stream never "
+                    "reached",
+                    s.ridge_blocks_unvisited);
+            if (s.ridge_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u ridge endpoint(s) off-plane",
+                                   s.ridge_off_plane);
+        }
+        if (s.ridge_survey_edges > 0) {
+            // Its OWN line, and the STATISTICAL wording verbatim: the survey
+            // fallback is separate ink and separate evidence, never folded
+            // into the exact counts above.
+            ImGui::TextColored(kWarn, "%s", space::RidgeSurvey::label());
+            ImGui::TextColored(kDim, "  %u survey edge(s), sampler %s",
+                               s.ridge_survey_edges,
+                               s.ridge_survey_sampler.empty()
+                                   ? "(unstated)"
+                                   : s.ridge_survey_sampler.c_str());
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

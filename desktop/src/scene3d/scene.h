@@ -25,6 +25,7 @@
 #include "space/converge.h"
 #include "space/crossing.h" // T2 (57): CrossingLayer, set_crossing_layer
 #include "space/blameforest.h" // T4 (57): BlameForest, set_blame_forest
+#include "space/ridge.h"       // T5 (57): PathRidge, set_path_ridge
 #include "space/taint.h"    // T3 (57): TaintFront, set_taint_front
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
@@ -99,6 +100,9 @@ struct SceneLayers {
     // trace back to. A SET OVERLAP of recorded cones, never a synthesised
     // link (see space/blameforest.h).
     bool blame = true;
+    // T5 (57): the dominant-path ridge — which successor control usually
+    // takes at each fork. An AGGREGATE, never a path (see space/ridge.h).
+    bool ridge = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -217,6 +221,11 @@ class Scene {
     void set_taint_front(const space::TaintFront &front);
     // T4: the blame convergence forest.
     void set_blame_forest(const space::BlameForest &forest);
+    // T5: the dominant-path ridge. The exact ridge and the SURVEY fallback
+    // arrive together but are uploaded into SEPARATE buffers and drawn in
+    // separate ink — they are never merged (57 T5 step 6).
+    void set_path_ridge(const space::PathRidge &ridge,
+                        const space::RidgeSurvey &survey);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);

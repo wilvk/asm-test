@@ -18,7 +18,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 4/5 landed 2026-08-03.**
+> **Status — ✅ 5/5 landed 2026-08-03.**
 > T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
 > [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
 > (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
@@ -109,6 +109,40 @@
 > **Step 4's drill-in** is data-only in this landing, on the same terms as
 > T2's: every producer carries its `step` and every sink its `step`/`off`, but
 > the pick-pass wiring is deferred (see T2's note).
+>
+> **T5** landed as `space/ridge.{h,cpp}` (the exact ridge) +
+> `views/hotedges.cpp`'s `build_ridge_survey` (the survey fallback, returning
+> its own `space::RidgeSurvey`) + geometry in `scene3d/causal.cpp`. **Never
+> blended** is structural, not a convention: two builders over two inputs
+> returning two types into two `SceneFrame` fields and two GL buffers. The
+> exact builder physically never sees a survey; the survey builder never sees
+> the trace.
+>
+> **The greedy rule the brief warns about is refused in two places, not one.**
+> `2026-07-17-blockstep-reconstruction-defects.md` records this tree shipping a
+> static successor guess twice with the rule in front of it, and notes that the
+> emulator-replay tier is immune "because it does not statically guess the
+> terminator". This builder is immune the same way. A transition exists only
+> when the recorded instruction stream actually went from one recorded block
+> start to another. Additionally — and this is a hazard the brief does not
+> name — an instruction is **never attributed to a block by "the greatest
+> recorded block start below it"**: that containment guess needs block LENGTHS
+> the wire does not carry, and it would fabricate membership for an instruction
+> in a block the recording never opened. Instructions before the first recorded
+> block start are counted (`unattributed_insns`). A recording with instructions
+> but NO `coverage` blocks is refused outright rather than having its block
+> boundaries inferred.
+>
+> **Tie-dimming is a pure function** (`space::ridge_brightness`, with
+> `kRidgeSplitBrightness` a named constant) and segments are BUCKETED by it in
+> the uploader, so a 51/49 fork and a 99/1 fork land in different GL buffers
+> and cannot be drawn alike even by accident.
+>
+> **Landed caveat on `coverage`.** A `coverage` event must state its own
+> `basis`: `decode_streams` runs `note_basis` over it exactly as over a
+> `trace` event, and omitting it sets `TraceStream::basis_error`, which this
+> layer (correctly) treats as a refusal. Worth knowing when hand-writing a
+> fixture.
 
 ## Why this work exists
 
@@ -379,7 +413,7 @@ truncation rides as a stated lower bound.
 **Done when.** Shared root causes are visible, and a convergence is always a real
 set overlap.
 
-### T5 — Dominant-path ridge (M)
+### T5 — ☑ Dominant-path ridge (M)
 
 **Goal.** At each fork, which successor control usually takes — and how much mass
 leaves the other way.
@@ -420,6 +454,15 @@ none produce visibly different geometry (the second capped); the label text
 contains "aggregate"; the survey fallback never appears in the exact geometry
 buffer.
 
+Landed as `desktop/test/test_ridge.cpp` with all five (the last one structurally
+— the survey has its own type, built by a function in another TU that is not
+even on the exact test's link line), plus: a self-loop is recorded as the real
+observed transition it is rather than dropped, instructions before any recorded
+block are counted rather than attributed by containment, a block with one
+observed successor is NOT reported as a fork, brightness is monotonic and a 99/1
+fork differs from a 51/49 one by a pinned margin, and both refusals (no
+instruction stream, no recorded blocks) state a reason and emit no geometry.
+
 **Done when.** Fork bias is readable, and nothing in the layer or its labels
 claims an observed path.
 
@@ -453,3 +496,14 @@ Five medium tasks. Risks:
   in this tree by implementations that had the rule in front of them.
 - **T2 and T3 both depend on Phase 0** and cannot start before it. T4 and T5 can
   start immediately and are the sensible first cut of this brief.
+
+**How the two named risks actually played out (2026-08-03).**
+
+- **T1 vs [50](50-two-way-brushing.md).** 50 landed first, so 57 adopted:
+  `StepPlacer` delegates every rung to `space::StepAddrResolver` and adds only
+  the plane coordinates, the region and the miss count. No second resolver
+  exists.
+- **T5's greedy failure mode.** Refused in the builder, and the refusal is
+  asserted by name in `test_ridge.cpp`. A second instance of the same family —
+  attributing an instruction to a block by "the greatest recorded start below
+  it" — was found while implementing and is refused too; see the status note.

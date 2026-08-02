@@ -28,6 +28,7 @@
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
 #include "space/blameforest.h" // BlameForest (57 T4): SceneView::blame
+#include "space/ridge.h"       // PathRidge (57 T5): SceneView::ridge
 #include "space/taint.h"    // TaintFront (57 T3): SceneView::taint
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
@@ -193,6 +194,11 @@ struct SceneView {
     // T4: the blame convergence forest — a whole-recording set overlap, so
     // woven once with terr/traj/conv above.
     space::BlameForest blame;
+    // T5: the dominant-path ridge and, SEPARATELY, its survey fallback. Two
+    // members, never one: the exact transition histogram and the sampled
+    // edges are different evidence and must not share a container.
+    space::PathRidge ridge;
+    space::RidgeSurvey ridge_survey;
 };
 
 struct ShellState {

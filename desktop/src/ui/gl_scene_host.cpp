@@ -109,6 +109,11 @@ class GlSceneHost : public SceneHost {
             scene_.set_taint_front(f.taint ? *f.taint : kNoTaint);
             static const space::BlameForest kNoBlame;
             scene_.set_blame_forest(f.blame ? *f.blame : kNoBlame);
+            static const space::PathRidge kNoRidge;
+            static const space::RidgeSurvey kNoRidgeSurvey;
+            scene_.set_path_ridge(
+                f.ridge ? *f.ridge : kNoRidge,
+                f.ridge_survey ? *f.ridge_survey : kNoRidgeSurvey);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

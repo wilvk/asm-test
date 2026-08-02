@@ -59,6 +59,51 @@ void apply_coverage_window(space::Terrain &slice,
     }
 }
 
+// 57 T5 (causal-layers): the ridge's survey fallback. One edge per `from`
+// address — the MAX-COUNT outgoing one, which is the statistical analogue of
+// "the modal successor" and is all a survey can say. Ties resolve to the
+// lowest `to_addr` so the result is deterministic across runs; nothing here
+// merges counts across addresses or infers a chain between edges.
+space::RidgeSurvey build_ridge_survey(const HotEdgeSceneView &hv,
+                                      const space::Projection &proj) {
+    space::RidgeSurvey out;
+    out.sampler = hv.sampler;
+    if (hv.edges.empty())
+        return out;
+
+    std::map<uint64_t, const HotEdgeForScene *> best;
+    for (const HotEdgeForScene &e : hv.edges) {
+        auto it = best.find(e.from_addr);
+        if (it == best.end() || e.count > it->second->count ||
+            (e.count == it->second->count &&
+             e.to_addr < it->second->to_addr)) {
+            best[e.from_addr] = &e;
+        }
+    }
+    for (const auto &kv : best) {
+        const HotEdgeForScene &e = *kv.second;
+        float ua = 0, va = 0, ub = 0, vb = 0;
+        const bool from_ok = proj.project(e.from_addr, &ua, &va);
+        const bool to_ok = proj.project(e.to_addr, &ub, &vb);
+        if (!from_ok)
+            out.off_plane++;
+        if (!to_ok)
+            out.off_plane++;
+        if (!from_ok || !to_ok)
+            continue;
+        space::RidgeSurveyEdge se;
+        se.from_addr = e.from_addr;
+        se.to_addr = e.to_addr;
+        se.count = e.count;
+        se.ua = ua;
+        se.va = va;
+        se.ub = ub;
+        se.vb = vb;
+        out.edges.push_back(se);
+    }
+    return out;
+}
+
 space::MispredLayer build_mispred_layer(const HotEdgeSceneView &hv,
                                         const space::Projection &proj) {
     space::MispredLayer out;

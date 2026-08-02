@@ -56,6 +56,13 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"blame", "blame",
          "which producing step do many sinks trace back to?", G::Activity,
          LayerGrade::Derived, &SceneLayers::blame},
+        // T5: Derived — every transition it counts was observed exactly, but
+        // the ridge itself is a per-fork AGGREGATE and never a run, which is
+        // why its label says "aggregate" in words as well as in this grade.
+        {"ridge", "ridge (aggregate)",
+         "at each fork, which way does control usually go — and how much "
+         "mass leaves the other way?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::ridge},
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},

@@ -968,6 +968,14 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // recorded cone — a whole-recording fact, so it is woven here too.
         sv.blame = space::build_blame_forest(a.blame, a.df, sv.terr.proj,
                                              r.truncated());
+        // 57 T5: the dominant-path ridge, and its survey fallback built by a
+        // DIFFERENT function from a DIFFERENT input. The exact builder never
+        // sees the survey and the survey builder never sees the trace, which
+        // is what makes "never blended" structural.
+        sv.ridge =
+            space::build_path_ridge(a.trace, sv.terr.proj, r.truncated());
+        sv.ridge_survey =
+            build_ridge_survey(sv.hotedges_scene, sv.terr.proj);
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
         sv.opcode_cells = space::build_opcode_terrain(
@@ -1093,6 +1101,19 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.blame_born_untraced = sv.blame.born_untraced;
     sv.hud.blame_max_weight = sv.blame.max_weight;
     sv.hud.blame_off_plane_note = sv.blame.off_plane_note;
+    // 57 T5: the ridge's honesty channel, with the survey's totals kept
+    // separate from the exact ones.
+    sv.hud.ridge_disabled_reason =
+        sv.ridge.enabled ? std::string() : sv.ridge.disabled_reason;
+    sv.hud.ridge_truncated = sv.ridge.truncated;
+    sv.hud.ridge_caps = static_cast<uint32_t>(sv.ridge.caps.size());
+    sv.hud.ridge_forks = static_cast<uint32_t>(sv.ridge.forks.size());
+    sv.hud.ridge_off_plane = sv.ridge.off_plane;
+    sv.hud.ridge_unattributed_insns = sv.ridge.unattributed_insns;
+    sv.hud.ridge_blocks_unvisited = sv.ridge.blocks_unvisited;
+    sv.hud.ridge_survey_edges =
+        static_cast<uint32_t>(sv.ridge_survey.edges.size());
+    sv.hud.ridge_survey_sampler = sv.ridge_survey.sampler;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1312,6 +1333,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.crossings = &sv.crossings;       // 57 T2
     f.taint = &sv.taint;               // 57 T3
     f.blame = &sv.blame;               // 57 T4
+    f.ridge = &sv.ridge;               // 57 T5
+    f.ridge_survey = &sv.ridge_survey; // 57 T5 (separate ink, separate field)
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

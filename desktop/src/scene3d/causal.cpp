@@ -37,6 +37,7 @@
 #include <GL/glext.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -191,6 +192,15 @@ struct Scene::CausalGL {
     std::vector<Prim> blame_beacons;  // GL_POINTS, one per weight band
     Prim blame_sinks;                 // GL_LINES: sink rings
     Prim blame_untraced;              // GL_LINES: the born-untraced verdict
+
+    // T5: the dominant-path ridge. Segments are bucketed by BRIGHTNESS BAND
+    // (ridge_brightness of the successor's share), which is what makes
+    // tie-dimming structural rather than cosmetic: a 51/49 fork and a 99/1
+    // fork land in different buckets and therefore cannot be drawn alike.
+    std::vector<Prim> ridge_segments;
+    Prim ridge_forks;    // GL_POINTS, sized by the leaving mass
+    Prim ridge_caps;     // GL_LINES: "unknown continuation" brackets
+    Prim ridge_survey;   // GL_LINES: the SEPARATE statistical ink
 };
 
 // Each set_* below replaces ONLY its own layer's geometry, so the four
@@ -218,6 +228,11 @@ void Scene::free_causal() {
         free_prim(p);
     free_prim(causal_->blame_sinks);
     free_prim(causal_->blame_untraced);
+    for (Prim &p : causal_->ridge_segments)
+        free_prim(p);
+    free_prim(causal_->ridge_forks);
+    free_prim(causal_->ridge_caps);
+    free_prim(causal_->ridge_survey);
     delete causal_;
     causal_ = nullptr;
 }
@@ -511,6 +526,116 @@ void Scene::set_blame_forest(const space::BlameForest &forest) {
     }
 }
 
+// T5 (57-causal-layers): the dominant-path ridge.
+//
+// **TIE-DIMMING IS STRUCTURAL HERE, NOT COSMETIC.** Segments are bucketed by
+// `space::ridge_brightness(fraction)` — a pure function pinned by
+// test_ridge.cpp — so a 51/49 fork and a 99/1 fork land in different buckets
+// and physically cannot be drawn alike. That difference is the whole
+// distinction between a backbone and a coin toss.
+//
+// **THE RIDGE STOPS WHERE THE RECORDING STOPS.** A `RidgeCap` draws an open
+// bracket ("unknown continuation") and nothing continues from it: no wrap to
+// offset 0, no join to the next block by address adjacency. That is the exact
+// greedy rule 2026-07-17-blockstep-reconstruction-defects.md records this tree
+// shipping twice, and it is refused in the builder AND absent here.
+//
+// The tube's height is log1p(count), an axis of its OWN above the plane — it
+// is never the terrain's height field.
+void Scene::set_path_ridge(const space::PathRidge &ridge,
+                           const space::RidgeSurvey &survey) {
+    ensure_causal();
+    for (Prim &p : causal_->ridge_segments)
+        free_prim(p);
+    causal_->ridge_segments.clear();
+    free_prim(causal_->ridge_forks);
+    free_prim(causal_->ridge_caps);
+    free_prim(causal_->ridge_survey);
+
+    if (ridge.enabled) {
+        constexpr int kBands = 6;
+        std::vector<float> band[kBands];
+        for (const space::RidgeSegment &sg : ridge.segments) {
+            const float b = space::ridge_brightness(sg.fraction);
+            int bi = static_cast<int>(b * (kBands - 1) + 0.5f);
+            if (bi < 0)
+                bi = 0;
+            if (bi >= kBands)
+                bi = kBands - 1;
+            // The raised tube: a chord lifted by log1p(count) at its midpoint.
+            // Three segments is enough to read as a raised arc at these
+            // scales and keeps the whole layer inside six draw calls.
+            const float lift = 0.06f + 0.10f * sg.height;
+            const float a[3] = {sg.ua, 0.008f, sg.va};
+            const float c[3] = {0.5f * (sg.ua + sg.ub), 0.008f + lift,
+                                0.5f * (sg.va + sg.vb)};
+            const float d[3] = {sg.ub, 0.008f, sg.vb};
+            if (sg.self_loop) {
+                // A self-loop has no chord: draw a short vertical stub so the
+                // observed transition is visible rather than degenerate.
+                const float up[3] = {sg.ua, 0.008f + lift, sg.va};
+                push_seg(band[bi], a, up);
+            } else {
+                push_seg(band[bi], a, c);
+                push_seg(band[bi], c, d);
+            }
+        }
+        for (int bi = 0; bi < kBands; bi++) {
+            if (band[bi].empty())
+                continue;
+            const float t = static_cast<float>(bi) / (kBands - 1);
+            const float rgba[4] = {0.45f + 0.50f * t, 0.75f + 0.20f * t,
+                                   0.55f + 0.35f * t, 0.25f + 0.70f * t};
+            causal_->ridge_segments.push_back(upload(band[bi], GL_LINES, rgba));
+        }
+
+        // Fork glyphs, sized by the LEAVING mass: a fork that mostly goes one
+        // way is a small mark, a coin toss is a large one.
+        std::vector<float> forks;
+        for (const space::RidgeFork &f : ridge.forks)
+            forks.insert(forks.end(), {f.u, 0.010f, f.v});
+        if (!forks.empty()) {
+            float mass = 0.0f;
+            for (const space::RidgeFork &f : ridge.forks)
+                mass = std::max(mass, static_cast<float>(f.leaving_mass));
+            const float rgba[4] = {1.0f, 0.80f, 0.45f, 0.9f};
+            causal_->ridge_forks =
+                upload(forks, GL_POINTS, rgba, 3.0f + 12.0f * mass);
+        }
+
+        // Caps: an OPEN bracket. Open, because the continuation is unknown —
+        // a closed shape would read as a terminus the recording states.
+        std::vector<float> caps;
+        for (const space::RidgeCap &c : ridge.caps) {
+            const float r = 0.011f, y = 0.010f;
+            const float p0[3] = {c.u - r, y, c.v - r};
+            const float p1[3] = {c.u + r, y, c.v - r};
+            const float p2[3] = {c.u + r, y, c.v + r};
+            push_seg(caps, p0, p1);
+            push_seg(caps, p1, p2);
+        }
+        if (!caps.empty()) {
+            const float rgba[4] = {0.70f, 0.66f, 0.85f, 0.9f};
+            causal_->ridge_caps = upload(caps, GL_LINES, rgba);
+        }
+    }
+
+    // The SURVEY fallback, in its own buffer and its own ink. It is drawn
+    // dashed and desaturated, and it is NEVER merged into the exact bands
+    // above — the two come from different builders over different inputs and
+    // must not share a vertex buffer, let alone a colour.
+    if (!survey.edges.empty()) {
+        std::vector<float> v;
+        for (const space::RidgeSurveyEdge &e : survey.edges) {
+            const float a[3] = {e.ua, 0.005f, e.va};
+            const float b[3] = {e.ub, 0.005f, e.vb};
+            push_dashed(v, a, b);
+        }
+        const float rgba[4] = {0.62f, 0.62f, 0.68f, 0.55f};
+        causal_->ridge_survey = upload(v, GL_LINES, rgba);
+    }
+}
+
 void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
     if (!causal_ || !prog_traj_)
         return;
@@ -526,7 +651,11 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
         layers.blame &&
         (!causal_->blame_beacons.empty() || causal_->blame_sinks.count > 0 ||
          causal_->blame_untraced.count > 0);
-    if (!any_crossing && !any_taint && !any_blame)
+    const bool any_ridge =
+        layers.ridge &&
+        (!causal_->ridge_segments.empty() || causal_->ridge_forks.count > 0 ||
+         causal_->ridge_caps.count > 0 || causal_->ridge_survey.count > 0);
+    if (!any_crossing && !any_taint && !any_blame && !any_ridge)
         return;
 
     glUseProgram(prog_traj_);
@@ -575,6 +704,15 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
             draw(p);
         draw(causal_->blame_sinks);
         draw(causal_->blame_untraced);
+    }
+    if (any_ridge) {
+        for (const Prim &p : causal_->ridge_segments)
+            draw(p);
+        draw(causal_->ridge_caps);
+        draw(causal_->ridge_forks);
+        // The survey LAST and dimmest, so the exact ridge always reads over
+        // it rather than the other way round.
+        draw(causal_->ridge_survey);
     }
 
     glBindVertexArray(0);
