@@ -172,14 +172,31 @@ uniform float uTailHalf;      // T6: half-width of the brightened tail band
 uniform float uTimeCutY;      // T1 (49): the terrain playhead's world Y
 uniform int uHasTimeCut;      // T1 (49): 0 when the playhead is at the end
 out vec4 frag;
+// T4 (55-scene-render-quality): Interleaved Gradient Noise (Jimenez 2014) --
+// see kStatFrag's own comment for why (duplicated rather than shared: these
+// are independent string literals, the existing convention TORN/STAT/CHURN's
+// C++-mirrored bit values already follow).
+float ign(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 void main(){
   vec4 c = uColor;
   if (uHasTimeCut == 1 && vY > uTimeCutY) {
     c.rgb *= 0.35; // dim, not discard: "recorded, not yet reached in this view"
   }
   if (uStipple == 1) {
-    float d = mod(gl_FragCoord.x + gl_FragCoord.y, 8.0);
-    if (d < 4.0) discard;     // dashed screen-space pattern
+    // T4 (55): a fragment survives with probability c.a (uColor's own alpha,
+    // 0.45 for a statistical line) and is then drawn FULLY OPAQUE -- the
+    // "dithered/stochastic transparency" fallback (McGuire & Bavoil's
+    // weighted-blended OIT is the "exact" alternative this brief defers, see
+    // its own status note): compositing against whatever is already in the
+    // depth buffer is then a NORMAL z-test, with no blend and no draw-order
+    // dependency, which is what makes stacking honest regardless of draw
+    // order. This replaces the old regular (x+y) mod 8 checkerboard, whose
+    // REGULAR screen-space frequency could beat against the terrain's own
+    // regular grid (moire) -- IGN's irregular frequency cannot.
+    if (ign(gl_FragCoord.xy) > c.a) discard;
+    c.a = 1.0;
   }
   if (uHasHead == 1 && abs(vY - uHeadY) < uTailHalf) {
     c = vec4(mix(c.rgb, vec3(1.0), 0.6), max(c.a, 0.95)); // comet tail
@@ -227,21 +244,35 @@ out uint fragid;
 void main(){ fragid = fId; }
 )GLSL";
 
-// --- T4 (44-faithful-city-phase-a): the ghost-fog terrain. Reuses kTerrainVert
-//     (it needs only vUV + the displaced depth); the frag is desaturated,
-//     translucent and STIPPLED — the same screen-space dither idiom kTrajFrag
-//     uses for a statistical trajectory, not a second technique.
+// --- T4 (44-faithful-city-phase-a, dithering refined 55-scene-render-quality):
+//     the ghost-fog terrain. Reuses kTerrainVert (it needs only vUV + the
+//     displaced depth); the frag is desaturated and STIPPLED — the same
+//     screen-space dither idiom kTrajFrag uses for a statistical trajectory,
+//     not a second technique.
 inline const char *kStatFrag = R"GLSL(#version 130
 in float vHeight;
 in vec2 vUV;
 uniform usampler2D uFlags;
 out vec4 frag;
+// T4 (55): Interleaved Gradient Noise (Jimenez 2014) — a fragment survives
+// with probability 0.55 and is then drawn FULLY OPAQUE, so this surface
+// composites against the exact terrain (and anything else already in the
+// depth buffer) via a normal z-test: no blend, no draw-order dependency. This
+// is "dithered (stochastic) transparency" — the T4 fallback this brief takes
+// over weighted-blended OIT (deferred; see the doc's own status note) — and
+// it replaces the old regular (x+y) mod 8 checkerboard, whose REGULAR
+// screen-space frequency could beat against the terrain's own regular grid
+// (moire); IGN's irregular frequency cannot. The 0.55 keep-probability is the
+// same number the old code spent as a blend alpha — the surface's apparent
+// translucency is now spent as COVERAGE instead of per-pixel opacity.
+float ign(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 void main(){
-  float d = mod(gl_FragCoord.x + gl_FragCoord.y, 8.0);
-  if (d < 4.0) discard;              // stippled — never a solid fill
+  if (ign(gl_FragCoord.xy) > 0.55) discard;
   vec3 grey = vec3(0.55, 0.55, 0.60); // desaturated — never the exact palette
   vec3 col = mix(grey * 0.5, grey, clamp(vHeight, 0.0, 1.0));
-  frag = vec4(col, 0.55);            // translucent
+  frag = vec4(col, 1.0); // opaque: the discard pattern IS the translucency
 }
 )GLSL";
 

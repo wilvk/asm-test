@@ -928,17 +928,19 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         draw_terrain_common(prog_terrain_, mvp, layers.zoning,
                             layers.contours ? kContourLevels : 0.0f);
 
-    // T4: the ghost-fog terrain, after the exact terrain — depth-tested but
-    // depth-write off (so it never occludes anything BEHIND it either) and
-    // blended, so it reads as "a hair above" the exact land.
-    if (layers.ghost_fog && has_stat_terrain_) {
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDepthMask(GL_FALSE);
+    // T4 (44, depth-write fixed by 55's dithering): the ghost-fog terrain,
+    // after the exact terrain. kStatFrag now composites by DISCARD (T4, 55)
+    // rather than alpha blend, so a surviving fragment is fully opaque and
+    // depth-tests/writes exactly like ordinary geometry — no GL_BLEND, no
+    // depth-mask trick needed: whichever surface (exact or ghost) is nearer
+    // the camera at a given pixel legitimately wins the z-test, which is
+    // what fixes the pre-55 bug (this pass used to leave depth-write ON for
+    // the BLENDED trajectory pass below while this pass turned it OFF only
+    // for itself — an inconsistency that made draw order matter for two
+    // translucent surfaces; there is no blended pass left to be inconsistent
+    // with).
+    if (layers.ghost_fog && has_stat_terrain_)
         draw_stat_terrain(mvp);
-        glDepthMask(GL_TRUE);
-        glDisable(GL_BLEND);
-    }
 
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use

@@ -570,6 +570,17 @@ static void mode_color(const std::vector<unsigned char> &px,
     out[2] = static_cast<unsigned char>(best_key & 0xff);
 }
 
+// T4 (55): the C++ mirror of kTrajFrag/kStatFrag's own `ign()` — same
+// formula, verbatim — so a test can check that a shader's discard decision
+// at a given pixel actually IS Interleaved Gradient Noise, not merely "some
+// pattern or other". gl_FragCoord is pixel-CENTRE, bottom-left origin — the
+// same convention glReadPixels/capture()'s buffer already uses, so a buffer
+// index needs no flip to become (x, y).
+static float ign_cpu(float x, float y) {
+    auto fract = [](float v) { return v - std::floor(v); };
+    return fract(52.9829189f * fract(x * 0.06711056f + y * 0.00583715f));
+}
+
 // Upload one scene model (terrain slice + trajectories), clearing any
 // convergence arcs a previous case left behind.
 static void upload(Scene &scene, const SceneModel &m, const space::Terrain &t) {
@@ -1383,38 +1394,41 @@ int main() {
                 px_no_edl[i + 2] != off_px_no_edl[i + 2])
                 marked.push_back(p);
 
-        // STIPPLED: the shader discards a band of `(x+y) mod 8`, so the drawn
-        // pixels leave whole diagonal phases EMPTY. A solid line fills all eight
-        // roughly evenly. Counting empty phases (rather than testing one exact
-        // phase) keeps this independent of the pattern's offset and period.
-        int phase[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-        for (size_t p : marked)
-            phase[((p % static_cast<size_t>(GW)) +
-                   (p / static_cast<size_t>(GW))) %
-                  8]++;
-        int empty_phases = 0;
-        for (int k = 0; k < 8; k++)
-            if (phase[k] == 0)
-                empty_phases++;
-        check("golden stat scene: the sampled mark is STIPPLED, not solid",
-              !marked.empty() && empty_phases >= 3,
-              "the residency filled every diagonal phase — it drew as a solid "
-              "tube, which is exactly what an exact path draws");
-
-        // TRANSLUCENT: the line blends at alpha < 1 over a dark background, so
-        // no marked pixel reaches the raw per-tid palette brightness an exact
-        // tube paints (palette entry 0 is {0.95,0.85,0.25} -> red 242). Reads
-        // px_no_edl (not px) for the same reason `marked` does above — EDL
-        // only ever darkens further, so this stays the tighter, more direct
-        // check of the base technique's own brightness ceiling.
-        int brightest = 0;
-        for (size_t p : marked)
-            if (px_no_edl[p * 4] > brightest)
-                brightest = px_no_edl[p * 4];
-        check("golden stat scene: the sampled mark is TRANSLUCENT, not opaque",
-              !marked.empty() && brightest < 200,
-              "a residency pixel reached full palette brightness — it drew as "
-              "an opaque exact tube");
+        // STIPPLED (55 T4: via Interleaved Gradient Noise, not the old
+        // regular (x+y) mod 8 checkerboard — see kTrajFrag's own comment for
+        // why): a marked (surviving) pixel is drawn FULLY OPAQUE now, so
+        // "not solid" is no longer a per-pixel brightness/alpha question —
+        // it is a DISCARD PATTERN question. Checked directly against the
+        // shader's own formula (ign_cpu, verbatim) at each marked pixel's
+        // (x, y): a survivor must have ign() <= the line's alpha (0.45,
+        // scene.cpp's set_trajectories literal), so most marked pixels
+        // should agree with the CPU-side prediction. A generous 90% bar
+        // absorbs GPU/CPU float-rounding disagreement right at the
+        // threshold; a shader that stopped discarding entirely (solid fill)
+        // would fail this by roughly half, not by a few edge pixels.
+        constexpr float kStatTrajAlpha = 0.45f; // set_trajectories' own literal
+        int agree = 0;
+        for (size_t p : marked) {
+            float x = static_cast<float>(p % static_cast<size_t>(GW)) + 0.5f;
+            float y = static_cast<float>(p / static_cast<size_t>(GW)) + 0.5f;
+            if (ign_cpu(x, y) <= kStatTrajAlpha)
+                agree++;
+        }
+        double agree_frac =
+            marked.empty()
+                ? 0.0
+                : static_cast<double>(agree) / static_cast<double>(marked.size());
+        check("golden stat scene: the sampled mark is STIPPLED via "
+              "Interleaved Gradient Noise, not solid",
+              !marked.empty() && agree_frac > 0.9,
+              "marked pixels do not match the shader's own IGN discard "
+              "formula — looks solid (discard removed) rather than dithered");
+        // (55 T4's replacement for the old per-pixel "TRANSLUCENT, not
+        // opaque" alpha-blend check, which no longer applies now that a
+        // surviving fragment is fully opaque by construction — see
+        // kTrajFrag's own comment: translucency is now spent as COVERAGE,
+        // not blend. The IGN-formula match above already verifies coverage
+        // is governed by the 0.45 keep-probability, which subsumes it.)
     }
 
     // --- (h) the synthetic rich-`mem` scene: present, and inert -------------
