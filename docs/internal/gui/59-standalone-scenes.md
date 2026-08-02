@@ -16,7 +16,23 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Status — ◐ 1/5, in progress (2026-08-03).** T1 landed the second
+> substrate: `scene3d/scene_kind.h` (the `SceneKind` discriminant + the
+> required axis contract), the outer pick-id band inside 47 T3's own
+> `PickBands`, `scene3d/glcommon.{h,cpp}` (the shared program link + R32UI
+> pick target, factored out of `scene.cpp`),
+> `scene3d/standalone_gl.{h,cpp}` (the non-plane renderer) and the
+> pane/HUD wiring, verified by `desktop/test/test_scene_kind.cpp` and the
+> new T1 block of `desktop/test/test_scene_fbo.cpp`.
+>
+> **Adopted, not duplicated.** 47 T3's `PickBands` gained a `kind` +
+> `nelem` field rather than a parallel allocator; 48 T1's movable
+> `Camera::target`/`frame()` is what `standalone_default_camera` frames
+> each scene with. Both were extended in place, not forked.
+>
+> **No `glLineWidth(>1.0)` is added anywhere** (55 T6): a rib's thickness
+> is drawn as stacked strands, and the divergence torn cap / ribbon seam
+> are the two draws that would want a wider stroke.
 
 ## Why this work exists
 
@@ -76,7 +92,7 @@ that does not assume the address plane**. Everything after it is content.
 
 ## Tasks
 
-### T1 — A scene kind: host a substrate that is not the address plane (L)
+### T1 — ✅ A scene kind: host a substrate that is not the address plane (L)
 
 **Goal.** `SceneFrame` can describe more than one kind of scene, and `Scene` can
 render one, without the plane's assumptions leaking into it or its assumptions

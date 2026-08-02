@@ -21,6 +21,7 @@ TreeView obs_tree_build(const Recording &r, const ObsLifecycle *lc) {
             row.addr = e.body.value("addr", uint64_t{0});
             row.name = e.body.value("name", std::string());
             row.module = e.body.value("module", std::string());
+            row.seq = e.seq; // 54 T3 / 59 T4: cross-thread call order
             v.rows.push_back(std::move(row));
         }
     }

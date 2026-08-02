@@ -36,6 +36,14 @@ struct TreeRow {
     uint64_t addr = 0;
     std::string name;   // resolved symbol, or "0x…"
     std::string module; // module basename, "jit", or "?"
+    // 54 T3 / 59 T4: this call's position in the STREAM (Event::seq), counted
+    // across every kind. `rows` is already in per-kind order, but CALL ORDER
+    // ACROSS THREADS is a coordinate only `seq` can give — two tids' rows
+    // interleave in the stream and not in this vector. The module excursion
+    // ribbon (59 T4) makes it the X axis; carrying it here keeps ONE call-tree
+    // decode rather than a second walk of `by_kind["call"]` that could
+    // disagree with this one about which row is which.
+    uint64_t seq = 0;
 };
 
 // The filter panel's state == the engine's filter, one field per parameter.

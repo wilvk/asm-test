@@ -20,6 +20,7 @@
 
 #include "scene3d/atmosphere.h" // T3 (44): the fidelity weather sky's pure config
 #include "scene3d/camera.h"
+#include "scene3d/glcommon.h" // T1 (59): GlPickTarget, the SHARED pick target
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
@@ -391,11 +392,16 @@ class Scene {
     unsigned vao_spur_pick_ = 0, vbo_spur_pick_id_ = 0;
     int nconv_ = 0, nspur_ = 0;
 
-    unsigned fbo_pick_ = 0, tex_pick_ = 0, rbo_pick_depth_ = 0;
-    int pick_w_ = 0, pick_h_ = 0;
+    // T1 (59-standalone-scenes) step 2: the R32UI pick target + its readback
+    // are one of the three things a second substrate genuinely shares with the
+    // plane, so they now live in scene3d::GlPickTarget (glcommon.h) and a
+    // standalone scene picks through the SAME code rather than a second,
+    // drifting copy. What stays plane-specific — which geometry is drawn into
+    // it — is still render_pick_into_fbo below.
+    GlPickTarget pick_target_;
 
     // T1/T5 (55-scene-render-quality): the internal multi-pass compose
-    // target — COMPLETELY SEPARATE from fbo_pick_ above (the pick pass is
+    // target — COMPLETELY SEPARATE from pick_target_ above (the pick pass is
     // sacred, D7's own bar here: it must never be multisampled or post-
     // processed). fbo_draw_ is where the raw geometry lands (renderbuffers,
     // multisampled when compose_samples_ >= 2); fbo_resolve_ holds the
@@ -415,7 +421,6 @@ class Scene {
 
     void build_grid(uint32_t n);
     void build_sky_quad();
-    void ensure_pick_fbo(int w, int h);
     // T1/T5: (re)build fbo_draw_/fbo_resolve_ for this size, retrying once at
     // 0 samples if the multisampled target does not complete, and leaving
     // compose_ready_ false (not a crash, not a black pane) if even that

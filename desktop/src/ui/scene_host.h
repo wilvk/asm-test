@@ -21,6 +21,8 @@
 #include "scene3d/camera.h"     // Camera (pure math)
 #include "scene3d/pick.h"  // T3 (47): PickBands, SceneHost::pick_bands()'s type
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
+#include "scene3d/scene_kind.h" // T1 (59): SceneKind, SceneFrame::kind
+#include "scene3d/standalone.h" // T1 (59): the four non-plane scene models
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
 #include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
@@ -40,6 +42,19 @@ namespace asmdesk {
 // keeps a LIVE, growing capture's worldlines from freezing: its identity never
 // changes as it grows, but its generation advances each batch.
 struct SceneFrame {
+    // T1 (59-standalone-scenes): WHICH substrate this frame describes. The
+    // default is Plane and every field below keeps its exact pre-59 meaning,
+    // so nothing in 56/57/58 has to change and the Plane path is
+    // byte-identical. A non-Plane kind reads its OWN model pointer (further
+    // down) and ignores terr/traj/conv/slice entirely — the four plane models
+    // are not overloaded to mean something else, which is how a scene's
+    // assumptions stay out of another scene's.
+    //
+    // ONE KIND AT A TIME. The pane switches; scenes do not compose. SceneLayers
+    // is the additive-layer mechanism of the PLANE and does not extend across
+    // substrates with different axes.
+    scene3d::SceneKind kind = scene3d::SceneKind::Plane;
+
     const space::TerrainModel *terr = nullptr;
     const space::TrajectorySet *traj = nullptr;
     const space::ConvergenceSet *conv = nullptr;
@@ -88,6 +103,24 @@ struct SceneFrame {
     // mismatch decision this mirrors, T5/T6 above).
     bool has_highlight = false;
     uint32_t highlight_cell = 0;
+
+    // --- T1 (59-standalone-scenes): the non-plane substrates ---------------
+    // One pointer per SceneKind past Plane, each read ONLY when `kind` names
+    // it. Separate members rather than one overloaded pointer (or a reuse of
+    // `terr`) so a host can never mistake one substrate's model for another's,
+    // and so adding a kind is additive to this struct rather than a change to
+    // an existing field's meaning. All null under the Plane kind, which is
+    // what keeps the plane frame byte-identical.
+    const scene3d::DivergenceScene *divergence = nullptr;   // T2
+    const scene3d::InvocationScene *invocation = nullptr;   // T3
+    const scene3d::ModuleRibbonScene *ribbon = nullptr;     // T4
+    const scene3d::LanePrismScene *prism = nullptr;         // T5
+
+    // The axes this frame's kind declares — a pure function of `kind`
+    // (scene3d::scene_axes), exposed here so the HUD and the tests read the
+    // same one. There is no way to set an axis label directly: a scene cannot
+    // ship an unlabelled axis because the label is not the scene's to choose.
+    scene3d::SceneAxes axes() const { return scene3d::scene_axes(kind); }
 };
 
 // The abstract GL host. main.cpp constructs one (make_gl_scene_host), calls init()

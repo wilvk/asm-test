@@ -346,6 +346,56 @@ PlacementChip basis_chip(const space::TerrainModel &terr,
                                    : "rel: routine-relative (not a true path)"};
 }
 
+void draw_scene_axes(SceneKind k) {
+    const SceneAxes ax = scene_axes(k);
+    ImGui::TextColored(kDim, "axes — X: %s", ax.x);
+    ImGui::TextColored(kDim, "axes — Y: %s", ax.y);
+    ImGui::TextColored(kDim, "axes — Z: %s", ax.z);
+    // The DENIAL, in the warn colour rather than the dim one: what a vertical
+    // axis is NOT is the claim a new substrate is most likely to be misread as
+    // making, so it is not an aside (D7).
+    ImGui::TextColored(kWarn, "%s", ax.y_not);
+}
+
+// T1 (59) step 5: the substrate selector. A COMBO, never a checkbox row —
+// scenes do not compose, and a checkbox would advertise that they might.
+static void draw_scene_kind_selector(HudState &s) {
+    const std::vector<SceneKind> &kinds = all_scene_kinds();
+    ImGui::TextUnformatted("scene:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(240.0f);
+    if (ImGui::BeginCombo("##scene-kind", scene_kind_name(s.kind))) {
+        for (SceneKind k : kinds) {
+            const size_t i = scene_kind_index(k);
+            const std::string why =
+                i < s.kind_unavailable.size() ? s.kind_unavailable[i] : "";
+            const bool ok = why.empty();
+            // An unavailable kind is offered DISABLED with its reason, never
+            // omitted: "this recording cannot show that" is a fact worth
+            // stating, and a silently missing entry teaches nothing.
+            ImGui::BeginDisabled(!ok);
+            if (ImGui::Selectable(scene_kind_name(k), k == s.kind) && ok) {
+                s.req_kind_change = true;
+                s.req_kind = k;
+            }
+            ImGui::EndDisabled();
+            if (!ok) {
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "— %s", why.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+    const size_t cur = scene_kind_index(s.kind);
+    if (cur < s.kind_unavailable.size() && !s.kind_unavailable[cur].empty())
+        ImGui::TextColored(kWarn, "%s", s.kind_unavailable[cur].c_str());
+    draw_scene_axes(s.kind);
+    if (s.kind != SceneKind::Plane)
+        ImGui::TextColored(kDim,
+                           "one scene at a time — layers compose on the "
+                           "address plane only, never across substrates");
+}
+
 void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                     const space::TrajectorySet &traj) {
     ImGui::Begin("3D overview");
@@ -353,6 +403,12 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // Report HUD keyboard focus (22 T2): the caller applies the camera keys when
     // the HUD OR the 3D viewport holds focus, so orbiting works from either.
     s.kbd_focus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
+    // T1 (59-standalone-scenes): which substrate, and what its axes mean —
+    // FIRST, above the provenance chips, because everything below is read in
+    // terms of it.
+    draw_scene_kind_selector(s);
+    ImGui::Separator();
 
     // --- provenance chips: coarse-vs-rich, exact-vs-statistical, truncation ----
     ImGui::TextUnformatted("provenance:");

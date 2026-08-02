@@ -24,6 +24,7 @@
 #include <string>
 
 #include "scene3d/scene.h"
+#include "scene3d/standalone_gl.h" // T1 (59): the non-plane substrates
 #include "ui/gl_scene_host.h"
 #include "ui/scene_gate.h"
 
@@ -53,6 +54,8 @@ class GlSceneHost : public SceneHost {
     void shutdown() override {
         free_fbo();
         scene_.shutdown();
+        standalone_.shutdown(); // T1 (59)
+        standalone_inited_ = standalone_ready_ = false;
         ready_ = false;
     }
 
@@ -60,10 +63,18 @@ class GlSceneHost : public SceneHost {
     const char *error() const override { return err_.c_str(); }
 
     ImTextureID render(const SceneFrame &f) override {
-        if (!ready_ || f.slice == nullptr || f.terr == nullptr)
+        if (!ready_)
             return (ImTextureID)0;
         int w = f.fbw < 1 ? 1 : f.fbw;
         int h = f.fbh < 1 ? 1 : f.fbh;
+        // T1 (59-standalone-scenes): ONE SCENE AT A TIME. A non-plane kind is
+        // rendered by its own renderer into the SAME offscreen texture, and
+        // the plane's uploads are neither consulted nor disturbed — the two
+        // substrates share the framebuffer, never the geometry.
+        if (f.kind != scene3d::SceneKind::Plane)
+            return render_standalone(f, w, h);
+        if (f.slice == nullptr || f.terr == nullptr)
+            return (ImTextureID)0;
         ensure_fbo(w, h);
         if (fbo_ == 0)
             return (ImTextureID)0;
@@ -142,6 +153,11 @@ class GlSceneHost : public SceneHost {
                   int y) override {
         if (!ready_)
             return 0;
+        // T1 (59): route to whichever substrate was last rendered. Both save
+        // and restore the bound draw framebuffer themselves, so the ImGui
+        // renderer's target survives the pick pass either way.
+        if (kind_ != scene3d::SceneKind::Plane)
+            return standalone_.pick(cam, fbw, fbh, x, y);
         // Scene::pick saves and restores the bound draw framebuffer itself, so the
         // ImGui renderer's target (the default framebuffer) survives the pick pass.
         return scene_.pick(cam, fbw, fbh, x, y);
@@ -151,13 +167,61 @@ class GlSceneHost : public SceneHost {
 
     // T3 (47-scene-inspect-and-pickable-overlays): ground truth from the
     // scene's own last upload — see SceneHost::pick_bands()'s doc comment.
+    // T1 (59): from whichever substrate is live, so a decode reads the bands
+    // of the scene that actually drew the pixel it is decoding.
     scene3d::PickBands pick_bands() const override {
-        return scene_.pick_bands();
+        return kind_ == scene3d::SceneKind::Plane ? scene_.pick_bands()
+                                                  : standalone_.pick_bands();
     }
 
     ~GlSceneHost() override { free_fbo(); }
 
   private:
+    // T1 (59): the non-plane path. Lazily initialises its own programs (a
+    // session that never opens a standalone scene builds no extra shaders),
+    // re-uploads on a kind change or a recording change/growth, and draws into
+    // the same offscreen texture the plane path returns.
+    ImTextureID render_standalone(const SceneFrame &f, int w, int h) {
+        if (!standalone_inited_) {
+            standalone_inited_ = true;
+            std::string e;
+            standalone_ready_ = standalone_.init_gl(&e);
+            if (!standalone_ready_)
+                err_ = e;
+        }
+        if (!standalone_ready_)
+            return (ImTextureID)0;
+        ensure_fbo(w, h);
+        if (fbo_ == 0)
+            return (ImTextureID)0;
+        scene3d::StandaloneFrame sf;
+        sf.kind = f.kind;
+        sf.divergence = f.divergence;
+        sf.invocation = f.invocation;
+        sf.ribbon = f.ribbon;
+        sf.prism = f.prism;
+        // A kind switch ALWAYS re-uploads: the previous kind's geometry means
+        // nothing here, and merging it would be exactly the composition this
+        // brief rules out.
+        if (kind_ != f.kind || sa_key_ != f.key || sa_gen_ != f.gen ||
+            !sa_have_) {
+            standalone_.upload(sf);
+            sa_key_ = f.key;
+            sa_gen_ = f.gen;
+            sa_have_ = true;
+        }
+        kind_ = f.kind;
+        GLint prev_fbo = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+        glViewport(0, 0, w, h);
+        glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        standalone_.render(f.cam, w, h);
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));
+        return (ImTextureID)(intptr_t)tex_;
+    }
+
     void ensure_fbo(int w, int h) {
         if (fbo_ && fbo_w_ == w && fbo_h_ == h)
             return;
@@ -198,6 +262,17 @@ class GlSceneHost : public SceneHost {
     }
 
     scene3d::Scene scene_;
+    // T1 (59): the second substrate's renderer. A SEPARATE object with its own
+    // programs, geometry and pick target — the plane's machinery is not
+    // generalised to serve it (T1 step 2's own instruction), only the program
+    // link and the R32UI target are shared, through scene3d/glcommon.h.
+    scene3d::StandaloneRenderer standalone_;
+    bool standalone_inited_ = false;
+    bool standalone_ready_ = false;
+    scene3d::SceneKind kind_ = scene3d::SceneKind::Plane; // last rendered
+    uint64_t sa_key_ = 0, sa_gen_ = 0;
+    bool sa_have_ = false;
+
     bool inited_ = false;
     bool ready_ = false;
     std::string err_;

@@ -37,6 +37,7 @@
 #include "scene3d/goto.h"
 #include "scene3d/hud.h"
 #include "scene3d/pick.h"
+#include "scene3d/standalone.h" // T1-T5 (59): the non-plane substrates
 #include "space/projection.h"
 #include "ui/legend.h"       // shared semantic legend (24 T1/T2)
 #include "ui/palette.h"      // command palette over the spine (21 T1)
@@ -895,6 +896,253 @@ scene3d::Atmosphere scene_atmosphere_for_tier(FidelityTier tier) {
     return a;
 }
 
+// --- T1-T5 (59-standalone-scenes): the non-plane substrates ----------------
+// Weave the four pure models. Called once per weave, from the SAME lazy block
+// the plane models are built in — a recording whose 3D tab is never opened
+// pays nothing, and a kind switch is then a pointer change, not a re-weave.
+// The divergence scene is the one exception: it depends on the B-side
+// recording, which the user can attach or detach at any time, so it is rebuilt
+// whenever that pairing changes (tracked by `div_b`).
+static void shell_weave_standalone(SceneView &sv, const Recording &r,
+                                   const Streams &a, const Streams *b) {
+    // T3: the invocation stack. The slab's X/Z stays the Hilbert plane, so it
+    // takes the terrain's own Projection rather than a second one.
+    sv.invocation =
+        scene3d::build_invocation_scene(obs_region_build(r), &sv.terr.proj);
+    // T4: the module excursion ribbon, over the exact recorded call tree.
+    sv.ribbon = scene3d::build_module_ribbon(obs_tree_build(r));
+    // T5: the SIMD lane prism. One register at a time — the selector's options
+    // are the wide registers this pass actually wrote.
+    sv.prism_regs = scene3d::lane_prism_registers(a.df);
+    if (!sv.prism_regs.empty() &&
+        std::find(sv.prism_regs.begin(), sv.prism_regs.end(), sv.prism_reg) ==
+            sv.prism_regs.end())
+        sv.prism_reg = sv.prism_regs.front();
+    sv.prism = scene3d::build_lane_prism(a.df, sv.prism_reg, a.arch);
+    // T2: two recordings. With no B side there is nothing to diverge FROM —
+    // stated by the availability note below, never drawn as an empty scene.
+    if (b != nullptr)
+        sv.divergence = scene3d::build_divergence_scene(a, *b);
+    else
+        sv.divergence = scene3d::DivergenceScene{};
+}
+
+// Why a kind cannot be shown for this recording — one line per SceneKind, in
+// scene_kind_index order. Empty means available. The HUD offers an unavailable
+// kind DISABLED with this reason rather than omitting it (D7: "this recording
+// cannot show that" is a fact worth stating).
+static std::vector<std::string>
+shell_kind_availability(const SceneView &sv, const Streams *b) {
+    std::vector<std::string> why(scene3d::all_scene_kinds().size());
+    if (b == nullptr)
+        why[scene_kind_index(scene3d::SceneKind::Divergence)] =
+            "needs a second recording (press d to attach one)";
+    if (sv.invocation.slabs.empty())
+        why[scene_kind_index(scene3d::SceneKind::Invocation)] =
+            sv.invocation.note.empty() ? "no region capture in this recording"
+                                       : sv.invocation.note;
+    if (sv.ribbon.lanes.empty())
+        why[scene_kind_index(scene3d::SceneKind::ModuleRibbon)] =
+            sv.ribbon.note.empty() ? "no call tree in this recording"
+                                   : sv.ribbon.note;
+    if (sv.prism.writes.empty())
+        why[scene_kind_index(scene3d::SceneKind::LanePrism)] =
+            sv.prism.note.empty() ? "no wide register writes in this recording"
+                                  : sv.prism.note;
+    return why;
+}
+
+// T1 (59): decode a standalone pick and answer BOTH questions at once — "what
+// is this" (the hover readout) and "where would a click go" (the drill-in) —
+// from ONE decode, so the two can never disagree. That is the same anti-drift
+// discipline resolve_pick/resolve_pick_hint share on the plane. False for the
+// background, an id from a different substrate, or an id past the geometry.
+static bool shell_standalone_pick(const SceneView &sv, const std::string &rec,
+                                  uint32_t id, const scene3d::PickBands &bands,
+                                  std::string *what,
+                                  std::optional<dt_link> *link) {
+    what->clear();
+    *link = std::nullopt;
+    const std::optional<uint64_t> el =
+        scene3d::decode_pick_standalone(id, bands);
+    if (!el)
+        return false;
+    const uint64_t i = *el;
+    switch (sv.kind) {
+    case scene3d::SceneKind::Plane:
+        return false;
+    case scene3d::SceneKind::Divergence: {
+        const std::vector<scene3d::DivElem> order =
+            scene3d::divergence_pick_order(sv.divergence);
+        if (i >= order.size())
+            return false;
+        if (order[i].kind == scene3d::DivElemKind::Fork) {
+            *what = "patient zero — the first step at which the two "
+                    "recordings' instruction streams part";
+        } else {
+            const scene3d::DivRib &r = sv.divergence.ribs[order[i].rib];
+            *what = "rib at step " + std::to_string(r.step) + " — " +
+                    (r.hollow ? std::string("HOLLOW: nobody computed a delta "
+                                            "here, so agreement was never "
+                                            "observed")
+                              : std::to_string(r.changed) +
+                                    " register(s) disagree (" +
+                                    scene3d::reg_class_name(r.cls) + ")");
+        }
+        *link = scene3d::divergence_pick_link(sv.divergence, i);
+        return true;
+    }
+    case scene3d::SceneKind::Invocation: {
+        const std::vector<scene3d::InvElem> order =
+            scene3d::invocation_pick_order(sv.invocation);
+        if (i >= order.size())
+            return false;
+        const scene3d::InvSlab &sl = sv.invocation.slabs[order[i].slab];
+        const scene3d::InvCell &c = sl.cells[order[i].cell];
+        *what = "invocation #" + std::to_string(sl.number) + ", block " +
+                std::to_string(c.block) +
+                (c.state == scene3d::InvCellState::Unknown
+                     ? " — count UNKNOWN (in the coverage footer, but no "
+                       "recorded instruction described it)"
+                     : " — ran " + std::to_string(c.count) + "x here") +
+                (sl.closed ? "" : " · this invocation is an open PREFIX");
+        *link = scene3d::invocation_pick_link(sv.invocation, rec, i);
+        return true;
+    }
+    case scene3d::SceneKind::ModuleRibbon: {
+        const scene3d::RibbonDrill d =
+            scene3d::ribbon_pick_link(sv.ribbon, rec, i);
+        if (!d.ok)
+            return false;
+        *what = "tid " + std::to_string(d.tid) + " · " +
+                (d.module.empty() ? std::string("module unresolved")
+                                  : d.module) +
+                "!" + d.symbol + (d.at_cap ? " · at the CAPPED lane floor" : "");
+        *link = d.link;
+        return true;
+    }
+    case scene3d::SceneKind::LanePrism: {
+        const std::vector<scene3d::PrismElem> order =
+            scene3d::prism_pick_order(sv.prism);
+        if (i >= order.size())
+            return false;
+        const scene3d::PrismWrite &w = sv.prism.writes[order[i].write];
+        const scene3d::LaneByte &b = w.bytes[order[i].byte];
+        char buf[128];
+        std::snprintf(buf, sizeof buf,
+                      "byte[%llu] = 0x%02x at step %u%s",
+                      static_cast<unsigned long long>(order[i].byte),
+                      static_cast<unsigned>(b.value), w.step,
+                      w.lane_width_recorded ? "" : " (default lane width)");
+        *what = buf;
+        *link = scene3d::prism_pick_link(sv.prism, rec, i);
+        return true;
+    }
+    }
+    return false;
+}
+
+// The per-kind ImGui chrome: a refusal card, the legend, the fidelity notes.
+// Drawn on EVERY path (null backend included) — it is what makes a refused or
+// empty standalone scene state its reason rather than show a void.
+static void shell_standalone_chrome(ShellState &s, SceneView &sv,
+                                    const Streams &a) {
+    switch (sv.kind) {
+    case scene3d::SceneKind::Plane:
+        return;
+    case scene3d::SceneKind::Divergence: {
+        const scene3d::DivergenceScene &d = sv.divergence;
+        if (d.refused) {
+            // The admission gate is a REFUSAL CARD, not a silent empty scene.
+            ImGui::TextColored(dt_refuse_col(), "REFUSED: %s",
+                               d.refusal.c_str());
+            return;
+        }
+        if (!d.identity_note.empty())
+            ImGui::TextColored(dt_dim_col(), "%s", d.identity_note.c_str());
+        if (d.bounded)
+            ImGui::TextColored(dt_warn_col(),
+                               "the shared tube ends TORN: at least one "
+                               "recording is truncated, so we stopped looking "
+                               "— this is not \"they agreed to the end\"");
+        if (!d.rib_note.empty())
+            ImGui::TextColored(dt_warn_col(), "%s", d.rib_note.c_str());
+        else
+            ImGui::TextColored(dt_dim_col(),
+                               "%zu rib(s), %u hollow (a hollow rib is a step "
+                               "nobody computed — never \"nothing changed\")",
+                               d.ribs.size(), d.hollow_ribs());
+        ImGui::TextColored(dt_warn_col(),
+                           "post-fork ribs are step-indexed ARCHITECTURAL-STATE "
+                           "disagreement, not proof of instruction "
+                           "correspondence once the streams parted");
+        return;
+    }
+    case scene3d::SceneKind::Invocation: {
+        const scene3d::InvocationScene &v = sv.invocation;
+        if (!v.note.empty())
+            ImGui::TextColored(dt_warn_col(), "%s", v.note.c_str());
+        ImGui::TextColored(dt_dim_col(), "%s",
+                           scene3d::InvocationScene::legend());
+        ImGui::TextColored(dt_dim_col(),
+                           "%zu slab(s) · %u hole(s) (block absent from that "
+                           "invocation) · %u unknown-count cell(s) · %u open "
+                           "prefix(es)",
+                           v.slabs.size(), v.holes, v.unknown_cells,
+                           v.open_slabs);
+        return;
+    }
+    case scene3d::SceneKind::ModuleRibbon: {
+        const scene3d::ModuleRibbonScene &v = sv.ribbon;
+        if (!v.note.empty())
+            ImGui::TextColored(dt_warn_col(), "%s", v.note.c_str());
+        if (v.depth_capped)
+            ImGui::TextColored(dt_warn_col(), "%s", v.cap_note.c_str());
+        ImGui::TextColored(dt_dim_col(), "%s",
+                           scene3d::ModuleRibbonScene::legend());
+        ImGui::TextColored(dt_dim_col(),
+                           "%zu lane(s) · %u module seam(s) · %u unresolved "
+                           "module(s) (their own hue, never merged)",
+                           v.lanes.size(), v.seams, v.unknown_modules);
+        return;
+    }
+    case scene3d::SceneKind::LanePrism: {
+        scene3d::LanePrismScene &v = sv.prism;
+        if (!sv.prism_regs.empty()) {
+            // One register at a time: a prism of two would be two meanings on
+            // one X axis.
+            char label[64];
+            std::snprintf(label, sizeof label, "reg %u", sv.prism_reg);
+            ImGui::SetNextItemWidth(160.0f);
+            if (ImGui::BeginCombo("wide register", label)) {
+                for (uint32_t rid : sv.prism_regs) {
+                    char rl[64];
+                    std::snprintf(rl, sizeof rl, "reg %u", rid);
+                    if (ImGui::Selectable(rl, rid == sv.prism_reg)) {
+                        sv.prism_reg = rid;
+                        v = scene3d::build_lane_prism(a.df, rid, a.arch);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        if (!v.note.empty())
+            ImGui::TextColored(dt_warn_col(), "%s", v.note.c_str());
+        if (!v.width_note.empty())
+            ImGui::TextColored(dt_warn_col(), "%s", v.width_note.c_str());
+        ImGui::TextColored(dt_dim_col(),
+                           "%zu write(s) · %u wireframe (bytes not captured — "
+                           "never zeros) · %u hollow (value_valid false)",
+                           v.writes.size(), v.wireframes, v.hollow);
+        ImGui::TextColored(dt_dim_col(),
+                           "colour continuity shows what the BYTES did; it "
+                           "never asserts what the instruction meant");
+        return;
+    }
+    }
+    (void)s;
+}
+
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (s.active_tab < 0 || i >= s.scenes.size())
@@ -967,6 +1215,51 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // above — never re-derived per frame (see SceneView::home_u's doc).
         sv.has_home = scene3d::scene_home_target(sv.terr, &sv.home_u, &sv.home_v);
         sv.built = true;
+        // T1-T5 (59): the four non-plane substrates, woven on the same gate.
+        shell_weave_standalone(sv, r, a, shell_b(s));
+        sv.div_b = shell_b(s) != nullptr ? shell_b(s)->id : std::string();
+    }
+    // T2 (59): the B side can be attached/detached at any time, so the
+    // divergence scene alone is rebuilt when that pairing changes — the other
+    // three depend only on this recording and ride the weave gate above.
+    {
+        const Streams *bb = shell_b(s);
+        const std::string bid = bb != nullptr ? bb->id : std::string();
+        if (bid != sv.div_b) {
+            sv.div_b = bid;
+            sv.divergence = bb != nullptr
+                                ? scene3d::build_divergence_scene(a, *bb)
+                                : scene3d::DivergenceScene{};
+        }
+    }
+    // T1 (59): sync the selector, apply its one-shot intent. `kind_cam` holds
+    // a camera PER SUBSTRATE, seeded from that kind's own default framing (48
+    // T1's movable target, never a second camera type) — switching kinds must
+    // not carry the plane orbit into a scene whose extents it was not chosen
+    // for, and switching back must restore what you had.
+    if (sv.kind_cam.size() != scene3d::all_scene_kinds().size()) {
+        sv.kind_cam.assign(scene3d::all_scene_kinds().size(),
+                           scene3d::Camera{});
+        sv.kind_cam_inited.assign(scene3d::all_scene_kinds().size(), 0);
+    }
+    sv.hud.kind = sv.kind;
+    sv.hud.kind_unavailable = shell_kind_availability(sv, shell_b(s));
+    if (sv.hud.req_kind_change) {
+        sv.hud.req_kind_change = false;
+        if (sv.hud.req_kind != sv.kind) {
+            // Save the camera of the kind we are leaving, restore (or seed)
+            // the one we are entering.
+            sv.kind_cam[scene_kind_index(sv.kind)] = sv.cam;
+            sv.kind_cam_inited[scene_kind_index(sv.kind)] = 1;
+            sv.kind = sv.hud.req_kind;
+            const size_t ki = scene_kind_index(sv.kind);
+            if (!sv.kind_cam_inited[ki]) {
+                sv.kind_cam[ki] = scene3d::standalone_default_camera(sv.kind);
+                sv.kind_cam_inited[ki] = 1;
+            }
+            sv.cam = sv.kind_cam[ki];
+            sv.hud.kind = sv.kind;
+        }
     }
 
     // 50 T2 (two-way-brushing): recompute the located highlight only when the
@@ -1194,11 +1487,30 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // under the null test backend (and any run with no GL context): the models +
     // HUD above are the whole pane there, with this placard in place of the
     // viewport. draw_shell links no GL — every GL touch is behind this pointer.
+    // T1 (59): the per-kind chrome — a refusal card, the legend, the fidelity
+    // counts. Drawn BEFORE the viewport branches below so it appears on every
+    // path, null backend included: a refused or empty standalone scene must
+    // state its reason wherever it is shown.
+    shell_standalone_chrome(s, sv, a);
+
     if (s.scene_host == nullptr) {
         ImGui::TextDisabled(
             "3D viewport unavailable — no GL context in this build/run "
             "(headless test, or a viewer with no display). The scene's models, "
             "provenance and legend above are fully woven.");
+        // T1 (59): the flat reading surface is the ADDRESS PLANE's 2D form
+        // (52). It is not a substitute for a standalone scene — those have no
+        // plane — so it is offered only for the Plane kind, and the other
+        // kinds say what they are instead of showing an unrelated surface.
+        if (sv.kind != scene3d::SceneKind::Plane) {
+            ImGui::TextDisabled(
+                "\"%s\" has no flat plane form: its axes are not addresses. "
+                "The model above is complete; only its 3D rendering needs GL.",
+                scene3d::scene_kind_name(sv.kind));
+            sv.viewport_focus =
+                scene_viewport_target(ImGui::GetContentRegionAvail());
+            return;
+        }
         draw_flat_surface();
         // The Tab-reachable focus target + keyboard camera exist here too (22 T2):
         // this is precisely the null-backend path, where moving the pure Camera
@@ -1225,6 +1537,14 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         fbh = 16;
 
     SceneFrame f;
+    // T1 (59): the substrate discriminant + its model pointers. The plane's
+    // fields below keep their exact meanings and are filled unconditionally,
+    // so the Plane path is byte-identical to what it was before this brief.
+    f.kind = sv.kind;
+    f.divergence = &sv.divergence;
+    f.invocation = &sv.invocation;
+    f.ribbon = &sv.ribbon;
+    f.prism = &sv.prism;
     f.terr = &sv.terr;
     f.traj = &sv.traj;
     f.conv = &sv.conv;
@@ -1263,8 +1583,13 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // works fine. Drawn here (not the separate HUD window) so it sits right
     // beside what it toggles. Own picking, own hover when checked; none of
     // the GL orbit/dolly/pick code below applies while it is showing.
-    ImGui::Checkbox("flat surface (2D reading mode)", &sv.flat_view);
-    if (sv.flat_view) {
+    // T1 (59): the flat surface is the ADDRESS PLANE's 2D form, so the toggle
+    // is offered only where there is a plane. A standalone scene has no flat
+    // reading surface, and offering one would advertise a view that cannot
+    // exist.
+    if (sv.kind == scene3d::SceneKind::Plane)
+        ImGui::Checkbox("flat surface (2D reading mode)", &sv.flat_view);
+    if (sv.flat_view && sv.kind == scene3d::SceneKind::Plane) {
         draw_flat_surface();
         sv.viewport_focus =
             scene_viewport_target(ImGui::GetContentRegionAvail());
@@ -1290,10 +1615,17 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // exists, so the ruler's absence there is the SAME graceful degradation
     // the rest of this pane already practises; the HUD's axis note above
     // still reads either way).
-    scene3d::draw_trajectory_ruler(
-        ImGui::GetWindowDrawList(), sv.cam, vp_origin,
-        ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
-        sv.terr.nsteps, s.scene_host->traj_scale());
+    // T1 (59): the ruler measures the PLANE's trajectory-time axis; a
+    // standalone scene's vertical axis is a different quantity entirely
+    // (execution step, invocation ordinal, call depth, byte magnitude), and
+    // drawing a trajectory-time ruler over one would be the fabricated
+    // correspondence this whole family avoids. The HUD's axis block names the
+    // real axis on every kind.
+    if (sv.kind == scene3d::SceneKind::Plane)
+        scene3d::draw_trajectory_ruler(
+            ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+            ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+            sv.terr.nsteps, s.scene_host->traj_scale());
 
     // T4 (50-two-way-brushing): a located selection off-screen is DISCLOSED —
     // a small edge-anchored label naming the direction — rather than moved to
@@ -1344,7 +1676,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             ImVec2 origin = ImGui::GetItemRectMin();
             int px = static_cast<int>(io.MousePos.x - origin.x);
             int py = static_cast<int>(io.MousePos.y - origin.y);
-            if (px >= 0 && py >= 0 && px < fbw && py < fbh) {
+            // T1 (59): recentring resolves a pick to a PLANE COORDINATE
+            // (scene_recentre_target), which a substrate with no address axis
+            // has none of. Say so rather than silently doing nothing.
+            if (sv.kind != scene3d::SceneKind::Plane) {
+                sv.hud.nav_note =
+                    "double-click recentres on an ADDRESS; \"" +
+                    std::string(scene3d::scene_kind_name(sv.kind)) +
+                    "\" has no address axis — pan and dolly instead";
+            } else if (px >= 0 && py >= 0 && px < fbw && py < fbh) {
                 uint32_t id = s.scene_host->pick(sv.cam, fbw, fbh, px, py);
                 scene3d::Pick pk = scene3d::decode_pick(id, sv.terr.w);
                 float u = 0.0f, v = 0.0f;
@@ -1405,10 +1745,27 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
                 // convergence arc or an access spur hovers exactly as it
                 // would click.
                 const scene3d::PickBands bands = s.scene_host->pick_bands();
-                scene3d::Pick hpk =
-                    scene3d::decode_pick(sv.hover_id, sv.terr.w, bands);
-                sv.hover_hint = scene3d::resolve_pick_hint(
-                    sv.terr, sv.traj, sv.conv, hpk, sv.follow_step);
+                if (sv.kind != scene3d::SceneKind::Plane) {
+                    // T1 (59): the standalone substrates' own decode, from
+                    // the SAME bands the renderer really uploaded. One decode
+                    // answers both the hover and the click, so the two cannot
+                    // disagree (the plane's own anti-drift rule, 47 T2).
+                    std::string what;
+                    std::optional<dt_link> lk;
+                    sv.hover_hint = scene3d::PickHint{};
+                    if (shell_standalone_pick(sv, a.id, sv.hover_id, bands,
+                                              &what, &lk)) {
+                        sv.hover_hint.empty = false;
+                        sv.hover_hint.what = what;
+                        sv.hover_hint.target =
+                            lk ? dt_view_name(lk->view) : std::string();
+                    }
+                } else {
+                    scene3d::Pick hpk =
+                        scene3d::decode_pick(sv.hover_id, sv.terr.w, bands);
+                    sv.hover_hint = scene3d::resolve_pick_hint(
+                        sv.terr, sv.traj, sv.conv, hpk, sv.follow_step);
+                }
             }
         }
 
@@ -1457,6 +1814,17 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             if (px >= 0 && py >= 0 && px < fbw && py < fbh) {
                 uint32_t id = s.scene_host->pick(sv.cam, fbw, fbh, px, py);
                 const scene3d::PickBands bands = s.scene_host->pick_bands();
+                if (sv.kind != scene3d::SceneKind::Plane) {
+                    // T1 (59): the standalone drill-in — the same one decode
+                    // the hover above used, so a click lands exactly where the
+                    // tooltip said it would.
+                    std::string what;
+                    std::optional<dt_link> lk;
+                    if (shell_standalone_pick(sv, a.id, id, bands, &what, &lk) &&
+                        lk && !dt_nav_go(s.nav, *lk))
+                        s.status = s.nav.last_error;
+                    return;
+                }
                 scene3d::Pick pk = scene3d::decode_pick(id, sv.terr.w, bands);
                 // T3 (50-two-way-brushing): `a.df` is the recording's latest
                 // dataflow pass — the SAME stream the trajectory's df_step

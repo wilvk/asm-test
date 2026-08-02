@@ -623,6 +623,9 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/s3/layers.o \
+  $(BUILD)/desktop/$(1)/s3/glcommon.o \
+  $(BUILD)/desktop/$(1)/s3/standalone.o \
+  $(BUILD)/desktop/$(1)/s3/standalone_gl.o \
   $(BUILD)/desktop/$(1)/pf/window_picker.o
 # regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
 # the emulator (emu.o), so — like forks.o — it is APP-ONLY (never in the viewer's
@@ -1140,6 +1143,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
+                 $(BUILD)/desktop_test_scene_kind \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
@@ -1489,6 +1493,30 @@ $(BUILD)/desktop_test_drillin: $(BUILD)/desktop/test/t/test_drillin.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# --- 59-standalone-scenes ----------------------------------------------------
+# T1: the scene-KIND contract — the axis-labelling exhaustiveness walk, the
+# per-kind pick id bands (allocated, never inferred), and the per-kind camera
+# framing. scene_kind.h is header-only, so this links the GL-free pick id space
+# (s3/pick.o, for the plane's own decode) + s3/standalone.o (the pure models
+# the band check builds) and their transitive pure closure — no ImGui, no GL,
+# no engine (D4). A STANDALONE TU rather than an addition to test_drillin.cpp,
+# so it never collides with that file's own concurrent work (the same reason
+# test_goto.cpp is its own binary).
+$(BUILD)/desktop_test_scene_kind: $(BUILD)/desktop/test/t/test_scene_kind.o \
+    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/standalone.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/mnemonic.o \
+    $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/tree.o \
+    $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop/test/t/test_scene_kind.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+
 # The convergence detector + the incremental live feed (10-spacetime-3d-overview.md
 # T5) links space/converge.o + trajectory.o + projection.o (it places PC vertices
 # on the plane) + the live capture host session.o + the doc model — and NOTHING
@@ -1558,6 +1586,12 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/s3/glcommon.o \
+    $(BUILD)/desktop/test/s3/standalone.o \
+    $(BUILD)/desktop/test/s3/standalone_gl.o \
+    $(BUILD)/desktop/test/sp/mnemonic.o \
+    $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/tree.o \
+    $(BUILD)/desktop/test/vw/observer.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
@@ -1850,6 +1884,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
+    $(BUILD)/desktop/test/s3/standalone.o \
     $(DESKTOP_TEST_IG) \
     $(BUILD)/desktop/test/pf/window_picker.o
 
