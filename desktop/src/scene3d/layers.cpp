@@ -42,6 +42,12 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"working set", "working set",
          "what is being touched now, and what has drifted cold?", G::Activity,
          LayerGrade::Derived, &SceneLayers::working_set},
+        // 58 T4: Exact — the pillar's two ends ARE recorded step indices
+        // (DataCell::steps.front()/back()), not an aggregate of them. The
+        // claim it makes is exactly what the recording states.
+        {"lifetime", "lifetime",
+         "over what interval is each address OBSERVED alive?", G::Activity,
+         LayerGrade::Exact, &SceneLayers::lifetime},
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},

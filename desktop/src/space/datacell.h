@@ -185,5 +185,50 @@ WorkingSetTide build_working_set_tide(const TerrainModel &m, uint64_t t,
 // The layer's legend line — states the axis, the unit and the watermark rule.
 std::string tide_note(const WorkingSetTide &tide);
 
+// ---------------------------------------------------------------------------
+// T4 — observed-lifetime pillars
+// ---------------------------------------------------------------------------
+
+enum class PillarDominance { Read, Write, Balanced, Undirected };
+const char *pillar_dominance_label(PillarDominance d);
+
+struct LifetimePillar {
+    uint32_t cell = 0;
+    float u = 0.0f, v = 0.0f;
+    // The OBSERVED-TOUCH interval: DataCell::steps.front()..back(), both
+    // already precomputed and ascending, so this layer is one pass and no
+    // rescan. Y is terrain (trace) time.
+    uint64_t first_step = 0, last_step = 0;
+    uint64_t touches = 0;
+    // first_step == last_step: a single touch. A STUB with a stated
+    // zero-length interval, never silently widened to "at least one step".
+    bool zero_length = false;
+    // The recording is torn AND this pillar's last touch sits at the tail: the
+    // interval's top is a FLOOR, not a cap. The renderer draws it open-topped.
+    bool open_top = false;
+    uint64_t read_bytes = 0, write_bytes = 0, unknown_bytes = 0;
+    bool has_read = false, has_write = false;
+    PillarDominance dominance = PillarDominance::Undirected;
+};
+
+struct LifetimePillars {
+    std::vector<LifetimePillar> pillars;
+    uint64_t nsteps = 0; // the terrain-time extent the pillars are drawn in
+    bool mem_present = false;
+    bool torn = false;
+    uint32_t open_topped = 0; // how many pillars are floors, not intervals
+};
+
+// Build one pillar per touched data cell over the WHOLE recording (the layer
+// is a Gantt of the run, not a slice; the playhead reads as a horizontal plane
+// THROUGH the pillars — below = born, intersected = live, above = untouched).
+LifetimePillars build_lifetime_pillars(const TerrainModel &m);
+
+// The load-bearing label of this whole brief. MUST contain "observed" and MUST
+// NOT contain "allocat" — pinned by test, because nothing in the capture layer
+// emits allocation events and a pillar that claimed otherwise would be the
+// single most plausible-looking lie this family could tell.
+const char *lifetime_pillar_label();
+
 } // namespace asmdesk::space
 #endif // ASMDESK_SPACE_DATACELL_H

@@ -781,6 +781,19 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::TextColored(kDim, "%u live cell(s), %u cold (faded watermark)",
                            s.tide_live_cells, s.tide_cold_cells);
     }
+    // T4 (58): the lifetime pillars' own chrome — the label FIRST, because it
+    // is the load-bearing sentence of that whole brief (these are observed
+    // touches, not allocations) and a reader who sees the geometry before the
+    // caveat has already drawn the wrong conclusion.
+    if (s.layers.lifetime) {
+        ImGui::TextColored(kDim, "%s", space::lifetime_pillar_label());
+        if (s.lifetime_open_topped > 0)
+            ImGui::TextColored(kBad,
+                               "%u pillar(s) OPEN-TOPPED — a torn capture cut "
+                               "the observation, not the object: the top is a "
+                               "lower bound",
+                               s.lifetime_open_topped);
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

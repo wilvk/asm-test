@@ -275,4 +275,90 @@ std::string tide_note(const WorkingSetTide &tide) {
     return s;
 }
 
+// ---------------------------------------------------------------------------
+// T4 — observed-lifetime pillars
+// ---------------------------------------------------------------------------
+
+const char *pillar_dominance_label(PillarDominance d) {
+    switch (d) {
+    case PillarDominance::Read:
+        return "read-dominant (by OBSERVED bytes)";
+    case PillarDominance::Write:
+        return "write-dominant (by OBSERVED bytes)";
+    case PillarDominance::Balanced:
+        return "both directions observed, neither dominant";
+    case PillarDominance::Undirected:
+        return "no recorded direction";
+    }
+    return "";
+}
+
+LifetimePillars build_lifetime_pillars(const TerrainModel &m) {
+    LifetimePillars out;
+    out.nsteps = m.nsteps;
+    out.mem_present = m.mem_present;
+    out.torn = m.torn;
+    if (!m.basis_error.empty())
+        return out;
+    // The torn TAIL: the last step the recording actually carries. A pillar
+    // whose last touch sits there is OPEN-TOPPED — the capture stopped, so the
+    // interval's top is a lower bound on the real one, not its end. Derived
+    // from the observed maximum rather than nsteps, because a `mem` stream can
+    // outlast (or fall short of) the trace's own step count and the honest
+    // question is "is this the last thing we saw?".
+    uint64_t tail = 0;
+    for (const TerrainModel::DataCell &dc : m.data)
+        if (!dc.steps.empty())
+            tail = std::max(tail, dc.steps.back());
+
+    out.pillars.reserve(m.data.size());
+    for (const TerrainModel::DataCell &dc : m.data) {
+        if (dc.steps.empty())
+            continue; // never touched: no pillar. Absence, not a zero nub.
+        LifetimePillar p;
+        p.cell = dc.cell;
+        cell_uv(dc.cell, m.w, m.h, &p.u, &p.v);
+        // Both ends are already precomputed and ascending (terrain.h), so this
+        // layer costs one pass and no rescan — T4's entire data requirement.
+        p.first_step = dc.steps.front();
+        p.last_step = dc.steps.back();
+        p.touches = dc.steps.size();
+        // A single touch is a STUB with a STATED zero-length interval. It is
+        // never silently widened to "at least one step" — the recording says
+        // the address was touched once, at one step, and nothing more.
+        p.zero_length = p.first_step == p.last_step;
+        p.open_top = m.torn && p.last_step == tail;
+        if (p.open_top)
+            out.open_topped++;
+        p.read_bytes = dc.cum_read_size.empty() ? 0 : dc.cum_read_size.back();
+        p.write_bytes = dc.cum_write_size.empty() ? 0 : dc.cum_write_size.back();
+        const uint64_t total = dc.cum_size.empty() ? 0 : dc.cum_size.back();
+        const uint64_t directed = p.read_bytes + p.write_bytes;
+        p.unknown_bytes = total > directed ? total - directed : 0;
+        const uint8_t dir = dc.cum_dir.empty() ? 0u : dc.cum_dir.back();
+        p.has_read = (dir & DD_READ) != 0u;
+        p.has_write = (dir & DD_WRITE) != 0u;
+        p.dominance = (!p.has_read && !p.has_write) ? PillarDominance::Undirected
+                      : p.read_bytes > p.write_bytes ? PillarDominance::Read
+                      : p.write_bytes > p.read_bytes ? PillarDominance::Write
+                                                     : PillarDominance::Balanced;
+        out.pillars.push_back(p);
+    }
+    return out;
+}
+
+const char *lifetime_pillar_label() {
+    // THE load-bearing sentence of this brief, and the reason a test greps it.
+    // Nothing in the capture layer emits allocation events — recording.cpp's
+    // kind registry is trace/coverage/.../mem/blame/statediff, with no
+    // malloc/free/mmap/brk — so an "allocation lifetime" is a claim this tree
+    // has no evidence for, and it is the single most plausible-looking lie
+    // this family could tell.
+    return "lifetime pillars: the interval between the FIRST and LAST OBSERVED "
+           "TOUCH of an address — not an allocation lifetime. No producer "
+           "emits allocation events, so the real object may have existed long "
+           "before the first touch and long after the last. A pillar is open-"
+           "topped where a torn capture cut the observation, not the object.";
+}
+
 } // namespace asmdesk::space

@@ -89,6 +89,10 @@ struct SceneLayers {
     // the cumulative, monotonic terrain cannot show by construction. Default
     // OFF for the same compositing reason as data_relief above.
     bool working_set = false;
+    // T4 (58-memory-data-cell-family): the observed-lifetime pillars — a
+    // Gantt-in-3D over the WHOLE recording, so the playhead reads as a plane
+    // through them rather than cutting them. Default OFF, same reason.
+    bool lifetime = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -209,6 +213,13 @@ class Scene {
     // decay, and a decay summed into "what is hot right now" would be a lie
     // about the working set.
     void set_working_set_tide(const space::WorkingSetTide &tide);
+    // T4 (58): the observed-lifetime pillars. A WHOLE-RECORDING aggregate (a
+    // pillar spans first..last touch regardless of the playhead), so this
+    // uploads once per weave like the stat terrain — never on a scrub. The
+    // OPEN-TOPPED pillars (a torn capture cut the observation at the tail) go
+    // into their own batch: an interval and a lower bound on an interval are
+    // different claims and must not share one buffer or one colour.
+    void set_lifetime_pillars(const space::LifetimePillars &pillars);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -368,6 +379,7 @@ class Scene {
     };
     DataLineBatch relief_read_, relief_write_; // T2
     DataLineBatch tide_live_, tide_watermark_; // T3
+    DataLineBatch pillars_, pillars_open_;     // T4
     void free_data_layers();
     // Upload `verts` (3 floats per vertex) into `b`, replacing whatever it
     // held. Defined in data_layers_gl.cpp with the rest of the family.

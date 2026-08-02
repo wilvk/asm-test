@@ -80,7 +80,7 @@ void Scene::upload_data_batch(DataLineBatch &b, const std::vector<float> &verts)
 
 void Scene::free_data_layers() {
     DataLineBatch *all[] = {&relief_read_, &relief_write_, &tide_live_,
-                            &tide_watermark_};
+                            &tide_watermark_, &pillars_, &pillars_open_};
     for (DataLineBatch *b : all) {
         if (b->vbo)
             glDeleteBuffers(1, &b->vbo);
@@ -174,6 +174,50 @@ void Scene::set_working_set_tide(const space::WorkingSetTide &tide) {
     tide_watermark_.line_width = 1.5f;
 }
 
+// T4 (58): the observed-lifetime pillars. Y is TRACE TIME (traj_scale_, the
+// same world-Y-per-step the worldlines use), so the terrain playhead reads as
+// a horizontal plane through them: below = born, intersected = live, above =
+// untouched. Whole-recording geometry — it does not move with the playhead,
+// which is the point of a Gantt.
+//
+// OPEN-TOPPED pillars live in their own batch. A torn capture cut the
+// OBSERVATION, not the object, so the top of such a pillar is a lower bound on
+// the interval and never its end; an interval and a lower bound on an interval
+// are different claims and must not share a buffer or a colour.
+//
+// A zero-length pillar (one single touch) still emits a segment — but a
+// deliberately MINIMAL one, one step tall, so it reads as the stub it is
+// rather than vanishing. That is not a fabricated extent: LifetimePillar
+// states zero_length, the HUD says so, and a vanished pillar would hide a real
+// observed touch.
+void Scene::set_lifetime_pillars(const space::LifetimePillars &pillars) {
+    std::vector<float> solid, open;
+    solid.reserve(pillars.pillars.size() * 6);
+    for (const space::LifetimePillar &p : pillars.pillars) {
+        const float y0 = static_cast<float>(p.first_step) * traj_scale_;
+        float y1 = static_cast<float>(p.last_step) * traj_scale_;
+        if (p.zero_length)
+            y1 = y0 + traj_scale_; // a one-step stub, never a vanished touch
+        seg(p.open_top ? open : solid, p.u, y0, p.v, p.u, y1, p.v);
+    }
+    upload_data_batch(pillars_, solid);
+    upload_data_batch(pillars_open_, open);
+    // Translucent, per T4's own wording — the pillars stand over the terrain
+    // and the worldlines pass through them, so they must not occlude.
+    pillars_.color[0] = 0.65f;
+    pillars_.color[1] = 0.80f;
+    pillars_.color[2] = 0.90f;
+    pillars_.color[3] = 0.40f;
+    pillars_.line_width = 2.0f;
+    // Open-topped: the torn red-shift, and thinner, so a lower bound never
+    // reads as heavier evidence than a closed interval.
+    pillars_open_.color[0] = 1.00f;
+    pillars_open_.color[1] = 0.35f;
+    pillars_open_.color[2] = 0.30f;
+    pillars_open_.color[3] = 0.55f;
+    pillars_open_.line_width = 1.5f;
+}
+
 void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (!prog_traj_)
         return;
@@ -181,6 +225,10 @@ void Scene::draw_data_layers(const float mvp[16], const SceneLayers &layers) {
     if (layers.data_relief) {
         batches.push_back(&relief_read_);
         batches.push_back(&relief_write_);
+    }
+    if (layers.lifetime) {
+        batches.push_back(&pillars_);
+        batches.push_back(&pillars_open_);
     }
     if (layers.working_set) {
         // Watermark first, live second: the faded decay sits behind the mass

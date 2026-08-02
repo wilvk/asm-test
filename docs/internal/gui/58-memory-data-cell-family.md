@@ -19,7 +19,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change. Line numbers below were re-verified 2026-08-03 while implementing.
 >
-> **Status — ☑ 3/6 (T1, T2, T3 landed 2026-08-03).**
+> **Status — ☑ 4/6 (T1–T4 landed 2026-08-03).**
 
 ## Why this work exists
 
@@ -240,7 +240,7 @@ The live crest and the cold watermark are separate GL batches, so no draw-order
 accident can composite a decayed cell into the live mass; the watermark draws at
 10% alpha in the live hue (it is the same quantity at an earlier time).
 
-### T4 — Observed-lifetime pillars (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
+### ☑ T4 — Observed-lifetime pillars (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
 
 **Goal.** A Gantt-in-3D: over what interval each address is observed alive.
 
@@ -271,6 +271,27 @@ the tail; the label text contains "observed" and does not contain "allocat".
 
 **Done when.** Address lifetimes are readable and no geometry or wording claims
 allocation.
+
+**Landed.** `build_lifetime_pillars(model)` in `space/datacell.{h,cpp}` — one pass,
+no rescan: both ends are `DataCell::steps.front()/back()`, already precomputed and
+ascending. A WHOLE-RECORDING aggregate, so it uploads on the weave gate, never on a
+scrub (a Gantt that moved with the playhead would not be a Gantt); the playhead
+reads as a plane through the pillars instead.
+
+`lifetime_pillar_label()` carries this brief's load-bearing sentence, and the test
+does not merely grep for "observed" — it walks **every** occurrence of `allocat` in
+the label and fails unless each one sits inside an explicit denial. Open-topped
+pillars (torn capture, last touch at the observed tail) live in their **own** GL
+batch with their own colour and are counted in the HUD in the refuse colour: an
+interval and a lower bound on an interval are different claims and must not share a
+buffer. Torn-ness is not smeared over every pillar — a test asserts a pillar that
+ended *before* the tail stays closed.
+
+A zero-length pillar (one single touch) states `zero_length` and draws a deliberate
+one-step stub rather than vanishing: the touch was really observed, and a vanished
+pillar would hide it. Tests: 5-and-900 yields **one** pillar spanning 5..900 (never
+two); the single-touch stub keeps its stated zero-length interval; the torn tail
+open-tops exactly the right pillar; no `mem` yields no pillars at all.
 
 ### T5 — Data-access worldline ribbon (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1*
 

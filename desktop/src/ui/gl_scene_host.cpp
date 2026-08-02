@@ -97,6 +97,11 @@ class GlSceneHost : public SceneHost {
             // aggregate too — same upload gate.
             static const space::MispredLayer kNoMispred;
             scene_.set_mispred_layer(f.mispred ? *f.mispred : kNoMispred);
+            // T4 (58): the lifetime pillars span first..last OBSERVED touch
+            // over the whole recording, so they ride this gate too — a Gantt
+            // that moved with the playhead would not be a Gantt.
+            static const space::LifetimePillars kNoLifetime;
+            scene_.set_lifetime_pillars(f.lifetime ? *f.lifetime : kNoLifetime);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

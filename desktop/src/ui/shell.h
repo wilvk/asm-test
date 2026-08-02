@@ -80,6 +80,10 @@ struct SceneView {
     // recency claim the reader did not ask for.
     space::WorkingSetTide tide;
     uint64_t tide_window = space::kTideWindowDefault;
+    // 58 T4: the observed-lifetime pillars — a WHOLE-RECORDING aggregate (a
+    // pillar spans first..last touch regardless of the playhead), so it is
+    // woven ONCE per recording alongside terr/traj, exactly like opcode_cells.
+    space::LifetimePillars lifetime;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

@@ -281,6 +281,12 @@ struct HudState {
     // live/cold split and the tint provenance without rebuilding the layer.
     uint32_t tide_live_cells = 0, tide_cold_cells = 0;
     std::string tide_legend; // space::tide_note(tide), built by the caller
+
+    // T4 (58-memory-data-cell-family): how many lifetime pillars are OPEN-
+    // TOPPED (a torn capture cut the observation at the tail, so the interval's
+    // top is a lower bound). Synced by the caller; shown only while
+    // SceneLayers::lifetime is on, in the refuse colour.
+    uint32_t lifetime_open_topped = 0;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

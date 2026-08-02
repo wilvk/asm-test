@@ -541,10 +541,126 @@ static void t3_working_set_tide() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T4 — observed-lifetime pillars
+// ---------------------------------------------------------------------------
+static void t4_lifetime_pillars() {
+    // kSpan is touched at steps 5 and 900 — ONE pillar spanning 5..900, never
+    // two. kStub is touched exactly once.
+    const uint64_t kSpan = 0x200000, kStub = 0x200040;
+    std::string nd = kHeader + trace_steps(950) + mem_ev(5, kSpan, 8, "r") +
+                     mem_ev(900, kSpan, 8, "w") + mem_ev(400, kStub, 8, "r") +
+                     kEnd;
+    Recording r = mk_rec(nd);
+    TerrainModel m = weave(r);
+    LifetimePillars P = build_lifetime_pillars(m);
+
+    const LifetimePillar *sp = find_at(P.pillars, m.proj, m.w, m.h, kSpan);
+    const LifetimePillar *st = find_at(P.pillars, m.proj, m.w, m.h, kStub);
+    check("T4: both touched cells produce a pillar", sp && st,
+          "a touched cell produced no pillar");
+    if (!(sp && st))
+        return;
+
+    check("T4: a cell touched at 5 and 900 yields ONE pillar spanning 5..900",
+          sp->first_step == 5 && sp->last_step == 900 && sp->touches == 2,
+          "got " + std::to_string(sp->first_step) + ".." +
+              std::to_string(sp->last_step));
+    check("T4: exactly two pillars for two touched cells", P.pillars.size() == 2,
+          "got " + std::to_string(P.pillars.size()) + " (a second pillar for "
+          "the same cell would mean the interval was split)");
+    check("T4: a cell touched once yields a STUB with a STATED zero-length "
+          "interval",
+          st->zero_length && st->first_step == st->last_step &&
+              st->first_step == 400,
+          "the stub's interval was silently widened");
+    check("T4: the spanning pillar is not zero-length", !sp->zero_length,
+          "a real interval was reported as a stub");
+    check("T4: dominance comes from the OBSERVED byte split",
+          sp->has_read && sp->has_write &&
+              sp->dominance == PillarDominance::Balanced,
+          "8r/8w should be balanced");
+
+    // A never-touched cell places NOTHING (not a zero-length nub at the
+    // origin). Asserted through the shipping composition: an address the
+    // recording never touched has no DataCell at all, so no pillar.
+    {
+        bool any_at_zero = false;
+        for (const LifetimePillar &p : P.pillars)
+            if (p.touches == 0)
+                any_at_zero = true;
+        check("T4: no pillar exists for an untouched cell", !any_at_zero,
+              "a zero-touch pillar appeared");
+    }
+
+    // A torn recording OPEN-TOPS the pillars whose last touch is at the tail —
+    // and only those.
+    {
+        std::string tn = kHeader + trace_steps(50) + mem_ev(2, kStub, 8, "r") +
+                         mem_ev(4, kSpan, 8, "r") + mem_ev(40, kSpan, 8, "w");
+        Recording trr = mk_rec(tn); // no `end` footer => torn
+        TerrainModel tm = weave(trr);
+        check("T4: the torn fixture is torn", tm.torn, "not torn");
+        LifetimePillars TP = build_lifetime_pillars(tm);
+        const LifetimePillar *tail = find_at(TP.pillars, tm.proj, tm.w, tm.h,
+                                             kSpan);
+        const LifetimePillar *early = find_at(TP.pillars, tm.proj, tm.w, tm.h,
+                                              kStub);
+        check("T4: the pillar whose last touch is at the tail is OPEN-TOPPED",
+              tail && tail->open_top, "the torn tail was capped, not floored");
+        check("T4: a pillar that ended BEFORE the tail is NOT open-topped",
+              early && !early->open_top,
+              "torn-ness was smeared over every pillar");
+        check("T4: the layer counts the open-topped pillars",
+              TP.open_topped == 1,
+              "got " + std::to_string(TP.open_topped));
+    }
+
+    // THE load-bearing wording assertion of this whole brief.
+    {
+        std::string lab = lifetime_pillar_label();
+        std::string lower;
+        for (char c : lab)
+            lower += static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+        check("T4: the label contains \"observed\"",
+              lower.find("observed") != std::string::npos,
+              "the pillar label does not say it measures observed touches");
+        check("T4: the label does NOT contain \"allocat\"",
+              lower.find("allocat") == std::string::npos ||
+                  lower.find("not an allocation") != std::string::npos,
+              "the label claims an allocation lifetime nothing recorded");
+        // Stronger: the ONLY permitted occurrence is the explicit denial.
+        size_t pos = lower.find("allocat");
+        bool ok = true;
+        while (pos != std::string::npos) {
+            const std::string ctx = lower.substr(pos > 8 ? pos - 8 : 0, 24);
+            if (ctx.find("not an alloc") == std::string::npos &&
+                ctx.find("no producer") == std::string::npos &&
+                ctx.find("emits allocat") == std::string::npos)
+                ok = false;
+            pos = lower.find("allocat", pos + 1);
+        }
+        check("T4: every mention of allocation is a DENIAL, never a claim", ok,
+              "the label asserts something about allocation");
+    }
+
+    // Absent `mem` => no pillars at all.
+    {
+        std::string coarse = kHeader + trace_steps(6) + kEnd;
+        Recording cr = mk_rec(coarse);
+        TerrainModel cm = weave(cr);
+        LifetimePillars CP = build_lifetime_pillars(cm);
+        check("T4: no `mem` => no pillars, not zero-height ones",
+              CP.pillars.empty() && !CP.mem_present,
+              "the coarse rung produced pillars");
+    }
+}
+
 int main() {
     t1_hud_contract();
     t2_twin_relief();
     t3_working_set_tide();
+    t4_lifetime_pillars();
 
     if (failures) {
         std::fprintf(stderr, "%d data-layer check(s) failed\n", failures);

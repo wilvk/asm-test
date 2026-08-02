@@ -69,6 +69,10 @@ struct SceneFrame {
     // window is part of the layer's definition, not a display option.
     const space::WorkingSetTide *tide = nullptr;
     uint64_t tide_gen = 0;
+    // T4 (58-memory-data-cell-family): the observed-lifetime pillars — a
+    // whole-recording aggregate like `opcode_cells`, so the host uploads it on
+    // the weave/growth gate, never on a playhead scrub.
+    const space::LifetimePillars *lifetime = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

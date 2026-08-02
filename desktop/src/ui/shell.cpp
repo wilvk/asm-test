@@ -959,6 +959,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.mispred = build_mispred_layer(sv.hotedges_scene, sv.terr.proj);
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
+        // 58 T4: the lifetime pillars are a whole-recording Gantt (first..last
+        // OBSERVED touch), so they are woven here with the other
+        // playhead-independent models, never re-gated on a scrub.
+        sv.lifetime = space::build_lifetime_pillars(sv.terr);
         sv.opcode_cells = space::build_opcode_terrain(
             sv.terr, r, space::opcode_guest_from_arch(a.arch));
         sv.hud.nsteps = sv.terr.nsteps;
@@ -1027,6 +1031,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.tide_live_cells = sv.tide.live_cells;
     sv.hud.tide_cold_cells = sv.tide.cold_cells;
     sv.hud.tide_legend = space::tide_note(sv.tide);
+    // 58 T4: an open-topped pillar is a lower bound, never an interval — the
+    // count is stated, never silently folded into the closed ones.
+    sv.hud.lifetime_open_topped = sv.lifetime.open_topped;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1271,6 +1278,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.relief = &sv.relief;             // 58 T2
     f.tide = &sv.tide;                 // 58 T3
     f.tide_gen = sv.tide_window;
+    f.lifetime = &sv.lifetime;         // 58 T4
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant
