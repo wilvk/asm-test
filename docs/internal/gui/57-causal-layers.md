@@ -18,6 +18,17 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
+> **Citations re-verified and corrected 2026-08-03** (this rule, applied). Six
+> of the file:line references above and below pointed at the wrong lines and
+> have been repointed against the tree as this brief leaves it: `BlameAttr` is
+> `streams.h:164-171` (was 152-159), `TrajPoint` is `types.h:58-75` (was
+> 51-68), `access_spurs_` is `scene.h:431` (was 187 — it was already 371 before
+> this brief), `resolve_pick`'s `link.step = pv.t` is `pick.cpp:327` (was
+> 136-139), `Anchor` is `projection.h:46-57` with `place` at `:56`, and
+> `placement_chips` is `hud.h:32-37`. The SUBSTANCE of every claim those
+> citations support was verified against the code and holds — only the line
+> numbers were wrong.
+>
 > **Status — ✅ 5/5 landed 2026-08-03.**
 > T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
 > [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
@@ -161,7 +172,7 @@ trap. [46](46-3d-functional-roadmap.md) §4 states the rule once for the whole 3
 family — *cross-axis brushing goes through the ADDRESS, never through an ordinal* —
 and its G10 shows the rule already being broken in the shipped code
 (`resolve_pick` sets `link.step = pv.t`, a per-tid vertex counter,
-[pick.cpp:136-139](../../../desktop/src/scene3d/pick.cpp#L136)). Four new layers
+[pick.cpp:327](../../../desktop/src/scene3d/pick.cpp#L327)). Four new layers
 each doing their own step→place conversion is four new chances to repeat it. T1
 makes there be one conversion.
 
@@ -170,11 +181,11 @@ makes there be one conversion.
 - **The step→address bridge is real data, per step.** `insn_off` and `insn_rbase`
   with `rbase_present` saying whether the wire stated a base
   ([streams.h:68-76](../../../desktop/src/doc/streams.h#L68)); `Anchor::place`
-  ([projection.h:45-56](../../../desktop/src/space/projection.h#L45)) is the
+  ([projection.h:46-57](../../../desktop/src/space/projection.h#L46)) is the
   existing rel→abs resolver and **returns false rather than guessing**, so a miss
   is countable.
 - **`Streams::blame` is decoded.** `BlameAttr{step, off, has_loc, loc, cone,
-  born_untraced}` ([streams.h:152-159](../../../desktop/src/doc/streams.h#L152)),
+  born_untraced}` ([streams.h:164-171](../../../desktop/src/doc/streams.h#L164)),
   where `cone` is *"ascending producing steps (sink included)"* and
   `born_untraced` is the explicit verdict that a value has no traced producer —
   never an empty cone presented as "nothing found".
@@ -186,10 +197,10 @@ makes there be one conversion.
   `insns`, ascending `blocks`, plus per-offset `disasm`.
 - **The worldline geometry T2 hangs spurs on already exists.**
   `TrajectorySet`/`TrajPoint{t, addr, fidelity, is_access, tid, placed}`
-  ([types.h:51-68](../../../desktop/src/space/types.h#L51)), and `placed` already
+  ([types.h:58-75](../../../desktop/src/space/types.h#L58)), and `placed` already
   distinguishes a vertex that could be positioned from one that could not.
 - **`access_spurs_` is the precedent for a spur layer**: all spurs in one
-  `GL_LINES` buffer ([scene.h:187](../../../desktop/src/scene3d/scene.h#L187)),
+  `GL_LINES` buffer ([scene.h:431](../../../desktop/src/scene3d/scene.h#L431)),
   drawn from the trajectory program.
 - **`ValRec` carries what a taint front needs**: `space` (`"reg"`/`"abs"`/`"off"`),
   `addr`, `write`, `value_valid`
@@ -235,12 +246,12 @@ function, and that function reports what it could not place.
    fact rather than a fallback guess: (a) `insn_rbase[step] != 0` → `rbase + off`
    (37's on-the-wire region tag); (b) otherwise the `Anchor` (36's single-codeimage
    derivation) via `Anchor::place`, which already refuses rather than guessing
-   ([projection.h:51-55](../../../desktop/src/space/projection.h#L51)); (c)
+   ([projection.h:50-56](../../../desktop/src/space/projection.h#L50)); (c)
    otherwise unplaced, with `why` naming which rung failed.
 3. **A miss is counted, never dropped.** `unplaced()` feeds a HUD chip on every
    layer that uses the placer — "N steps off-plane" — using the wording
    `placement_chips` already establishes
-   ([hud.h:29-34](../../../desktop/src/scene3d/hud.h#L29)) rather than new phrasing
+   ([hud.h:32-37](../../../desktop/src/scene3d/hud.h#L32)) rather than new phrasing
    (D7 / [24](../archive/gui/24-one-visual-language.md)).
 4. **Never invert through an ordinal.** The header must say, in these words, that
    `TrajPoint::t` is a per-tid vertex counter
@@ -286,7 +297,7 @@ rather than in a separate flat list.
    buckets to a visible "other"/grey on any miss** — never folded into a known
    class, never green-on-unknown.
 4. Reuse the per-tid trajectory colouring and the `access_spurs_` single-buffer
-   pattern ([scene.h:187](../../../desktop/src/scene3d/scene.h#L187)).
+   pattern ([scene.h:431](../../../desktop/src/scene3d/scene.h#L431)).
 5. **Self-gate.** With no `TraceStream` worldline there is nothing to hang a spur
    on: disable the layer and have the HUD say why. Never synthesise a path to
    decorate.
@@ -377,7 +388,7 @@ shared root cause many sinks trace back to.
 
 **Steps.**
 1. For each `BlameAttr` in `Streams::blame`
-   ([streams.h:152-159](../../../desktop/src/doc/streams.h#L152)): place the sink
+   ([streams.h:164-171](../../../desktop/src/doc/streams.h#L164)): place the sink
    at `off` → cell (through T1's placer), and place each step in `cone[]` the same
    way.
 2. A producer cell's **convergence weight is the count of distinct cones whose
