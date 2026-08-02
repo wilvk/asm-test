@@ -343,6 +343,120 @@ int main() {
         }
     }
 
+    // =====================================================================
+    // T4 — module excursion ribbon
+    // =====================================================================
+    {
+        // obs-tree.asmtrace: two tids, a spy_victim -> jit module transition
+        // on tid 4243, and an engine-side depth cap of 3.
+        const Recording rec = load_fixture("obs-tree.asmtrace");
+        const TreeView tv = obs_tree_build(rec);
+        const ModuleRibbonScene s = build_module_ribbon(tv);
+        check("T4: two lanes, one per tid", s.lanes.size() == 2,
+              "lanes=" + std::to_string(s.lanes.size()));
+        check("T4: lanes are ascending by tid",
+              s.lanes[0].tid == 4242 && s.lanes[1].tid == 4243,
+              "lane order is not tid-ascending");
+        check("T4: the lanes have independent depth profiles",
+              s.lanes[0].max_depth == 2 && s.lanes[1].max_depth == 1,
+              "lane depths: " + std::to_string(s.lanes[0].max_depth) + " / " +
+                  std::to_string(s.lanes[1].max_depth));
+        check("T4: X is the recording's own call order (Event::seq)",
+              s.lanes[0].segs.size() == 3 && s.lanes[0].segs[0].seq <
+                                                 s.lanes[0].segs[1].seq,
+              "segments are not ordered by stream position");
+        // The seam is the finding.
+        check("T4/seam: the module transition produces a seam at the right "
+              "call index",
+              s.seams == 1 && s.lanes[1].segs.size() == 2 &&
+                  s.lanes[1].segs[1].boundary && !s.lanes[1].segs[0].boundary,
+              "seams=" + std::to_string(s.seams) + "\n" +
+                  module_ribbon_dump(s));
+        // A depth-capped capture marks the lane floor CAPPED.
+        check("T4/cap: the capture is depth-capped", s.depth_capped,
+              "the engine-side depth filter did not reach the scene");
+        check("T4/cap: the note says clipped, not bottom",
+              s.cap_note.find("CLIPPED") != std::string::npos,
+              s.cap_note);
+        check("T4/cap: the floor segment is marked",
+              s.lanes[0].segs[2].depth == 2 && s.lanes[0].segs[2].at_cap,
+              "the depth-2 call under a cap of 3 is not marked capped");
+        check("T4/cap: a shallower call is NOT marked",
+              !s.lanes[0].segs[0].at_cap,
+              "a depth-0 call was marked as being at the cap");
+        check("T4/cap: the cap survives the drill-in", [&] {
+            // lane 0, segment 2 — the third element in lane-then-segment order
+            const RibbonDrill d = ribbon_pick_link(s, "r.asmtrace", 2);
+            return d.ok && d.at_cap && d.tid == 4242;
+        }(), "the capped floor did not survive the drill-in");
+        check("T4/drill-in: opens the tree, carrying tid + module + symbol",
+              [&] {
+                  const RibbonDrill d = ribbon_pick_link(s, "r.asmtrace", 0);
+                  return d.ok && d.link.view == dt_view::tree &&
+                         d.tid == 4242 && d.module == "spy_victim" &&
+                         d.symbol == "work" && d.link.off &&
+                         *d.link.off == 4198710;
+              }(),
+              "the segment drill-in lost its tid/module/symbol");
+        check("T4/legend: states that returns are inferred from depth",
+              std::string(ModuleRibbonScene::legend()).find("depth") !=
+                  std::string::npos,
+              ModuleRibbonScene::legend());
+
+        // An unresolved module gets its own hue rather than being dropped or
+        // merged into a resolved one.
+        {
+            std::string nd = kHdr;
+            nd += "{\"k\":\"call\",\"tid\":1,\"depth\":0,\"addr\":16,\"name\":"
+                  "\"a\",\"module\":\"libc\"}\n";
+            nd += "{\"k\":\"call\",\"tid\":1,\"depth\":1,\"addr\":32,\"name\":"
+                  "\"b\",\"module\":\"?\"}\n";
+            nd += "{\"k\":\"call\",\"tid\":2,\"depth\":0,\"addr\":48,\"name\":"
+                  "\"c\",\"module\":\"libc\"}\n";
+            const ModuleRibbonScene u =
+                build_module_ribbon(obs_tree_build(mk_rec(nd)));
+            check("T4/unknown: an unresolved module is kept",
+                  u.lanes.size() == 2 && u.lanes[0].segs.size() == 2,
+                  "the unresolved call was dropped");
+            check("T4/unknown: labelled, never blank",
+                  u.lanes[0].segs[1].module_unknown &&
+                      u.lanes[0].segs[1].module ==
+                          std::string(ribbon_unknown_module()),
+                  "the unresolved module is blank or borrowed a real name");
+            check("T4/unknown: counted", u.unknown_modules == 1,
+                  "unknown_modules=" + std::to_string(u.unknown_modules));
+            check("T4/unknown: it is a seam like any other module change",
+                  u.lanes[0].segs[1].boundary,
+                  "the resolved->unresolved transition is not a seam");
+            check("T4/unknown: the drill-in does NOT filter by the word "
+                  "\"unknown\"",
+                  [&] {
+                      const RibbonDrill d = ribbon_pick_link(u, "r", 1);
+                      return d.ok && d.module.empty();
+                  }(),
+                  "the tree would be filtered by a module literally named "
+                  "\"unknown\"");
+        }
+
+        // A single-thread recording degrades to the 2D icicle form.
+        {
+            std::string nd = kHdr;
+            nd += "{\"k\":\"call\",\"tid\":9,\"depth\":0,\"addr\":16,\"name\":"
+                  "\"a\",\"module\":\"libc\"}\n";
+            const ModuleRibbonScene one =
+                build_module_ribbon(obs_tree_build(mk_rec(nd)));
+            check("T4/2D: a single-tid recording asks for the 2D form",
+                  one.single_thread, "one lane was left as a 3D scene");
+            check("T4/2D: and says why", !one.note.empty(), "silent degrade");
+        }
+        // No call tree at all: a stated reason, not an empty scene.
+        {
+            const ModuleRibbonScene none = build_module_ribbon(TreeView{});
+            check("T4/empty: states its reason", !none.note.empty(),
+                  "an empty ribbon is silent");
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d standalone-scene check(s) failed\n", failures);
         return 1;

@@ -16,7 +16,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 3/5, in progress (2026-08-03).** T1 landed the second
+> **Status — ◐ 4/5, in progress (2026-08-03).** T1 landed the second
 > substrate: `scene3d/scene_kind.h` (the `SceneKind` discriminant + the
 > required axis contract), the outer pick-id band inside 47 T3's own
 > `PickBands`, `scene3d/glcommon.{h,cpp}` (the shared program link + R32UI
@@ -221,7 +221,7 @@ untouched by this path.
 **Done when.** Cross-call variation is visible at a glance and the invocation axis is
 never scrubbed as time.
 
-### T4 — Module excursion ribbon (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
+### T4 — ✅ Module excursion ribbon (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
 
 **Goal.** Which thread is in which library, when — a cross-thread pattern a single
 2D icicle cannot show.
