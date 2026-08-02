@@ -909,6 +909,28 @@ int main() {
               !has_flag(space::TF_READ) && !has_flag(space::TF_WRITE),
               "the terrain shader does not key a colour off read/write");
 
+        // T4 (56): the opcode-class legend is exhaustive over space::OpClass
+        // — one swatch per value, no more, no fewer (mirrors embedded.h's
+        // opClassHue[8]).
+        auto op_swatches = scene3d::opcode_class_swatches();
+        check("opcode legend: exactly 8 swatches (one per OpClass)",
+              op_swatches.size() == 8,
+              ("got " + std::to_string(op_swatches.size())).c_str());
+        for (space::OpClass cls :
+            {space::OpClass::Unknown, space::OpClass::Move,
+             space::OpClass::IntArith, space::OpClass::Logic,
+             space::OpClass::CompareBranch, space::OpClass::ScalarFloat,
+             space::OpClass::VectorSIMD, space::OpClass::System}) {
+            bool found = false;
+            for (const auto &sw : op_swatches)
+                if (sw.cls == cls)
+                    found = true;
+            check((std::string("opcode legend covers ") +
+                  space::op_class_name(cls))
+                      .c_str(),
+                  found, "a class added to OpClass without a swatch here");
+        }
+
         // T3: the height-scale note states the raw magnitude, or says there
         // is none.
         check("height scale note: states the raw magnitude",

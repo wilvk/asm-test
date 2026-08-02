@@ -63,6 +63,14 @@ uniform int uHighlightCell;   // 50 T2: the flat views' selection, located onto
 // themselves are UNCHANGED: this brief re-tints the existing geometry rather
 // than re-deriving the mesh, see the doc's own status note on this scoping).
 uniform int uConfidence;
+// T4 (56-fidelity-and-module-layers): SceneLayers::opcode — 1 tints a CODE
+// cell by its dominant instruction class (space::OpClass, uOpClass's per-
+// cell R8UI) instead of region kind. uOpClass == 255 means "no
+// classification for this cell" (a non-code cell, or a code cell
+// build_opcode_terrain never saw) and renders exactly as if uOpcode were 0 —
+// never a stray colour for cells this layer has nothing to say about.
+uniform int uOpcode;
+uniform usampler2D uOpClass; // R8UI, n x n — 0..7 = OpClass, 255 = none
 out vec4 frag;
 const uint TORN = 1u;     // rubble: a KNOWN lower bound (capture truncated/torn)
 const uint STAT = 2u;
@@ -74,6 +82,20 @@ const uint UNKNOWN = 32u; // T2: fog-of-war — in-domain, no content at all
 // already mirror space::TerrainFlag.
 const uint INWINDOW_EMPTY = 64u;
 const uint OUTWINDOW = 128u;
+// T4 (56): mirrors space::OpClass (mnemonic.h) VERBATIM, the same keep-in-
+// sync convention kindHue follows against Region::Kind. Index 0 (Unknown) is
+// a neutral grey — "described, but not understood" (an abstain), distinct
+// from the fog-of-war UNKNOWN bit above ("never described at all").
+const vec3 opClassHue[8] = vec3[8](
+  vec3(0.55,0.55,0.55), // Unknown: neutral grey, never coerced
+  vec3(0.35,0.75,0.95), // Move
+  vec3(0.90,0.55,0.15), // IntArith
+  vec3(0.80,0.80,0.40), // Logic
+  vec3(1.00,0.35,0.35), // CompareBranch
+  vec3(0.70,0.50,0.85), // ScalarFloat
+  vec3(0.85,0.30,0.75), // VectorSIMD
+  vec3(0.45,0.85,0.45)  // System
+);
 const vec3 kindHue[6] = vec3[6](
   vec3(0.90,0.55,0.15), // Code
   vec3(0.35,0.75,0.95), // Stack
@@ -88,6 +110,15 @@ void main(){
   // an off-domain sentinel (255) clamps to grey; zoning off -> always Code's
   // hue (today's plain amber ramp), ignoring uKind entirely (T7).
   vec3 hot = (uZoning == 1) ? kindHue[k < 6u ? k : 5u] : kindHue[0];
+  // T4 (56): opcode mode OVERRIDES the hue for a classified cell only —
+  // uOpClass == 255 (no classification) falls through to the hue above
+  // unchanged, so a data cell or an un-classified code cell never shows a
+  // stray colour this layer has nothing to say about.
+  if (uOpcode == 1) {
+    uint oc = texture(uOpClass, vUV).r;
+    if (oc < 8u)
+      hot = opClassHue[oc];
+  }
   // kind sets the HUE at full density; height (unchanged) still sets
   // brightness — kindHue[Code] is BYTE-IDENTICAL to the amber this used to
   // hardcode, so a code-only recording renders exactly today's ramp.

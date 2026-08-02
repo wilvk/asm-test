@@ -23,6 +23,7 @@
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
+#include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -65,6 +66,12 @@ struct SceneLayers {
     // an ADDITIONAL translucent overview surface (like ghost_fog above), so
     // default ON matches this struct's own convention for compositing layers.
     bool canopy = true;
+    // T4 (56-fidelity-and-module-layers): tint a code cell by its dominant
+    // instruction class instead of region kind. Default OFF — like
+    // `confidence`, this re-lifts the SAME terrain's existing reading rather
+    // than adding a surface, so a session does not silently start in this
+    // lens instead of the density/kind view it has always opened to.
+    bool opcode = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -154,6 +161,13 @@ class Scene {
     // t-gated), unlike set_zoning/set_stat_terrain above.
     void set_module_canopies(const std::vector<space::ModuleCanopy> &canopies,
                              const space::Projection &proj);
+    // T4 (56-fidelity-and-module-layers): upload the per-cell dominant-class
+    // byte map (255 = no classification for that cell) as an R8UI texture —
+    // clones set_zoning's shape exactly. Slice-invariant like zoning/kind
+    // (a cell's opcode mix does not change as the playhead scrubs): call
+    // ONCE per weave, never on a scrub.
+    void set_opcode_terrain(const std::vector<space::CellOpcode> &cells,
+                            uint32_t w, uint32_t h);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -281,6 +295,7 @@ class Scene {
     int grid_index_count_ = 0;
     unsigned tex_height_ = 0, tex_flags_ = 0;
     unsigned tex_kind_ = 0; // T1: R8UI region-kind-per-cell texture
+    unsigned tex_opclass_ = 0; // T4 (56): R8UI dominant-opcode-class-per-cell
 
     // T4: the SEPARATE statistical terrain's height/flags texture pair (same
     // upload shape as tex_height_/tex_flags_, a different pair of GL objects
@@ -390,7 +405,7 @@ class Scene {
     // (which does not declare uZoning at all).
     void draw_terrain_common(unsigned prog, const float mvp[16],
                              bool zoning = true, float contour_levels = 0.0f,
-                             bool confidence = false);
+                             bool confidence = false, bool opcode = false);
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
     void draw_canopies(const float mvp[16]); // T3 (56)

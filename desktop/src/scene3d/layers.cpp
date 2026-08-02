@@ -24,6 +24,8 @@ const std::vector<LayerDesc> &scene_layers_all() {
          G::Structure, LayerGrade::Derived, &SceneLayers::contours},
         {"canopy", "canopy", "which library is hot as a whole?", G::Structure,
          LayerGrade::Derived, &SceneLayers::canopy},
+        {"opcode", "opcode", "what kind of work happens here?", G::Structure,
+         LayerGrade::Derived, &SceneLayers::opcode},
         {"edl", "EDL", "which surface is nearer the camera?", G::Structure,
          LayerGrade::Derived, &SceneLayers::edl},
         // --- activity: what happened, and when ------------------------------

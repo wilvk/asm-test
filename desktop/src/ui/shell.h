@@ -26,6 +26,7 @@
 #include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
+#include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
@@ -68,6 +69,10 @@ struct SceneView {
     // alongside `slice` (raw_heat is t-gated the same way), never on a
     // playhead move that only re-lands the coarse degrade plane.
     std::vector<space::ModuleCanopy> canopies;
+    // 56 T4: the per-cell opcode classification — woven ONCE per recording
+    // alongside terr/traj above (a cell's instruction mix is a whole-
+    // recording fact, never re-gated on the playhead, unlike canopies).
+    std::vector<space::CellOpcode> opcode_cells;
     // The 3D scrub's degrade-to-coarse state (23-graded-truth-layer.md T4):
     // `scrub_pending` marks a re-slice deferred because the full slice would
     // exceed the frame budget — the coarse plane renders this frame and the full

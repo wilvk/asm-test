@@ -23,6 +23,7 @@
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
+#include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -48,6 +49,10 @@ struct SceneFrame {
     // before t), so the host re-uploads it on the SAME `slice_t` gate.
     // nullptr is treated exactly like an empty vector (no canopies drawn).
     const std::vector<space::ModuleCanopy> *canopies = nullptr;
+    // T4 (56-fidelity-and-module-layers): the per-cell opcode classification
+    // — a whole-recording fact like kind_by_cell, so the host uploads it on
+    // the SAME gate as set_zoning/set_stat_terrain, never on a scrub.
+    const std::vector<space::CellOpcode> *opcode_cells = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

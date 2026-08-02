@@ -164,6 +164,27 @@ const char *confidence_layer_note() {
            "in-window, below-rate; black hatch = outside the stated window";
 }
 
+const std::vector<OpClassSwatch> &opcode_class_swatches() {
+    // Mirrors embedded.h's opClassHue[8] VERBATIM, in space::OpClass's own
+    // declaration order — a colour added or reordered there and not here
+    // fails test_layers' exhaustiveness check.
+    static const std::vector<OpClassSwatch> kSwatches = {
+        {space::OpClass::Unknown, "unknown: not classifiable (abstain)",
+         {0.55f, 0.55f, 0.55f}},
+        {space::OpClass::Move, "move", {0.35f, 0.75f, 0.95f}},
+        {space::OpClass::IntArith, "integer arithmetic", {0.90f, 0.55f, 0.15f}},
+        {space::OpClass::Logic, "logic / bit manipulation",
+         {0.80f, 0.80f, 0.40f}},
+        {space::OpClass::CompareBranch, "compare / branch",
+         {1.00f, 0.35f, 0.35f}},
+        {space::OpClass::ScalarFloat, "scalar float", {0.70f, 0.50f, 0.85f}},
+        {space::OpClass::VectorSIMD, "vector / SIMD", {0.85f, 0.30f, 0.75f}},
+        {space::OpClass::System, "system / privileged",
+         {0.45f, 0.85f, 0.45f}},
+    };
+    return kSwatches;
+}
+
 std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
     std::vector<uint64_t> out;
     if (nsteps == 0)
@@ -596,6 +617,20 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // it never advertises a hatch the plane is not currently drawing.
     if (s.layers.confidence)
         ImGui::TextColored(kDim, "%s", confidence_layer_note());
+    // T4 (56): the opcode-class swatches, likewise shown only while the
+    // layer is on — a code-only legend, so it stays out of the way for a
+    // recording nobody is reading by instruction kind right now.
+    if (s.layers.opcode) {
+        for (const OpClassSwatch &sw : opcode_class_swatches()) {
+            ImVec4 col{sw.rgb[0], sw.rgb[1], sw.rgb[2], 1.0f};
+            ImGui::ColorButton(("##op" + sw.label).c_str(), col,
+                               ImGuiColorEditFlags_NoTooltip |
+                                   ImGuiColorEditFlags_NoPicker,
+                               ImVec2(12, 12));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(sw.label.c_str());
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

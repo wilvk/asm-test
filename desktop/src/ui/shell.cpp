@@ -954,6 +954,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 56 T2/T5: the survey aggregate does not change with the playhead,
         // so it is woven once here, like terr/traj/conv above.
         sv.hotedges_scene = obs_hotedges_for_scene(obs_hotedges_build(r));
+        // 56 T4: the opcode classification is a whole-recording fact (which
+        // offsets exist and what they are), never gated on the playhead.
+        sv.opcode_cells = space::build_opcode_terrain(
+            sv.terr, r, space::opcode_guest_from_arch(a.arch));
         sv.hud.nsteps = sv.terr.nsteps;
         sv.hud.t = sv.terr.nsteps; // show the whole trace by default
         // 48 T4: the landmark, computed ONCE per weave alongside the models
@@ -1219,7 +1223,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.traj = &sv.traj;
     f.conv = &sv.conv;
     f.slice = &sv.slice;
-    f.canopies = &sv.canopies; // 56 T3
+    f.canopies = &sv.canopies;         // 56 T3
+    f.opcode_cells = &sv.opcode_cells; // 56 T4
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

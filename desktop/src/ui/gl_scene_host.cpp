@@ -87,6 +87,12 @@ class GlSceneHost : public SceneHost {
                 scene_.set_stat_terrain(f.terr->stat);
             else
                 scene_.clear_stat_terrain();
+            // T4 (56): the opcode classification is a whole-recording fact
+            // like kind_by_cell — same upload gate.
+            static const std::vector<space::CellOpcode> kNoOpcodeCells;
+            scene_.set_opcode_terrain(
+                f.opcode_cells ? *f.opcode_cells : kNoOpcodeCells, f.terr->w,
+                f.terr->h);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

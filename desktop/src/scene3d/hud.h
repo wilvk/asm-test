@@ -17,6 +17,7 @@
 #include "imgui.h" // 49 T4: ImDrawList/ImVec2 in draw_trajectory_ruler's signature
 #include "scene3d/camera.h" // 49 T4: draw_trajectory_ruler's projection
 #include "scene3d/scene.h"
+#include "space/mnemonic.h" // T4 (56): OpClass, OpClassSwatch::cls
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -100,6 +101,18 @@ std::string height_scale_note(uint64_t max_full_heat);
 // always-visible branches. Drawn only while confidence is enabled, so it
 // never advertises an idiom the plane is not currently showing.
 const char *confidence_layer_note();
+
+// T4 (56-fidelity-and-module-layers): one swatch per space::OpClass, mirroring
+// embedded.h's opClassHue[8] VERBATIM (the same keep-in-sync convention
+// terrain_encoding_swatches follows against kTerrainFrag) — EXHAUSTIVE BY
+// TEST, one entry per OpClass value. Shown only while SceneLayers::opcode is
+// on, exactly like confidence_layer_note above.
+struct OpClassSwatch {
+    space::OpClass cls;
+    std::string label;
+    float rgb[3];
+};
+const std::vector<OpClassSwatch> &opcode_class_swatches();
 
 // 49 T4: tick values for the trajectory-time ruler, `0..nsteps` inclusive at
 // a step no finer than `nsteps / max_ticks` — pure so the tick set is

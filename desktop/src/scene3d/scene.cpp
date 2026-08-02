@@ -424,6 +424,31 @@ void Scene::set_zoning(const std::vector<uint8_t> &kind_by_cell, uint32_t w,
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// T4 (56-fidelity-and-module-layers): the per-cell dominant-opcode-class byte
+// map. 255 (never a real OpClass value, which is 0..7) marks a cell
+// build_opcode_terrain produced no entry for — a data cell, or a code cell
+// with no CodeCell at all — so the shader's `oc < 8u` guard leaves it
+// untinted rather than reading texel 0 (Unknown) by accident.
+void Scene::set_opcode_terrain(const std::vector<space::CellOpcode> &cells,
+                               uint32_t w, uint32_t h) {
+    if (w == 0 || h == 0)
+        return;
+    std::vector<uint8_t> byte_map(static_cast<size_t>(w) * h, 255u);
+    for (const space::CellOpcode &co : cells)
+        if (co.cell < byte_map.size())
+            byte_map[co.cell] = static_cast<uint8_t>(co.dominant);
+    if (!tex_opclass_)
+        glGenTextures(1, &tex_opclass_);
+    glBindTexture(GL_TEXTURE_2D, tex_opclass_);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, w, h, 0, GL_RED_INTEGER,
+                GL_UNSIGNED_BYTE, byte_map.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void Scene::set_stat_terrain(const space::Terrain &t) {
     if (t.w == 0 || t.h == 0)
         return;
@@ -829,7 +854,8 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
 }
 
 void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
-                                float contour_levels, bool confidence) {
+                                float contour_levels, bool confidence,
+                                bool opcode) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex_height_);
@@ -837,6 +863,8 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     glBindTexture(GL_TEXTURE_2D, tex_flags_);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, tex_kind_); // T1: harmless if 0 / unused
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, tex_opclass_); // T4 (56): harmless if 0/unused
     glUniformMatrix4fv(glGetUniformLocation(prog, "uMVP"), 1, GL_FALSE, mvp);
     glUniform1f(glGetUniformLocation(prog, "uYScale"), y_scale);
     glUniform1f(glGetUniformLocation(prog, "uN"), static_cast<float>(n_));
@@ -870,6 +898,14 @@ void Scene::draw_terrain_common(unsigned prog, const float mvp[16], bool zoning,
     GLint uconf = glGetUniformLocation(prog, "uConfidence");
     if (uconf >= 0)
         glUniform1i(uconf, confidence ? 1 : 0);
+    // T4 (56): absent from the pick shader and prog_stat_ (loc -1, harmless)
+    // — only kTerrainFrag declares uOpcode/uOpClass.
+    GLint uop = glGetUniformLocation(prog, "uOpcode");
+    if (uop >= 0)
+        glUniform1i(uop, opcode ? 1 : 0);
+    GLint uoc = glGetUniformLocation(prog, "uOpClass");
+    if (uoc >= 0)
+        glUniform1i(uoc, 3);
     glBindVertexArray(vao_grid_);
     glDrawElements(GL_TRIANGLES, grid_index_count_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
@@ -1032,7 +1068,7 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     if (layers.terrain)
         draw_terrain_common(prog_terrain_, mvp, layers.zoning,
                             layers.contours ? kContourLevels : 0.0f,
-                            layers.confidence);
+                            layers.confidence, layers.opcode);
 
     // T4 (44, depth-write fixed by 55's dithering): the ghost-fog terrain,
     // after the exact terrain. kStatFrag now composites by DISCARD (T4, 55)
@@ -1351,6 +1387,8 @@ void Scene::shutdown() {
         glDeleteTextures(1, &tex_flags_);
     if (tex_kind_)
         glDeleteTextures(1, &tex_kind_);
+    if (tex_opclass_)
+        glDeleteTextures(1, &tex_opclass_);
     if (tex_height_stat_)
         glDeleteTextures(1, &tex_height_stat_);
     if (tex_flags_stat_)
@@ -1380,7 +1418,7 @@ void Scene::shutdown() {
         if (p)
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
-    tex_kind_ = tex_height_stat_ = tex_flags_stat_ = 0;
+    tex_kind_ = tex_height_stat_ = tex_flags_stat_ = tex_opclass_ = 0;
     vbo_sky_ = vao_sky_ = vbo_head_ = vao_head_ = 0;
     vbo_front_ = vao_front_ = 0;
     has_stat_terrain_ = false;
