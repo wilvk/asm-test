@@ -621,6 +621,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
+  $(BUILD)/desktop/$(1)/s3/layers.o \
   $(BUILD)/desktop/$(1)/pf/window_picker.o
 # regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
 # the emulator (emu.o), so — like forks.o — it is APP-ONLY (never in the viewer's
@@ -1114,6 +1115,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_asm_language \
                  $(BUILD)/desktop_test_mnemonic \
+                 $(BUILD)/desktop_test_layers \
                  $(BUILD)/desktop_test_theme \
                  $(BUILD)/desktop_test_fidelity \
                  $(BUILD)/desktop_test_progress \
@@ -1657,6 +1659,15 @@ $(BUILD)/desktop_test_mnemonic: $(BUILD)/desktop/test/t/test_mnemonic.o \
     $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The layer registry (56-fidelity-and-module-layers.md T1): layers.o links
+# NOTHING but itself — SceneLayers is a header-only POD (scene3d/scene.h) and
+# the registry touches no Scene method, so this is the same engine-free,
+# ImGui-free closure proof test_fabric makes for the document model, now for
+# the layer table.
+$(BUILD)/desktop_test_layers: $(BUILD)/desktop/test/t/test_layers.o \
+    $(BUILD)/desktop/test/s3/layers.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The register time-travel scrubber (09-teaching-producers.md T3). The PURE
 # builder links scrubber.o + stepindex.o + the doc model and NOTHING else — no
 # ImGui, no engine — the same engine-free closure proof test_timeline makes, now
@@ -1791,6 +1802,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/s3/hud.o \
+    $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
     $(DESKTOP_TEST_IG) \
     $(BUILD)/desktop/test/pf/window_picker.o

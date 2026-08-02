@@ -4,11 +4,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 
 #include "imgui.h"
 
 #include "scene3d/goto.h"
+#include "scene3d/layers.h" // 56 T1: the layer registry
 #include "space/projection.h"
 #include "ui/theme.h"
 #include "ui/timepos.h" // one time-position widget, continuous scrub (24 T4)
@@ -38,6 +40,23 @@ const ImVec4 &sev_col(PlacementChip::Sev s) {
     return s == PlacementChip::Bad    ? kBad
            : s == PlacementChip::Warn ? kWarn
                                       : kOk;
+}
+
+// 56 T1 step 4: the group header text — one line per LayerDesc::Group, printed
+// once when the toggle loop crosses into a new group (the table is already
+// grouped in scene_layers_all()'s own declaration order).
+const char *group_label(LayerDesc::Group g) {
+    switch (g) {
+    case LayerDesc::Group::Fidelity:
+        return "fidelity:";
+    case LayerDesc::Group::Structure:
+        return "structure:";
+    case LayerDesc::Group::Activity:
+        return "activity:";
+    case LayerDesc::Group::Survey:
+        return "survey (statistical):";
+    }
+    return "";
 }
 
 } // namespace
@@ -373,43 +392,39 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::SameLine();
     ImGui::TextColored(kDim, "play — step (trace time)");
 
-    // --- layer toggles ---------------------------------------------------------
+    // --- layer toggles (56 T1): generated from the registry, never hand-listed
+    // ---------------------------------------------------------------------------
+    // Grouped by the question asked (fidelity/structure/activity/survey);
+    // s.layers.*row.flag is a direct pointer-to-member access, so the toggle a
+    // row drives is keyed by the MEMBER, never by the row's position — a
+    // reordered table cannot shuffle which bool a checkbox flips. A
+    // Statistical-graded row carries the shared STATISTICAL wording in the
+    // warn colour automatically (T1 step 3), so no layer re-invents the
+    // phrasing.
     ImGui::TextUnformatted("layers:");
-    ImGui::SameLine();
-    ImGui::Checkbox("terrain", &s.layers.terrain);
-    ImGui::SameLine();
-    ImGui::Checkbox("exact", &s.layers.exact);
-    ImGui::SameLine();
-    ImGui::Checkbox("statistical", &s.layers.statistical);
-    ImGui::SameLine();
-    ImGui::Checkbox("access", &s.layers.access_marks);
-    // T5 (47-scene-inspect-and-pickable-overlays): the convergence-arc toggle
-    // — the plumbing (SceneLayers::convergence, scene.cpp's draw gate) has
-    // existed since 10-T5; only this checkbox was missing.
-    ImGui::SameLine();
-    ImGui::Checkbox("convergence", &s.layers.convergence);
-    // T7 (44-faithful-city-phase-a): the four new city-reskin bools, extending
-    // this same checkbox list — each independently toggleable, matching the
-    // existing five.
-    ImGui::SameLine();
-    ImGui::Checkbox("zoning", &s.layers.zoning);
-    ImGui::SameLine();
-    ImGui::Checkbox("weather", &s.layers.weather);
-    ImGui::SameLine();
-    ImGui::Checkbox("ghost fog", &s.layers.ghost_fog);
-    ImGui::SameLine();
-    ImGui::Checkbox("vehicle", &s.layers.vehicle);
-    ImGui::SameLine();
-    ImGui::Checkbox("contours", &s.layers.contours);
-    ImGui::SameLine();
-    ImGui::Checkbox("EDL", &s.layers.edl);
+    {
+        std::optional<LayerDesc::Group> last_group;
+        for (const LayerDesc &row : scene_layers_all()) {
+            if (!last_group.has_value() || *last_group != row.group) {
+                // No preceding SameLine(): every ImGui item starts a fresh
+                // line by default, so a new group's label always begins one.
+                ImGui::TextColored(kDim, "%s", group_label(row.group));
+                last_group = row.group;
+            }
+            ImGui::SameLine();
+            ImGui::Checkbox(row.label, &(s.layers.*row.flag));
+            if (row.grade == LayerGrade::Statistical) {
+                ImGui::SameLine();
+                ImGui::TextColored(kWarn, "STATISTICAL — survey");
+            }
+        }
+    }
     // T1 (55) step 3: "HUD-exposed" as a stated fact, not yet a live slider —
     // Scene owns edl_strength/edl_radius_px directly (like y_scale/traj_scale_
     // above it, neither of which is HUD-adjustable either) and the abstract
     // SceneHost/SceneFrame seam has no channel for a per-frame float today;
     // wiring a slider through it is a follow-on, not silently dropped.
-    ImGui::SameLine();
-    ImGui::TextColored(kDim, "(strength %.1f, radius %.0fpx)",
+    ImGui::TextColored(kDim, "EDL: strength %.1f, radius %.0fpx",
                        static_cast<double>(kEdlStrengthDefault),
                        static_cast<double>(kEdlRadiusPxDefault));
 
