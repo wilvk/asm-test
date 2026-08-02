@@ -533,7 +533,7 @@ the catalog nor the city doc acted on.
 | Doc | Area | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|
 | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 13-gap table (G1–G13), sequencing, and the one fidelity decision the family turns on — *cross-axis brushing goes through the ADDRESS, never an ordinal* (**roadmap, not a brief**) | — | 10, 44 | roadmap · cuts 47–52 | — |
-| [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | G1–G3: throttled hover pick + cell→content index, `resolve_pick_hint`, pickable convergence arcs / access spurs, hover readout, HUD legend | 5 | none | ☐ 0/5 | *free* |
+| [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md) | G1–G3: throttled hover pick + cell→content index, `resolve_pick_hint`, pickable convergence arcs / access spurs, hover readout, HUD legend | 5 | none | ☐ 0/5 | claude · T1–T5 · 2026-08-02 |
 | [48-scene-navigation-and-goto.md](48-scene-navigation-and-goto.md) | G4–G6: camera pan/recentre, address & region goto, landmark home, discoverable controls | 5 | none | ☐ 0/5 | *free* |
 | [49-one-time-truth-in-the-scene.md](../archive/gui/49-one-time-truth-in-the-scene.md) | G7–G8: clip the worldline to the playhead, mark the execution front, make height readable | 4 | none | ✅ 4/4 | — |
 | [50-two-way-brushing.md](50-two-way-brushing.md) | G9–G10: light the scene from the flat views *through the address*; closes 44's deferred resolver and the reverse-direction ordinal | 4 | 47 (hint helper, else free) | ☐ 0/4 | *free* |
