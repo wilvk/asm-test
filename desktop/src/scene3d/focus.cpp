@@ -148,6 +148,12 @@ std::string subject_filter_note(const SceneFocus &f,
         s += " only (the rest of the plane desaturated)";
         any = true;
     }
+    // Nothing was actually named: the only "filter" set was a region index
+    // this projection does not have, which build_focus_mask refuses to build a
+    // mask for — so nothing IS being dimmed. Claiming a filter that is not
+    // happening is the same category of error as hiding one that is.
+    if (!any)
+        return std::string();
     return s;
 }
 

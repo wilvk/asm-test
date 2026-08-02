@@ -346,6 +346,16 @@ int main() {
               rn.find(proj.regions[0].label) != std::string::npos,
               "note was: " + rn);
 
+        // A region index this projection does not have dims nothing (
+        // build_focus_mask refuses to build a mask for it), so the note must
+        // not claim a filter either — a filter announced but not happening is
+        // the same category of error as one happening but not announced.
+        SceneFocus bogus;
+        bogus.region = 99;
+        check("T2: an out-of-range region claims no filter",
+              subject_filter_note(bogus, proj).empty(),
+              "note was: " + subject_filter_note(bogus, proj));
+
         SceneFocus tid;
         tid.tid = 7;
         const std::string tn = subject_filter_note(tid, proj);
