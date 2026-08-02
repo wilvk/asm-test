@@ -13,6 +13,7 @@
 #include "doc/recording.h"
 #include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
 #include "scene3d/hud.h"         // 36 T4: placement_chips (fidelity chrome)
+#include "scene3d/pick.h" // 52 T3: resolve_pick parity for the flat surface
 #include "ui/fidelity.h" // 44 T3: FidelityTier
 #include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
@@ -20,6 +21,7 @@
 #include "ui/transport.h"     // 44 T5: transport_tick, direct on Transport
 #include "ui/view_presence.h" // 20 T1: the data-driven view set
 #include "views/abixray.h"    // 09-T4: the surfaced ABI x-ray tab's model
+#include "views/scene2d.h" // 52 T1/T2: Scene2dPlan / build_scene2d_plan
 #include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
 #include "walkthrough.h"
 
@@ -457,6 +459,87 @@ int main() {
             ImGui::Render();
             check("scene/cleared selection clears the highlight", !sv.highlight.ok,
                   "a cleared Selection must not leave a stale highlight");
+        }
+
+        // === 52 T2/T3: the GL-free flat surface, built from the SAME woven
+        // models draw_scene_overview already produced above. Every
+        // draw_scene_overview call in this null-backend file already runs
+        // draw_flat_surface() (the three degraded branches call it
+        // unconditionally, and scene_host is null throughout this file) —
+        // this block proves the plan it built for a real codeimage
+        // recording is non-empty and that a pick against it resolves
+        // through the SAME scene3d::resolve_pick the 3D path uses (the
+        // pure pick-inversion/resolve_pick parity contract itself is
+        // proven directly in test_scene2d.cpp). ===
+        if (igs >= 0) {
+            s3.active_tab = igs;
+            const Streams *a = shell_a(s3);
+            const SceneView &sv = s3.scenes[static_cast<size_t>(igs)];
+            check("scene/flat_view defaults to false", !sv.flat_view,
+                  "a freshly-opened recording must default to the GL viewport");
+
+            Scene2dPlan plan = build_scene2d_plan(sv.terr, sv.slice, sv.traj,
+                                                  sv.conv, sv.hud.t);
+            check("flat surface/has a plane for a codeimage recording",
+                  plan.has_plane, "the abs golden must place a flat plane");
+            check("flat surface/at least one block", !plan.blocks.empty(),
+                  "a sized plane must emit blocks");
+            check("flat surface/at least one path with a placed point",
+                  std::any_of(plan.paths.begin(), plan.paths.end(),
+                              [](const Scene2dPath &p) {
+                                  return std::any_of(
+                                      p.points.begin(), p.points.end(),
+                                      [](const Scene2dPathPoint &pp) {
+                                          return pp.placed;
+                                      });
+                              }),
+                  "the abs golden's exact trajectory must place a vertex");
+
+            // T3: pick the first placed path point's own cell and prove it
+            // resolves — the same call scene2d_draw.cpp's click handler
+            // makes, exercised here with a hand-picked cell instead of a
+            // simulated mouse event.
+            bool picked = false;
+            for (const Scene2dPath &path : plan.paths) {
+                for (const Scene2dPathPoint &pp : path.points) {
+                    if (!pp.placed)
+                        continue;
+                    uint32_t cell = 0;
+                    if (scene2d_pick_cell(plan, pp.u, pp.v, &cell)) {
+                        scene3d::Pick pk;
+                        pk.kind = scene3d::Pick::Cell;
+                        pk.cell = cell;
+                        auto link = scene3d::resolve_pick(
+                            sv.terr, sv.traj, a != nullptr ? a->id : "",
+                            pk, sv.conv);
+                        check("flat surface/a placed vertex's cell resolves",
+                              link.has_value(),
+                              "a placed exact-path cell must resolve to a link");
+                        picked = true;
+                        break;
+                    }
+                }
+                if (picked)
+                    break;
+            }
+            check("flat surface/found at least one placed point to pick",
+                  picked, "the abs golden's path must have a placed vertex");
+
+            // The reading-mode toggle round-trips and does not crash a
+            // render, even under the null backend (where the branch it
+            // gates is unreachable, but the field itself must persist).
+            s3.scenes[static_cast<size_t>(igs)].flat_view = true;
+            ImGui::NewFrame();
+            ImGui::Begin("t3flat");
+            if (a != nullptr)
+                draw_scene_overview(
+                    s3, s3.ws.recordings[static_cast<size_t>(igs)], *a);
+            ImGui::End();
+            ImGui::Render();
+            check("flat surface/flat_view persists across a frame",
+                  s3.scenes[static_cast<size_t>(igs)].flat_view,
+                  "the toggle must not be reset by draw_scene_overview");
+            s3.scenes[static_cast<size_t>(igs)].flat_view = false;
         }
 
         // === 48 T4: camera_here_text — a pure function of (Projection, target) ===
