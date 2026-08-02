@@ -1273,6 +1273,113 @@ TEST(emu_riscv, double_arg_returns_in_fa0) {
     emu_riscv_close(e);
 }
 
+/* ---- Per-step register-capture ring, RISC-V guest (60-arm32-riscv-author-
+ * mode.md T3) ------------------------------------------------------------
+ * The riscv64 mirror of the arm64/arm32 `step_capture_records_prestates` /
+ * `step_capture_drops_oldest_and_counts` /
+ * `step_capture_arming_survives_across_calls_on_same_handle` tests above,
+ * over emu_riscv_t / emu_riscv_regs_t. RV_ADD3 (three instructions: add
+ * a0,a0,a1 ; add a0,a0,a2 ; ret) with args {1, 2, 100}: the 1st add (step 0)
+ * has not run at step 0's pre-state (a0 still the raw arg), has run by step
+ * 1's pre-state (a0 = 1+2 = 3), and the 2nd add has also run by step 2's
+ * pre-state (a0 = 3+100 = 103). */
+TEST(emu_riscv, step_capture_records_prestates) {
+    emu_riscv_t *e = emu_riscv_open();
+    ASSERT_TRUE(e != NULL);
+    emu_riscv_result_t r;
+    long args[] = {1, 2, 100};
+
+    ASSERT_TRUE(emu_riscv_step_capture(e, 8)); /* cap 8 comfortably holds 3 */
+    ASSERT_TRUE(emu_riscv_call(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0, &r));
+    ASSERT_EQ(r.regs.x[10], 103);
+
+    /* Every executed instruction (including ret) captured a pre-state; the
+     * ring never overflowed, so nothing was dropped. */
+    ASSERT_UEQ(emu_riscv_step_count(e), 3);
+    ASSERT_UEQ(emu_riscv_step_dropped(e), 0);
+
+    /* Entry 0 is the state BEFORE the first instruction: step index 0, pc at
+     * the routine entry, and a0/a1 (x10/x11) still the raw args (neither add
+     * has run). */
+    uint64_t si = ~0ULL;
+    emu_riscv_regs_t s0, s1, s2;
+    ASSERT_TRUE(emu_riscv_step_at(e, 0, &si, &s0));
+    ASSERT_UEQ(si, 0);
+    ASSERT_UEQ(s0.pc, EMU_CODE_BASE);
+    ASSERT_UEQ(s0.x[10], 1);
+    ASSERT_UEQ(s0.x[11], 2);
+
+    ASSERT_TRUE(emu_riscv_step_at(e, 1, &si, &s1));
+    ASSERT_UEQ(si, 1);
+    ASSERT_UEQ(s1.x[10], 3); /* the 1st add ran between step 0 and step 1 */
+
+    ASSERT_TRUE(emu_riscv_step_at(e, 2, &si, &s2));
+    ASSERT_UEQ(si, 2);
+    ASSERT_UEQ(s2.x[10], 103); /* the 2nd add ran between step 1 and step 2 */
+    ASSERT_UNE(s1.x[10], s2.x[10]);
+
+    /* An out-of-range entry is refused (and leaves the out-params untouched). */
+    ASSERT_FALSE(emu_riscv_step_at(e, 3, &si, &s2));
+
+    /* Disarm frees the ring and zeros the counters. */
+    emu_riscv_step_capture_clear(e);
+    ASSERT_UEQ(emu_riscv_step_count(e), 0);
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, step_capture_drops_oldest_and_counts) {
+    emu_riscv_t *e = emu_riscv_open();
+    ASSERT_TRUE(e != NULL);
+    emu_riscv_result_t r;
+    long args[] = {1, 2, 100};
+
+    ASSERT_TRUE(
+        emu_riscv_step_capture(e, 2)); /* cap 2 over 3 steps -> 1 evicted */
+    emu_riscv_call(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0, &r);
+    ASSERT_NO_FAULT(&r);
+
+    ASSERT_UEQ(emu_riscv_step_count(e), 2);   /* only the two newest survive */
+    ASSERT_UEQ(emu_riscv_step_dropped(e), 1); /* the earliest one was dropped */
+
+    /* The survivors are the LAST two steps (1 then 2), oldest-held first —
+     * the eviction is faithful data, not a silent truncation. */
+    uint64_t si = ~0ULL;
+    emu_riscv_regs_t s;
+    ASSERT_TRUE(emu_riscv_step_at(e, 0, &si, &s));
+    ASSERT_UEQ(si, 1);      /* pre-state of step 1 */
+    ASSERT_UEQ(s.x[10], 3); /* only the 1st add has run */
+    ASSERT_TRUE(emu_riscv_step_at(e, 1, &si, &s));
+    ASSERT_UEQ(si, 2);        /* pre-state of step 2 */
+    ASSERT_UEQ(s.x[10], 103); /* the 2nd add ran between step 1 and step 2 */
+
+    emu_riscv_step_capture_clear(e);
+    emu_riscv_close(e);
+}
+
+TEST(emu_riscv, step_capture_arming_survives_across_calls_on_same_handle) {
+    /* Like emu_arm64_t/emu_arm_t, emu_riscv_t has no snapshot/restore (out of
+     * scope — an x86-64 emu_t / Reweave concern). What DOES carry over on
+     * this handle is the arming itself across repeated calls, exactly as
+     * emu_step_capture's x86-64 doc promises: "each run resets the ring and
+     * captures afresh." */
+    emu_riscv_t *e = emu_riscv_open();
+    ASSERT_TRUE(emu_riscv_step_capture(e, 8));
+
+    emu_riscv_result_t r;
+    long args[] = {1, 2, 100};
+    emu_riscv_call(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0, &r);
+    ASSERT_UEQ(emu_riscv_step_count(e), 3);
+
+    /* A second call on the same still-armed handle re-captures afresh (not
+     * appended to the first run's entries). */
+    emu_riscv_call(e, RV_ADD3, sizeof RV_ADD3, args, 3, 0, &r);
+    ASSERT_UEQ(emu_riscv_step_count(e), 3);
+    ASSERT_UEQ(emu_riscv_step_dropped(e), 0);
+
+    emu_riscv_step_capture_clear(e);
+    emu_riscv_close(e);
+}
+
 /* -------------------------------------------------------------------------
  * ARM32 (A32) guest: raw machine code run on whatever host this is (Unicorn
  * emulates ARM32 even on an x86-64 host). Integer args arrive in r0..r3; the

@@ -1278,8 +1278,24 @@ bool emu_arm64_step_at(const emu_arm64_t *e, size_t i, uint64_t *step_index,
 /* RISC-V (RV64) guest                                                 */
 /* ------------------------------------------------------------------ */
 
+/* Opt-in per-step register ring for the RISC-V guest (60-arm32-riscv-author-
+ * mode.md T3, mirroring arm64_step_ring_t above): the same drop-oldest ring
+ * discipline (armed/buf/cap/head/count/dropped), captured into
+ * emu_riscv_regs_t entries. Kept as its OWN type scoped to emu_riscv_t, the
+ * same reasoning arm64_step_ring_t/arm_step_ring_t give — emu_riscv_t is
+ * already a separate per-guest handle type. */
+typedef struct {
+    bool armed;
+    emu_riscv_regs_t *buf; /* cap entries, handle-owned (NULL == disarmed) */
+    size_t cap;
+    size_t head;
+    size_t count;
+    uint64_t dropped;
+} riscv_step_ring_t;
+
 struct emu_riscv {
     uc_engine *uc;
+    riscv_step_ring_t step_ring; /* opt-in per-step register capture (T3) */
 };
 
 emu_riscv_t *emu_riscv_open(void) {
@@ -1317,6 +1333,7 @@ void emu_riscv_close(emu_riscv_t *e) {
     if (e == NULL)
         return;
     uc_close(e->uc);
+    free(e->step_ring.buf);
     free(e);
 }
 
@@ -1355,6 +1372,30 @@ static void emu_riscv_zero_regs(uc_engine *uc) {
         uc_reg_write(uc, UC_RISCV_REG_F0 + i, &z);
 }
 
+/* UC_HOOK_CODE companion (emu_riscv_step_capture): captures the full RV64
+ * register file BEFORE each executed instruction into the handle's bounded
+ * ring, evicting and counting the earliest entry once the ring is full — the
+ * riscv analogue of on_code_step_arm64, reading the SAME register set as
+ * read_all_regs_riscv (the result read-back). */
+static void on_code_step_riscv(uc_engine *uc, uint64_t address, uint32_t size,
+                               void *user) {
+    (void)address;
+    (void)size;
+    riscv_step_ring_t *sr = (riscv_step_ring_t *)user;
+    if (sr->buf == NULL || sr->cap == 0)
+        return;
+    size_t pos;
+    if (sr->count < sr->cap) {
+        pos = (sr->head + sr->count) % sr->cap;
+        sr->count++;
+    } else {
+        pos = sr->head; /* full: overwrite the oldest, advance head */
+        sr->head = (sr->head + 1) % sr->cap;
+        sr->dropped++;
+    }
+    read_all_regs_riscv(uc, &sr->buf[pos]);
+}
+
 /* Shared RISC-V setup: code + flush, sentinel ra, 16-aligned sp, integer args
  * in a0..a7 (x10..x17). Returns false only on a code-write failure. */
 static bool emu_riscv_setup(uc_engine *uc, const void *code, size_t code_len,
@@ -1376,9 +1417,13 @@ static bool emu_riscv_setup(uc_engine *uc, const void *code, size_t code_len,
     return true;
 }
 
-/* Shared RISC-V run-and-capture (registers/stack already set up). */
-static bool emu_riscv_run(uc_engine *uc, uint64_t max_insns,
+/* Shared RISC-V run-and-capture (registers/stack already set up). Takes the
+ * whole handle (not just its uc_engine), mirroring emu_arm64_run's/
+ * emu_arm_run's shape, so it can wire in the handle's opt-in per-step ring
+ * (T3) the same way. */
+static bool emu_riscv_run(emu_riscv_t *e, uint64_t max_insns,
                           emu_riscv_result_t *out, emu_trace_t *trace) {
+    uc_engine *uc = e->uc;
     fault_rec_t fr = {0};
     uc_hook hh;
     uc_hook_add(uc, &hh, UC_HOOK_MEM_INVALID, (void *)on_invalid_mem, &fr, 1,
@@ -1387,6 +1432,18 @@ static bool emu_riscv_run(uc_engine *uc, uint64_t max_insns,
     uc_hook hcode, hblock;
     add_trace_hooks(uc, &tc, &hcode, &hblock);
 
+    /* Opt-in per-step register ring (emu_riscv_step_capture): one more
+     * UC_HOOK_CODE, reset to empty for this run before it captures each
+     * pre-instruction state — the riscv mirror of emu_arm64_run's hstep. */
+    uc_hook hstep = 0;
+    if (e->step_ring.armed && e->step_ring.buf != NULL) {
+        e->step_ring.head = 0;
+        e->step_ring.count = 0;
+        e->step_ring.dropped = 0;
+        uc_hook_add(uc, &hstep, UC_HOOK_CODE, (void *)on_code_step_riscv,
+                    &e->step_ring, 1, 0);
+    }
+
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
     uc_hook_del(uc, hh);
@@ -1394,6 +1451,8 @@ static bool emu_riscv_run(uc_engine *uc, uint64_t max_insns,
         uc_hook_del(uc, hcode);
         uc_hook_del(uc, hblock);
     }
+    if (hstep)
+        uc_hook_del(uc, hstep);
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -1407,13 +1466,12 @@ static bool emu_riscv_run(uc_engine *uc, uint64_t max_insns,
 bool emu_riscv_call_traced(emu_riscv_t *e, const void *code, size_t code_len,
                            const long *args, int nargs, uint64_t max_insns,
                            emu_riscv_result_t *out, emu_trace_t *trace) {
-    uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-    if (!emu_riscv_setup(uc, code, code_len, args, nargs)) {
+    if (!emu_riscv_setup(e->uc, code, code_len, args, nargs)) {
         out->uc_err = -1;
         return false;
     }
-    return emu_riscv_run(uc, max_insns, out, trace);
+    return emu_riscv_run(e, max_insns, out, trace);
 }
 
 bool emu_riscv_call(emu_riscv_t *e, const void *code, size_t code_len,
@@ -1428,15 +1486,71 @@ bool emu_riscv_call_fp(emu_riscv_t *e, const void *code, size_t code_len,
                        int nfargs, uint64_t max_insns,
                        emu_riscv_result_t *out) {
     /* FP args go in fa0..fa7 == f10..f17. */
-    uc_engine *uc = e->uc;
     memset(out, 0, sizeof *out);
-    if (!emu_riscv_setup(uc, code, code_len, iargs, niargs)) {
+    if (!emu_riscv_setup(e->uc, code, code_len, iargs, niargs)) {
         out->uc_err = -1;
         return false;
     }
     for (int i = 0; i < nfargs && i < 8; i++)
-        uc_reg_write(uc, UC_RISCV_REG_F10 + i, &fargs[i]);
-    return emu_riscv_run(uc, max_insns, out, NULL);
+        uc_reg_write(e->uc, UC_RISCV_REG_F10 + i, &fargs[i]);
+    return emu_riscv_run(e, max_insns, out, NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (RISC-V guest, T3)                  */
+/* ------------------------------------------------------------------ */
+
+/* Arm (or re-arm) the RISC-V per-step ring — the riscv mirror of
+ * emu_arm64_step_capture. Returns false on a NULL handle, a zero cap, or
+ * allocation failure. */
+bool emu_riscv_step_capture(emu_riscv_t *e, size_t cap) {
+    if (e == NULL || cap == 0)
+        return false;
+    emu_riscv_regs_t *buf = (emu_riscv_regs_t *)calloc(cap, sizeof *buf);
+    if (buf == NULL)
+        return false;
+    free(e->step_ring.buf); /* drop any previously armed ring */
+    e->step_ring.armed = true;
+    e->step_ring.buf = buf;
+    e->step_ring.cap = cap;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+    return true;
+}
+
+/* Disarm the ring and free its buffer (no-op if never armed). */
+void emu_riscv_step_capture_clear(emu_riscv_t *e) {
+    if (e == NULL)
+        return;
+    free(e->step_ring.buf);
+    e->step_ring.buf = NULL;
+    e->step_ring.armed = false;
+    e->step_ring.cap = 0;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+}
+
+size_t emu_riscv_step_count(const emu_riscv_t *e) {
+    return e != NULL ? e->step_ring.count : 0;
+}
+
+uint64_t emu_riscv_step_dropped(const emu_riscv_t *e) {
+    return e != NULL ? e->step_ring.dropped : 0;
+}
+
+bool emu_riscv_step_at(const emu_riscv_t *e, size_t i, uint64_t *step_index,
+                       emu_riscv_regs_t *out) {
+    if (e == NULL || i >= e->step_ring.count)
+        return false;
+    /* Held entries are the contiguous most-recent steps, so the absolute step
+     * number of entry i is dropped_steps + i (the earliest evicted count). */
+    if (step_index != NULL)
+        *step_index = e->step_ring.dropped + (uint64_t)i;
+    if (out != NULL)
+        *out = e->step_ring.buf[(e->step_ring.head + i) % e->step_ring.cap];
+    return true;
 }
 
 /* ------------------------------------------------------------------ */

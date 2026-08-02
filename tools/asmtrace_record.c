@@ -798,6 +798,245 @@ static int record_arm32(const char *dir, const char *out, const char *label,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* RISC-V (RV64) worked example (60-arm32-riscv-author-mode.md T3)     */
+/*                                                                     */
+/* Mirrors the arm64/arm32 listings immediately above: a BYTE LITERAL, */
+/* hand-derivable on paper (assembled with `.option norvc`, so every   */
+/* instruction is the base 4-byte RV64I encoding — no compressed forms,*/
+/* matching the fixed-stride offsets the arm64/arm32 chains have).     */
+/* Run through the riscv64 `df_guest` under Unicorn (which emulates    */
+/* RV64 on any host), generated on the SAME x86-64 lane as every other */
+/* golden — the guest is the arch, not the host.                       */
+/* ------------------------------------------------------------------ */
+
+/* riscv_df_chain(a, b)  [a0=a, a1=b] — the SAME straight-line def-use chain
+ * shape as ARM64_DF_CHAIN/ARM32_DF_CHAIN, in RV64I:
+ *   0x00  add a2, a0, a1  ; 33 06 b5 00   a2 = a + b   (reads a0,a1; writes a2)
+ *   0x04  add a3, a2, a2  ; b3 06 c6 00   a3 = 2 * a2  (edge a2; writes a3)
+ *   0x08  mv  a0, a3      ; 13 85 06 00   a0 = a3      (edge a3; the return value)
+ *   0x0c  ret             ; 67 80 00 00   return via ra (jalr x0, 0(ra))
+ * With a = 7, b = 5 the fabric is a2 = 12, a3 = 24, a0 = 24, and the def-use
+ * graph has edges 0->1 (a2) and 1->2 (a3) — the same L0->L1 story the
+ * arm64/arm32 chains tell, under the riscv64 guest. */
+static const uint8_t RISCV_DF_CHAIN[] = {
+    0x33, 0x06, 0xb5, 0x00, /* 0x00 add a2, a0, a1 */
+    0xb3, 0x06, 0xc6, 0x00, /* 0x04 add a3, a2, a2 */
+    0x13, 0x85, 0x06, 0x00, /* 0x08 mv  a0, a3     */
+    0x67, 0x80, 0x00, 0x00, /* 0x0c ret            */
+};
+
+/* One RISC-V per-step register snapshot as a `regstate` event, by descriptor
+ * reference — the riscv64 analogue of emit_regstate_arm64/emit_regstate_arm32.
+ * `values` names the integer register file only: x0..x31 and pc, in
+ * emu_riscv_regs_t declaration order — integer-only, no F/D-extension deck,
+ * mirroring both the arm64/arm32 descriptors and the riscv64 value fabric's
+ * own integer-only scope (60-arm32-riscv-author-mode.md T3). */
+static void emit_regstate_riscv(asmtrace_writer_t *w,
+                                const emu_riscv_regs_t *r) {
+    char body[2048];
+    int o = snprintf(
+        body, sizeof body,
+        "\"desc\":\"emu_riscv_regs_t@riscv64/lp64\",\"values\":{"
+        "\"x0\":%llu,\"x1\":%llu,\"x2\":%llu,\"x3\":%llu,\"x4\":%llu,"
+        "\"x5\":%llu,\"x6\":%llu,\"x7\":%llu,\"x8\":%llu,\"x9\":%llu,"
+        "\"x10\":%llu,\"x11\":%llu,\"x12\":%llu,\"x13\":%llu,\"x14\":%llu,"
+        "\"x15\":%llu,\"x16\":%llu,\"x17\":%llu,\"x18\":%llu,\"x19\":%llu,"
+        "\"x20\":%llu,\"x21\":%llu,\"x22\":%llu,\"x23\":%llu,\"x24\":%llu,"
+        "\"x25\":%llu,\"x26\":%llu,\"x27\":%llu,\"x28\":%llu,\"x29\":%llu,"
+        "\"x30\":%llu,\"x31\":%llu,\"pc\":%llu}",
+        (unsigned long long)r->x[0], (unsigned long long)r->x[1],
+        (unsigned long long)r->x[2], (unsigned long long)r->x[3],
+        (unsigned long long)r->x[4], (unsigned long long)r->x[5],
+        (unsigned long long)r->x[6], (unsigned long long)r->x[7],
+        (unsigned long long)r->x[8], (unsigned long long)r->x[9],
+        (unsigned long long)r->x[10], (unsigned long long)r->x[11],
+        (unsigned long long)r->x[12], (unsigned long long)r->x[13],
+        (unsigned long long)r->x[14], (unsigned long long)r->x[15],
+        (unsigned long long)r->x[16], (unsigned long long)r->x[17],
+        (unsigned long long)r->x[18], (unsigned long long)r->x[19],
+        (unsigned long long)r->x[20], (unsigned long long)r->x[21],
+        (unsigned long long)r->x[22], (unsigned long long)r->x[23],
+        (unsigned long long)r->x[24], (unsigned long long)r->x[25],
+        (unsigned long long)r->x[26], (unsigned long long)r->x[27],
+        (unsigned long long)r->x[28], (unsigned long long)r->x[29],
+        (unsigned long long)r->x[30], (unsigned long long)r->x[31],
+        (unsigned long long)r->pc);
+    if (o < 0)
+        return;
+    size_t n = (size_t)o >= sizeof body ? sizeof body - 1 : (size_t)o;
+    body[n] = '\0';
+    asmtrace_emit(w, "regstate", body);
+}
+
+/* Per-step RISC-V register ring (T3): when steps_cap > 0, run the SAME bytes
+ * again under a FRESH emu_riscv_t handle with its per-step ring armed
+ * (emu_riscv_step_capture) and emit one `regstate` event per held pre-state
+ * (oldest first) — the riscv64 analogue of emit_regstates_arm64/
+ * emit_regstates_arm32. A SEPARATE Unicorn engine from the value-fabric run
+ * above, exactly like the arm64/arm32 pairs; EMU_CODE_BASE/EMU_STACK_BASE
+ * match DF_CODE_BASE/DF_STACK_BASE numerically, so both engines see the same
+ * addresses even though neither shares state with the other. Returns the
+ * number of earliest steps the ring evicted. */
+static uint64_t emit_regstates_riscv(asmtrace_writer_t *w, const uint8_t *code,
+                                     size_t code_len, const long *args,
+                                     int nargs, size_t steps_cap) {
+    emu_riscv_t *e;
+    emu_riscv_result_t res;
+    uint64_t dropped = 0;
+    if (steps_cap == 0)
+        return 0;
+    e = emu_riscv_open();
+    if (e == NULL)
+        return 0;
+    if (emu_riscv_step_capture(e, steps_cap)) {
+        size_t held, i;
+        memset(&res, 0, sizeof res);
+        emu_riscv_call(e, code, code_len, args, nargs, 0, &res);
+        held = emu_riscv_step_count(e);
+        dropped = emu_riscv_step_dropped(e);
+        for (i = 0; i < held; i++) {
+            emu_riscv_regs_t regs;
+            if (!emu_riscv_step_at(e, i, NULL, &regs))
+                continue;
+            emit_regstate_riscv(w, &regs);
+        }
+    }
+    emu_riscv_close(e);
+    return dropped;
+}
+
+/* Record one RISC-V routine as a value-fabric golden (60-arm32-riscv-author-
+ * mode.md T3), written as `note` + `trace` (rel) + `df_step` + `df_edge`
+ * through the riscv64 `df_guest` — plus, when `steps_cap > 0`, the regstate/
+ * Scrubber half: one `regstate` event per held pre-state of the riscv64
+ * per-step ring (emu_riscv_regs_t@riscv64/lp64). The header's `arch` is
+ * accurately "riscv64" (the guest, via the writer override) even though the
+ * recording is produced on an x86-64 lane. No mem/blame: those ride their
+ * own opt-ins and are not armed here. The reader needs NO change either
+ * way, mirroring record_arm64's/record_arm32's own closing note. Returns
+ * 0 / -1. */
+static int record_riscv(const char *dir, const char *out, const char *label,
+                        const uint8_t *code, size_t code_len,
+                        const long *args, int nargs, size_t steps_cap) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    asmtest_defuse_t *g = NULL;
+    char path[1024], body[65536];
+    size_t nsteps, nrecs, cur = 0, s;
+    int rc;
+
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_RISCV64, code, code_len,
+                                       args, nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr,
+                "asmtrace_record: riscv64 emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    g = asmtest_defuse_build(vt);
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_writer_set_arch(&w, "riscv64"); /* the guest, not the host (T3) */
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        char text[256];
+        int o = snprintf(text, sizeof text, "%s(", label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(
+            text + o, sizeof text - (size_t)o,
+            ") under the deterministic emulator L0 producer, RISC-V guest");
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    nsteps = vt->steps_len;
+    nrecs = vt->recs_len;
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_RISCV64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           (unsigned long long)vt->insn_off[s], body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                           (unsigned long long)vt->insn_off[s]);
+        }
+    }
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        size_t first;
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_RISCV64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        while (cur < nrecs && vt->recs[cur].step < s)
+            cur++;
+        first = cur;
+        while (cur < nrecs && vt->recs[cur].step == s)
+            cur++;
+        asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
+                              REC_CODE_BASE, 0, dis, &vt->recs[first],
+                              cur - first, vt->wide, vt->wide_len);
+        asmtrace_emit(&w, "df_step", body);
+    }
+
+    for (size_t i = 0; g && i < g->n; i++) {
+        asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
+        asmtrace_emit(&w, "df_edge", body);
+    }
+
+    /* Per-step riscv64 register states from the ring (T3), after the value
+     * stream — the same ordering emit_regstates_arm64/emit_regstates_arm32
+     * use. A non-zero eviction count is truncation just like a full recs
+     * buffer. */
+    uint64_t step_dropped =
+        emit_regstates_riscv(&w, code, code_len, args, nargs, steps_cap);
+
+    if (vt->truncated || step_dropped > 0)
+        w.truncated = 1;
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, step_dropped, 0, NULL);
+
+    {
+        size_t nedges = g ? g->n : (size_t)0;
+        int trunc = vt->truncated || step_dropped > 0;
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        printf("  %-20s %zu steps, %zu records, %zu def-use edges", out, nsteps,
+               nrecs, nedges);
+        if (steps_cap > 0)
+            printf(", regstate cap %zu (dropped %llu)", steps_cap,
+                   (unsigned long long)step_dropped);
+        printf("  [riscv64]%s\n", trunc ? " [TRUNCATED]" : "");
+    }
+    return 0;
+}
+
 /* One per-step register snapshot as a `regstate` event, by descriptor
  * reference (schema: `desc` names a state descriptor, never a bare inline
  * register list). The `values` object carries the full x86-64 INTEGER file —
@@ -2091,6 +2330,36 @@ int main(int argc, char **argv) {
         if (record_arm32(dir, "arm32-regstate-truncated",
                          "arm32_df_chain (steps_cap = 2)", ARM32_DF_CHAIN,
                          sizeof ARM32_DF_CHAIN, arm32_args, 2, 2) != 0)
+            failed++;
+    }
+
+    /* The RISC-V (RV64) value-fabric golden (60-arm32-riscv-author-mode.md
+     * T3): the third non-x86-64 guest, the doc-32-shaped mirror of the
+     * arm64/arm32 blocks above — unblocked by this doc's own Keystone spike
+     * (a pinned pre-release upstream commit with a verified-working RISCV
+     * backend; see the doc's status section for the exact commit + evidence).
+     * Generated on the SAME x86-64 lane (Unicorn emulates the RV64 guest);
+     * deterministic and byte-stable. The header's arch is accurately
+     * "riscv64" (the guest), and the Loom / Slice / Timeline render its
+     * fabric with no desktop change. Baked steps_cap = 8 comfortably holds
+     * all four executed steps (add/add/mv/ret), so this is also the riscv64
+     * regstate worked example, exercising the `regstate` kind without a
+     * separate --steps-style flag. */
+    {
+        static const long riscv_args[2] = {7, 5};
+        if (record_riscv(dir, "riscv-df-chain", "riscv_df_chain",
+                         RISCV_DF_CHAIN, sizeof RISCV_DF_CHAIN, riscv_args, 2,
+                         8) != 0)
+            failed++;
+        /* The D7 low-fidelity fixture for the riscv64 ring (mirrors
+         * arm64-regstate-truncated.asmtrace/arm32-regstate-truncated.asmtrace):
+         * the SAME chain with a two-entry step ring over four executed
+         * steps, so the earliest two pre-states are evicted. `-truncated`
+         * in the name so the golden test requires it to actually be
+         * truncated. Generated, never hand-edited. */
+        if (record_riscv(dir, "riscv-regstate-truncated",
+                         "riscv_df_chain (steps_cap = 2)", RISCV_DF_CHAIN,
+                         sizeof RISCV_DF_CHAIN, riscv_args, 2, 2) != 0)
             failed++;
     }
 

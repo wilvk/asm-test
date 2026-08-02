@@ -384,6 +384,81 @@ static const df_guest DF_GUEST_ARM32 = {
     setup_call_arm32,
 };
 
+/* --- RISC-V (RV64) guest (60-arm32-riscv-author-mode.md T3) ---------------- */
+
+/* RISCV_REG_* / CS_ARCH_RISCV only exist in Capstone >= 5 (this repo's own
+ * pinned build-capstone.sh targets 5.0.1, but build-capstone.sh no-ops when
+ * pkg-config already finds an older system capstone — src/disasm.c's
+ * cs_target() and src/dataflow_operands.c's cs_target() both already guard
+ * on this for exactly that reason; this guest mirrors them so the file still
+ * compiles against an older Capstone, with df_guest_for(ASMTEST_ARCH_RISCV64)
+ * then simply returning NULL, the same "no guest armed" refusal the switch's
+ * default case already gives every other unrecognised arch value). */
+#if defined(CS_API_MAJOR) && (CS_API_MAJOR >= 5)
+#define DF_HAVE_RISCV_GUEST 1
+
+/* Map a Capstone riscv register id to its Unicorn UC_RISCV_REG_* id.
+ * Capstone lists X0..X31 as a contiguous block, and — unlike Unicorn's own
+ * apparent numbering coincidence — this is verified NUMERICALLY IDENTICAL to
+ * UC_RISCV_REG_X0..X31 (both enums are RISCV_REG_INVALID/UC_RISCV_REG_INVALID
+ * = 0 followed by X0..X31 = 1..32, confirmed against the installed headers);
+ * the explicit range-checked translation below is kept anyway, mirroring
+ * every other guest's cap_*_to_uc shape rather than relying on that
+ * coincidence holding across a future Capstone/Unicorn bump. F/D
+ * floating-point registers are not modelled by this integer producer,
+ * mirroring arm64/arm32's own integer-only scope. */
+static int cap_riscv_to_uc(uint32_t r) {
+    if (r >= RISCV_REG_X0 && r <= RISCV_REG_X31)
+        return (int)UC_RISCV_REG_X0 + (int)(r - RISCV_REG_X0);
+    return -1;
+}
+
+/* RISC-V analogue of emu_riscv_zero_regs (src/emu.c): clear x1..x31 (x0 is
+ * hardwired zero — writing it is a harmless no-op on real hardware, but
+ * Unicorn's RISC-V core simply ignores the write, so it is skipped here to
+ * mirror emu_riscv_zero_regs exactly). RISC-V has no flags register — branch
+ * comparisons are folded into the instruction itself, so there is nothing
+ * else to reset (unlike ARM32's CPSR / x86's EFLAGS). */
+static void df_init_riscv(uc_engine *uc) {
+    uint64_t z = 0;
+    for (int r = (int)UC_RISCV_REG_X0 + 1; r <= (int)UC_RISCV_REG_X0 + 31; r++)
+        uc_reg_write(uc, r, &z);
+}
+
+/* RV64 integer calling convention: the return address goes in ra (x1), not on
+ * the stack — a `ret` (jalr x0, 0(ra)) branches to it, so pointing it at the
+ * sentinel stops the run exactly as AArch64/ARM32's link-register return
+ * does. sp (x2) is 16-byte aligned at entry, matching emu_riscv_setup. */
+static void setup_call_riscv(uc_engine *uc, uint64_t stack_top,
+                             uint64_t ret_addr) {
+    uint64_t sp = stack_top & ~(uint64_t)0xF;
+    uc_reg_write(uc, UC_RISCV_REG_SP, &sp);
+    uc_reg_write(uc, UC_RISCV_REG_RA, &ret_addr);
+}
+
+static const int riscv_arg_regs[8] = {
+    UC_RISCV_REG_X10, UC_RISCV_REG_X11, UC_RISCV_REG_X12, UC_RISCV_REG_X13,
+    UC_RISCV_REG_X14, UC_RISCV_REG_X15, UC_RISCV_REG_X16, UC_RISCV_REG_X17};
+
+/* RISC-V captures the scalar integer fabric only: no wide-register read (the
+ * D-extension F file is a future seam, like arm64/arm32's vector files —
+ * NULL) and no FP-arg marshalling (fa0..fa7, a future seam mirroring
+ * emu_riscv_call_fp's own separate entry point). */
+static const df_guest DF_GUEST_RISCV64 = {
+    "riscv64",
+    UC_ARCH_RISCV,
+    UC_MODE_RISCV64,
+    ASMTEST_ARCH_RISCV64,
+    cap_riscv_to_uc,
+    NULL,
+    riscv_arg_regs,
+    8,
+    NULL,
+    df_init_riscv,
+    setup_call_riscv,
+};
+#endif /* CS_API_MAJOR >= 5 */
+
 /* Non-static (declared in asmtest_dataflow_internal.h) so the emu_t-hosted producer
  * (src/dataflow_resume.c, R3) selects the same descriptor the standalone run does. */
 const df_guest *df_guest_for(asmtest_arch_t arch) {
@@ -394,8 +469,14 @@ const df_guest *df_guest_for(asmtest_arch_t arch) {
         return &DF_GUEST_ARM64;
     case ASMTEST_ARCH_ARM32:
         return &DF_GUEST_ARM32;
+    case ASMTEST_ARCH_RISCV64:
+#ifdef DF_HAVE_RISCV_GUEST
+        return &DF_GUEST_RISCV64;
+#else
+        return NULL; /* built against a Capstone < 5 (no RISCV_REG_*) */
+#endif
     default:
-        return NULL; /* RISCV64: no guest armed (gated on the doc-60 T3 spike) */
+        return NULL;
     }
 }
 
@@ -635,6 +716,18 @@ static int df_run_impl(const df_guest *g, const uint8_t *code, size_t code_len,
     if (uc_mem_map(uc, DF_CODE_BASE, DF_CODE_SIZE, UC_PROT_ALL) != UC_ERR_OK ||
         uc_mem_map(uc, DF_STACK_BASE, DF_STACK_SIZE,
                    UC_PROT_READ | UC_PROT_WRITE) != UC_ERR_OK) {
+        uc_close(uc);
+        return -1;
+    }
+    /* Unlike the x86-64/AArch64/ARM32 backends, Unicorn's RISC-V core fetches
+     * the instruction AT the `until` address before honoring the stop (see
+     * emu_riscv_open's identical map in src/emu.c), so an unmapped
+     * DF_RET_MAGIC would fault the sentinel `ret` itself. Map a small
+     * read/exec landing page there for this guest only — uc_emu_start still
+     * stops before executing it. */
+    if (g->arch == UC_ARCH_RISCV &&
+        uc_mem_map(uc, DF_RET_MAGIC, 0x1000, UC_PROT_READ | UC_PROT_EXEC) !=
+            UC_ERR_OK) {
         uc_close(uc);
         return -1;
     }

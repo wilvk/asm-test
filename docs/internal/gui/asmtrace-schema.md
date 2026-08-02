@@ -1258,6 +1258,107 @@ ring unarmed — the `arm32-df-chain.asmtrace` golden without one would be the
 normal case, mirroring arm64's own note (this golden bakes a ring in, like
 arm64's does).
 
+## `regstate` descriptor — `emu_riscv_regs_t@riscv64/lp64` (60-arm32-riscv-author-mode.md T3 riscv64 ring)
+
+> **Owned by [60-arm32-riscv-author-mode.md](60-arm32-riscv-author-mode.md)**
+> (T3, the third `df_guest`/regstate ring instance — doc 32's own closing
+> line made concrete for the final architecture), appended under this file's
+> D5 append-only rule. It gives the `regstate` kind its **fifth** concrete
+> descriptor — the emulator's per-step RV64 register ring — and **adds no
+> field to any existing kind and no new envelope major.** The kind, the
+> `{"desc","values"}` shape and the descriptor-reference rule are unchanged
+> and remain 01's.
+
+The RISC-V analogue of the AArch64/ARM32 emulator rings
+([include/asmtest_emu.h](../../../include/asmtest_emu.h) —
+`emu_riscv_step_capture`), scoped to the separate `emu_riscv_t` handle
+(RISC-V has always been its own guest handle type — `emu_riscv_open`/
+`emu_riscv_call` predate this brief — this ring is the one Track F seam it
+gains; `emu_riscv_t` still has no snapshot/restore, that stays an x86-64
+`emu_t` / Reweave concern). Unlike the ARM32 T1 naming trap, there is no
+struct-tag/descriptor-id mismatch here: the real C type IS `emu_riscv_regs_t`
+already. T3 was gated on a real, previously-unsurfaced dependency gap: the
+pinned Keystone release (0.9.2) has no RISC-V backend at all —
+`KS_ARCH_RISCV` does not exist in its header. The spike this doc's T3
+describes found a natural upstream milestone commit where RISC-V support is
+complete AND the tree independently fixes the CMake4/GCC15 compatibility
+patches this repo already carries as local sed workarounds (see the doc's
+status section for the exact commit, and the corresponding change to
+`scripts/build-keystone.sh`'s pin). The corpus recorder
+([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) bakes a ring
+cap into the riscv64 golden fixtures directly, mirroring the arm64/arm32
+fixtures' own pattern; after the run it emits one `regstate` event per held
+pre-state, referencing this descriptor.
+
+**Descriptor id.** `emu_riscv_regs_t@riscv64/lp64` — naming the RV64
+architecture and the (integer-only) LP64 calling convention, over the full
+RISC-V emulator register file backing type `emu_riscv_regs_t`
+([include/asmtest_emu.h:277](../../../include/asmtest_emu.h#L277)). `lp64`
+rather than `lp64d`, even though the D extension is enabled at
+`emu_riscv_open` for the `_call_fp` entry point — this descriptor names only
+the integer file it actually captures (see the no-F/D-deck note below), so
+the ABI suffix stays honest about scope rather than the hardware feature set.
+
+**`values` fields.** The 32 integer registers `x0`..`x31`, plus `pc`, in
+`emu_riscv_regs_t` **declaration order** (`x[0..31]` then `pc`) — named by
+their raw `xN` numbers rather than their ABI role names (`zero`/`ra`/`sp`/
+`gp`/`tp`/`t0`-`t2`/`s0`-`s11`/`a0`-`a7`/`t3`-`t6`), mirroring how the arm64
+descriptor names `x0`..`x30` by register number rather than AAPCS64 role
+(ARM32's `sp`/`lr`/`pc` role-naming is the one exception, per that
+descriptor's own note about ARM32's disassembly/ABI docs conventionally
+using those names — RV64I disassembly conventionally uses ABI names for
+registers but raw `xN` numbers for the *architectural state itself*, e.g.
+`readelf`/GDB's `info registers` output), each a decimal `u64` (exactly like
+the x86-64/arm64 descriptors' `u64` fields, and unlike ARM32's `u32` ones —
+RV64 is a 64-bit integer file end to end, no 32/64 split):
+
+```
+x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30 x31 pc
+```
+
+The pre-state of `riscv-df-chain.asmtrace`'s first held step (args `a0=7`
+(`x10`), `a1=5` (`x11`); `x1`(`ra`)/`x2`(`sp`)/`pc` are the guest's fixed
+entry state, not yet the routine's own values — RISC-V has no flags register
+comparable to `cpsr`/`eflags`/`nzcv`, so this descriptor carries none, faithfully):
+
+```json
+{"k":"regstate","desc":"emu_riscv_regs_t@riscv64/lp64","values":{"x0":0,"x1":15728640,"x2":2162672,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":7,"x11":5,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":0,"x31":0,"pc":1048576}}
+```
+
+- **No F/D-extension deck** — like the x86-64 descriptor's original v1
+  omission and the arm64/arm32 descriptors' own scope, a wide value is not a
+  bare JSON integer; `emu_riscv_regs_t.f[32]` is not captured here (a further
+  descriptor row, mirroring the x86-64 wide-deck extension above), exactly
+  as the riscv64 value fabric's own scope stayed integer-only
+  ([60](60-arm32-riscv-author-mode.md) T3). RVC (compressed instructions)
+  and the V (vector) extension stay out of scope entirely, per the doc's own
+  non-goals — this descriptor's `values` are unaffected either way (it names
+  registers, not encodings).
+- **The reader has no riscv64-specific field-order table.**
+  `stepindex_reg_order()`
+  ([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp))
+  lists neither the arm64, arm32, nor riscv64 names; a riscv64 `values`
+  object's field names all fall through its generic "any other integer key,
+  sorted" path, exactly like arm64's/arm32's own degradation. The Scrubber
+  therefore renders every field — time-travel works end to end — just in a
+  lexicographic rather than a hand-curated order (`x0`, `x1`, `x10`..`x19`,
+  `x2`, `x20`..`x29`, `x3`..`x9`, `pc` — string-sorted, not numeric; cosmetic,
+  not correctness, exactly as arm64/arm32's own note already says of theirs).
+- **No live (ptrace) RISC-V producer exists.** This descriptor has exactly
+  one producer today, the emulator ring; a live RV64 single-step engine is a
+  separate host concern ([60](60-arm32-riscv-author-mode.md) Non-goals).
+
+**Order, dropping and truncation (D7).** Identical discipline to the
+x86-64/arm64/arm32 emulator rings: held pre-states are emitted **oldest
+first**, each snapshotted BEFORE its instruction; when more steps run than
+the ring holds, the **earliest** entries are evicted and the `end` footer
+carries `"truncated":true` plus the evicted count in `drops.lost`, so a
+reader offsets the first held step by `drops.lost` and renders the missing
+prefix as a torn edge. A recording with no `regstate` events simply had the
+riscv64 ring unarmed — the `riscv-df-chain.asmtrace` golden without one
+would be the normal case, mirroring arm64's/arm32's own note (this golden
+bakes a ring in, like theirs does).
+
 ## `fpenv` — the FP/SIMD environment (rounding / sticky / FTZ-DAZ)
 
 > **Owned by [31-wide-register-deck.md](../archive/gui/31-wide-register-deck.md)** (T2), appended

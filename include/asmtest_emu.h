@@ -326,6 +326,39 @@ bool emu_riscv_call_fp(emu_riscv_t *e, const void *code, size_t code_len,
                        int nfargs, uint64_t max_insns, emu_riscv_result_t *out);
 
 /* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (RISC-V guest, 60-arm32-riscv-     */
+/* author-mode.md T3)                                                  */
+/* ------------------------------------------------------------------ */
+
+/* The RISC-V analogue of the AArch64/ARM32 rings above: the same
+ * drop-oldest / truncation / absolute-step-index discipline, snapshotting
+ * the full emu_riscv_regs_t (x0..x31, pc, f0..f31) BEFORE each executed
+ * instruction into a bounded ring on the emu_riscv_t handle. A SEPARATE
+ * API, mirroring how emu_arm64_step_* / emu_arm_step_* are each their own
+ * seam rather than a union grafted onto emu_step_* / emu_x86_regs_t —
+ * emu_riscv_t is already its own per-guest handle type. emu_riscv_t gains
+ * no snapshot/restore or watch/guard machinery here (an x86-64 emu_t /
+ * Reweave concern, out of scope). Never armed by default.
+ *
+ * This is the producer half of the `emu_riscv_regs_t@riscv64/lp64` regstate
+ * descriptor (docs/internal/gui/asmtrace-schema.md) — which names x0..x31
+ * and pc only (integer-only, D7: no F/D float deck, mirroring arm64/arm32's
+ * own integer-only scope), even though this ring snapshots the whole
+ * emu_riscv_regs_t struct (f0..f31 included) the same way the arm64/arm32
+ * rings carry their vector files; the descriptor is simply narrower than
+ * the struct it reads from. */
+bool emu_riscv_step_capture(emu_riscv_t *e, size_t cap); /* arm (realloc ok) */
+void emu_riscv_step_capture_clear(emu_riscv_t *e);       /* disarm + free   */
+size_t emu_riscv_step_count(const emu_riscv_t *e);       /* entries held    */
+uint64_t emu_riscv_step_dropped(const emu_riscv_t *e);   /* steps evicted   */
+/* Entry i (0 = oldest held): the register file BEFORE step_index's insn. Copies
+ * it into *out and the absolute step number (dropped_steps + i) into
+ * *step_index; either out-param may be NULL. Returns false for i >=
+ * emu_riscv_step_count (out-params untouched). */
+bool emu_riscv_step_at(const emu_riscv_t *e, size_t i, uint64_t *step_index,
+                       emu_riscv_regs_t *out);
+
+/* ------------------------------------------------------------------ */
 /* ARM32 (AArch32 / A32) guest (emulated regardless of host arch)      */
 /*                                                                     */
 /* Like the AArch64 and RISC-V guests, this runs raw A32 machine code  */

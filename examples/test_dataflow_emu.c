@@ -97,6 +97,22 @@ static const uint8_t arm32_df_add[] = {
     0x1e, 0xff, 0x2f, 0xe1, /* 0x08 bx lr          */
 };
 
+/* RISC-V (RV64) leaf routine df_add(a, b)  [a0=a, a1=b] — the doc-60 T3
+ * riscv64 guest end to end, the SAME shape as arm64_df_add/arm32_df_add
+ * above (assembled with `.option norvc`, so every instruction is the base
+ * 4-byte RV64I encoding — no compressed forms, mirroring this file's
+ * arm64/arm32 blocks' own fixed 4-byte instruction stride):
+ *   0x00  add a2, a0, a1  ; step0: A2 <- A0 + A1   (reads a0,a1; writes a2)
+ *   0x04  mv a0, a2       ; step1: A0 <- A2        (the return value; edge a2)
+ *   0x08  ret             ; step2: return via ra (jalr x0, 0(ra))
+ * Hand-derived: a def-use edge step0 -> step1 (a2), and a0 = a + b at step1 —
+ * a different `df_guest`, not a second code path. */
+static const uint8_t riscv_df_add[] = {
+    0x33, 0x06, 0xb5, 0x00, /* 0x00 add a2, a0, a1 */
+    0x13, 0x05, 0x06, 0x00, /* 0x04 mv a0, a2      */
+    0x67, 0x80, 0x00, 0x00, /* 0x08 ret            */
+};
+
 /* Find a memory WRITE record at `step` and report its captured value. */
 static int mem_write_value(const asmtest_valtrace_t *v, uint32_t step,
                            uint64_t *out) {
@@ -229,6 +245,39 @@ int main(void) {
         asmtest_valtrace_free(v32);
     } else {
         CHECK(0, "arm32: valtrace_new failed");
+    }
+
+    /* --- doc 60 T3: the RISC-V (RV64) guest, same L0->L1 machinery, a
+     * different df_guest --- */
+    asmtest_valtrace_t *vr = asmtest_valtrace_new(64, 512, 256);
+    if (vr != NULL) {
+        long ar[2] = {7, 5}; /* a0=7, a1=5 -> a0 = 12 */
+        int rcr =
+            asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_RISCV64, riscv_df_add,
+                                          sizeof riscv_df_add, ar, 2, 0, vr);
+        CHECK(rcr == 0, "riscv64: routine ran to the sentinel return (via ra)");
+        CHECK(vr->steps_len == 3,
+              "riscv64: three steps captured (add, mv, ret)");
+        if (vr->steps_len == 3) {
+            static const uint64_t want[3] = {0x00, 0x04, 0x08};
+            int ok = 1;
+            for (int i = 0; i < 3; i++)
+                if (vr->insn_off[i] != want[i])
+                    ok = 0;
+            CHECK(ok,
+                  "riscv64: per-step offsets are the 4-byte instruction stride");
+        }
+        uint64_t a2 = 0;
+        CHECK(reg_write_value(vr, 0, &a2) && a2 == 12,
+              "riscv64: add a2, a0, a1 captured a2 = 7 + 5 = 12");
+        asmtest_defuse_t *gr = asmtest_defuse_build(vr);
+        CHECK(gr != NULL, "riscv64: def-use graph built");
+        CHECK(has_edge(gr, 0, 1),
+              "riscv64: def-use edge step0 -> step1 (a2 add -> mv)");
+        asmtest_defuse_free(gr);
+        asmtest_valtrace_free(vr);
+    } else {
+        CHECK(0, "riscv64: valtrace_new failed");
     }
 
     printf("1..%d\n", checks);

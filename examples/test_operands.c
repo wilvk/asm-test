@@ -6,8 +6,9 @@
  *
  * The table asserts the full set — including the IMPLICIT operands the plan calls
  * out: `eflags` written by `cmp`, `rsp` read+written by `push`, and a `gs:`-segmented
- * memory operand. x86-64, arm64, and (60-arm32-riscv-author-mode.md T1) arm32 are
- * armed; RISCV64 stays stubbed and must enumerate nothing.
+ * memory operand. x86-64, arm64, (60-arm32-riscv-author-mode.md T1) arm32, and
+ * (T3) riscv64 are armed (riscv64 additionally gated on Capstone >= 5, below
+ * which it degrades to the old "enumerates nothing" stub).
  */
 #include "asmtest_valtrace.h"
 
@@ -142,16 +143,65 @@ static void test_arm32(void) {
     CHECK(has_reg(wr, nw, ARM_REG_R0), "arm32 ldr: writes r0");
 }
 
-/* RISCV64 stays stubbed — gated on the doc-60 T3 Keystone spike, not this
- * enumerator (its cs_target() branch still returns false). */
-static void test_stubbed(void) {
+/* 60-arm32-riscv-author-mode.md T3: RISCV64 (RV64) is now armed too — gated
+ * on Capstone >= 5 (RISCV_REG_* / CS_ARCH_RISCV do not exist before that; below
+ * Capstone 5 this degrades back to the old "enumerates nothing" stub, mirror-
+ * ing dataflow_operands.c's own cs_target() guard). Unlike arm64/arm32, this
+ * enumerator does NOT go through cs_regs_access (Capstone's RISCV backend
+ * does not implement it — CS_ERR_ARCH always) — src/dataflow_operands.c's
+ * add_riscv_ops infers direction from the RV64I instruction format instead,
+ * so this exercises a load (dest write, base-register + mem read) AND a
+ * store (source value read, base-register read, mem WRITE — proving op[0]
+ * is correctly read-not-written for S-type, the one case that would go
+ * wrong under a naive "operand[0] is always the destination" rule). */
+static void test_riscv64(void) {
+#if defined(CS_API_MAJOR) && (CS_API_MAJOR >= 5)
+    at_val_rec_t rd[64], wr[64];
+    size_t nr, nw, len;
+
+    /* add a2, a0, a1 — read {a0,a1}, write {a2} */
+    const uint8_t add[] = {0x33, 0x06, 0xb5, 0x00};
+    nr = 64;
+    nw = 64;
+    len = asmtest_operands(ASMTEST_ARCH_RISCV64, add, sizeof add, 0, rd, &nr,
+                           wr, &nw);
+    CHECK(len == 4, "riscv64 add a2,a0,a1: decodes (len 4)");
+    CHECK(has_reg(rd, nr, RISCV_REG_A0) && has_reg(rd, nr, RISCV_REG_A1),
+          "riscv64 add: reads a0 and a1");
+    CHECK(has_reg(wr, nw, RISCV_REG_A2), "riscv64 add: writes a2");
+
+    /* ld a0, 0(a1) — memory READ based on a1, write {a0} */
+    const uint8_t ld[] = {0x03, 0xb5, 0x05, 0x00};
+    nr = 64;
+    nw = 64;
+    asmtest_operands(ASMTEST_ARCH_RISCV64, ld, sizeof ld, 0, rd, &nr, wr, &nw);
+    CHECK(has_mem_base(rd, nr, RISCV_REG_A1),
+          "riscv64 ld a0,0(a1): memory read operand based on a1");
+    CHECK(has_reg(rd, nr, RISCV_REG_A1),
+          "riscv64 ld: also reads a1 as a plain register (the address base)");
+    CHECK(has_reg(wr, nw, RISCV_REG_A0), "riscv64 ld: writes a0");
+
+    /* sd a1, 0(a0) — reads {a1 (the stored value), a0 (the base)}, writes
+     * memory only — never a0/a1 themselves (the S-type case). */
+    const uint8_t sd[] = {0x23, 0x30, 0xb5, 0x00};
+    nr = 64;
+    nw = 64;
+    asmtest_operands(ASMTEST_ARCH_RISCV64, sd, sizeof sd, 0, rd, &nr, wr, &nw);
+    CHECK(has_reg(rd, nr, RISCV_REG_A1),
+          "riscv64 sd a1,0(a0): reads a1 (the stored value)");
+    CHECK(has_mem_base(wr, nw, RISCV_REG_A0),
+          "riscv64 sd a1,0(a0): memory WRITE operand based on a0");
+    CHECK(!has_reg(wr, nw, RISCV_REG_A0) && !has_reg(wr, nw, RISCV_REG_A1),
+          "riscv64 sd: writes memory only, never a register (S-type)");
+#else
     at_val_rec_t rd[8], wr[8];
     size_t nr = 8, nw = 8;
     const uint8_t bytes[] = {0x00, 0x00, 0x00, 0x00};
     CHECK(asmtest_operands(ASMTEST_ARCH_RISCV64, bytes, sizeof bytes, 0, rd,
                            &nr, wr, &nw) == 0 &&
               nr == 0 && nw == 0,
-          "stub: RISCV64 enumerates nothing");
+          "stub: RISCV64 enumerates nothing (Capstone < 5)");
+#endif
 }
 #endif /* ASMTEST_HAVE_CAPSTONE */
 
@@ -176,7 +226,7 @@ int main(void) {
     test_x86();
     test_arm64();
     test_arm32();
-    test_stubbed();
+    test_riscv64();
 #else
     printf("# SKIP operand enumerator: built without Capstone\n");
 #endif

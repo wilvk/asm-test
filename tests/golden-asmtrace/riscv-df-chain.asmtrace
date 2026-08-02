@@ -1,0 +1,17 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"riscv64","code":{"name":"riscv-df-chain","sha256":"11a8dda61c111a99bee69aec3369a5503487fc286c52d681bcee75d890b89b3b","len":16}}
+{"k":"note","text":"riscv_df_chain(7, 5) under the deterministic emulator L0 producer, RISC-V guest"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"add a2, a0, a1"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"add a3, a2, a2"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"mv a0, a3"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"ret"}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"add a2, a0, a1","ops":[{"space":"reg","reg":11,"size":0,"write":false,"value_valid":true,"value":7},{"space":"reg","reg":12,"size":0,"write":false,"value_valid":true,"value":5},{"space":"reg","reg":13,"size":0,"write":true,"value_valid":true,"value":12}]}
+{"k":"df_step","step":1,"off":4,"rbase":1048576,"disasm":"add a3, a2, a2","ops":[{"space":"reg","reg":13,"size":0,"write":false,"value_valid":true,"value":12},{"space":"reg","reg":14,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":2,"off":8,"rbase":1048576,"disasm":"mv a0, a3","ops":[{"space":"reg","reg":14,"size":0,"write":false,"value_valid":true,"value":24},{"space":"reg","reg":11,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":3,"off":12,"rbase":1048576,"disasm":"ret","ops":[]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":13,"size":0,"write":false,"value_valid":true,"value":12}}
+{"k":"df_edge","from":1,"to":2,"loc":{"space":"reg","reg":14,"size":0,"write":false,"value_valid":true,"value":24}}
+{"k":"regstate","desc":"emu_riscv_regs_t@riscv64/lp64","values":{"x0":0,"x1":15728640,"x2":2162672,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":7,"x11":5,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":0,"x31":0,"pc":1048576}}
+{"k":"regstate","desc":"emu_riscv_regs_t@riscv64/lp64","values":{"x0":0,"x1":15728640,"x2":2162672,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":7,"x11":5,"x12":12,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":0,"x31":0,"pc":1048580}}
+{"k":"regstate","desc":"emu_riscv_regs_t@riscv64/lp64","values":{"x0":0,"x1":15728640,"x2":2162672,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":7,"x11":5,"x12":12,"x13":24,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":0,"x31":0,"pc":1048584}}
+{"k":"regstate","desc":"emu_riscv_regs_t@riscv64/lp64","values":{"x0":0,"x1":15728640,"x2":2162672,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":24,"x11":5,"x12":12,"x13":24,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":0,"x31":0,"pc":1048588}}
+{"k":"end","events":15,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":4}
