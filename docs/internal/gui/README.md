@@ -30,8 +30,8 @@ rules follow [../implementations/](../implementations/README.md) — read
 > | [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md) | Phase A landed as doc 44; **Phases B–E are not yet cut** into briefs. |
 > | [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md) | the 3D **instrument** axis (what you can *do* with the scene), sibling to 43's representation axis. Cuts docs 47–52; 47, 48, 50 and 52 landed 2026-08-02, 51 ☐ not started. |
 > | [51-scene-focus-and-scale.md](51-scene-focus-and-scale.md) | ☐ 0/4 — per-tid/region/kind focus, thread ghosting, a camera-distance entity budget. |
-> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; docs 55–59 all ☐ not started. |
-> | [55-scene-render-quality.md](55-scene-render-quality.md) | ☐ 0/6 — eye-dome lighting, depth-dependent halos, contour bands + height key, order-independent translucency, MSAA, portable line width. |
+> | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 3D **depiction** axis (which quantities the scene draws) — the 26-graph catalog cut into phases. Phase 0 (54) landed 2026-08-02; 55 ◐ 4/6 landed the same day, 56–59 ☐ not started. |
+> | [55-scene-render-quality.md](55-scene-render-quality.md) | ◐ 4/6 — eye-dome lighting, screen-space-constant contour bands, dithered translucency and MSAA landed 2026-08-02; depth-dependent halos and portable line width (quad expansion) remain, the latter blocking the former — see the doc's own status note. |
 > | [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | ☐ 0/5 — the layer registry, confidence terrain, per-module skyline, opcode-class terrain, misprediction survey layer. |
 > | [57-causal-layers.md](57-causal-layers.md) | ☐ 0/5 — one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge. |
 > | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | ☐ 0/6 — read/write twin relief, working-set tide, observed-lifetime pillars, data-access ribbon, residency sediment columns. |
@@ -576,15 +576,16 @@ catalog's own 26-graph inventory and its five-phase build order.
 |---|---|---|---|---|---|
 | [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) | the 26-graph inventory with each gate re-verified, the GL-effects survey and its baseline gate, the city-phase mapping, and what a Phase-4/5 cut would contain (**roadmap, not a brief**) | — | 10, 43, 46 | roadmap · cuts 54–59 | — |
 | [54-3d-catalog-phase0-plumbing.md](../archive/gui/54-3d-catalog-phase0-plumbing.md) | observed-data-span projection (**makes the terrain's data half reachable at all**), read/write prefix-sum split, `Event::seq` on `SyscallRow`, engine-free `mnemonic_class`, BFS-depth dataflow walk, `dt_link` invocation field, the `HotEdge` sourcing decision | 7 | none | ✅ 7/7 | — |
-| [55-scene-render-quality.md](55-scene-render-quality.md) | eye-dome lighting, depth-dependent halos, `fwidth` contour bands + height key, order-independent translucency (WBOIT + dithered fallback), MSAA, portable line width + the GLSL-version question | 6 | none | ☐ 0/6 | will · T1-T6 · 2026-08-02 |
+| [55-scene-render-quality.md](55-scene-render-quality.md) | eye-dome lighting, depth-dependent halos, `fwidth` contour bands + height key, order-independent translucency (WBOIT + dithered fallback), MSAA, portable line width + the GLSL-version question | 6 | none | ◐ 4/6 (T1 EDL `dec808a`; T3 contours `acbf5ae`; T4 dithered translucency `1ebdb69`; T5 MSAA `dec808a`; T6 step 2 only `ada0cb3` — step 1 quad-expansion and T2 halos remain, see the doc's own status note for why) | *free* |
 | [56-fidelity-and-module-layers.md](56-fidelity-and-module-layers.md) | L1–L4: the layer registry, confidence terrain + coverage-window mask, per-module residency skyline, opcode-class code terrain, misprediction survey layer | 5 | 54 T4 (T4), 54 T7 (T5) | ☐ 0/5 | *free* |
 | [57-causal-layers.md](57-causal-layers.md) | L5, L6, L11, L14: one step→place resolver, kernel crossing spurs, taint isochrone, blame convergence forest, dominant-path ridge | 5 | 54 T3 (T2), 54 T5 (T3); 56 T1 | ☐ 0/5 | *free* |
 | [58-memory-data-cell-family.md](58-memory-data-cell-family.md) | L7–L9, L12, L13: data-rung HUD contract, read/write twin relief, working-set tide, observed-lifetime pillars, data-access worldline ribbon, residency sediment columns | 6 | **54 T1 + T2**; 55, 56 T1 | ☐ 0/6 | *free* |
 | [59-standalone-scenes.md](59-standalone-scenes.md) | S1–S4: a scene host that is not the address plane, then divergence worldline, invocation stack, module excursion ribbon, SIMD lane prism | 5 | 54 T6 (T3), 54 T3 (T4); 48, 47 T3 | ☐ 0/5 | *free* |
 
-67 tasks across the three families (36 landed — 7 in representation via 44, 22
-in instrument via 47/48/49/50/52, 7 in depiction via 54 — and 31 still open: 4
-in instrument (51), 27 in depiction (55–59)). Sequencing across
+67 tasks across the three families (40 landed — 7 in representation via 44, 22
+in instrument via 47/48/49/50/52, 11 in depiction via 54 and 55 (T1/T3/T4/T5)
+— and 27 still open: 4 in instrument (51), 23 in depiction (55's remaining T2
+and T6 step 1, 56–59)). Sequencing across
 them: the two roadmaps' own orders hold within each family
 ([46](46-3d-functional-roadmap.md)§3, [53](53-3d-catalog-build-roadmap.md)§8), and
 the families do not block each other — with three overlaps that must be
@@ -595,8 +596,10 @@ target**: 48, 59 T5's per-scene framing. In each case whichever lands first owns
 and the second adopts it; all six briefs say so in their own text. Landing
 [55](55-scene-render-quality.md) early pays off across both open families —
 [58](58-memory-data-cell-family.md) is where stacked translucency stops being
-decorative, and [49](../archive/gui/49-one-time-truth-in-the-scene.md)'s height readability was the
-same problem 55 T3 solves in the shader.
+decorative (55 T4's dithered discard now covers the two-surface case; 58's
+five-to-twenty-layer stacks are the harder test), and
+[49](../archive/gui/49-one-time-truth-in-the-scene.md)'s height readability
+was the same problem 55 T3 already solved in the shader.
 
 **The faithful city (docs 43–44, 2026-07-31): a new numbered family, not part of
 the ten core docs.** [43-faithful-city-roadmap.md](43-faithful-city-roadmap.md)
@@ -755,13 +758,22 @@ data) and **depth-dependent halos** (Everts et al., IEEE Vis 2009 — designed f
 dense line data) both clear core 3.0 outright; `fwidth` contour bands turn terrain
 height into a readable quantity; weighted-blended OIT is the one candidate that
 does *not* clear it (`glBlendFunci` is GL 4.0 / `ARB_draw_buffers_blend`), so 55 T4
-probes it and falls back to dithered transparency rather than assuming. The survey
+was scoped to probe it and fall back to dithered transparency rather than
+assuming — **landed 2026-08-02 without the probe**: dithered (Interleaved
+Gradient Noise) transparency alone already meets the "a layer that is drawn
+must be visible" bar the doc's own "Done when" states as an explicit OR, so
+the extension probe was deferred as dead code with no consumer rather than
+built ahead of a WBOIT branch that would use it (see 55's own status note).
+Eye-dome lighting and `fwidth` contours landed the same day; depth-dependent
+halos did not (blocked on the portable-line-width work below). The survey
 also turned up two portability defects: `glLineWidth(2.0f)`/`(3.0f)`
 ([scene.cpp:664](../../../desktop/src/scene3d/scene.cpp#L664), [:695](../../../desktop/src/scene3d/scene.cpp#L695))
 on a context that is core and forward-compatible on Apple, and every scene shader
 pinned at `#version 130` while `main.cpp` selects a 3.2 core profile there — the
-second recorded as **verify-first on Darwin**, not as a confirmed break, since this
-tree has no macOS desktop lane. Sequencing in 53§8: 54 and 55 are independent and
+line-width range is now queried and recorded (55 T6 step 2), but the actual
+fix (quad expansion) and the version question (**verify-first on Darwin**,
+still unconfirmed since this tree has no macOS desktop lane) remain open.
+Sequencing in 53§8: 54 and 55 are independent and
 both land first; then 56 (whose T1 builds the layer registry 57–58 register into),
 57 and 59 in parallel; 58 last, after 54 T1+T2 and 55. The catalog's Phase 4/5 —
 seven large scenes — is deliberately uncut, with 53§7 stating exactly what each

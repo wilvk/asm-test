@@ -18,7 +18,57 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/6, not started.**
+> **Status — ◐ 4/6 landed 2026-08-02, T6 half-landed, T2 not started.**
+> T1 (Eye-Dome Lighting), T3 (contour bands), T4 (dithered translucency) and
+> T5 (MSAA) are fully landed, each via one internal multi-pass refactor of
+> `Scene::render()`: the raw geometry now always draws into Scene's OWN
+> offscreen target (multisampled when `msaa_samples >= 2`, defaulting to 0 so
+> golden/CLI/headless renders stay bit-exact — the interactive app opts in
+> via `GlSceneHost::init()`), resolved to single-sample colour+depth
+> TEXTURES, then either composited through the EDL fullscreen pass
+> (`kEdlVert`/`kEdlFrag`, 8 depth taps at a screen-space pixel radius) or
+> plain-blitted into the framebuffer the caller had bound at entry — the pick
+> pass (`fbo_pick_`) is untouched throughout, verified by byte-identical
+> pick-buffer assertions with each new pass on and off (`dec808a`). Contour
+> bands (doc 49's `kContourLevels`) now use `fwidth()` on the pre-fract
+> quantity for a screen-space-constant width and exclude `TF_TORN` cells
+> (only `TF_UNKNOWN` was excluded before) — a torn cell's height is a known
+> lower bound, not a measurement (`acbf5ae`). The ghost-fog terrain and
+> statistical trajectory lines composite via Interleaved Gradient Noise
+> discard (Jimenez 2014) instead of order-dependent alpha blend: a surviving
+> fragment is fully opaque, so compositing is an ordinary z-test with no
+> blend state and no draw-order dependency — the doc's own pre-authorized
+> capacity-constrained landing (step 1 depth-write fix + step 4 dithered
+> fallback + step 5 HUD-states-the-mode, step 2 WBOIT and its step-3
+> extension probe deferred as dead code with no consumer until a future pass
+> adds the "exact" branch) (`1ebdb69`). T6 step 2 (query
+> `GL_ALIASED_LINE_WIDTH_RANGE` at `init_gl`) landed alongside (`ada0cb3`);
+> step 1 (vertex-shader quad expansion, the actual portable-width fix) and
+> step 3 (the GLSL-130-on-Apple-core-profile verify-first question) did not.
+>
+> **What's still open, and why.** T6 step 1 would replace every
+> `glLineWidth(>1.0)` call (trajectories at 2px, convergence arcs at 3px, and
+> the pick pass's own 5–6px click-target widening) with per-segment quad
+> geometry — but the pick pass currently REUSES the colour pass's position
+> buffer for all three line categories (`vao_conv_pick_`/`vao_spur_pick_`
+> binding `conv_arcs_.vbo`/`access_spurs_.vbo` directly, adding only a
+> parallel id array; see scene.h's own comments on that sharing). Quad
+> expansion changes the position buffer's own layout (pos + the segment's
+> other endpoint + a side attribute, not a bare vec3), so this reuse breaks
+> and the pick geometry needs its own, separately-reasoned design — a larger
+> and differently-shaped change than this session's other four tasks, and
+> one this tree cannot confidently verify without visual inspection (unlike
+> T1/T3/T4/T5, which reduce to pixel/coverage/pick-identity assertions this
+> session could and did write). T2 (depth-dependent halos) explicitly
+> reuses T6 step 1's quad expansion for its own width, so it is blocked on
+> the same work. Both are left for whoever picks this brief back up, with
+> the reasoning above so the next session does not have to re-derive it.
+> Verified throughout via targeted docker builds of
+> `test_scene_fbo`/`test_camera`/`test_goto` (all green) rather than the
+> full `docker-desktop` suite, which was blocked across this whole landing
+> window by unrelated, independently-in-flight failures elsewhere in this
+> shared tree (`test_author_vm`, then a RISC-V Capstone API mismatch in
+> `dataflow_operands.c` — both doc 60, neither touched here).
 
 ## Why this work exists
 
