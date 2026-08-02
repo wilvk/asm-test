@@ -87,17 +87,32 @@ void main(){
     base = mix(base, vec3(0.02,0.02,0.03), 0.85); // sunken fog-of-war pit
   float torn = ((f & TORN) != 0u) ? 1.0 : 0.0;
   vec3 col = mix(base, vec3(1.0,0.15,0.15), torn*0.7); // rubble = red gash
-  // T3 (49): iso-density contour bands re-encode vHeight — never drawn on a
-  // flat/zero cell (no measured level to band) or a fog-of-war/off-domain
-  // cell (UNKNOWN already covers "no value"; a band there would imply one).
-  // The +0.5 phase offset is deliberate: height is normalised so the
-  // BRIGHTEST cell in any slice sits at EXACTLY 1.0, and an unshifted
-  // fract(1.0*levels) is exactly 0 for any integer level count — every
-  // terrain's single hottest cell would otherwise always land ON a line and
-  // read as darkened. Shifting the phase puts 0.0 and 1.0 mid-band instead.
-  if (uContourLevels > 0.0 && (f & UNKNOWN) == 0u && vHeight > 0.0) {
-    float band = fract(clamp(vHeight,0.0,1.0) * uContourLevels + 0.5);
-    float line = 1.0 - smoothstep(0.0, 0.08, min(band, 1.0 - band));
+  // T3 (49, refined 55): iso-density contour bands re-encode vHeight — never
+  // drawn on a flat/zero cell (no measured level to band), a fog-of-war/off-
+  // domain cell (UNKNOWN already covers "no value"; a band there would imply
+  // one), or a TORN cell (55: its height is a KNOWN LOWER BOUND, not a
+  // measurement — a band would claim a precision the rubble does not have;
+  // the red gash above is TORN's own idiom, so this simply does not layer a
+  // second one on top of it). The +0.5 phase offset is deliberate: height is
+  // normalised so the BRIGHTEST cell in any slice sits at EXACTLY 1.0, and an
+  // unshifted fract(1.0*levels) is exactly 0 for any integer level count —
+  // every terrain's single hottest cell would otherwise always land ON a
+  // line and read as darkened. Shifting the phase puts 0.0 and 1.0 mid-band
+  // instead.
+  if (uContourLevels > 0.0 && (f & UNKNOWN) == 0u && (f & TORN) == 0u &&
+      vHeight > 0.0) {
+    float v = clamp(vHeight, 0.0, 1.0) * uContourLevels;
+    float band = fract(v + 0.5);
+    // 55 T3: the band's screen-space width stays constant across zoom via
+    // fwidth — but taken on `v` (the PRE-fract quantity), never on `band`
+    // itself: fract() is discontinuous at every integer, so fwidth(band)
+    // would spike to a huge, spurious value exactly AT each line (the
+    // classic fwidth-of-a-sawtooth trap), which is precisely where the true
+    // width is needed most. A fixed world-space width (the old literal 0.08)
+    // thickens when the camera dollies in and aliases into noise dollied
+    // out; this does neither.
+    float w = max(fwidth(v) * 1.5, 1e-4);
+    float line = 1.0 - smoothstep(0.0, w, min(band, 1.0 - band));
     col = mix(col, col * 0.55, line);
   }
   // 50 T2: ring the located cell — an outline near its edge, never a height

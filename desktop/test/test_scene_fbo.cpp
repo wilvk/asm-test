@@ -1304,6 +1304,23 @@ int main() {
             check("golden torn scene: the cell paints the red gash",
                   p[0] > p[1] + 40 && p[0] > p[2] + 40, "not a red gash");
         }
+
+        // T3 (55): a TORN cell never grows a contour band — its height is a
+        // known LOWER BOUND, not a measurement, so a band would claim a
+        // precision the rubble does not have. Checked at the specific torn
+        // cell's own pixel (not the whole frame, which this fixture's other
+        // content — CHURN, say — may legitimately still band).
+        SceneLayers no_contours;
+        no_contours.contours = false;
+        std::vector<unsigned char> px_no_contours =
+            capture(scene, gcam, gcf, no_contours);
+        if (tpx >= 0) {
+            const unsigned char *pc = &px[tpx * 4];
+            const unsigned char *pnc = &px_no_contours[tpx * 4];
+            check("T3 GL: a TORN cell carries no contour band",
+                  pc[0] == pnc[0] && pc[1] == pnc[1] && pc[2] == pnc[2],
+                  "the contour toggle changed the torn cell's own pixel");
+        }
     }
 
     // --- (g) the statistical scene: a STAT layer, and nothing exact ---------
@@ -1534,6 +1551,102 @@ int main() {
               ids_msaa_on == ids_msaa_off,
               "MSAA leaked into the colour-ID pick pass");
         scene.msaa_samples = 0; // restore Scene's own conservative default
+    }
+
+    // --- (k) T3 (55): contour band width stays roughly constant in SCREEN
+    //     pixels across a large change in camera distance ---------------------
+    {
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(
+                space::regions_from_codeimage(load(ndjson_hotcold()))),
+            load(ndjson_hotcold()));
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(space::TrajectorySet{}, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+
+        SceneLayers contours_on;
+        contours_on.exact = contours_on.statistical =
+            contours_on.access_marks = contours_on.convergence =
+                contours_on.vehicle = contours_on.edl = false;
+        SceneLayers contours_off = contours_on;
+        contours_off.contours = false;
+
+        // Frame the KNOWN hot/cold boundary directly (Camera::frame, not the
+        // default plane-centre target) so both distances look at the same
+        // gradient regardless of where the Hilbert layout happens to place
+        // it — a plane-centre target risks the boundary landing near an
+        // edge, out of frame, at one of the two radii.
+        float hot_u = 0.0f, hot_v = 0.0f;
+        terr.proj.project(kLoopBody, &hot_u, &hot_v);
+
+        // A contour-affected pixel is exactly one where the on/off renders
+        // disagree — reusing the SceneLayers toggle rather than re-deriving
+        // the shader's own colour math a second time in C++. Reports the
+        // pixel-run lengths (in a scanline) of contiguous affected pixels: a
+        // fixed WORLD-space band (the pre-55 bug) widens as the camera
+        // dollies in, so its run length in pixels scales with distance; a
+        // fixed SCREEN-space band (fwidth) does not.
+        auto band_run_lengths = [&](float radius) {
+            Camera c;
+            c.frame(hot_u, hot_v,
+                   Camera::clampf(radius, Camera::kMinRadius,
+                                  Camera::kMaxRadius));
+            std::vector<unsigned char> on = capture(scene, c, cf, contours_on);
+            std::vector<unsigned char> off =
+                capture(scene, c, cf, contours_off);
+            std::vector<int> runs;
+            for (int y = 0; y < cf.h; y++) {
+                int run = 0;
+                for (int x = 0; x < cf.w; x++) {
+                    size_t i = (static_cast<size_t>(y) * cf.w +
+                               static_cast<size_t>(x)) *
+                              4;
+                    bool differs = on[i] != off[i] || on[i + 1] != off[i + 1] ||
+                                  on[i + 2] != off[i + 2];
+                    if (differs) {
+                        run++;
+                    } else {
+                        if (run > 0)
+                            runs.push_back(run);
+                        run = 0;
+                    }
+                }
+                if (run > 0)
+                    runs.push_back(run);
+            }
+            return runs;
+        };
+        auto mean_run = [](const std::vector<int> &v) {
+            if (v.empty())
+                return 0.0;
+            double s = 0.0;
+            for (int x : v)
+                s += x;
+            return s / static_cast<double>(v.size());
+        };
+
+        std::vector<int> near_runs = band_run_lengths(0.8f);
+        std::vector<int> far_runs = band_run_lengths(6.0f);
+        check("T3 GL: contour bands are visible at both a close and a far "
+              "camera distance",
+              !near_runs.empty() && !far_runs.empty(),
+              "no contour-affected pixel run found at one of the two "
+              "distances — the fixture may need a steeper height gradient");
+        if (!near_runs.empty() && !far_runs.empty()) {
+            double mn = mean_run(near_runs), mf = mean_run(far_runs);
+            double ratio = mn > mf ? mn / mf : mf / mn;
+            // A screen-space-constant band's mean run length should be
+            // roughly camera-distance-independent; a world-space-fixed band
+            // (the pre-55 bug) scales with the ~7.5x radius change used here.
+            // 3x is generous headroom over discretization noise while
+            // staying well short of what the old bug would produce.
+            check("T3 GL: contour band width is roughly constant across a "
+                  "7.5x camera-distance change",
+                  ratio < 3.0,
+                  "band width scaled with camera distance — looks world-"
+                  "space-fixed, not screen-space-fixed (fwidth)");
+        }
     }
 
     scene.shutdown();
