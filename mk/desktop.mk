@@ -619,6 +619,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
   $(BUILD)/desktop/$(1)/sp/canopy.o $(BUILD)/desktop/$(1)/sp/opcode_terrain.o \
+  $(BUILD)/desktop/$(1)/sp/stepplace.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
@@ -1143,6 +1144,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
+                 $(BUILD)/desktop_test_stepplace \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
@@ -1536,6 +1538,19 @@ $(BUILD)/desktop_test_goto: $(BUILD)/desktop/test/t/test_goto.o \
 # via decode_streams). No trajectory, no pick id space — locate.h never
 # touches them (D4).
 $(BUILD)/desktop_test_locate: $(BUILD)/desktop/test/t/test_locate.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# 57 T1 (causal-layers): the shared step->place resolver — stepplace.o over
+# locate.o (which it ADAPTS, never duplicates) + projection.o + terrain.o
+# (regions_from_codeimage, the fixtures' region builder) + the doc model.
+# Exactly test_locate's own closure plus the one new TU.
+$(BUILD)/desktop_test_stepplace: $(BUILD)/desktop/test/t/test_stepplace.o \
+    $(BUILD)/desktop/test/sp/stepplace.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \

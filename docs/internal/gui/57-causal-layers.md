@@ -18,7 +18,19 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Status — ◐ 1/5 landed 2026-08-03.**
+> T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
+> [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
+> (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
+> per this brief's own risk note 57 adopts: the rbase/anchor resolution order,
+> the anchor caching and every refusal reason come from `locate.cpp` verbatim,
+> and `StepPlacer` adds only the plane coordinates, the region and the running
+> miss count the HUD chip needs. Three signature deviations from the sketch
+> below, each recorded there: `why` is a `std::string` (the refusal reasons are
+> the anchor's own, built at runtime — a `const char *` would dangle), the
+> constructor takes no `Anchor` (`StepAddrResolver` already derives and caches
+> one; a second would be the parallel source of truth T1 exists to remove), and
+> `at()` is non-const (a miss mutates the count — that is the point).
 
 ## Why this work exists
 
@@ -73,13 +85,15 @@ makes there be one conversion.
 
 ## Tasks
 
-### T1 — One step→place resolver, with its misses counted (M)
+### T1 — ☑ One step→place resolver, with its misses counted (M)
 
 **Goal.** Every layer in this brief converts a step to a cell through one
 function, and that function reports what it could not place.
 
 **Steps.**
-1. New pure helper in `space/` (engine-free, D4):
+1. New pure helper in `space/` (engine-free, D4) — landed as
+   `desktop/src/space/stepplace.{h,cpp}`, with the three sketch deviations
+   the status banner records marked inline:
    ```
    struct StepPlace {
        bool placed = false;
@@ -87,15 +101,23 @@ function, and that function reports what it could not place.
        float u = 0, v = 0;    // plane coordinates, valid iff placed
        uint32_t cell = 0;
        const Region *region = nullptr;
-       const char *why = "";  // when !placed: which resolution step failed
+       std::string why;       // when !placed: which resolution step failed
+                              // (a std::string, not a const char *: the
+                              // reasons are Anchor's own, built at runtime)
    };
    class StepPlacer {                 // built once per weave, reused per layer
      public:
-       StepPlacer(const Projection &, const DataflowStream &, const Anchor &);
-       StepPlace at(uint32_t step) const;
+       // No Anchor parameter: StepAddrResolver (50 T1) already derives and
+       // caches it from proj.regions, and a caller-supplied one would be a
+       // second source of truth.
+       StepPlacer(const Projection &, const DataflowStream &);
+       StepPlace at(uint32_t step);   // non-const: a miss mutates the count
        uint64_t unplaced() const;     // running count, for the HUD chip
        const std::string &note() const;
    };
+   // Three of the four layers also place addresses the recording states
+   // directly (a ValRec::addr, a block start), which have no step rung:
+   StepPlace place_address(const Projection &, uint64_t addr);
    ```
 2. **The resolution order is the recording's own**, and each rung is a stated
    fact rather than a fallback guess: (a) `insn_rbase[step] != 0` → `rbase + off`
@@ -114,7 +136,9 @@ function, and that function reports what it could not place.
    interchangeable with a dataflow step index — the mismatch
    [46](46-3d-functional-roadmap.md) G10 found already shipped in the other
    direction. If [50](50-two-way-brushing.md) has landed, use its resolver instead
-   of adding a second; if it has not, write this one so 50 can adopt it.
+   of adding a second; if it has not, write this one so 50 can adopt it. **50 had
+   landed**, so `StepPlacer` delegates every resolution rung to
+   `space::StepAddrResolver` and re-derives nothing.
 
 **Tests.** New `test_stepplace.cpp`: an `rbase`-carrying step resolves through the
 wire base; a step with no rbase and a single codeimage resolves through the anchor;
@@ -122,6 +146,10 @@ a step with no rbase and two codeimage spans is unplaced with the anchor's own
 refusal reason; an offset past the span's length is unplaced with the clamp reason;
 `unplaced()` counts each of those exactly once. Assert the resolver never returns a
 cell for an unplaced step (no cell 0 fallback — the single most likely bug here).
+Landed with all of the above, plus: re-querying one unplaceable step does not
+double-count (`unplaced()` counts DISTINCT steps, never calls — a chip that said
+"2" for one bad step would be a fabricated quantity), an out-of-range index is
+counted, and `place_address` refuses an unmapped address without a cell.
 
 **Done when.** One resolver exists, its misses are countable, and no layer in this
 brief converts a step to a place any other way.
