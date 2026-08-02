@@ -417,6 +417,18 @@ int main() {
             check("scene/no mem => no observed-data span note",
                   sv.terr.proj.data_span_note.empty(),
                   "an observed-data note appeared with nothing to observe");
+
+            // 48 T4: the home landmark is woven alongside the other pure
+            // models — a codeimage recording places a code region, so
+            // scene_home_target must find it and the HUD's synced copy
+            // must match (the per-frame sync at the top of draw_scene_overview).
+            check("scene/home landmark computed for a codeimage recording",
+                  sv.has_home,
+                  "a recording with a placed code region must have a home");
+            check("scene/HUD synced with the landmark",
+                  sv.hud.has_home == sv.has_home &&
+                      sv.hud.home_u == sv.home_u && sv.hud.home_v == sv.home_v,
+                  "draw_scene_overview must sync home_* into HudState every frame");
         }
 
         // === 48 T4: camera_here_text — a pure function of (Projection, target) ===

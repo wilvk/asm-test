@@ -18,27 +18,27 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ pure infra landed 2026-08-02, wiring open.** `Camera::pan`/
-> `frame` + the four `CamKey` Pan* values (T1's model half), the
-> `scene3d/goto.h`/`.cpp` resolvers (`scene_recentre_target` T2,
-> `scene_goto_addr`/`scene_goto_region` T3, `scene_home_target` T4) and the HUD
-> additions (T4's "you are here" + reset/default-view split, T3's "go to" row,
-> T5's generated controls block) are landed, tested headlessly (new standalone
-> `test_goto.cpp`, extended `test_camera.cpp`/`test_shell.cpp`), and
-> `docker-desktop` is green. **What is not yet landed: the `ui/shell.cpp`
-> wiring** that wires user input to these — T1 step 4 (middle-drag/shift-drag
-> mouse pan), T2 (the double-click handler), T3/T4 (applying `HudState`'s
-> `req_goto`/`req_reset_view`/`req_default_view` to the `Camera`, and calling
-> `scene_home_target` once per weave to populate `SceneView::home_u/v`), and
-> the primer-text / find-bar "show in 3D" touches. The HUD draws and computes
-> correctly today; a click on "go to" or "default view" sets the intent but
-> nothing yet applies it to the camera (harmless — no crash, no wrong
-> placement, just inert until the next task lands). Deferred rather than
-> forced through: [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md)
-> is *concurrently* landing its own `shell.cpp`/`pick.h`/`pick.cpp` changes
-> (the throttled hover pick) in this same tree, and `shell.cpp` is the one
-> file both briefs touch — the shell.cpp wiring above is the remaining,
-> mechanical work for whoever picks this back up once that settles.
+> **Status — ✅ 5/5, landed 2026-08-02.** `Camera::pan`/`frame` + the four
+> `CamKey` Pan* values (T1's model half), the `scene3d/goto.h`/`.cpp` resolvers
+> (`scene_recentre_target` T2, `scene_goto_addr`/`scene_goto_region` T3,
+> `scene_home_target` T4) and the HUD additions (T4's "you are here" +
+> reset/default-view split, T3's "go to" row, T5's generated controls block)
+> landed first as pure infra (`7c7afe9`). The remaining `ui/shell.cpp` wiring —
+> T1 step 4 (middle/shift-drag mouse pan), T2 (the double-click-to-recentre
+> handler, guarded so the second click of the pair never also fires the
+> single-click navigate), T3/T4 (applying `HudState`'s
+> `req_goto`/`req_reset_view`/`req_default_view` to the `Camera`, computing
+> `scene_home_target` once per weave into `SceneView::home_u/v` and syncing it
+> into the HUD every frame), and the T5 primer-text / find-bar "show in 3D"
+> touches — was deferred at first landing to avoid colliding with
+> [47-scene-inspect-and-pickable-overlays.md](47-scene-inspect-and-pickable-overlays.md)'s
+> concurrent edits to the same file, then landed once 47 settled. Restored in
+> the same change: 47's own T4 hover-tooltip render block and its T4/T5 tests
+> in `test_shell.cpp`, which this brief's earlier shell.cpp reconstruction had
+> silently dropped — a repeat of the exact shared-index hazard `ee82b9a`
+> documents, caught here by diffing against HEAD before committing rather than
+> after. `docker-desktop` green end to end (`test_camera`, `test_goto`,
+> `test_shell`, `test_ui`), `desktop-engine-boundary-check` intact (D4).
 
 ## Why this work exists
 

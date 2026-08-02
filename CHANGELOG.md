@@ -26,6 +26,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     destination (or "click → nothing here"); the HUD legend gains swatches for
     both overlay classes, a `convergence` layer toggle, and a persistent
     "hover to inspect, click to open the flat reader" hint.
+- **Go there: camera pan, recentre, address/region goto, and discoverable
+  controls in the 3D scene** (docs/internal/gui/48-scene-navigation-and-goto.md).
+  The plane is a reproducible address layout; now it is navigable:
+  - `Camera` gains `pan`/`frame` plus four keyboard `CamKey` pan values,
+    bound to middle-drag or shift+left-drag in the viewport (plain left-drag
+    stays orbit).
+  - Double-click recentres on whatever is under the cursor — a cell or a
+    placed vertex's address — without reorienting; a background/padding
+    double-click is a stated no-op, not silent nothing.
+  - A "go to" row in the HUD accepts a hex address or a region from
+    `Projection.regions`; an address the recording does not map refuses with
+    a stated reason rather than snapping to the nearest cell, and a region
+    target frames its real cell footprint, never a bounding box. The global
+    find bar offers the same resolver as "show in 3D" for any hit carrying an
+    absolute address.
+  - `SceneView` computes a stable "home" landmark once per weave — the code
+    region's centroid, not the plane's fixed centre — so "reset view" returns
+    to a place that does not drift as a live capture grows; "default view"
+    keeps the literal fixed-centre preset as a separate button. A "you are
+    here" readout names the region and address under the camera target.
+  - The HUD's collapsible "controls" block is generated from the `CamKey`
+    enum so an unadvertised key fails a test, not a silent drift.
 - **Launch a process and trace it from birth, and target a running one by
   window-pick** (docs/internal/archive/gui/45-launch-and-window-target.md). Two new
   ways onto a live target, alongside attach-by-PID:

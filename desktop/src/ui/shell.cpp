@@ -34,6 +34,7 @@
 #include "analysis/diff.h" // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
 #include "live/inspect.h" // live_session_toasts (16 T1)
+#include "scene3d/goto.h"
 #include "scene3d/hud.h"
 #include "scene3d/pick.h"
 #include "space/projection.h"
@@ -909,7 +910,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "here walks TRACE-RESIDENCY time — a different axis from the "
             "execution step the flat views brush, so the two clocks are "
             "separate "
-            "(press Play to watch the path form). Reach this view with 5.",
+            "(press Play to watch the path form). Reach this view with 5. "
+            "Left-drag orbits; middle-drag or shift+left-drag PANS; the "
+            "wheel dollies; DOUBLE-CLICK recentres on whatever is under the "
+            "cursor. Know where you want to go? Use \"go to\" in the HUD to "
+            "name an address or a region directly, instead of hunting for "
+            "it.",
             [] { dt_semantic_legend(); }, sv.primer);
     }
 
@@ -938,6 +944,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.conv = space::detect_convergences(sv.traj, sv.terr.proj);
         sv.hud.nsteps = sv.terr.nsteps;
         sv.hud.t = sv.terr.nsteps; // show the whole trace by default
+        // 48 T4: the landmark, computed ONCE per weave alongside the models
+        // above — never re-derived per frame (see SceneView::home_u's doc).
+        sv.has_home = scene3d::scene_home_target(sv.terr, &sv.home_u, &sv.home_v);
         sv.built = true;
     }
 
@@ -947,12 +956,28 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // the view keeps no state the model does not).
     sv.hud.nsteps = sv.terr.nsteps;
     sv.hud.playing = sv.play.playing; // 34 T3: the HUD labels its Play button
+    // 48 T4: sync the landmark + current camera target every frame — read by
+    // draw_scene_hud for the "reset view" gate and the "you are here" text.
+    sv.hud.home_u = sv.home_u;
+    sv.hud.home_v = sv.home_v;
+    sv.hud.has_home = sv.has_home;
+    sv.hud.cam_target_u = sv.cam.target[0];
+    sv.hud.cam_target_v = sv.cam.target[2];
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
-    if (sv.hud.req_reset_view)
+    // 48 T4: "reset view" frames the landmark; "default view" is the literal
+    // Camera{} preset 25/34 documented — two buttons, two meanings, neither
+    // silently repurposed into the other.
+    if (sv.hud.req_reset_view && sv.has_home)
+        sv.cam.frame(sv.home_u, sv.home_v, scene3d::Camera{}.radius);
+    if (sv.hud.req_default_view)
         sv.cam.reset();
     if (sv.hud.req_top_down)
         sv.cam.top_down();
-    sv.hud.req_reset_view = sv.hud.req_top_down = false;
+    // 48 T3: the "go to" row's resolved destination (address or region).
+    if (sv.hud.req_goto)
+        sv.cam.frame(sv.hud.goto_u, sv.hud.goto_v, sv.hud.goto_radius);
+    sv.hud.req_reset_view = sv.hud.req_default_view = sv.hud.req_top_down =
+        sv.hud.req_goto = false;
     // 34 T3: play/pause the TERRAIN-TIME playhead — its own axis (trace-residency
     // steps), distinct from the execution step the flat views brush. Restart from
     // 0 when pressed at the end, then advance hud.t over terr.nsteps; the existing
@@ -1174,7 +1199,43 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         ImGuiIO &io = ImGui::GetIO();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             sv.nav_dragging = false;
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+        // 48 T2: a double-click recentres on whatever is under the cursor,
+        // read through the SAME pick the single-click-release path uses below.
+        // Set BEFORE the drag/orbit checks so the paired release (T2 step 4)
+        // sees nav_dragging already true and does not also fire a pick —
+        // this is the second click of the pair, not a fresh single click.
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            ImVec2 origin = ImGui::GetItemRectMin();
+            int px = static_cast<int>(io.MousePos.x - origin.x);
+            int py = static_cast<int>(io.MousePos.y - origin.y);
+            if (px >= 0 && py >= 0 && px < fbw && py < fbh) {
+                uint32_t id = s.scene_host->pick(sv.cam, fbw, fbh, px, py);
+                scene3d::Pick pk = scene3d::decode_pick(id, sv.terr.w);
+                float u = 0.0f, v = 0.0f;
+                if (scene3d::scene_recentre_target(sv.terr, sv.traj, pk, &u,
+                                                   &v)) {
+                    sv.cam.frame(u, v, sv.cam.radius);
+                    sv.hud.nav_note.clear();
+                } else {
+                    sv.hud.nav_note = "double-click: nothing to recentre on "
+                                      "here (background/padding)";
+                }
+            }
+            sv.nav_dragging = true;
+        }
+        // 48 T1: pan on middle-drag or shift+left-drag — plain left-drag stays
+        // orbit exactly as it was, so no existing muscle memory or test breaks.
+        // The delta is scaled by radius so a pan feels the same dollied in or
+        // out (a fixed pixel delta should cover the same fraction of the view).
+        const bool pan_drag =
+            ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 3.0f) ||
+            (io.KeyShift &&
+             ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f));
+        if (pan_drag) {
+            sv.nav_dragging = true; // suppresses the pending click-to-pick too
+            const float scale = 0.0015f * sv.cam.radius;
+            sv.cam.pan(-io.MouseDelta.x * scale, -io.MouseDelta.y * scale);
+        } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
             sv.nav_dragging = true;
             sv.cam.orbit(-io.MouseDelta.x * 0.008f, -io.MouseDelta.y * 0.008f);
         }
@@ -3517,10 +3578,52 @@ static void draw_find_bar(ShellState &s) {
                     s.status = s.nav.last_error;
         }
         if (s.find.active >= 0 &&
-            static_cast<size_t>(s.find.active) < s.find.hits.size())
-            ImGui::TextDisabled(
-                "match %d/%zu: %s", s.find.active + 1, s.find.hits.size(),
-                s.find.hits[static_cast<size_t>(s.find.active)].label.c_str());
+            static_cast<size_t>(s.find.active) < s.find.hits.size()) {
+            const FindHit &fh =
+                s.find.hits[static_cast<size_t>(s.find.active)];
+            ImGui::TextDisabled("match %d/%zu: %s", s.find.active + 1,
+                                s.find.hits.size(), fh.label.c_str());
+            // 48 T3: "show in 3D" reuses the find's own intent seam rather
+            // than adding a second search — but only when the active hit's
+            // `off` IS a true absolute address (an abs-basis recording,
+            // where `off` is the address by construction, 04's own
+            // identity). A rel-basis off needs the anchor first (36/37) and
+            // is out of scope for this convenience wiring; the row says so
+            // rather than silently misplacing the camera (D7: graded, never
+            // hidden).
+            if (fh.off.has_value()) {
+                const bool have_scene =
+                    s.active_tab >= 0 &&
+                    static_cast<size_t>(s.active_tab) < s.scenes.size() &&
+                    s.scenes[static_cast<size_t>(s.active_tab)].built;
+                const bool abs_ok =
+                    have_scene &&
+                    s.scenes[static_cast<size_t>(s.active_tab)].traj.basis ==
+                        "abs";
+                ImGui::SameLine();
+                if (abs_ok) {
+                    if (ImGui::Button("show in 3D##find")) {
+                        SceneView &sv =
+                            s.scenes[static_cast<size_t>(s.active_tab)];
+                        float u = 0.0f, v = 0.0f;
+                        if (scene3d::scene_goto_addr(sv.terr.proj, *fh.off, &u,
+                                                     &v)) {
+                            sv.cam.frame(u, v, sv.cam.radius);
+                            sv.hud.nav_note.clear();
+                        } else {
+                            sv.hud.nav_note =
+                                "show in 3D: address not mapped by any "
+                                "region in this recording";
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled(
+                        "(show in 3D: %s)",
+                        have_scene ? "not an abs-basis recording"
+                                  : "open the 3D pane first");
+                }
+            }
+        }
         // Minimap seam (doc 21 T3): when the timeline overview/minimap lands, paint
         // s.find.hits there as ticks — a clean seam, not a hard dependency, since
         // the timeline already highlights every hit (body_timeline).
