@@ -19,7 +19,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change. Line numbers below were re-verified 2026-08-03 while implementing.
 >
-> **Status — ☑ 1/6 (T1 landed 2026-08-03).**
+> **Status — ☑ 2/6 (T1, T2 landed 2026-08-03).**
 
 ## Why this work exists
 
@@ -122,7 +122,7 @@ label cannot drift. Tests: `desktop/test/test_datalayers.cpp` fixtures A–D (ze
 drops through the SHIPPING composition, all-dropped graded `Bad`, exactly 1-of-3
 dropped, and the `mem`-less coarse chip in `mem_note`'s verbatim words).
 
-### T2 — Read/write twin relief (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 + T2*
+### ☑ T2 — Read/write twin relief (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 + T2*
 
 **Goal.** Read-mostly constants, write accumulators and in-place RMW cells become
 three visibly different shapes — an asymmetry the OR-merged terrain structurally
@@ -157,6 +157,27 @@ fixture the mirror; a mixed fixture both; the unknown-direction access from
 
 **Done when.** The three access shapes are distinguishable and an uncaptured
 direction is a hole.
+
+**Landed.** `space/datacell.{h,cpp}` — `build_data_relief(model, t)`, one binary
+search per data cell, no rescan. **One model change was needed and is the honest
+core of this task:** presence could not be derived from anything that existed.
+`cum_rw` folds an unrecognised `rw` token into `TF_READ` (the pre-existing tint
+approximation), and `cum_read_size > 0` misreports a zero-BYTE access as an absent
+direction — magnitude and presence are different questions. So `DataCell::cum_dir`
+(a prefix OR of `DD_READ`/`DD_WRITE`, 0 for an unrecorded direction) was added
+beside the 54 T2 sums, one byte per access. `ReliefCell::has_read`/`has_write` come
+from it; a false one means the renderer emits **no vertex** on that side, so the
+absence is geometric and no shader branch can draw it flat. Draw half:
+`scene3d/data_layers_gl.cpp` (a new TU — five layers of GL in `scene.cpp` would be
+a large footprint in the tree's hottest merge file; `scene.cpp` keeps one call site
+and one teardown line). Legend: `relief_shape_swatches()` takes its text from
+`space::relief_shape_label()` rather than copying it, so the legend and the model
+cannot state two different rules. Tests: `test_datalayers.cpp` `t2_twin_relief` —
+read-only asserts the write surface is **absent, not zero**; the mirror; both; the
+unknown-direction access feeding neither surface and being **counted**
+(`unknown_direction_bytes`); `TF_TORN` flooring **both**; the playhead cutting the
+write surface off a mixed cell at `t=4`; the legend's exhaustiveness over
+`ReliefShape`.
 
 ### T3 — Working-set tide (M) · *needs [54](../archive/gui/54-3d-catalog-phase0-plumbing.md) T1 + T2*
 

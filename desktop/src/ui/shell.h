@@ -25,6 +25,7 @@
 #include "scene3d/pick.h" // T1/T2 (47): PickHint, SceneView::hover_hint
 #include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
+#include "space/datacell.h" // DataReliefLayer (58 T2): SceneView::relief
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
@@ -69,6 +70,10 @@ struct SceneView {
     // alongside `slice` (raw_heat is t-gated the same way), never on a
     // playhead move that only re-lands the coarse degrade plane.
     std::vector<space::ModuleCanopy> canopies;
+    // 58 T2: the read/write twin relief at THIS SAME slice_t — recomputed
+    // alongside `slice`/`canopies` (its two prefix sums are t-gated the same
+    // way), never on a degrade frame that only re-lands the coarse plane.
+    space::DataReliefLayer relief;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

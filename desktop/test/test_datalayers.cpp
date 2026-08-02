@@ -20,6 +20,7 @@
 
 #include "doc/recording.h"
 #include "scene3d/hud.h"
+#include "space/datacell.h"
 #include "space/projection.h"
 #include "space/terrain.h"
 
@@ -214,8 +215,175 @@ static void t1_hud_contract() {
     }
 }
 
+// A cell in a built layer, found by the address it was accessed at. Returns
+// nullptr when the address placed nowhere (which the caller then asserts on).
+template <typename Layer>
+static const typename Layer::value_type *
+find_at(const Layer &cells, const Projection &p, uint32_t w, uint32_t h,
+        uint64_t addr) {
+    float u = 0, v = 0;
+    if (!p.project(addr, &u, &v))
+        return nullptr;
+    uint32_t x = static_cast<uint32_t>(u * w), y = static_cast<uint32_t>(v * h);
+    if (x >= w)
+        x = w - 1;
+    if (y >= h)
+        y = h - 1;
+    const uint32_t cell = y * w + x;
+    for (const auto &c : cells)
+        if (c.cell == cell)
+            return &c;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// T2 — read/write twin relief
+// ---------------------------------------------------------------------------
+static void t2_twin_relief() {
+    // The fixture: one read-only cell, one write-only cell, one mixed cell,
+    // and one cell whose accesses carry an unrecognised direction token.
+    const uint64_t kRO = 0x200000, kWO = 0x200040, kRW = 0x200080,
+                   kUD = 0x2000c0;
+    std::string nd = kHeader + trace_steps(20) + mem_ev(1, kRO, 8, "r") +
+                     mem_ev(2, kRO, 8, "r") + mem_ev(3, kWO, 4, "w") +
+                     mem_ev(4, kRW, 8, "r") + mem_ev(5, kRW, 16, "w") +
+                     mem_ev(6, kUD, 32, "?") + kEnd;
+    Recording r = mk_rec(nd);
+    TerrainModel m = weave(r);
+    check("T2: the fixture placed four data cells", m.data.size() == 4,
+          "got " + std::to_string(m.data.size()));
+
+    DataReliefLayer L = build_data_relief(m, UINT64_MAX);
+    check("T2: one relief cell per touched data cell", L.cells.size() == 4,
+          "got " + std::to_string(L.cells.size()));
+
+    const ReliefCell *ro = find_at(L.cells, m.proj, m.w, m.h, kRO);
+    const ReliefCell *wo = find_at(L.cells, m.proj, m.w, m.h, kWO);
+    const ReliefCell *rw = find_at(L.cells, m.proj, m.w, m.h, kRW);
+    const ReliefCell *ud = find_at(L.cells, m.proj, m.w, m.h, kUD);
+    check("T2: every fixture address placed", ro && wo && rw && ud,
+          "one of the four cells did not place");
+    if (!(ro && wo && rw && ud))
+        return;
+
+    // THE central rule: a read-only fixture produces a peak and NO write
+    // surface — the surface is ABSENT, asserted as absent, not as zero.
+    check("T2: read-only cell has a read surface", ro->has_read, "no peak");
+    check("T2: read-only cell's WRITE surface is ABSENT (not zero)",
+          !ro->has_write, "a write surface appeared where none was recorded");
+    check("T2: read-only cell's read magnitude is the observed byte sum",
+          ro->read_bytes == 16 && ro->write_bytes == 0,
+          "got " + std::to_string(ro->read_bytes));
+    check("T2: read-only cell's shape", ro->shape() == ReliefShape::ReadOnly,
+          "wrong shape");
+
+    check("T2: write-only cell is the mirror",
+          wo->has_write && !wo->has_read && wo->write_bytes == 4,
+          "the write-only mirror did not hold");
+    check("T2: write-only cell's shape", wo->shape() == ReliefShape::WriteOnly,
+          "wrong shape");
+
+    check("T2: mixed cell has BOTH surfaces",
+          rw->has_read && rw->has_write && rw->read_bytes == 8 &&
+              rw->write_bytes == 16,
+          "the mixed cell lost a direction");
+    check("T2: mixed cell's shape", rw->shape() == ReliefShape::ReadWrite,
+          "wrong shape");
+
+    // 54 T2's unknown-direction access contributes to NEITHER surface, and is
+    // counted rather than vanishing.
+    check("T2: an unknown-direction access feeds NEITHER surface",
+          !ud->has_read && !ud->has_write && ud->read_bytes == 0 &&
+              ud->write_bytes == 0,
+          "an unrecognised rw token was folded into a direction");
+    check("T2: its bytes are COUNTED as undirected, not dropped",
+          ud->unknown_bytes == 32, "got " + std::to_string(ud->unknown_bytes));
+    check("T2: the layer totals the undirected traffic",
+          L.unknown_direction_bytes == 32 && L.unknown_direction_cells == 1,
+          "the layer lost the undirected traffic");
+    check("T2: shape counts add up",
+          L.read_only_cells == 1 && L.write_only_cells == 1 &&
+              L.read_write_cells == 1 && L.undirected_cells == 1,
+          "shape census wrong");
+
+    // The playhead cuts both surfaces. At t=4 the mixed cell has seen its read
+    // but not yet its write — so its write surface must still be ABSENT.
+    {
+        DataReliefLayer at4 = build_data_relief(m, 4);
+        const ReliefCell *c = find_at(at4.cells, m.proj, m.w, m.h, kRW);
+        check("T2: at t=4 the mixed cell is read-only SO FAR",
+              c && c->has_read && !c->has_write,
+              "the playhead did not cut the write surface");
+        const ReliefCell *unseen = find_at(at4.cells, m.proj, m.w, m.h, kUD);
+        check("T2: a cell not yet touched at this slice produces NO entry",
+              unseen == nullptr,
+              "an untouched-yet cell appeared as a zero-height entry");
+    }
+
+    // A torn capture floors BOTH surfaces (never one of them).
+    {
+        std::string torn_nd = kHeader + trace_steps(8) +
+                              mem_ev(1, kRO, 8, "r") + mem_ev(2, kWO, 8, "w");
+        // no `end` footer at all => Recording::torn
+        Recording tr = mk_rec(torn_nd);
+        TerrainModel tm = weave(tr);
+        check("T2: the torn fixture is torn", tm.torn, "not torn");
+        DataReliefLayer TL = build_data_relief(tm, UINT64_MAX);
+        check("T2: TORN floors the layer", TL.torn, "layer not flagged torn");
+        bool all = !TL.cells.empty();
+        for (const ReliefCell &c : TL.cells)
+            if (!c.torn)
+                all = false;
+        check("T2: TORN floors BOTH surfaces of EVERY cell", all,
+              "a torn capture left some surface unflagged");
+    }
+
+    // The wording: "observed", and no RMW claimed where one direction only.
+    {
+        const std::string note = data_relief_note();
+        check("T2: the note says OBSERVED",
+              note.find("OBSERVED") != std::string::npos ||
+                  note.find("observed") != std::string::npos,
+              "the layer note does not say observed");
+        const std::string ro_lab = relief_shape_label(ReliefShape::ReadOnly);
+        check("T2: the read-only label names the ABSENT write surface",
+              ro_lab.find("ABSENT") != std::string::npos,
+              "the read-only label does not state the absence rule");
+        const std::string rw_lab = relief_shape_label(ReliefShape::ReadWrite);
+        check("T2: the both-directions label does not INFER read-modify-write",
+              rw_lab.find("NOT inferred") != std::string::npos,
+              "the mixed label claims an RMW that was not recorded");
+    }
+
+    // The legend is exhaustive over ReliefShape and shares the model's words.
+    {
+        const auto &sw = scene3d::relief_shape_swatches();
+        check("T2: legend has one row per ReliefShape", sw.size() == 4,
+              "got " + std::to_string(sw.size()));
+        bool matches = true;
+        for (const auto &row : sw)
+            if (row.label != relief_shape_label(row.shape))
+                matches = false;
+        check("T2: legend text IS the model's own label (one source of truth)",
+              matches, "the legend re-spelled a shape's rule");
+    }
+
+    // The layer never fires for a recording with no `mem` — and it produces
+    // NOTHING rather than a flat plane of zero-height cells.
+    {
+        std::string coarse = kHeader + trace_steps(6) + kEnd;
+        Recording cr = mk_rec(coarse);
+        TerrainModel cm = weave(cr);
+        DataReliefLayer CL = build_data_relief(cm, UINT64_MAX);
+        check("T2: no `mem` => an EMPTY layer, not a zero-height one",
+              CL.cells.empty() && !CL.mem_present,
+              "the coarse rung produced relief cells");
+    }
+}
+
 int main() {
     t1_hud_contract();
+    t2_twin_relief();
 
     if (failures) {
         std::fprintf(stderr, "%d data-layer check(s) failed\n", failures);

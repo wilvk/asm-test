@@ -17,6 +17,7 @@
 #include "imgui.h" // 49 T4: ImDrawList/ImVec2 in draw_trajectory_ruler's signature
 #include "scene3d/camera.h" // 49 T4: draw_trajectory_ruler's projection
 #include "scene3d/scene.h"
+#include "space/datacell.h" // T2 (58): ReliefShape, ReliefSwatch::shape
 #include "space/mnemonic.h" // T4 (56): OpClass, OpClassSwatch::cls
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -122,6 +123,21 @@ struct OpClassSwatch {
     float rgb[3];
 };
 const std::vector<OpClassSwatch> &opcode_class_swatches();
+
+// T2 (58-memory-data-cell-family): the twin relief's legend — one line per
+// ReliefShape, in space::relief_shape_label()'s own words (a single source of
+// truth with the model, never a second copy of the phrasing), plus the layer
+// note. EXHAUSTIVE BY TEST over ReliefShape, exactly like
+// opcode_class_swatches over OpClass. Shown only while
+// SceneLayers::data_relief is on, and it names the ABSENT-surface rule, which
+// is the one thing a reader cannot deduce from the picture: a missing surface
+// means the direction was never recorded, not that it measured zero.
+struct ReliefSwatch {
+    space::ReliefShape shape;
+    std::string label;
+    float rgb[3];
+};
+const std::vector<ReliefSwatch> &relief_shape_swatches();
 
 // 49 T4: tick values for the trajectory-time ruler, `0..nsteps` inclusive at
 // a step no finer than `nsteps / max_ticks` — pure so the tick set is
@@ -244,6 +260,14 @@ struct HudState {
     // could not place is COUNTED, never silently dropped (T5 step 3's own
     // bar). Shown only while SceneLayers::mispred is on.
     uint32_t mispred_off_plane = 0;
+
+    // T2 (58-memory-data-cell-family): synced by the caller every frame from
+    // space::DataReliefLayer — traffic whose direction was never recorded is
+    // drawn on NEITHER surface, so it would otherwise vanish between the
+    // terrain (which counts it in cum_size) and this layer. Stated instead.
+    // Shown only while SceneLayers::data_relief is on.
+    uint32_t relief_undirected_cells = 0;
+    uint64_t relief_undirected_bytes = 0;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

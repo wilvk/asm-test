@@ -619,7 +619,9 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
   $(BUILD)/desktop/$(1)/sp/canopy.o $(BUILD)/desktop/$(1)/sp/opcode_terrain.o \
-  $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/sp/datacell.o \
+  $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/data_layers_gl.o \
+  $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/s3/layers.o \
@@ -1419,7 +1421,7 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
 $(BUILD)/desktop_test_datalayers: $(BUILD)/desktop/test/t/test_datalayers.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
-    $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(BUILD)/desktop/test/s3/hud.o $(BUILD)/desktop/test/s3/layers.o \
@@ -1577,9 +1579,10 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/s3/data_layers_gl.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
-    $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
@@ -1865,7 +1868,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/sp/canopy.o $(BUILD)/desktop/test/sp/opcode_terrain.o \
-    $(BUILD)/desktop/test/sp/mnemonic.o \
+    $(BUILD)/desktop/test/sp/mnemonic.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \

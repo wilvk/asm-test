@@ -1016,6 +1016,11 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 56 T5: the misprediction layer's off-plane endpoint count — never
     // silently dropped.
     sv.hud.mispred_off_plane = sv.mispred.off_plane;
+    // 58 T2: traffic whose direction was never recorded is drawn on NEITHER
+    // relief surface, so the HUD states it rather than letting it vanish
+    // between the terrain (which counts it in cum_size) and this layer.
+    sv.hud.relief_undirected_cells = sv.relief.unknown_direction_cells;
+    sv.hud.relief_undirected_bytes = sv.relief.unknown_direction_bytes;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1105,6 +1110,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             apply_coverage_window(sv.slice, sv.terr, sv.hotedges_scene);
             // 56 T3: the per-module skyline, t-gated the same way.
             sv.canopies = space::build_module_canopies(sv.terr, sv.hud.t);
+            // 58 T2: the read/write twin relief, t-gated the same way (its two
+            // prefix sums are cut at the same inclusive [0, t]). Built here
+            // rather than on the degrade branch above precisely so a coarse
+            // scrub frame draws NO relief instead of a stale one — the same
+            // rule the canopies follow.
+            sv.relief = space::build_data_relief(sv.terr, sv.hud.t);
             sv.slice_t = sv.hud.t;
             sv.scrub_pending = false;
         }
@@ -1232,6 +1243,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.canopies = &sv.canopies;         // 56 T3
     f.opcode_cells = &sv.opcode_cells; // 56 T4
     f.mispred = &sv.mispred;           // 56 T5
+    f.relief = &sv.relief;             // 58 T2
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

@@ -109,6 +109,11 @@ class GlSceneHost : public SceneHost {
             static const std::vector<space::ModuleCanopy> kNoCanopies;
             scene_.set_module_canopies(f.canopies ? *f.canopies : kNoCanopies,
                                        f.terr->proj);
+            // T2 (58): the twin relief is cut at the SAME inclusive [0, t] as
+            // the terrain slice, so it rides the same gate — never a stale
+            // relief standing over a freshly-scrubbed terrain.
+            static const space::DataReliefLayer kNoRelief;
+            scene_.set_data_relief(f.relief ? *f.relief : kNoRelief);
             up_t_ = f.slice_t;
         }
         have_upload_ = true;

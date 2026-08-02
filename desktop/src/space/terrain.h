@@ -78,6 +78,16 @@ enum TerrainFlag : uint32_t {
 // "no owning region" and "an unclassified region" cannot be confused.
 inline constexpr uint8_t kKindByCellNone = 255;
 
+// T2 (58-memory-data-cell-family): the OBSERVED direction of a `mem` access,
+// as carried by DataCell::cum_dir. Distinct from TF_READ/TF_WRITE, which are
+// the terrain's tint channel and fold an unrecognised `rw` token into READ.
+// Neither bit set means the direction was NOT recorded — which is a third
+// state, never a synonym for "read" and never a synonym for zero.
+enum DataDir : uint8_t {
+    DD_READ = 1u << 0,
+    DD_WRITE = 1u << 1,
+};
+
 // The precomputed, re-sliceable terrain. Built ONCE by build_terrain(); slice(t)
 // is O(touched cells). Also carries the provenance a HUD must surface so a flat
 // or refused plane is always labelled, never mistaken for a measured zero.
@@ -153,6 +163,21 @@ struct TerrainModel {
         // an absent surface, never a flat one).
         std::vector<uint64_t> cum_read_size;
         std::vector<uint64_t> cum_write_size;
+        // T2 (58-memory-data-cell-family): the prefix OR of the HONEST
+        // direction bits (DataDir below) — 0 for an access whose `rw` token is
+        // neither "r" nor "w". This is DELIBERATELY not cum_rw: cum_rw folds
+        // an unknown token into TF_READ (the pre-existing approximation the
+        // tint channel has always used), so "has this cell ever been observed
+        // being read?" cannot be answered from it without asserting a read
+        // that was never recorded. The twin-relief layer's central rule —
+        // an uncaptured direction is an ABSENT surface, not a zero-height one
+        // — needs a presence signal that is exact, and this is it. One byte
+        // per access beside two existing 8-byte prefix sums.
+        //
+        // Why presence is not read off cum_read_size > 0: a zero-BYTE access
+        // moves no bytes and would leave that sum at 0 while a direction was
+        // genuinely observed. Magnitude and presence are different questions.
+        std::vector<uint8_t> cum_dir;
     };
     std::vector<CodeCell> code;
     std::vector<DataCell> data;

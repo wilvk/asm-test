@@ -21,8 +21,9 @@
 #include "scene3d/atmosphere.h" // T3 (44): the fidelity weather sky's pure config
 #include "scene3d/camera.h"
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
-#include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
+#include "space/canopy.h"   // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
+#include "space/datacell.h" // T2/T3/T4 (58): the data-cell family's models
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
@@ -78,6 +79,12 @@ struct SceneLayers {
     // `statistical`/`ghost_fog` above, so default ON matches this struct's
     // compositing-layer convention.
     bool mispred = true;
+    // T2 (58-memory-data-cell-family): the read/write twin relief over the
+    // terrain's DATA half. Default OFF — it is a SECOND surface stacked on the
+    // exact terrain in the same footprint (this brief's own "translucency
+    // stops being decorative" risk), and a session should not silently open
+    // into a composited haze it did not ask for.
+    bool data_relief = false;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -178,6 +185,20 @@ class Scene {
     // layer's arcs + site columns — a whole-recording survey aggregate
     // (like the stat terrain), so call ONCE per weave, never on a scrub.
     void set_mispred_layer(const space::MispredLayer &layer);
+
+    // --- 58-memory-data-cell-family: the data-cell family's uploads ---------
+    // Every layer in this family is DEFINED in scene3d/data_layers_gl.cpp, a
+    // separate TU from scene.cpp: five layers' worth of upload + draw code in
+    // the tree's hottest merge file would be a footprint nobody wants, and the
+    // split costs nothing (these are ordinary Scene member functions; the
+    // private batches below are theirs). scene.cpp keeps exactly one call
+    // site, draw_data_layers(), inside render().
+    //
+    // T2 (58): the read/write twin relief. Playhead-gated like the canopies —
+    // re-upload whenever the terrain slice moves. A cell whose read (or write)
+    // direction was never OBSERVED contributes NO vertex on that side: the
+    // absence is geometric, so no shader branch can accidentally draw it flat.
+    void set_data_relief(const space::DataReliefLayer &relief);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -320,6 +341,29 @@ class Scene {
     std::vector<MispredArcDraw> mispred_arcs_;
     std::vector<MispredColumnDraw> mispred_columns_;
     void free_mispred();
+
+    // 58-memory-data-cell-family: one BATCHED GL_LINES buffer per layer half.
+    // Batched rather than a draw call per cell (canopies'/mispred's "a
+    // handful" argument does not hold here — this family is per-DATA-CELL and
+    // T6 multiplies that by a band count), and split into separate batches
+    // wherever two halves must never be confused: read vs write, live vs
+    // watermark, exact vs statistical. A batch with count == 0 is simply not
+    // drawn, which is how "this direction was never observed" stays an ABSENT
+    // surface rather than a flat one.
+    struct DataLineBatch {
+        unsigned vao = 0, vbo = 0;
+        int count = 0; // vertex count (GL_LINES: 2 per segment)
+        float color[4] = {1, 1, 1, 1};
+        float line_width = 2.0f;
+    };
+    DataLineBatch relief_read_, relief_write_; // T2
+    void free_data_layers();
+    // Upload `verts` (3 floats per vertex) into `b`, replacing whatever it
+    // held. Defined in data_layers_gl.cpp with the rest of the family.
+    void upload_data_batch(DataLineBatch &b, const std::vector<float> &verts);
+    // The family's single call site in render() — draws whichever of the
+    // batches above the SceneLayers toggles enable.
+    void draw_data_layers(const float mvp[16], const SceneLayers &layers);
 
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;

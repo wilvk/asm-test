@@ -26,6 +26,12 @@ const std::vector<LayerDesc> &scene_layers_all() {
          LayerGrade::Derived, &SceneLayers::canopy},
         {"opcode", "opcode", "what kind of work happens here?", G::Structure,
          LayerGrade::Derived, &SceneLayers::opcode},
+        // 58 T2: Derived, not Exact — the surfaces are log-scaled sums of the
+        // recorded per-access sizes, which is a re-encoding of exact data
+        // (LayerGrade::Derived's own definition), not a raw recorded field.
+        {"relief", "read/write relief",
+         "is this address read-mostly, a write accumulator, or both?",
+         G::Structure, LayerGrade::Derived, &SceneLayers::data_relief},
         {"edl", "EDL", "which surface is nearer the camera?", G::Structure,
          LayerGrade::Derived, &SceneLayers::edl},
         // --- activity: what happened, and when ------------------------------

@@ -251,6 +251,33 @@ const std::vector<OpClassSwatch> &opcode_class_swatches() {
     return kSwatches;
 }
 
+const std::vector<ReliefSwatch> &relief_shape_swatches() {
+    // The colours mirror data_layers_gl.cpp's relief_read_/relief_write_
+    // literals VERBATIM — the same keep-in-sync convention
+    // terrain_encoding_swatches follows against kTerrainFrag (that TU is the
+    // GL half, which this one cannot include: D4/D9, no GL here). The LABELS
+    // are not copied at all: they come from space::relief_shape_label(), so
+    // the legend and the model can never state two different rules for the
+    // same shape. A ReadWrite cell gets the read hue (its peak is what the
+    // reader sees first); the None row is deliberately grey, the same abstain
+    // colour OpClass::Unknown uses.
+    static const std::vector<ReliefSwatch> kSwatches = {
+        {space::ReliefShape::ReadOnly,
+         space::relief_shape_label(space::ReliefShape::ReadOnly),
+         {0.30f, 0.72f, 0.95f}},
+        {space::ReliefShape::WriteOnly,
+         space::relief_shape_label(space::ReliefShape::WriteOnly),
+         {1.00f, 0.60f, 0.20f}},
+        {space::ReliefShape::ReadWrite,
+         space::relief_shape_label(space::ReliefShape::ReadWrite),
+         {0.30f, 0.72f, 0.95f}},
+        {space::ReliefShape::None,
+         space::relief_shape_label(space::ReliefShape::None),
+         {0.55f, 0.55f, 0.55f}},
+    };
+    return kSwatches;
+}
+
 std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
     std::vector<uint64_t> out;
     if (nsteps == 0)
@@ -714,6 +741,28 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         if (s.mispred_off_plane > 0)
             ImGui::TextColored(kWarn, "%u branch endpoint(s) off-plane",
                                s.mispred_off_plane);
+    }
+    // T2 (58): the twin relief's own legend, shown only while it is on. The
+    // note first (it states the ABSENT-surface rule, the one thing the picture
+    // cannot say for itself), then one row per shape.
+    if (s.layers.data_relief) {
+        ImGui::TextColored(kDim, "%s", space::data_relief_note());
+        for (const ReliefSwatch &sw : relief_shape_swatches()) {
+            ImVec4 col{sw.rgb[0], sw.rgb[1], sw.rgb[2], 1.0f};
+            ImGui::ColorButton(("##rlf" + sw.label).c_str(), col,
+                               ImGuiColorEditFlags_NoTooltip |
+                                   ImGuiColorEditFlags_NoPicker,
+                               ImVec2(12, 12));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(sw.label.c_str());
+        }
+        if (s.relief_undirected_cells > 0)
+            ImGui::TextColored(kWarn,
+                               "%u data cell(s) carry %llu byte(s) of traffic "
+                               "with NO recorded direction — counted, drawn on "
+                               "neither surface",
+                               s.relief_undirected_cells,
+                               (unsigned long long)s.relief_undirected_bytes);
     }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct

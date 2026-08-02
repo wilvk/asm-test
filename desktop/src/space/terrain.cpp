@@ -393,7 +393,15 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
         // invariant, kept separate from rwbit below, which is the PRE-EXISTING
         // (and unchanged) TF_READ/TF_WRITE approximation that folds an unknown
         // token into READ.
-        enum Dir : uint8_t { kDirNone = 0, kDirRead = 1, kDirWrite = 2 };
+        // T2 (58) reuses these same bits as DataCell::cum_dir's prefix OR, so
+        // the honest three-state direction (read / write / not recorded)
+        // survives into the layers instead of being re-derived from cum_rw,
+        // which cannot express the third state.
+        enum Dir : uint8_t {
+            kDirNone = 0,
+            kDirRead = DD_READ,
+            kDirWrite = DD_WRITE
+        };
         std::map<uint32_t,
                  std::vector<std::tuple<uint64_t, uint64_t, uint32_t, uint8_t>>>
             acc; // cell -> (step, size, rw-bit, direction)
@@ -429,10 +437,12 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
             dc.cell = kv.first;
             uint64_t cum = 0, cum_r = 0, cum_w = 0;
             uint32_t rwm = 0;
+            uint8_t dirm = 0;
             for (const auto &t : v) {
                 dc.steps.push_back(std::get<0>(t));
                 cum += std::get<1>(t);
                 rwm |= std::get<2>(t);
+                dirm |= std::get<3>(t); // T2 (58): 0 stays 0 for an unknown
                 switch (std::get<3>(t)) {
                 case kDirRead:
                     cum_r += std::get<1>(t);
@@ -447,6 +457,7 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
                 dc.cum_rw.push_back(rwm);
                 dc.cum_read_size.push_back(cum_r);
                 dc.cum_write_size.push_back(cum_w);
+                dc.cum_dir.push_back(dirm);
             }
             m.data.push_back(std::move(dc));
         }
