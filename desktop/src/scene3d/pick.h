@@ -15,6 +15,7 @@
 #include <string>
 
 #include "nav.h"
+#include "scene3d/scene_kind.h" // T1 (59): SceneKind, the id space's OUTER band
 #include "space/converge.h" // T2 (47): ConvergenceSet, resolve_pick_hint's third param
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -26,6 +27,52 @@ struct DataflowStream;
 } // namespace asmdesk
 
 namespace asmdesk::scene3d {
+
+// --- the OUTER band: which SceneKind an id belongs to (T1, 59) --------------
+// T3 (47) bounded the vertex band so the conv/spur bands could exist without
+// ambiguity; every one of those bands is INSIDE one scene — the address plane.
+// 59 adds substrates that are not the plane, so the id space needs one more,
+// OUTERMOST split, and 59 T1's rule is that a band is ALLOCATED, never
+// inferred: the top `kPickKindBits` of the 32-bit id name the SceneKind, and
+// the remaining `kPickKindShift` bits are that kind's own local id space.
+//
+// SceneKind::Plane is 0, so `kind << shift` is 0 for it and EVERY plane id —
+// pick_id_cell/_vertex/_conv/_spur, every golden, every existing test — is
+// byte-identical to what it was before this brief. That is the whole reason
+// the enum pins Plane at 0.
+//
+// The plane's local space is 2^28 = 268,435,456 ids. Its worst case is
+// n*n + 1 + npts + nconv + nspur with n = 2^12 (Projection's clamped maximum
+// order, projection.h) = 16,777,216 cells, leaving ~251M for the vertex/conv/
+// spur bands of any weave a machine could hold. `pick_id_fits` states the
+// bound rather than assuming it, and test_scene_kind pins it.
+inline constexpr uint32_t kPickKindBits = 4;
+inline constexpr uint32_t kPickKindShift = 32u - kPickKindBits;
+inline constexpr uint32_t kPickKindLocalMask = (1u << kPickKindShift) - 1u;
+inline constexpr uint32_t kPickKindCapacity = kPickKindLocalMask; // max local id
+
+// Tag a kind-local id with its scene band. `local == 0` stays 0 for EVERY kind:
+// 0 is the cleared background of the R32UI target ("nothing here"), a fact of
+// the framebuffer clear, not of any one scene — so it can never be a kind's
+// first element.
+inline uint32_t pick_id_in_kind(SceneKind k, uint32_t local) {
+    if (local == 0)
+        return 0;
+    return (scene_kind_index(k) << kPickKindShift) | (local & kPickKindLocalMask);
+}
+// Which scene band a read-back id lies in (meaningless for id 0 — check that
+// first). A decode MUST check this before interpreting the local part: an id
+// read back from a stale frame of another kind decodes to a different scene,
+// and silently reading it as this one is the aliasing bug the brief names.
+inline SceneKind pick_id_kind(uint32_t id) {
+    return static_cast<SceneKind>((id >> kPickKindShift) &
+                                  ((1u << kPickKindBits) - 1u));
+}
+inline uint32_t pick_id_local(uint32_t id) { return id & kPickKindLocalMask; }
+// Does a kind-local id fit its band? False means the geometry is too large to
+// pick unambiguously and the caller must NOT emit the id (a wrapped id would
+// alias into the next kind's band — an inferred boundary by another name).
+inline bool pick_id_fits(uint64_t local) { return local <= kPickKindCapacity; }
 
 // The id space written into the R32UI pick target. 0 is the cleared background
 // ("nothing here"); terrain cells occupy [1, n*n]; trajectory PC vertices occupy
@@ -66,6 +113,19 @@ struct PickBands {
     uint64_t npts = UINT64_MAX;
     uint64_t nconv = 0;
     uint64_t nspur = 0;
+    // T1 (59-standalone-scenes): WHICH scene's bands these are. The three
+    // counts above describe the address plane's inner bands and mean nothing
+    // for another substrate, so a decode reads `kind` first. Defaults to
+    // Plane, which is what every pre-59 caller (every existing test, the
+    // pre-59 shell.cpp path, Scene::pick_bands()) constructs — so they stay
+    // byte-identical without being touched, exactly as T3 (47) kept the
+    // pre-T3 callers with `npts == UINT64_MAX`.
+    SceneKind kind = SceneKind::Plane;
+    // T1 (59): the standalone scene's own uploaded element count — the same
+    // "the decoder needs actual uploaded counts, not an inferred boundary"
+    // discipline as npts/nconv/nspur, for the one band a non-plane kind has.
+    // Local ids run [1, nelem]; 0 is the background.
+    uint64_t nelem = 0;
 };
 
 struct Pick {
@@ -97,7 +157,40 @@ struct PickHint {
 // Decode a read-back id against a plane of side n (n = 2^order). `bands`
 // defaults to "unbounded vertex band, no conv/spur band" (see PickBands), so
 // every pre-T3 call site decodes exactly as it always did.
+// T1 (59): an id whose OUTER band names a kind other than Plane decodes to
+// Kind::None — a stale id read back from another substrate's frame is not a
+// cell of this one. Plane ids are all < 2^28, so nothing that existed before
+// this brief changes.
 Pick decode_pick(uint32_t id, uint32_t n, const PickBands &bands = PickBands{});
+
+// T1 (59-standalone-scenes): the standalone kinds' decode. A non-plane scene
+// uploads ONE flat band of pickable elements, so its decode is a bounds check
+// against the count that was REALLY uploaded (PickBands::nelem) plus the outer
+// kind check — the same "actual uploaded counts, never an inferred boundary"
+// rule the plane's inner bands follow. Returns the 0-based element index, or
+// nullopt for the background, an id from a different scene kind, or an id past
+// the live geometry. Inline (like the id encoders above) so the id space stays
+// one header both the GL encode and the pure decode read.
+inline std::optional<uint64_t> decode_pick_standalone(uint32_t id,
+                                                      const PickBands &bands) {
+    if (id == 0 || bands.kind == SceneKind::Plane)
+        return std::nullopt;
+    if (pick_id_kind(id) != bands.kind)
+        return std::nullopt;
+    const uint32_t local = pick_id_local(id);
+    if (local == 0 || local > bands.nelem)
+        return std::nullopt;
+    return static_cast<uint64_t>(local - 1);
+}
+// The id a standalone scene writes for its `index`-th pickable element (0
+// based). Mirrors decode_pick_standalone exactly — both live here so the GL
+// encode and the pure decode cannot drift, the discipline pick_id_cell and
+// decode_pick already share.
+inline uint32_t pick_id_element(SceneKind k, uint64_t index) {
+    if (!pick_id_fits(index + 1))
+        return 0; // too large to pick unambiguously: emit nothing, never wrap
+    return pick_id_in_kind(k, static_cast<uint32_t>(index + 1));
+}
 
 // The canonical order the scene uploads pickable trajectory vertices in, and that
 // resolve_pick() replays to turn a vertex index back into a (tid, step): every

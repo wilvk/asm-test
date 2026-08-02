@@ -137,6 +137,14 @@ Pick decode_pick(uint32_t id, uint32_t n, const PickBands &bands) {
     Pick p;
     if (id == 0)
         return p; // background
+    // T1 (59-standalone-scenes): the OUTER band. An id whose top bits name a
+    // non-Plane SceneKind belongs to a different substrate (a stale read-back
+    // after a kind switch, or a caller that mixed the two) — it is not a cell
+    // of THIS plane, so it decodes to None rather than aliasing onto one.
+    // Every plane id is < 2^28, so this branch is unreachable for anything
+    // pick_id_cell/_vertex/_conv/_spur ever produced.
+    if (pick_id_kind(id) != SceneKind::Plane)
+        return p;
     const uint64_t ncells = static_cast<uint64_t>(n) * n;
     const uint32_t d = id - 1u;
     if (d < ncells) {

@@ -38,11 +38,13 @@
 namespace asmdesk::scene3d {
 
 namespace {
-// Mirrors scene.cpp's own kAttrPos (the 3.0 spelling that stands in for
-// `layout(location=)`; see shaders/embedded.h). A second constant rather than a
-// shared one because scene.cpp keeps its GL binding constants file-local — the
-// value is bound from C++ in link_program and is pinned there.
-constexpr GLuint kAttrPos = 0;
+// kAttrPos used to be duplicated here, because scene.cpp kept its GL binding
+// constants file-local and there was nothing to share. 59 T1 hoisted them into
+// scene3d/glcommon.h (reached via scene.h) for exactly the reason this file
+// needed a copy — "two files picking their own numbers is how a VAO ends up
+// bound to the wrong attribute on one driver and the right one on another" —
+// so the copy is gone and this TU uses the shared one. Both spelled 0, so the
+// merge changed no binding.
 
 // Push one GL_LINES segment (two vertices, 3 floats each).
 inline void seg(std::vector<float> &v, float x0, float y0, float z0, float x1,

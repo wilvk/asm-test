@@ -29,6 +29,7 @@
 #include <cstring>
 #include <vector>
 
+#include "scene3d/glcommon.h" // T1 (59): the SHARED program link + pick target
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
 #include "scene3d/shaders/embedded.h"
@@ -37,67 +38,20 @@ namespace asmdesk::scene3d {
 
 namespace {
 
-// Attribute + fragment-output locations, bound from C++ (the 3.0 spelling that
-// stands in for `layout(location=)`; see shaders/embedded.h).
-constexpr GLuint kAttrPos = 0; // "cell" (terrain) / "pos" (trajectory)
-constexpr GLuint kAttrVid = 1; // "vid" (pick points)
-constexpr GLuint kFragId = 0;  // "fragid" (pick targets)
 // T3 (49): the terrain's iso-density contour band count — enough bands to
 // read as a height key without turning the ramp to noise at Phase-A's grid
 // sizes.
 constexpr float kContourLevels = 12.0f;
 
-GLuint compile(GLenum type, const char *src, std::string &err) {
-    GLuint sh = glCreateShader(type);
-    glShaderSource(sh, 1, &src, nullptr);
-    glCompileShader(sh);
-    GLint ok = 0;
-    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = {0};
-        glGetShaderInfoLog(sh, sizeof(log) - 1, nullptr, log);
-        err = std::string("shader compile failed: ") + log;
-        glDeleteShader(sh);
-        return 0;
-    }
-    return sh;
-}
-
-// Link a program from two sources, binding "pos"/"cell" -> 0 and "vid" -> 1 and
-// the integer output "fragid" -> 0 (harmless for the colour programs that have no
-// such output). `pick` selects the integer fragment-data bind.
+// T1 (59-standalone-scenes) step 2: the program compile/link is one of the
+// three things a second substrate genuinely SHARES with the plane, so its
+// implementation moved to scene3d/glcommon.cpp and every scene links the same
+// one. This is a spelling alias only — the call sites below are unchanged, and
+// the attribute-location constants (kAttrPos/kAttrVid/kFragId) now live in
+// glcommon.h so the two files cannot pick different slots.
 GLuint link_program(const char *vs, const char *fs, bool has_vid, bool pick,
                     std::string &err) {
-    GLuint v = compile(GL_VERTEX_SHADER, vs, err);
-    if (!v)
-        return 0;
-    GLuint f = compile(GL_FRAGMENT_SHADER, fs, err);
-    if (!f) {
-        glDeleteShader(v);
-        return 0;
-    }
-    GLuint p = glCreateProgram();
-    glAttachShader(p, v);
-    glAttachShader(p, f);
-    glBindAttribLocation(p, kAttrPos, "cell");
-    glBindAttribLocation(p, kAttrPos, "pos");
-    if (has_vid)
-        glBindAttribLocation(p, kAttrVid, "vid");
-    if (pick)
-        glBindFragDataLocation(p, kFragId, "fragid");
-    glLinkProgram(p);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    GLint ok = 0;
-    glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = {0};
-        glGetProgramInfoLog(p, sizeof(log) - 1, nullptr, log);
-        err = std::string("program link failed: ") + log;
-        glDeleteProgram(p);
-        return 0;
-    }
-    return p;
+    return gl_link_program(vs, fs, has_vid, pick, err);
 }
 
 // A small per-tid palette (opaque exact paths); statistical layers are drawn
@@ -1486,43 +1440,12 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     }
 }
 
-void Scene::ensure_pick_fbo(int w, int h) {
-    if (fbo_pick_ && pick_w_ == w && pick_h_ == h)
-        return;
-    if (!fbo_pick_)
-        glGenFramebuffers(1, &fbo_pick_);
-    if (!tex_pick_)
-        glGenTextures(1, &tex_pick_);
-    if (!rbo_pick_depth_)
-        glGenRenderbuffers(1, &rbo_pick_depth_);
-    pick_w_ = w;
-    pick_h_ = h;
-    glBindTexture(GL_TEXTURE_2D, tex_pick_);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, w, h, 0, GL_RED_INTEGER,
-                 GL_UNSIGNED_INT, nullptr);
-    glBindRenderbuffer(GL_RENDERBUFFER, rbo_pick_depth_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_pick_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                           tex_pick_, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                              GL_RENDERBUFFER, rbo_pick_depth_);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
 int Scene::render_pick_into_fbo(const Camera &cam, int fbw, int fbh) {
-    ensure_pick_fbo(fbw, fbh);
-    GLint prev_fbo = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_pick_);
-    glViewport(0, 0, fbw, fbh);
-    const GLuint zero[4] = {0, 0, 0, 0};
-    glClearBufferuiv(GL_COLOR, 0, zero);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    // T1 (59) step 2: the R32UI target + its readback is the second of the
+    // three genuinely shared pieces, so it is now scene3d::GlPickTarget
+    // (glcommon.h) and a standalone scene picks through the same code. What
+    // stays HERE is what is plane-specific: which geometry is drawn into it.
+    const int prev_fbo = pick_target_.bind_and_clear(fbw, fbh);
 
     float mvp[16];
     cam.mvp(mvp, static_cast<float>(fbw) / fbh);
@@ -1579,14 +1502,9 @@ uint32_t Scene::pick(const Camera &cam, int fbw, int fbh, int x, int y) {
         return 0;
     int prev_fbo = render_pick_into_fbo(cam, fbw, fbh);
     // Read the id under (x, y). glReadPixels is bottom-left origin; the caller
-    // gives y from the top.
-    uint32_t id = 0;
-    int ry = fbh - 1 - y;
-    if (x >= 0 && x < fbw && ry >= 0 && ry < fbh) {
-        glReadBuffer(GL_COLOR_ATTACHMENT0);
-        glReadPixels(x, ry, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_INT, &id);
-    }
-    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));
+    // gives y from the top (GlPickTarget::read_pixel does the flip).
+    const uint32_t id = pick_target_.read_pixel(x, y, fbh);
+    GlPickTarget::restore(prev_fbo);
     return id;
 }
 
@@ -1596,9 +1514,8 @@ void Scene::render_pick_buffer(const Camera &cam, int fbw, int fbh,
     if (!ready_ || n_ == 0 || fbw <= 0 || fbh <= 0)
         return;
     int prev_fbo = render_pick_into_fbo(cam, fbw, fbh);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glReadPixels(0, 0, fbw, fbh, GL_RED_INTEGER, GL_UNSIGNED_INT, out.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));
+    pick_target_.read_all(fbw, fbh, out);
+    GlPickTarget::restore(prev_fbo);
 }
 
 void Scene::shutdown() {
@@ -1639,12 +1556,7 @@ void Scene::shutdown() {
         glDeleteBuffers(1, &vbo_front_);
     if (vao_front_)
         glDeleteVertexArrays(1, &vao_front_);
-    if (tex_pick_)
-        glDeleteTextures(1, &tex_pick_);
-    if (rbo_pick_depth_)
-        glDeleteRenderbuffers(1, &rbo_pick_depth_);
-    if (fbo_pick_)
-        glDeleteFramebuffers(1, &fbo_pick_);
+    pick_target_.free_gl(); // T1 (59): the shared R32UI target
     free_compose_targets(); // T1/T5 (55)
     for (unsigned p : {prog_terrain_, prog_traj_, prog_pick_terrain_,
                        prog_pick_pt_, prog_stat_, prog_sky_, prog_edl_,
@@ -1658,7 +1570,9 @@ void Scene::shutdown() {
     vbo_front_ = vao_front_ = 0;
     has_stat_terrain_ = false;
     has_focus_mask_ = false; // 51 T2
-    tex_pick_ = rbo_pick_depth_ = fbo_pick_ = 0;
+    // 59 T1 folded tex_pick_/rbo_pick_depth_/fbo_pick_ into pick_target_
+    // (scene3d/glcommon.h), freed and zeroed by pick_target_.free_gl() above —
+    // so there are no raw pick handles left here to reset.
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
     prog_stat_ = prog_sky_ = prog_edl_ = prog_canopy_ = 0;
     ready_ = false;

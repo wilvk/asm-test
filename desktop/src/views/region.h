@@ -54,6 +54,14 @@ struct RegionInvocation {
     // short invocation that simply did less.
     bool closed = false;
     std::string basis; // "rel" | "abs"; never defaulted (schema)
+    // 59 T3: how many `codeimage` events preceded this invocation in the
+    // STREAM (Event::seq) — i.e. which version of the code body was in force
+    // when it started, so a slab executed after a JIT rewrite is visibly a
+    // different body. `codeimage_known` is false when the recording carries no
+    // codeimage timeline at all: the invocation is then UNTINTED rather than
+    // tinted "version 0", which would claim a version nobody stated.
+    bool codeimage_known = false;
+    uint64_t codeimage_version = 0;
 };
 
 struct RegionView {

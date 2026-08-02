@@ -15,10 +15,16 @@ std::string hex(uint64_t v) {
 }
 
 // One event of either kind, in STREAM order — the ordering by_kind cannot give.
+// 59 T3 adds a third kind to the walk: `codeimage`. It never opens or closes an
+// invocation; it only advances the code-body version the NEXT invocation runs
+// under, which is the tint the invocation-stack scene needs. Folding it into
+// this one seq-ordered walk keeps a single source for "which invocation is
+// which" — a second walk keyed on coverage-event ordering could disagree with
+// this one about exactly the boundary it is trying to describe.
 struct SeqEvent {
     uint64_t seq;
     const Event *ev;
-    bool is_coverage;
+    enum Kind { Trace, Coverage, CodeImage } kind;
 };
 
 } // namespace
@@ -54,11 +60,16 @@ RegionView obs_region_build(const Recording &r, const ObsLifecycle *lc) {
     auto tr = r.by_kind.find("trace");
     if (tr != r.by_kind.end())
         for (const Event &e : tr->second)
-            ordered.push_back({e.seq, &e, false});
+            ordered.push_back({e.seq, &e, SeqEvent::Trace});
     auto cov = r.by_kind.find("coverage");
     if (cov != r.by_kind.end())
         for (const Event &e : cov->second)
-            ordered.push_back({e.seq, &e, true});
+            ordered.push_back({e.seq, &e, SeqEvent::Coverage});
+    // 59 T3: the codeimage timeline, in the SAME stream order.
+    const bool have_codeimage = r.by_kind.count("codeimage") != 0;
+    if (have_codeimage)
+        for (const Event &e : r.by_kind.at("codeimage"))
+            ordered.push_back({e.seq, &e, SeqEvent::CodeImage});
     std::sort(
         ordered.begin(), ordered.end(),
         [](const SeqEvent &a, const SeqEvent &b) { return a.seq < b.seq; });
@@ -66,6 +77,12 @@ RegionView obs_region_build(const Recording &r, const ObsLifecycle *lc) {
     RegionInvocation cur;
     cur.number = 1;
     bool any = false;
+    // 59 T3: the version in force RIGHT NOW — assigned to an invocation when
+    // its first instruction arrives, so a rewrite between two invocations
+    // separates them and a rewrite mid-invocation does not retroactively
+    // relabel one that already started.
+    uint64_t ci_version = 0;
+    cur.codeimage_known = have_codeimage;
     auto note_basis = [&v](const std::string &b) {
         if (b.empty())
             return;
@@ -82,9 +99,17 @@ RegionView obs_region_build(const Recording &r, const ObsLifecycle *lc) {
 
     for (const SeqEvent &se : ordered) {
         const nlohmann::json &b = se.ev->body;
+        if (se.kind == SeqEvent::CodeImage) {
+            // A new code body. It neither opens nor closes an invocation; it
+            // only changes what the next one will be running.
+            ci_version++;
+            continue;
+        }
         note_basis(b.value("basis", std::string()));
-        if (!se.is_coverage) {
+        if (se.kind == SeqEvent::Trace) {
             uint64_t off = b.value("off", uint64_t{0});
+            if (!any)
+                cur.codeimage_version = ci_version; // pinned at its FIRST insn
             cur.insns.push_back(off);
             if (b.contains("disasm") && b["disasm"].is_string())
                 cur.disasm[off] = b["disasm"].get<std::string>();
@@ -105,6 +130,8 @@ RegionView obs_region_build(const Recording &r, const ObsLifecycle *lc) {
         v.invocations.push_back(std::move(cur));
         cur = RegionInvocation();
         cur.number = v.invocations.size() + 1;
+        cur.codeimage_known = have_codeimage;
+        cur.codeimage_version = ci_version;
         any = false;
     }
     // Trailing instructions with no coverage footer: a capture that stopped

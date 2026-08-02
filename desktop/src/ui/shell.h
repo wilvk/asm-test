@@ -209,6 +209,36 @@ struct SceneView {
     std::vector<uint8_t> focus_mask;
     int32_t focus_mask_region = -2;
     uint64_t focus_mask_gen = UINT64_MAX;
+    // --- T1 (59-standalone-scenes): the non-plane substrates ---------------
+    // Which one this pane is showing (the HUD's selector reports changes back
+    // through hud.req_kind), plus the pure models for the four. They are woven
+    // ALONGSIDE the plane models above and cached the same way — a pane that
+    // never switches kind pays for them once, and a kind switch is then a
+    // pointer change rather than a re-weave.
+    //
+    // ONE AT A TIME: `kind` selects; nothing composes. The plane's models stay
+    // built regardless, so switching back is instant and byte-identical.
+    scene3d::SceneKind kind = scene3d::SceneKind::Plane;
+    scene3d::DivergenceScene divergence;  // T2
+    // Which B-side recording `divergence` was built against ("" = none). The
+    // user can attach/detach a B side at any time, so this one model is
+    // rebuilt when the pairing changes rather than on the weave gate.
+    std::string div_b;
+    scene3d::InvocationScene invocation;  // T3
+    // `module_ribbon`, not `ribbon`: 58 T5 owns `ribbon` above for the
+    // data-access ribbon. See the same note in scene_host.h.
+    scene3d::ModuleRibbonScene module_ribbon; // T4
+    scene3d::LanePrismScene prism;        // T5
+    // T5: which register the prism is of, and the wide registers this
+    // recording actually wrote (the selector's options). A prism is of ONE
+    // register — two on one X axis would be two meanings on one position.
+    uint32_t prism_reg = 0;
+    std::vector<uint32_t> prism_regs;
+    // Per-kind camera, so switching substrates does not carry the plane's
+    // orbit into a scene whose extents it was not chosen for (and switching
+    // back restores what you had). Index by scene_kind_index().
+    std::vector<scene3d::Camera> kind_cam;
+    std::vector<char> kind_cam_inited;
 };
 
 struct ShellState {

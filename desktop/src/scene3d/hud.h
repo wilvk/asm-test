@@ -316,7 +316,34 @@ struct HudState {
     // COUNT (T6 step 6's own requirement) and whether the scene budget
     // coarsened it. Shown only while SceneLayers::sediment is on.
     std::string sediment_legend;
+    // T1 (59-standalone-scenes): WHICH substrate the pane is showing. The HUD
+    // owns the selector (it already owns every other "what am I looking at"
+    // control) and reports the change back exactly like the camera presets
+    // above — `kind` is synced by the caller each frame, `req_kind` is the
+    // one-shot intent the caller applies and clears.
+    //
+    // ONE AT A TIME: this is a selector, never a set of checkboxes. Scenes do
+    // not compose — SceneLayers above is the additive mechanism of the ADDRESS
+    // PLANE, and two substrates with different axes drawn together would put
+    // two meanings on one screen position.
+    SceneKind kind = SceneKind::Plane;
+    bool req_kind_change = false;
+    SceneKind req_kind = SceneKind::Plane;
+    // The one-line reason a kind is unavailable for this recording (no second
+    // recording to diverge against, no region capture, no call tree, no wide
+    // register writes). Synced by the caller; a kind with a reason is offered
+    // DISABLED with the reason beside it, never silently missing.
+    std::vector<std::string> kind_unavailable =
+        std::vector<std::string>(all_scene_kinds().size());
 };
+
+// T1 (59-standalone-scenes) step 4: draw the axis block for a kind — one line
+// per axis plus the vertical axis's DENIAL, straight from
+// scene3d::scene_axes(). Split out of draw_scene_hud so the pane can draw it
+// on the null-backend/no-GL path too (where there is no viewport but the axes
+// are still what the scene claims), and so a test can call it without
+// standing up the whole HUD. Renders nothing else.
+void draw_scene_axes(SceneKind k);
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance
 // and the legend; nothing here is mutated.

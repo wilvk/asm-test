@@ -8,6 +8,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Four standalone 3D scenes, on a substrate that is not the address plane**
+  (docs/internal/gui/59-standalone-scenes.md). The 3D pane gains a scene
+  selector; every kind states what each of its axes is *and what it is not*,
+  because the axis label is part of the host contract rather than each scene's
+  choice:
+  - **Divergence worldline** — two recordings, one fused tube up their shared
+    prefix, then A and B ribbons with a rib per step of architectural-state
+    disagreement. A failed identity/basis/arch check renders a refusal card,
+    not an empty scene; a truncated side caps the tube TORN ("we stopped
+    looking" ≠ "they agreed to the end"); an uncomputed step is a hollow rib,
+    never a zero-width one.
+  - **Invocation stack** — one slab per invocation of a routine, stacked on a
+    discrete *invocation #* axis that is never scrubbed as time. A block absent
+    from an invocation is a hole in that slab, not a zero column; an
+    unterminated invocation is a labelled prefix; a slab is tinted by the
+    codeimage version in force when it started. Drill-in uses the dedicated
+    `dt_link::invocation` field and leaves `dt_link::step` untouched.
+  - **Module excursion ribbon** — one depth-vs-call-order sheet per thread,
+    banded by module, with the boundary crossings brightened. A depth-capped
+    capture marks its lane floor CAPPED (and the cap survives the drill-in);
+    an unresolved module gets its own hue rather than being blanked or merged;
+    a single-threaded recording renders the honest 2D icicle form instead.
+  - **SIMD lane prism** — what happens inside one wide vector register across
+    its writes, built from the already-decoded `ValRec::wide`/`bytes`. A stable
+    value→hue hash makes a shuffle's permutation visible. Element width is not
+    recorded, so the default 16 byte-lanes is labelled as a default and only an
+    unambiguous mnemonic subdivides; uncaptured bytes render a `[wide]`
+    wireframe rather than zeros.
 - **Inspect before you leap: hover readout and pickable overlays in the 3D
   scene** (docs/internal/gui/47-scene-inspect-and-pickable-overlays.md). The 3D
   pane now answers "what is this, and where would a click send me?" before any

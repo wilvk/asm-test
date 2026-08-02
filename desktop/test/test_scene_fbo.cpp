@@ -42,6 +42,9 @@
 #include "scene3d/camera.h"
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
+#include "scene3d/scene_kind.h"    // T1 (59): SceneKind
+#include "scene3d/standalone.h"    // T1 (59): the pure standalone models
+#include "scene3d/standalone_gl.h" // T1 (59): the second substrate's renderer
 #include "space/converge.h"
 #include "space/projection.h"
 #include "space/terrain.h"
@@ -1806,6 +1809,119 @@ int main() {
                              pick_id_cell(torn_cell),
               "a filter reached the pick pass");
         scene.focus = scene3d::SceneFocus{};
+    }
+
+    // ---- T1 (59-standalone-scenes): a SECOND SUBSTRATE renders and picks ---
+    // The brief's own "done when": a second substrate can be rendered and
+    // picked, and the plane path is unchanged. The image check is the round
+    // trip — rendering another kind in between and coming back must reproduce
+    // the plane's frame byte for byte, which is what proves a kind switch
+    // disturbs no plane state (and that the shared program-link/pick-target
+    // factoring left the plane's own GL objects alone).
+    {
+        StandaloneRenderer sr;
+        std::string serr;
+        const bool sok = sr.init_gl(&serr);
+        check("T1 GL (59): the standalone renderer builds its programs", sok,
+              serr.c_str());
+        if (sok) {
+            // A hand-built invocation stack: two slabs, the second missing the
+            // middle block (a HOLE — not pickable, because nothing is there).
+            InvocationScene inv;
+            inv.blocks = {0x10, 0x20, 0x30};
+            for (uint32_t k = 1; k <= 2; k++) {
+                InvSlab sl;
+                sl.number = k;
+                sl.closed = k == 1;
+                for (size_t j = 0; j < inv.blocks.size(); j++) {
+                    InvCell c;
+                    c.block = inv.blocks[j];
+                    c.state = (k == 2 && j == 1) ? InvCellState::Absent
+                                                 : InvCellState::Counted;
+                    c.count = 1 + static_cast<uint32_t>(j);
+                    if (c.state == InvCellState::Absent)
+                        inv.holes++;
+                    sl.cells.push_back(c);
+                }
+                inv.slabs.push_back(std::move(sl));
+            }
+            StandaloneFrame sf;
+            sf.kind = SceneKind::Invocation;
+            sf.invocation = &inv;
+            sr.upload(sf);
+
+            // The bands report what was REALLY uploaded, in the right band —
+            // the ground truth a decode needs, never a re-derivation.
+            const PickBands sb = sr.pick_bands();
+            check("T1 GL (59): the upload reports its own kind",
+                  sb.kind == SceneKind::Invocation,
+                  "pick_bands() did not name the uploaded substrate");
+            check("T1 GL (59): the upload reports its element count",
+                  sb.nelem == invocation_pick_order(inv).size(),
+                  "the uploaded element count does not match the pure pick "
+                  "order — the GL encode and the pure decode disagree");
+
+            const Camera scam =
+                standalone_default_camera(SceneKind::Invocation);
+            glBindFramebuffer(GL_FRAMEBUFFER, gcf.fbo);
+            glViewport(0, 0, GW, GH);
+            glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            sr.render(scam, GW, GH);
+            std::vector<unsigned char> spx(static_cast<size_t>(GW) * GH * 4);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glReadPixels(0, 0, GW, GH, GL_RGBA, GL_UNSIGNED_BYTE, spx.data());
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            size_t slit = 0;
+            for (size_t i = 0; i < spx.size(); i += 4)
+                if (lum(&spx[i]) > 20.0f)
+                    slit++;
+            check("T1 GL (59): the standalone scene draws geometry", slit > 0,
+                  "the second substrate rendered an empty frame");
+
+            // ...and it PICKS: ids appear, and every read-back id decodes
+            // inside its OWN band and never as a plane cell.
+            std::vector<uint32_t> sids;
+            sr.render_pick_buffer(scam, GW, GH, sids);
+            size_t shits = 0, sforeign = 0;
+            for (uint32_t id : sids) {
+                if (id == 0)
+                    continue;
+                shits++;
+                if (!decode_pick_standalone(id, sb))
+                    sforeign++;
+                if (decode_pick(id, 64).kind != Pick::None)
+                    sforeign++;
+            }
+            check("T1 GL (59): the standalone scene is pickable", shits > 0,
+                  "the pick pass wrote no ids");
+            check("T1 GL (59): every id decodes inside its own band",
+                  sforeign == 0,
+                  "a standalone id decoded as another substrate's element");
+
+            // The round trip.
+            SceneLayers rl;
+            const std::vector<unsigned char> before =
+                capture(scene, gcam, gcf, rl);
+            glBindFramebuffer(GL_FRAMEBUFFER, gcf.fbo);
+            glViewport(0, 0, GW, GH);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            sr.render(scam, GW, GH); // the other substrate, in between
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            const std::vector<unsigned char> after =
+                capture(scene, gcam, gcf, rl);
+            check("T1 GL (59): switching kinds and back reproduces the "
+                  "original image",
+                  pixels_differ(before, after) == 0,
+                  "the plane image changed after a standalone scene rendered "
+                  "in between — a kind switch disturbed plane state");
+            // The plane's own pick bands are still the PLANE's: a foreign
+            // render must not have rewritten them.
+            check("T1 GL (59): the plane's bands still name the plane",
+                  scene.pick_bands().kind == SceneKind::Plane,
+                  "the plane's pick bands were relabelled by a kind switch");
+            sr.shutdown();
+        }
     }
 
     scene.shutdown();

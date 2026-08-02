@@ -16,7 +16,31 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ☐ 0/5, not started.**
+> **Status — ✅ 5/5, complete (2026-08-03).** T1 landed the second substrate:
+> `scene3d/scene_kind.h` (the `SceneKind` discriminant + the required axis
+> contract), the outer pick-id band inside 47 T3's own `PickBands`,
+> `scene3d/glcommon.{h,cpp}` (the shared program link + R32UI pick target, factored
+> out of `scene.cpp`), `scene3d/standalone_gl.{h,cpp}` (the non-plane renderer) and
+> the pane/HUD wiring. T2–T5 landed their pure models in
+> `scene3d/standalone.{h,cpp}` with `desktop/test/test_scene_kind.cpp` (T1) and
+> `desktop/test/test_standalone.cpp` (T2–T5).
+>
+> **Adopted, not duplicated.** 47 T3's `PickBands` gained a `kind` + `nelem` field
+> rather than a parallel allocator; 48 T1's movable `Camera::target`/`frame()` is
+> what `standalone_default_camera` frames each scene with. Both were extended in
+> place, not forked.
+>
+> **Deviations, recorded.** (1) T3 needed the codeimage version in force at each
+> invocation, which `RegionInvocation` did not carry — `obs_region_build` now folds
+> `codeimage` events into its existing seq-ordered walk and reports
+> `codeimage_known`/`codeimage_version`, rather than a second walk that could
+> disagree with it about invocation boundaries. (2) T4 needed cross-thread call
+> order, so `TreeRow` gained `seq` (54 T3's `Event::seq`) — again to keep ONE
+> call-tree decode. (3) T4's drill-in carries its tid + module filter in a
+> `RibbonDrill` beside the `dt_link`, because `dt_link` has no tid or module field
+> and 54 T6 owns that struct's growth. (4) No `glLineWidth(>1.0)` is added anywhere
+> (55 T6): a rib's thickness is drawn as stacked strands, and the divergence torn
+> cap / ribbon seam are the two draws that would want a wider stroke.
 
 ## Why this work exists
 
@@ -76,7 +100,7 @@ that does not assume the address plane**. Everything after it is content.
 
 ## Tasks
 
-### T1 — A scene kind: host a substrate that is not the address plane (L)
+### T1 — ✅ A scene kind: host a substrate that is not the address plane (L)
 
 **Goal.** `SceneFrame` can describe more than one kind of scene, and `Scene` can
 render one, without the plane's assumptions leaking into it or its assumptions
@@ -126,7 +150,7 @@ kinds and switching back reproduces the original image.
 **Done when.** A second substrate can be rendered and picked, the plane path is
 unchanged, and no scene can have an unlabelled axis.
 
-### T2 — Divergence worldline (M)
+### T2 — ✅ Divergence worldline (M)
 
 **Goal.** Two recordings of the same routine: where their architectural states
 first diverge, and how the disagreement widens.
@@ -166,7 +190,7 @@ explicit note when statediff is empty.
 **Done when.** Two recordings' divergence is legible and every uncertainty in it is
 a visible mark.
 
-### T3 — Invocation stack (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T6*
+### T3 — ✅ Invocation stack (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T6*
 
 **Goal.** How one routine's control flow varies **across its calls** — where the
 region view's pager shows one invocation at a time.
@@ -205,7 +229,7 @@ untouched by this path.
 **Done when.** Cross-call variation is visible at a glance and the invocation axis is
 never scrubbed as time.
 
-### T4 — Module excursion ribbon (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
+### T4 — ✅ Module excursion ribbon (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T3*
 
 **Goal.** Which thread is in which library, when — a cross-thread pattern a single
 2D icicle cannot show.
@@ -237,7 +261,7 @@ form; an unresolved module gets the unknown hue rather than being dropped.
 **Done when.** Per-thread library residency is readable and truncation is visible on
 the axis it truncated.
 
-### T5 — SIMD lane prism (M)
+### T5 — ✅ SIMD lane prism (M)
 
 **Goal.** What happens *inside* a wide vector register over time — byte and element
 manipulation no current view looks into, since the loom folds sub-registers into a
