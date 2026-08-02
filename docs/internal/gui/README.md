@@ -277,7 +277,11 @@ playheads read as different axes, not a faked global clock (T4/fidelity). A pure
 the null backend (D4). Authored 2026-07-28 against HEAD `326afde`; **implemented
 2026-07-28 (`e962fb5`)** — all five tasks (execution-step brush, `5`/handoff reach,
 per-axis play/pause transports, axis labels), both docker-desktop lanes green.
-☑ 5/5 · —.
+☑ 5/5 · — . **Later change (2026-08-03):** T2's *"View in the 3D overview"*
+BUTTON (and the `want_scene` handoff behind it) was removed at the user's
+request — the 3D overview is reached the way every other view is, by its own tab
+or the `5` keyroute, so no capture pane carries a second door to it. The rest of
+T2 (the `5` route itself) stands.
 
 [35-continuous-live-dataflow.md](../archive/gui/35-continuous-live-dataflow.md) — make the live
 `dataflow` / `auto` engine **re-arm and keep capturing until Stop** (today it is

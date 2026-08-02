@@ -940,6 +940,16 @@ The facts are ordered by which one dominates:
 | `ptrace_scope=1` | **Unknown** | it permits a descendant or a `PR_SET_PTRACER` opt-in, and whether the target opted in is *not readable from outside* — a truthful Unknown beats a confident Yes that fails at attach |
 | same uid, scope 0 or Yama absent | Yes | |
 
+**The picker opens on the rows it can act on.** `only attachable` (on by
+default) drops the definite `No` rows — another user's processes, kernel
+threads, an i386 tracee, a target something else already traces — which on a
+normal machine is most of `/proc`. It is a *stated* absence, not a silent one:
+the checkbox says how many rows it hid and why, and unticking it brings them
+back with the verdict, the reason and the copy-ready remedy above intact.
+`maybe` (Unknown) rows are **never** hidden — "the deciding fact cannot be read
+from outside" is not a refusal, and hiding it would turn a truthful Unknown into
+an invisible No.
+
 ### Toasts are a notification, never the record
 
 Live-session events that used to be silent — a refusal, a session ending, a
@@ -972,6 +982,20 @@ together with that consequence, and when the server walks past a candidate that
 was never seen entering, each `pick` event surfaces with a note saying the
 refusal is about *that candidate* and **not a fact about the target**. A silent
 substitution would be the front door claiming a measurement it never made.
+
+**Two defaults `auto` carries** (both still just checkbox/field values the
+operator can change, and both sent verbatim on the wire):
+
+- **continuous is ON.** `auto` finds its own region from a sample window, so a
+  single invocation of it is typically over before anyone has looked at
+  anything; "watch this process" is what picking `auto` means. A *named*
+  `dataflow` region keeps the one-invocation default it always had. The default
+  follows the mode on each pick, and stops applying the moment the operator
+  moves the checkbox themselves — a default must not fight a choice.
+- **the sample window is 2000 ms**, not the host's own 400. A 400 ms window
+  frequently sees nothing in a target that is only intermittently in the region,
+  and an empty window costs a retry rather than producing a capture. A wider
+  window is still a knob, not a fix: an empty window is retried, never a verdict.
 
 ### Testing it without a tracer
 

@@ -159,6 +159,15 @@ struct InspectState {
     // pid / comm / cmdline.
     dt_filter_state proc_filter;
 
+    // Hide the rows whose verdict is a definite Attach::No — a target the picker
+    // could only refuse. ON by default: the useful list is the one you can act
+    // on, and a machine's /proc is mostly other users' processes and kernel
+    // threads. NOT a silent omission (D7): the hidden count and its reason are
+    // stated beside the checkbox, and one click brings them back with their
+    // per-row why / remedy intact. `maybe` (Attach::Unknown) rows are NEVER
+    // hidden — "the deciding fact cannot be read from outside" is not a refusal.
+    bool hide_unattachable = true;
+
     // The "activity" column ranks processes by CPU used over a short window, but
     // that sample is not free (list_processes(sample_cpu) briefly sleeps), so it
     // is gated on that column being the active sort: pid / comm / attach stay
@@ -209,14 +218,26 @@ struct InspectState {
     // `continuous:true`. Off by default (one invocation, then done). The
     // once-per-session perturb confirm already covers the whole session, so
     // continuous does NOT re-confirm per pass.
+    //
+    // Defaulted PER MODE by inspect_apply_continuous_default: ON for `auto`, off
+    // for a named `dataflow` region. An `auto` capture picks its own region from
+    // a sample window and a single invocation of it is typically over before the
+    // operator has looked at anything, so "re-arm until Stop" is the useful
+    // reading of "watch this process". The default re-applies on each entry into
+    // a mode until the operator moves the checkbox themselves (continuous_touched),
+    // after which their choice stands for the session.
     bool continuous = false;
+    bool continuous_touched = false;
+    LiveMode continuous_defaulted_for = LiveMode::Log; // the mode last defaulted
 
     // The `auto` SAMPLE WINDOW in ms (39 T3): how long the out-of-band sampler
     // watches before ranking a region. 0 means "unset" — the host's own default
-    // (AUTO_WINDOW_MS, 400) is used and no `ms` is sent, so an untouched capture
-    // is byte-identical to before. Surfaced as a capture-pane input for `auto`
-    // only (dataflow/trace name their region and sample nothing); sent as `ms`.
-    int window_ms = 0;
+    // (AUTO_WINDOW_MS, 400) is used and no `ms` is sent. Defaults to 2000: a
+    // 400 ms window frequently sees nothing at all in a target that is only
+    // intermittently in the region, and an empty window costs a retry rather
+    // than producing a capture. Surfaced as a capture-pane input for `auto` only
+    // (dataflow/trace name their region and sample nothing); sent as `ms`.
+    int window_ms = 2000;
 
     // Cross-pane requests from the Processes pane's row actions (double-click /
     // right-click): the door cannot reach ShellState, so it raises a flag the
@@ -240,11 +261,6 @@ struct InspectState {
     // Processes, and (unlike Capture) with no want_autoconnect alongside it.
     // Set by shell_select_mode, consumed once in draw_shell.
     bool want_focus_launch = false;
-    // 34 T2: the Live-capture "View in 3D overview" handoff — raised by the button
-    // in draw_live_views, consumed once in draw_shell to jump the active tab to the
-    // live capture and select its 3D inner tab (want_open_tab + want_view_id). Like
-    // the reveals above, the door cannot reach ShellState, so it flags the intent.
-    bool want_scene = false;
 
     // What the client believes is live on this target, for the patch bay. The
     // serve loop refuses a second concurrent start too, but the budget is
@@ -390,6 +406,14 @@ void inspect_arm_queue(InspectState &s);
 // modes. Pure over InspectState; test_shell drives it.
 nlohmann::json inspect_start_params(const InspectState &s);
 
+// Apply the per-mode default for `continuous` (see InspectState::continuous):
+// ON for `auto`, off for every other mode. Applied once per entry into a mode —
+// draw_patch_bay calls it each frame, inspect_attach_full_detail calls it after
+// pinning `auto` so the start it fires immediately carries the same value the
+// checkbox will show — and never after the operator has moved the checkbox
+// themselves (continuous_touched). Pure over InspectState; test_shell drives it.
+void inspect_apply_continuous_default(InspectState &s);
+
 // 39 T5: reconcile the patch bay's `active` belief against a session that ended
 // on its OWN (one-shot `auto`, hit `max`, target exited) — freeing the ptrace
 // jack no user action would, so an idle pane stops holding [Auto] and refusing
@@ -424,11 +448,11 @@ void inspect_launch_full_detail(InspectState &s);
 //   Processes   — the searchable /proc target picker (pid / comm / attach / why).
 //   Launch      — fork+exec a NEW process and trace it from birth (doc 45 T4),
 //                 the second way to arrive at a target.
-//   Live capture — the patch bay CONTROLS (mode + region + Start) and the 3D
-//                  handoff. The session log and save-to-.asmtrace are their OWN
-//                  panes (draw_session_status / draw_save_pane), the PT-replay
-//                  slice is its own PT-host-gated pane (draw_pt_slice_pane), and
-//                  the live views render in the doc-25 live-tab mirror panes.
+//   Live capture — the patch bay CONTROLS (mode + region + Start). The session
+//                  log and save-to-.asmtrace are their OWN panes
+//                  (draw_session_status / draw_save_pane), the PT-replay slice is
+//                  its own PT-host-gated pane (draw_pt_slice_pane), and the live
+//                  views render in the doc-25 live-tab mirror panes.
 void draw_connect_pane(InspectState &s);
 void draw_processes_pane(InspectState &s);
 void draw_launch_pane(InspectState &s);
@@ -444,7 +468,7 @@ void draw_session_status(InspectState &s);
 void draw_save_pane(InspectState &s);
 void draw_pt_slice_pane(InspectState &s);
 // Is there a capture to act on (a growing one, or a completed one this session)?
-// The Save pane's context gate + the capture pane's 3D-handoff enable.
+// The Save pane's context gate.
 bool inspect_has_capture(const InspectState &s);
 // Is this an Intel PT host — a host where a live PT capture can be started, so
 // there is ever a hardware-recorded path for the PT slice to replay? The pure

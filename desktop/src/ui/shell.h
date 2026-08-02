@@ -583,13 +583,6 @@ void shell_close(ShellState &s, size_t idx);
 // when the capture's event count moves.
 void shell_sync_live_tab(ShellState &s);
 
-// 34 T2: consume the Live-capture "View in 3D overview" intent
-// (InspectState::want_scene). When a live capture tab is up, jump the active tab
-// to it (want_open_tab) and request its 3D inner tab (want_view_id = Scene3D);
-// otherwise route a truthful reason to the status bar. A pure model move (no
-// ImGui), so test_shell drives it directly. Called once per frame from draw_shell.
-void shell_consume_scene_handoff(ShellState &s);
-
 // 25 T3: drop the ephemeral live tab (its parallel slots, the index shift, the
 // active-tab clamp) without touching the dedup watermark. Used both by
 // shell_sync_live_tab's own teardown and when a saved capture is opened as a

@@ -1687,37 +1687,13 @@ int main() {
                 "AND its --steps opt-in (26 T4)");
         }
 
-        // 34 T2: the "View in 3D overview" handoff — from the picked process's
-        // growing capture straight to its 3D tab. With a live tab up, the intent
-        // jumps the active tab to it and requests the 3D inner view (want_view_id).
-        {
-            ls.inspect.want_scene = true;
-            ls.want_open_tab = -1;
-            ls.want_view_id.reset();
-            shell_consume_scene_handoff(ls);
-            check("34/handoff jumps to the live tab",
-                  ls.want_open_tab == ls.live_tab,
-                  "the handoff must select the live capture's outer tab");
-            check(
-                "34/handoff requests the 3D inner tab",
-                ls.want_view_id.has_value() &&
-                    *ls.want_view_id == ViewId::Scene3D,
-                "want_view_id must name the 3D overview (no dt_view spelling)");
-            check("34/handoff consumes the intent", !ls.inspect.want_scene,
-                  "the one-frame intent must be cleared once honoured");
-        }
-        // The no-live-tab branch is faithful, never a silent no-op (D7): status set,
-        // no tab jump. A fresh state (no session) is the "attach first" case.
-        {
-            ShellState empty;
-            empty.inspect.want_scene = true;
-            shell_consume_scene_handoff(empty);
-            check("34/handoff no-tab sets status",
-                  empty.want_open_tab < 0 && !empty.status.empty() &&
-                      empty.status.find("attach") != std::string::npos,
-                  "with no live tab the handoff explains, it does not silently "
-                  "do nothing");
-        }
+        // 34 T2's "View in 3D overview" button (and the want_scene handoff it
+        // raised) is GONE — the 3D overview is reached like every other view, by
+        // its own tab or the `5` keyroute, so no capture pane carries a second
+        // door to it. What that keyroute needs still holds: the live capture is a
+        // real tab, and Scene3D is a view id the tab strip can select.
+        check("34/live tab is a real tab", ls.live_tab >= 0,
+              "the `5` keyroute selects the 3D view of the live capture's tab");
 
         // T4: the ephemeral, path-less live tab is never written to the store.
         WorkspaceState wss = shell_capture_workspace(ls);
@@ -2043,10 +2019,12 @@ int main() {
     // a region they do not need, and never sends one the serve host would reject.
     {
         InspectState is;
-        // Isolate from the `steps` ring's own default (true — see doors.h): this
-        // block's assertions are about REGION params only, and the dedicated
-        // sub-block below already covers `steps` on its own terms.
+        // Isolate from the `steps` ring's own default (true) and the `auto` sample
+        // window's (2000 ms) — see doors.h: this block's assertions are about
+        // REGION params only, and the dedicated sub-blocks below already cover
+        // `steps` and the window on their own terms.
         is.steps = false;
+        is.window_ms = 0;
         std::snprintf(is.region, sizeof is.region, "%s", "0x1000:16");
         is.want = LiveMode::Log;
         check("cap/log no region", inspect_start_params(is).empty(),
@@ -2095,6 +2073,52 @@ int main() {
         check("cap/log ignores continuous",
               !inspect_start_params(is).contains("continuous"),
               "a whole-process mode has no re-arm loop, continuous or not");
+
+        // `continuous` DEFAULTS per mode: on for `auto` (which finds its own
+        // region from a sample window, so one invocation is over before you look
+        // at it), off for a named dataflow region. Applied on each entry into a
+        // mode, and never once the operator has moved the checkbox themselves.
+        {
+            InspectState d;
+            d.want = LiveMode::Auto;
+            inspect_apply_continuous_default(d);
+            check("cap/auto defaults to continuous", d.continuous,
+                  "picking `auto` arms the re-arm loop by default");
+            d.want = LiveMode::Dataflow;
+            inspect_apply_continuous_default(d);
+            check("cap/dataflow defaults to one invocation", !d.continuous,
+                  "a named region keeps the one-invocation default");
+            d.want = LiveMode::Auto;
+            inspect_apply_continuous_default(d);
+            check("cap/re-entering auto re-arms the default", d.continuous,
+                  "the default follows the mode, not just the first frame");
+            // The operator's own choice pins: unticking continuous under `auto`
+            // must survive a trip through another mode and back.
+            d.continuous = false;
+            d.continuous_touched = true;
+            d.want = LiveMode::Log;
+            inspect_apply_continuous_default(d);
+            d.want = LiveMode::Auto;
+            inspect_apply_continuous_default(d);
+            check("cap/a touched continuous is never re-defaulted",
+                  !d.continuous,
+                  "a default must not fight a choice the operator made");
+            // A defaulted `auto` reaches the wire as {continuous:true} — the
+            // checkbox and the start params are the same value, never two.
+            InspectState w;
+            w.want = LiveMode::Auto;
+            inspect_apply_continuous_default(w);
+            check("cap/auto default reaches the wire",
+                  inspect_start_params(w).value("continuous", false),
+                  "the default must be what the start actually sends");
+            // And the untouched `auto` sample window is 2000 ms, sent explicitly
+            // (0 would mean "the host's own 400 ms default, send no `ms`").
+            check("cap/auto default window is 2000ms",
+                  inspect_start_params(w).value("ms", 0) == 2000,
+                  "a fresh auto capture samples for 2000 ms, not the host's 400");
+            check("procs/only-attachable is on by default", w.hide_unattachable,
+                  "the picker opens on the rows it can actually act on");
+        }
 
         // 39 T3: the `auto` sample window (ms). Sent as `ms` only for `auto` and
         // only when the operator set a non-default value; 0 (the default) sends

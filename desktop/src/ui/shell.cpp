@@ -289,24 +289,6 @@ void shell_sync_live_tab(ShellState &s) {
         s); // the decoded stream id is now live — point the router at it
 }
 
-// 34 T2: the Live-capture "View in 3D overview" handoff. A pure model move — no
-// ImGui — so test_shell drives it directly. want_open_tab selects the live
-// recording's outer tab (honoured by both shells); want_view_id selects its 3D
-// inner tab (mirroring the 1/2/3/4 want_view path). With no live tab yet, an
-// faithful status line instead of a silent no-op (D7).
-void shell_consume_scene_handoff(ShellState &s) {
-    if (!s.inspect.want_scene)
-        return;
-    s.inspect.want_scene = false;
-    if (s.live_tab >= 0) {
-        s.want_open_tab = s.live_tab;
-        s.want_view_id = ViewId::Scene3D;
-    } else {
-        s.status = "no live capture tab yet — attach a target in Processes "
-                   "first, then View in 3D";
-    }
-}
-
 // The dirty-close guard (18-breach-stops.md T3, F24): a clean recording closes
 // on the spot; a DIRTY (authored + unsaved) one raises the save/discard/cancel
 // choice instead of erasing, so authored output is never lost to one click.
@@ -3326,17 +3308,20 @@ void shell_apply_live_panes(ShellState &s) {
     s.live_applied_ordinal = ord;
 }
 
-// The Log pane (docs R2): the live session's current status (moved out of the
-// capture pane) above a COLORED scrollback of everything the capture and the
-// other tabs emit — every session transition and every nav refusal — so those
-// tabs stay uncluttered. Lines are graded on the shared fidelity axis: Error red,
-// Warning amber, Success green, Info neutral. Auto-scrolls to the newest line only
-// while the reader is already at the bottom (so scrolling back to read holds).
+// The Log pane (docs R2): ONE colored scrollback holding everything the capture
+// and the other tabs emit — every session transition, every nav refusal — so
+// those tabs stay uncluttered. Lines are graded on the shared fidelity axis:
+// Error red, Warning amber, Success green, Info neutral. Auto-scrolls to the
+// newest line only while the reader is already at the bottom (so scrolling back
+// to read holds).
+//
+// The live session's own log (state, refusals, skips, the --auto pick evidence,
+// the torn / end-cause placards, the streaming progress + Cancel) is drawn INSIDE
+// that same box rather than in a block above it: one pane, one place to read.
+// It sits at the TAIL, after the scrollback — which is where the auto-scroll
+// already parks the reader, so the current session state is what is on screen,
+// and the history reads upward from it in the one scroll.
 static void draw_log_pane(ShellState &s) {
-    // The current session state (the block that used to sit inside the capture
-    // pane). It carries its own progress bar / Cancel, so it stays interactive.
-    draw_session_status(s.inspect);
-    ImGui::Separator();
     ImGui::TextDisabled("log (%zu)", s.log.size());
     ImGui::SameLine();
     if (ImGui::SmallButton("Clear"))
@@ -3352,6 +3337,10 @@ static void draw_log_pane(ShellState &s) {
             ImGui::TextWrapped("%s", ln.text.c_str());
             ImGui::PopStyleColor();
         }
+        // The session block is interactive (a Cancel on the streaming progress
+        // bar, copy-ready remedy commands) — a child window hosts widgets exactly
+        // as the pane did, so nothing is lost by folding it in here.
+        draw_session_status(s.inspect);
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
     }
@@ -4398,10 +4387,6 @@ void draw_shell(ShellState &s) {
                 s.inspect.want_open_connect = true;
         }
     }
-    // 34 T2: the Live-capture "View in 3D overview" handoff — jump from the picked
-    // process's growing capture straight to its 3D tab. Consumed centrally so both
-    // the docked and windowed shells honour it (a pure model move, tested direct).
-    shell_consume_scene_handoff(s);
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through
     // the ONE writer so the timeline / slice / Loom / Scrubber animate together.

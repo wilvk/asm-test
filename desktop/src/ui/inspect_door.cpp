@@ -243,6 +243,20 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     return params;
 }
 
+// `continuous` defaults PER MODE: on for `auto`, off for everything else. An
+// `auto` capture finds its own region from a sample window, so one invocation of
+// it is usually over before the operator has looked at anything — "keep watching
+// this process" is what picking `auto` means. A named `dataflow` region keeps the
+// one-invocation default it always had. Re-applied on each entry into a mode so
+// arriving at `auto` from another pick still gets it, and never once the operator
+// has moved the checkbox (continuous_touched) — a default must not fight a choice.
+void inspect_apply_continuous_default(InspectState &s) {
+    if (s.continuous_touched || s.want == s.continuous_defaulted_for)
+        return;
+    s.continuous_defaulted_for = s.want;
+    s.continuous = (s.want == LiveMode::Auto);
+}
+
 void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st) {
     // A start the desktop issued resolves once the host confirms it (Running) or
     // the host is gone — clear the in-flight guard then. NOT keyed on skip_code:
@@ -296,6 +310,10 @@ void inspect_attach_full_detail(InspectState &s, long pid) {
     s.want = LiveMode::Auto;
     s.want_defaulted = true;
     s.steps = true;
+    // The start fires from here, before the capture pane draws — so apply the
+    // per-mode `continuous` default now, or this start would send one value while
+    // the checkbox the user sees a frame later shows another.
+    inspect_apply_continuous_default(s);
     s.want_open_capture = true; // the confirm / status / views land in that pane
     // No host yet: connect from the saved Settings (asmspy path / ssh host) rather
     // than bouncing the user to the Connect pane. Only if that connect fails do we
@@ -556,6 +574,9 @@ void draw_patch_bay(InspectState &s) {
         s.want_defaulted = true;
         s.want = budget_least_perturbing(s.sample_available);
     }
+    // `continuous` follows the mode until the operator sets it themselves: an
+    // `auto` capture re-arms by default, a named region does not.
+    inspect_apply_continuous_default(s);
 
     // The scoped-region input (the dataflow/trace region gap). trace and dataflow
     // single-step ONE region, so the serve host requires a func name or 0xADDR:LEN
@@ -584,9 +605,12 @@ void draw_patch_bay(InspectState &s) {
         // 35 T4: keep re-arming the same region until Stop, into one growing
         // recording (the Scrubber follows the latest invocation live). One start
         // fires; the once-per-session perturb confirm is not re-asked per pass.
-        ImGui::Checkbox(
-            "continuous — re-arm and keep capturing until Stop (35)",
-            &s.continuous);
+        // ON by default for `auto` (inspect_apply_continuous_default, called
+        // above) — until the operator moves it, which pins their choice.
+        if (ImGui::Checkbox(
+                "continuous — re-arm and keep capturing until Stop (35)",
+                &s.continuous))
+            s.continuous_touched = true;
         // 39 T3: the `auto` sample window (ms) — how long the out-of-band sampler
         // watches before ranking a region. Only `auto` samples; a named dataflow
         // region needs no window. 0 leaves the host default (400 ms) and sends no
@@ -594,7 +618,7 @@ void draw_patch_bay(InspectState &s) {
         // bounded number of times), so a wider window is a knob, not a fix.
         if (s.want == LiveMode::Auto) {
             ImGui::SetNextItemWidth(160.0f);
-            ImGui::InputInt("auto sample window (ms, 0 = default 400)",
+            ImGui::InputInt("auto sample window (ms, 0 = host default 400)",
                             &s.window_ms);
             if (s.window_ms < 0)
                 s.window_ms = 0;
@@ -829,15 +853,6 @@ void draw_live_views(InspectState &s) {
             "no capture yet — start a mode above and its view appears here");
         return;
     }
-    // 34 T2: the handoff from the picked process's growing capture to its 3D
-    // spacetime overview. Raises a flag draw_shell consumes (the door cannot reach
-    // ShellState). The 3D pane is faithful if the capture has no codeimage regions
-    // yet, so this is safe to always offer.
-    if (ImGui::Button("View in the 3D overview"))
-        s.want_scene = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("(spacetime terrain — press Play there to watch it form)");
-    ImGui::Separator();
     draw_observer(s.observer, *live, "live-session", nullptr);
 }
 
@@ -1092,14 +1107,42 @@ void draw_processes_pane(InspectState &s) {
         ImGui::TextDisabled("· activity = %%CPU/core over a ~150ms sample");
     }
 
+    // Hide the definite refusals (on by default). Everything the picker could
+    // only refuse — another user's process, a kernel thread, an i386 tracee, a
+    // target something else already traces — is dropped from the table, and the
+    // count of what that dropped is stated right here: a hidden row is a stated
+    // absence, never a silent one (D7). `maybe` rows stay, because a fact we
+    // could not read is not a refusal.
+    size_t n_hidden = 0;
+    for (const ProcRow &r : s.rows)
+        if (r.verdict.verdict == Attach::No)
+            ++n_hidden;
+    ImGui::Checkbox("only attachable", &s.hide_unattachable);
+    if (s.hide_unattachable && n_hidden) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("· %zu NOT-attachable row(s) hidden — untick to see "
+                            "them with their why / remedy",
+                            n_hidden);
+    }
+
     // Type-to-narrow (24 T4's shared filter) over pid / comm / cmdline — the
     // /proc list is the one client-side table that never had a filter (doc 16's
     // framing). Build the haystack once; the matcher + "showing N of M" are pure.
-    std::vector<std::string> hay;
-    hay.reserve(s.rows.size());
-    for (const ProcRow &r : s.rows)
-        hay.push_back(std::to_string(r.pid) + " " + r.comm + " " + r.cmdline);
-    std::string q = dt_filter_bar(s.proc_filter, hay, "filter");
+    // The haystack covers only the rows the table can show, so "showing N of M"
+    // counts what the filter narrowed, not what the attachability gate removed —
+    // that count is its own line above.
+    std::vector<std::string> hay(s.rows.size());
+    std::vector<char> shown(s.rows.size(), 0);
+    std::vector<std::string> hay_shown;
+    for (size_t i = 0; i < s.rows.size(); ++i) {
+        const ProcRow &r = s.rows[i];
+        if (s.hide_unattachable && r.verdict.verdict == Attach::No)
+            continue;
+        shown[i] = 1;
+        hay[i] = std::to_string(r.pid) + " " + r.comm + " " + r.cmdline;
+        hay_shown.push_back(hay[i]);
+    }
+    std::string q = dt_filter_bar(s.proc_filter, hay_shown, "filter");
     ImGui::TextDisabled("double-click a row to attach & trace at full detail; "
                         "right-click for more.");
 
@@ -1185,6 +1228,8 @@ void draw_processes_pane(InspectState &s) {
         const double clk_tck = static_cast<double>(sysconf(_SC_CLK_TCK));
         for (int oi : order) {
             const size_t i = static_cast<size_t>(oi);
+            if (!shown[i]) // hidden by the attachability gate above
+                continue;
             if (!dt_filter_match(q, hay[i]))
                 continue;
             const ProcRow &r = s.rows[i];
@@ -1267,8 +1312,9 @@ void draw_processes_pane(InspectState &s) {
 // (draw_session_status), save-to-.asmtrace to the Save pane (draw_save_pane), and
 // the PT slice to its own PT-host-gated pane (draw_pt_slice_pane); the live views
 // render in their own docked panes (the doc-25 live_tab mirror). So this tab is
-// now just the controls: pick a mode, scope it, Start — plus the 3D-overview
-// handoff, a capture-adjacent action.
+// now just the controls: pick a mode, scope it, Start. The 3D overview is reached
+// the way every other view is — its own tab, or the `5` keyroute — so no pane
+// carries a second door to it.
 void draw_capture_pane(InspectState &s) {
     if (!s.host_started) {
         ImGui::TextDisabled(
@@ -1279,17 +1325,6 @@ void draw_capture_pane(InspectState &s) {
         ImGui::TextDisabled(
             "pick a process in the Processes pane, then pick a mode below.");
     draw_patch_bay(s);
-    ImGui::Separator();
-    // The 3D-overview handoff (34 T2), kept as a compact button now the live views
-    // render in their own panes. Disabled until there is a capture to show, so a
-    // button that cannot act is greyed (F22-adjacent: no dead levers).
-    ImGui::BeginDisabled(!inspect_has_capture(s));
-    if (ImGui::Button("View in the 3D overview"))
-        s.want_scene = true;
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled(
-        "(spacetime terrain — press Play there to watch it form)");
 }
 
 // --- Launch pane: fork+exec a fresh target, traced from birth --------------
