@@ -66,6 +66,16 @@ struct dt_link {
     // there in a way it never is for a single-routine replay. Appended LAST in
     // the textual form, so every link written before it stays byte-identical.
     std::optional<long> pid;
+    // 54-3d-catalog-phase0-plumbing.md T6: "invocation #7 of this routine" — a
+    // coordinate `step` cannot express. `step` is documented above as a
+    // DATAFLOW STEP INDEX; an invocation number is a different axis (a pick
+    // that resolves to one call among several, e.g. by df_invocation, 35 T1),
+    // and putting it there would be the exact ordinal-conflation trap
+    // 46-3d-functional-roadmap.md §4 forbids. The two may both be set.
+    // Appended LAST (after `pid`, the previous last field) for the identical
+    // reason `pid` was: every link written before this change stays
+    // byte-identical.
+    std::optional<uint32_t> invocation;
 };
 
 // v=<canvas|timeline|slice|diff|syscalls|watch|topo|hotedges|tree|region|disasm

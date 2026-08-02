@@ -207,6 +207,13 @@ bool dt_nav_parse(std::string_view s, dt_link &out, std::string &err) {
                 return false;
             }
             link.pid = static_cast<long>(v);
+        } else if (key == "invocation") {
+            uint64_t v = 0;
+            if (!parse_u64(value, v) || v > 0xFFFFFFFFull) {
+                err = "invocation \"" + value + "\" is not a 32-bit index";
+                return false;
+            }
+            link.invocation = static_cast<uint32_t>(v);
         }
         // else: an unknown key, IGNORED — a link from a newer build still
         // navigates here, to the extent this build understands it.
@@ -247,6 +254,12 @@ std::string dt_nav_format(const dt_link &link) {
         char buf[32];
         std::snprintf(buf, sizeof buf, "%ld", *link.pid);
         s += "&pid=";
+        s += buf;
+    }
+    if (link.invocation) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%u", *link.invocation);
+        s += "&invocation=";
         s += buf;
     }
     return s;

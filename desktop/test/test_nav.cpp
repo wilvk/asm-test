@@ -132,6 +132,72 @@ int main() {
            "asmtrace-link:v=canvas&rec=x&off=0x12");
     }
 
+    // --- 54 T6: dt_link.invocation, appended LAST (after pid) ---------------
+    {
+        // No invocation: byte-identical to a pre-T6 link (nav.h's own bar --
+        // "every link written before this change stays byte-identical").
+        dt_link l;
+        l.view = dt_view::canvas;
+        l.rec = "x.asmtrace";
+        eq("no invocation: format unchanged", dt_nav_format(l),
+           "asmtrace-link:v=canvas&rec=x.asmtrace");
+
+        // With invocation: round-trips.
+        dt_link li;
+        li.view = dt_view::canvas;
+        li.rec = "x.asmtrace";
+        li.invocation = 7;
+        eq("invocation formats after rec", dt_nav_format(li),
+           "asmtrace-link:v=canvas&rec=x.asmtrace&invocation=7");
+        dt_link rt;
+        std::string err;
+        check("invocation round-trips",
+              dt_nav_parse(dt_nav_format(li), rt, err), err);
+        check("invocation value survives", rt.invocation.value_or(999) == 7,
+              "invocation was lost");
+        eq("re-format is byte-stable", dt_nav_format(rt), dt_nav_format(li));
+
+        // Both step and invocation set: two different axes, neither one lost
+        // ("the two may both be set", nav.h).
+        dt_link both;
+        both.view = dt_view::slice;
+        both.rec = "x.asmtrace";
+        both.step = 42;
+        both.invocation = 3;
+        dt_link rt2;
+        check("step+invocation link parses",
+              dt_nav_parse(dt_nav_format(both), rt2, err), err);
+        check("step survived alongside invocation",
+              rt2.step.value_or(0) == 42, "step was lost");
+        check("invocation survived alongside step",
+              rt2.invocation.value_or(0) == 3, "invocation was lost");
+        eq("step+invocation format is canonical", dt_nav_format(both),
+           "asmtrace-link:v=slice&rec=x.asmtrace&step=42&invocation=3");
+
+        // Appended LAST means after pid too.
+        dt_link withpid;
+        withpid.view = dt_view::topo;
+        withpid.rec = "x.asmtrace";
+        withpid.pid = 4242;
+        withpid.invocation = 1;
+        eq("invocation lands after pid", dt_nav_format(withpid),
+           "asmtrace-link:v=topo&rec=x.asmtrace&pid=4242&invocation=1");
+
+        // Rejected the way pid's unparseable value is: named, not silent.
+        dt_link bad;
+        check("an out-of-range invocation is rejected",
+              !dt_nav_parse(
+                  "asmtrace-link:v=canvas&rec=x&invocation=4294967296", bad,
+                  err),
+              "it was accepted");
+        check("...with a reason", err.find("invocation") != std::string::npos,
+              err);
+        check("a non-numeric invocation is rejected",
+              !dt_nav_parse("asmtrace-link:v=canvas&rec=x&invocation=abc",
+                            bad, err),
+              "it was accepted");
+    }
+
     // --- the router: dispatch, and refuse LOUDLY when it cannot ------------
     {
         dt_nav_table t;
