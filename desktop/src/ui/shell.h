@@ -25,8 +25,11 @@
 #include "scene3d/pick.h" // T1/T2 (47): PickHint, SceneView::hover_hint
 #include "space/canopy.h" // ModuleCanopy (56 T3): SceneView::canopies
 #include "space/converge.h"
+#include "space/datacell.h" // DataReliefLayer (58 T2): SceneView::relief
+#include "space/dataribbon.h" // DataRibbon (58 T5): SceneView::ribbon
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
+#include "space/sediment.h" // SedimentColumns (58 T6): SceneView::sediment
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
@@ -69,6 +72,28 @@ struct SceneView {
     // alongside `slice` (raw_heat is t-gated the same way), never on a
     // playhead move that only re-lands the coarse degrade plane.
     std::vector<space::ModuleCanopy> canopies;
+    // 58 T2: the read/write twin relief at THIS SAME slice_t — recomputed
+    // alongside `slice`/`canopies` (its two prefix sums are t-gated the same
+    // way), never on a degrade frame that only re-lands the coarse plane.
+    space::DataReliefLayer relief;
+    // 58 T3: the working-set tide at THIS SAME slice_t, with the HUD's dwell
+    // window. Rebuilt when EITHER the playhead or the window moves — the
+    // window is part of the layer's definition, so a stale one would draw a
+    // recency claim the reader did not ask for.
+    space::WorkingSetTide tide;
+    uint64_t tide_window = space::kTideWindowDefault;
+    // 58 T4: the observed-lifetime pillars — a WHOLE-RECORDING aggregate (a
+    // pillar spans first..last touch regardless of the playhead), so it is
+    // woven ONCE per recording alongside terr/traj, exactly like opcode_cells.
+    space::LifetimePillars lifetime;
+    // 58 T5: the data-access order ribbon — also a whole-recording aggregate
+    // (every recorded access, in step order), woven once with the models above.
+    space::DataRibbon ribbon;
+    // 58 T6: the residency sediment columns — whole-recording (the layer's
+    // point is to be readable with the playhead STATIONARY), so woven once
+    // alongside the models above, and built against the SAME scrub cell budget
+    // rather than a throttle of its own.
+    space::SedimentColumns sediment;
     // 56 T4: the per-cell opcode classification — woven ONCE per recording
     // alongside terr/traj above (a cell's instruction mix is a whole-
     // recording fact, never re-gated on the playhead, unlike canopies).

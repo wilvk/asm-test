@@ -1300,6 +1300,13 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     if (layers.mispred)
         draw_mispred(mvp);
 
+    // 58 (memory data-cell family): the five data-half layers, in ONE call —
+    // their upload + draw code lives in scene3d/data_layers_gl.cpp so this
+    // file keeps a single call site. Drawn after the terrains and before the
+    // trajectories: they stand ON the data half of the plane and the
+    // worldlines pass through them.
+    draw_data_layers(mvp, layers);
+
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use
     // the same lookup).
@@ -1599,6 +1606,7 @@ void Scene::shutdown() {
     free_conv();
     free_canopies();
     free_mispred();
+    free_data_layers(); // 58: the data-cell family (scene3d/data_layers_gl.cpp)
     if (vbo_cell_)
         glDeleteBuffers(1, &vbo_cell_);
     if (ibo_grid_)

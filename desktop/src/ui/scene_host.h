@@ -23,8 +23,11 @@
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
+#include "space/datacell.h" // T2 (58): DataReliefLayer, SceneFrame::relief
+#include "space/dataribbon.h" // T5 (58): DataRibbon, SceneFrame::ribbon
 #include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
+#include "space/sediment.h" // T6 (58): SedimentColumns, SceneFrame::sediment
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
@@ -57,6 +60,27 @@ struct SceneFrame {
     // T5 (56-fidelity-and-module-layers): the misprediction survey layer —
     // a whole-recording survey aggregate like opcode_cells above, same gate.
     const space::MispredLayer *mispred = nullptr;
+    // T2 (58-memory-data-cell-family): the read/write twin relief at this
+    // frame's slice_t — playhead-gated like `canopies` above, so the host
+    // re-uploads it on the SAME slice_t gate. nullptr is treated exactly like
+    // an empty layer (nothing drawn), never as a flat surface at zero.
+    const space::DataReliefLayer *relief = nullptr;
+    // T3 (58-memory-data-cell-family): the working-set tide, on the same
+    // playhead gate as `relief`. `tide_gen` advances whenever the dwell window
+    // changes, so a window move re-uploads even though slice_t did not — the
+    // window is part of the layer's definition, not a display option.
+    const space::WorkingSetTide *tide = nullptr;
+    uint64_t tide_gen = 0;
+    // T4 (58-memory-data-cell-family): the observed-lifetime pillars — a
+    // whole-recording aggregate like `opcode_cells`, so the host uploads it on
+    // the weave/growth gate, never on a playhead scrub.
+    const space::LifetimePillars *lifetime = nullptr;
+    // T5 (58-memory-data-cell-family): the data-access order ribbon — a
+    // whole-recording aggregate on the same weave/growth gate as `lifetime`.
+    const space::DataRibbon *ribbon = nullptr;
+    // T6 (58-memory-data-cell-family): the residency sediment columns — a
+    // whole-recording aggregate on the same weave/growth gate.
+    const space::SedimentColumns *sediment = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

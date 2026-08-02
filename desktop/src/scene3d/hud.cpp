@@ -99,6 +99,66 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
             out.push_back({PlacementChip::Warn, label});
         }
     }
+
+    // T1 (58-memory-data-cell-family): the DATA rung's own contract. Four
+    // facts, always stated, so an empty memory layer is never mistaken for an
+    // empty program:
+    //   1. which rung is feeding the data half at all (`mem` present or not);
+    //   2. how many observed-data spans the projection carries, and at what
+    //      gap threshold, since those spans are what makes a heap/stack
+    //      address placeable at all (54 T1);
+    //   3. how many `mem` accesses failed to place, which used to be a silent
+    //      `continue` in terrain.cpp;
+    //   4. nothing invented for the absent case — the coarse wording is
+    //      TerrainModel::mem_note's own, verbatim (D7 / 24-one-visual-language).
+    if (terr.mem_present) {
+        out.push_back({PlacementChip::Ok, "rich: per-access memory"});
+    } else if (!terr.mem_note.empty()) {
+        out.push_back({PlacementChip::Warn, terr.mem_note});
+    }
+    {
+        size_t spans = 0;
+        for (const space::Region &r : terr.proj.regions)
+            if (r.label == space::kObservedDataLabel)
+                spans++;
+        char buf[144];
+        if (spans > 0) {
+            std::snprintf(buf, sizeof buf,
+                          "data spans: %zu observed (%llu-byte gap threshold)",
+                          spans,
+                          (unsigned long long)space::kObservedSpanGap);
+            out.push_back({PlacementChip::Warn, buf});
+        } else if (terr.mem_present) {
+            // `mem` fed the rung but no span was derived: every access landed
+            // inside an already-known region (fine), or none placed (T1's own
+            // drop chip below then says so). Either way, say which.
+            out.push_back(
+                {PlacementChip::Warn,
+                 "data spans: none derived — every observed address fell "
+                 "inside an existing region, or none placed"});
+        }
+    }
+    if (terr.mem_accesses > 0) {
+        char buf[160];
+        if (terr.mem_dropped == 0) {
+            std::snprintf(buf, sizeof buf,
+                          "%llu of %llu memory accesses placed",
+                          (unsigned long long)terr.mem_accesses,
+                          (unsigned long long)terr.mem_accesses);
+            out.push_back({PlacementChip::Ok, buf});
+        } else {
+            std::snprintf(
+                buf, sizeof buf,
+                "%llu of %llu memory accesses OFF-PLANE (no region maps "
+                "them)",
+                (unsigned long long)terr.mem_dropped,
+                (unsigned long long)terr.mem_accesses);
+            out.push_back({terr.mem_dropped == terr.mem_accesses
+                               ? PlacementChip::Bad
+                               : PlacementChip::Warn,
+                           buf});
+        }
+    }
     return out;
 }
 
@@ -187,6 +247,33 @@ const std::vector<OpClassSwatch> &opcode_class_swatches() {
         {space::OpClass::VectorSIMD, "vector / SIMD", {0.85f, 0.30f, 0.75f}},
         {space::OpClass::System, "system / privileged",
          {0.45f, 0.85f, 0.45f}},
+    };
+    return kSwatches;
+}
+
+const std::vector<ReliefSwatch> &relief_shape_swatches() {
+    // The colours mirror data_layers_gl.cpp's relief_read_/relief_write_
+    // literals VERBATIM — the same keep-in-sync convention
+    // terrain_encoding_swatches follows against kTerrainFrag (that TU is the
+    // GL half, which this one cannot include: D4/D9, no GL here). The LABELS
+    // are not copied at all: they come from space::relief_shape_label(), so
+    // the legend and the model can never state two different rules for the
+    // same shape. A ReadWrite cell gets the read hue (its peak is what the
+    // reader sees first); the None row is deliberately grey, the same abstain
+    // colour OpClass::Unknown uses.
+    static const std::vector<ReliefSwatch> kSwatches = {
+        {space::ReliefShape::ReadOnly,
+         space::relief_shape_label(space::ReliefShape::ReadOnly),
+         {0.30f, 0.72f, 0.95f}},
+        {space::ReliefShape::WriteOnly,
+         space::relief_shape_label(space::ReliefShape::WriteOnly),
+         {1.00f, 0.60f, 0.20f}},
+        {space::ReliefShape::ReadWrite,
+         space::relief_shape_label(space::ReliefShape::ReadWrite),
+         {0.30f, 0.72f, 0.95f}},
+        {space::ReliefShape::None,
+         space::relief_shape_label(space::ReliefShape::None),
+         {0.55f, 0.55f, 0.55f}},
     };
     return kSwatches;
 }
@@ -370,11 +457,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // 36 T4: the placement chrome — nothing about anchoring is silent.
     for (const PlacementChip &pc : placement_chips(terr, traj))
         chip(sev_col(pc.sev), pc.text.c_str(), first);
-    // coarse-vs-rich
-    chip(terr.mem_present ? kOk : kWarn,
-         terr.mem_present ? "rich: per-access memory"
-                          : "coarse: no memory stream",
-         first);
+    // T1 (58): the coarse-vs-rich chip USED to be drawn inline here, a second
+    // spelling of the same fact ("coarse: no memory stream") that no test could
+    // reach. placement_chips now owns both branches (and grades them with the
+    // span/drop census beside them), so this loop draws it once — one source of
+    // truth for the data rung, testable without an ImGui frame.
     // exact-vs-statistical
     if (terr.has_stat)
         chip(kWarn, "statistical residency present (separate layer)", first);
@@ -791,6 +878,78 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             ImGui::TextColored(kWarn, "%u branch endpoint(s) off-plane",
                                s.mispred_off_plane);
     }
+    // T2 (58): the twin relief's own legend, shown only while it is on. The
+    // note first (it states the ABSENT-surface rule, the one thing the picture
+    // cannot say for itself), then one row per shape.
+    if (s.layers.data_relief) {
+        ImGui::TextColored(kDim, "%s", space::data_relief_note());
+        for (const ReliefSwatch &sw : relief_shape_swatches()) {
+            ImVec4 col{sw.rgb[0], sw.rgb[1], sw.rgb[2], 1.0f};
+            ImGui::ColorButton(("##rlf" + sw.label).c_str(), col,
+                               ImGuiColorEditFlags_NoTooltip |
+                                   ImGuiColorEditFlags_NoPicker,
+                               ImVec2(12, 12));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(sw.label.c_str());
+        }
+        if (s.relief_undirected_cells > 0)
+            ImGui::TextColored(kWarn,
+                               "%u data cell(s) carry %llu byte(s) of traffic "
+                               "with NO recorded direction — counted, drawn on "
+                               "neither surface",
+                               s.relief_undirected_cells,
+                               (unsigned long long)s.relief_undirected_bytes);
+    }
+    // T3 (58): the working-set tide's own chrome, shown only while it is on:
+    // the dwell knob (with its UNIT named on the control — a bare number was
+    // the 2026-07-29 review's top finding), the live/cold split, and the
+    // legend line the model itself produced.
+    if (s.layers.working_set) {
+        int win = static_cast<int>(s.tide_window > 0 ? s.tide_window : 1);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::SliderInt("dwell window (trace-time steps)", &win, 1,
+                             static_cast<int>(s.nsteps > 1 ? s.nsteps : 1024))) {
+            s.tide_window = static_cast<uint64_t>(win < 1 ? 1 : win);
+            s.tide_window_changed = true;
+        }
+        if (!s.tide_legend.empty())
+            ImGui::TextColored(kDim, "%s", s.tide_legend.c_str());
+        ImGui::TextColored(kDim, "%u live cell(s), %u cold (faded watermark)",
+                           s.tide_live_cells, s.tide_cold_cells);
+    }
+    // T4 (58): the lifetime pillars' own chrome — the label FIRST, because it
+    // is the load-bearing sentence of that whole brief (these are observed
+    // touches, not allocations) and a reader who sees the geometry before the
+    // caveat has already drawn the wrong conclusion.
+    if (s.layers.lifetime) {
+        ImGui::TextColored(kDim, "%s", space::lifetime_pillar_label());
+        if (s.lifetime_open_topped > 0)
+            ImGui::TextColored(kBad,
+                               "%u pillar(s) OPEN-TOPPED — a torn capture cut "
+                               "the observation, not the object: the top is a "
+                               "lower bound",
+                               s.lifetime_open_topped);
+    }
+    // T5 (58): the access-order ribbon. Its note comes from the model
+    // (space::data_ribbon_note) so the source population, the gap rule and the
+    // leap rule are stated once and cannot drift; the extra line here is the
+    // disambiguation against the access SPURS, which are a different layer
+    // drawn in the same pane and would otherwise read as one thing.
+    if (s.layers.data_ribbon) {
+        if (!s.ribbon_legend.empty())
+            ImGui::TextColored(kDim, "%s", s.ribbon_legend.c_str());
+        if (s.layers.access_marks)
+            ImGui::TextColored(kWarn,
+                               "\"access order\" and \"access\" are two "
+                               "DIFFERENT layers, both on: the ribbon is the "
+                               "ORDER data was touched in, the spurs are which "
+                               "instruction touched which datum");
+    }
+    // T6 (58): the sediment layer's note, which STATES THE BAND COUNT — the
+    // brief's own requirement, because a coarsened column looks exactly like a
+    // sparsely-hit one unless the reader is told which they are seeing.
+    if (s.layers.sediment && !s.sediment_legend.empty())
+        ImGui::TextColored(kDim, "%s", s.sediment_legend.c_str());
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

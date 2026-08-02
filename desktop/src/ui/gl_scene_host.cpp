@@ -97,6 +97,17 @@ class GlSceneHost : public SceneHost {
             // aggregate too — same upload gate.
             static const space::MispredLayer kNoMispred;
             scene_.set_mispred_layer(f.mispred ? *f.mispred : kNoMispred);
+            // T4 (58): the lifetime pillars span first..last OBSERVED touch
+            // over the whole recording, so they ride this gate too — a Gantt
+            // that moved with the playhead would not be a Gantt.
+            static const space::LifetimePillars kNoLifetime;
+            scene_.set_lifetime_pillars(f.lifetime ? *f.lifetime : kNoLifetime);
+            // T5 (58): the access-order ribbon is whole-recording too.
+            static const space::DataRibbon kNoRibbon;
+            scene_.set_data_ribbon(f.ribbon ? *f.ribbon : kNoRibbon);
+            // T6 (58): the sediment columns are whole-recording too.
+            static const space::SedimentColumns kNoSediment;
+            scene_.set_sediment_columns(f.sediment ? *f.sediment : kNoSediment);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below
@@ -114,7 +125,25 @@ class GlSceneHost : public SceneHost {
             static const std::vector<space::ModuleCanopy> kNoCanopies;
             scene_.set_module_canopies(f.canopies ? *f.canopies : kNoCanopies,
                                        f.terr->proj);
+            // T2 (58): the twin relief is cut at the SAME inclusive [0, t] as
+            // the terrain slice, so it rides the same gate — never a stale
+            // relief standing over a freshly-scrubbed terrain.
+            static const space::DataReliefLayer kNoRelief;
+            scene_.set_data_relief(f.relief ? *f.relief : kNoRelief);
+            // T3 (58): same gate, plus its own dwell-window generation below.
+            static const space::WorkingSetTide kNoTide;
+            scene_.set_working_set_tide(f.tide ? *f.tide : kNoTide);
+            up_tide_gen_ = f.tide_gen;
             up_t_ = f.slice_t;
+        }
+        // T3 (58): the dwell window is part of the tide's DEFINITION, so a
+        // window move must re-upload even though the playhead did not — a
+        // stale tide would draw a recency claim for a window the reader is no
+        // longer looking at.
+        if (f.tide_gen != up_tide_gen_) {
+            static const space::WorkingSetTide kNoTide2;
+            scene_.set_working_set_tide(f.tide ? *f.tide : kNoTide2);
+            up_tide_gen_ = f.tide_gen;
         }
         have_upload_ = true;
 
@@ -228,6 +257,9 @@ class GlSceneHost : public SceneHost {
     uint64_t up_key_ = 0;
     uint64_t up_gen_ = 0;
     uint64_t up_t_ = 0;
+    // T3 (58): the working-set dwell window last uploaded. UINT64_MAX so the
+    // very first frame always re-uploads (a real window is never that value).
+    uint64_t up_tide_gen_ = UINT64_MAX;
     bool have_upload_ = false;
     // 51 T2: which region index the focus mask currently uploaded is for.
     // -2 == nothing uploaded yet (distinct from -1, "no region focused").

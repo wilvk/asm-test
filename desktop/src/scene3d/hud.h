@@ -19,6 +19,7 @@
 #include "scene3d/focus.h"  // 51 T1/T2: SceneFocus, the thread roster
 #include "scene3d/lod.h"    // 51 T4: LodTier, the entity-budget placard
 #include "scene3d/scene.h"
+#include "space/datacell.h" // T2 (58): ReliefShape, ReliefSwatch::shape
 #include "space/mnemonic.h" // T4 (56): OpClass, OpClassSwatch::cls
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -124,6 +125,21 @@ struct OpClassSwatch {
     float rgb[3];
 };
 const std::vector<OpClassSwatch> &opcode_class_swatches();
+
+// T2 (58-memory-data-cell-family): the twin relief's legend — one line per
+// ReliefShape, in space::relief_shape_label()'s own words (a single source of
+// truth with the model, never a second copy of the phrasing), plus the layer
+// note. EXHAUSTIVE BY TEST over ReliefShape, exactly like
+// opcode_class_swatches over OpClass. Shown only while
+// SceneLayers::data_relief is on, and it names the ABSENT-surface rule, which
+// is the one thing a reader cannot deduce from the picture: a missing surface
+// means the direction was never recorded, not that it measured zero.
+struct ReliefSwatch {
+    space::ReliefShape shape;
+    std::string label;
+    float rgb[3];
+};
+const std::vector<ReliefSwatch> &relief_shape_swatches();
 
 // 49 T4: tick values for the trajectory-time ruler, `0..nsteps` inclusive at
 // a step no finer than `nsteps / max_ticks` — pure so the tick set is
@@ -261,6 +277,45 @@ struct HudState {
     // was dropped, so there is nothing to disclose.
     LodTier lod = LodTier::Near;
     std::string lod_note;
+    // T2 (58-memory-data-cell-family): synced by the caller every frame from
+    // space::DataReliefLayer — traffic whose direction was never recorded is
+    // drawn on NEITHER surface, so it would otherwise vanish between the
+    // terrain (which counts it in cum_size) and this layer. Stated instead.
+    // Shown only while SceneLayers::data_relief is on.
+    uint32_t relief_undirected_cells = 0;
+    uint64_t relief_undirected_bytes = 0;
+
+    // T3 (58-memory-data-cell-family): the working-set DWELL WINDOW, in
+    // TERRAIN-TIME steps — the playhead's own axis (`t` above), NEVER the
+    // execution step the flat views brush (34-playhead-and-scene-reach's
+    // two-axes rule). The HUD owns the control; the caller reads it back and
+    // rebuilds the tide, exactly as it does for `t`. `tide_window_changed` is
+    // the one-shot intent, cleared by the caller like playhead_moved.
+    uint64_t tide_window = space::kTideWindowDefault;
+    bool tide_window_changed = false;
+    // Synced by the caller from space::WorkingSetTide so the HUD can state the
+    // live/cold split and the tint provenance without rebuilding the layer.
+    uint32_t tide_live_cells = 0, tide_cold_cells = 0;
+    std::string tide_legend; // space::tide_note(tide), built by the caller
+
+    // T4 (58-memory-data-cell-family): how many lifetime pillars are OPEN-
+    // TOPPED (a torn capture cut the observation at the tail, so the interval's
+    // top is a lower bound). Synced by the caller; shown only while
+    // SceneLayers::lifetime is on, in the refuse colour.
+    uint32_t lifetime_open_topped = 0;
+
+    // T5 (58-memory-data-cell-family): the access-order ribbon's own legend
+    // line, built by the caller from space::data_ribbon_note(ribbon) — it
+    // names the SOURCE population (`mem` vs dataflow operands, which are NOT
+    // the same set of accesses), the gap rule and the leap rule. Shown only
+    // while SceneLayers::data_ribbon is on.
+    std::string ribbon_legend;
+
+    // T6 (58-memory-data-cell-family): the sediment layer's own legend line,
+    // built by the caller from space::sediment_note(cols) — it STATES THE BAND
+    // COUNT (T6 step 6's own requirement) and whether the scene budget
+    // coarsened it. Shown only while SceneLayers::sediment is on.
+    std::string sediment_legend;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

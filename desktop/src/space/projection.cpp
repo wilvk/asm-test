@@ -294,7 +294,7 @@ std::vector<Region> observed_data_spans(const Recording &rec,
         r.base = sp.lo;
         r.len = sp.hi - sp.lo;
         r.kind = Region::Unknown;
-        r.label = "observed data";
+        r.label = kObservedDataLabel;
         out.push_back(std::move(r));
     }
 
