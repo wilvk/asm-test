@@ -261,10 +261,119 @@ in vec3 pos;
 uniform mat4 uMVP;
 uniform float uPointSize;
 out float vY;
+// T2 (55): kTrajFrag is linked against BOTH this shader and kLineVert, and a
+// fragment input with no matching vertex output will not link -- so the two
+// halo varyings are declared here too, at values that put every fragment of a
+// POINT glyph inside the core. A point has no width to ring.
+noperspective out float vEdgePx;
+noperspective out float vCoreHalfPx;
 void main(){
   vY = pos.y;
+  vEdgePx = 0.0;
+  vCoreHalfPx = 1.0;
   gl_Position = uMVP * vec4(pos, 1.0);
   gl_PointSize = uPointSize;
+}
+)GLSL";
+
+// --- T6 (55-scene-render-quality) step 1: the PORTABLE line width. Wide lines
+//     (`glLineWidth` above 1.0) are deprecated in a core profile and a core
+//     implementation may report GL_ALIASED_LINE_WIDTH_RANGE = [1,1] and either
+//     clamp or raise GL_INVALID_VALUE — which is exactly the context this app's
+//     own Apple path requests (main.cpp: 3.2 core + forward-compatible). This
+//     shader replaces every such call: each SEGMENT arrives as two triangles
+//     (6 vertices) carrying its own endpoint, the segment's OTHER endpoint, and
+//     a ±1 side, and the width is applied in SCREEN SPACE here, in pixels.
+//
+// It serves BOTH the colour pass (linked against kTrajFrag, which reads vY) and
+// — where the pick pass takes its quad route — the id pass (linked against
+// kPickPointFrag, which reads fId). One vertex shader, two programs: the
+// colour program simply never enables the `vid` attribute, and a vertex output
+// no fragment shader reads is legal. That is what keeps the two passes' widened
+// geometry provably the SAME expansion rather than two implementations that
+// could drift.
+//
+// Fidelity (D7, this brief's own note): width here separates mark CLASSES
+// (spurs, paths, convergences) and — under uDepthCue — carries DEPTH. Neither
+// is a magnitude. No layer may map uWidthPx to a quantity without saying so at
+// that layer.
+inline const char *kLineVert = R"GLSL(#version 130
+in vec3 pos;    // this vertex's own endpoint
+in vec3 other;  // the segment's OTHER endpoint
+in float side;  // -1 / +1: which side of the centreline this corner sits on
+in uint vid;    // pick id (id pass only; the colour VAO leaves it disabled)
+uniform mat4 uMVP;
+uniform vec2 uViewportPx;   // (width, height) in pixels
+uniform float uWidthPx;     // the mark class's nominal CORE width, IN PIXELS
+uniform float uMinWidthPx;  // the floor -- see uDepthCue
+uniform int uDepthCue;      // T2 (55): 1 = attenuate width with eye distance
+uniform float uDepthCueRef; // the eye distance at which the width is nominal
+uniform float uHaloPadPx;   // T2 (55): halo ring per side, 0 = no halo at all
+out float vY;
+// noperspective, and it is load-bearing: both carry SCREEN-SPACE PIXEL
+// distances, and the default (perspective-correct) interpolation reports the
+// value that is linear in EYE space instead. The perpendicular offset below is
+// applied as a constant screen offset, so in eye space the quad is a trapezoid
+// that widens with depth -- and a foreshortened segment then reports a
+// fragment 2px off the centreline as being well inside the core, which paints
+// ring pixels as line and visibly fattens the mark. (Measured: it moved a
+// terrain cell's sampled pixel from terrain to line colour, silently breaking
+// a golden-scene brightness assertion.)
+noperspective out float vEdgePx;     // signed distance from the centreline, px
+noperspective out float vCoreHalfPx; // half the CORE width here, px
+flat out uint fId;
+void main(){
+  vY = pos.y;
+  fId = vid;
+  vec4 cp = uMVP * vec4(pos, 1.0);
+  vec4 co = uMVP * vec4(other, 1.0);
+  // A vertex at or behind the eye plane has no screen position to widen in;
+  // emit the un-widened clip position (the segment is being clipped anyway)
+  // rather than dividing by a non-positive w and scattering garbage.
+  if (cp.w <= 0.0 || co.w <= 0.0) { gl_Position = cp; return; }
+  vec2 half_vp = uViewportPx * 0.5;
+  vec2 sp = (cp.xy / cp.w) * half_vp;   // this endpoint, in pixels
+  vec2 so = (co.xy / co.w) * half_vp;   // the other endpoint, in pixels
+  vec2 d = so - sp;
+  float len = length(d);
+  // A degenerate (zero-length) segment has no direction; pick one rather than
+  // normalizing a zero vector (undefined) -- it collapses to a square dot.
+  vec2 dir = (len > 1e-6) ? d / len : vec2(1.0, 0.0);
+  vec2 perp = vec2(-dir.y, dir.x);
+  float w = uWidthPx;
+  if (uDepthCue == 1) {
+    // T2 step 3: depth-cued attenuation -- a farther line is thinner, which is
+    // a DEPTH cue and never a magnitude (D7). cp.w is eye distance for this
+    // projection. Bounded below by uMinWidthPx: a distant bundle that thinned
+    // to nothing would be an unknown rendered as an absence (invariant 3).
+    w *= clamp(uDepthCueRef / max(cp.w, 1e-4), 0.0, 1.0);
+  }
+  w = max(w, uMinWidthPx);
+  vCoreHalfPx = w * 0.5;
+  // T2 (55): the halo is the OUTER RING OF THIS SAME QUAD, not a second,
+  // wider primitive drawn behind it. That is what makes it safe on a densely
+  // tessellated polyline: with two primitives, a nearer segment's halo wins
+  // the depth test against a neighbouring segment's core and eats its own
+  // line (measured: a 16-segment arc lost 78% of itself). One primitive has
+  // no depth relationship to get wrong -- neighbouring segments overlap
+  // core-over-core along the shared centreline -- while a DIFFERENT mark is
+  // still cut by the ordinary z-test, which is the effect the paper is for.
+  // The pad is NOT depth-attenuated: the ring stays a constant screen-space
+  // width, so a far line thins but never loses its ability to cut.
+  float hw = w * 0.5 + uHaloPadPx;
+  vEdgePx = side * hw;
+  // Across the centreline: half the core width plus the ring. ALONG it: a
+  // square cap of half the CORE width only, never of the ringed width. The cap
+  // closes the wedge a per-segment expansion leaves at a polyline's joins, and
+  // every fragment inside it reads as core (|vEdgePx| there is whatever the
+  // corner carries) — so extending it by the ring as well would paint CORE
+  // colour up to a ring's width past every joint, visibly fattening the mark
+  // the moment halos turned on. With this, the core's own footprint is
+  // identical whether the ring is there or not; the ring only ever adds
+  // OUTSIDE it.
+  vec2 offs = perp * (hw * side) - dir * (w * 0.5);
+  cp.xy += (offs / half_vp) * cp.w;
+  gl_Position = cp;
 }
 )GLSL";
 
@@ -276,6 +385,18 @@ void main(){
 // the (possibly dimmed) base colour unchanged.
 inline const char *kTrajFrag = R"GLSL(#version 130
 in float vY;
+// T2 (55): both SCREEN-space pixel distances -- see kLineVert for why the
+// noperspective qualifier here is load-bearing rather than a micro-optimisation
+// (it must match the vertex shader's declaration, or the program will not link).
+noperspective in float vEdgePx;     // distance from the centreline, in pixels
+noperspective in float vCoreHalfPx; // past this, the fragment is halo, not line
+uniform int uHalo; // T2 (55): 1 = this draw carries a halo ring
+// T2 (55): the ring's colour+alpha, a FIXED constant handed down from scene.h.
+// Partial alpha on purpose: the cut comes from this quad's DEPTH write (a
+// farther line simply is not drawn), so the ring does not need to erase what
+// is behind it — and on this plane what is behind it is the terrain, whose
+// brightness is a measurement. See kHaloColor's own comment.
+uniform vec4 uHaloColor;
 uniform vec4 uColor;
 uniform int uStipple;         // 1 = statistical: never a solid exact tube
 uniform int uHasHead;         // T6: 1 on the followed trajectory's draw call
@@ -296,6 +417,13 @@ void main(){
   if (uHasTimeCut == 1 && vY > uTimeCutY) {
     c.rgb *= 0.35; // dim, not discard: "recorded, not yet reached in this view"
   }
+  // T2 (55): the halo ring. Taken BEFORE the time-cut dim and the comet tail
+  // (both of which are readings of the LINE, and a halo carries no reading of
+  // its own) but AFTER uColor is read, so the stipple below still sees the
+  // line's own alpha. D7: the colour is a fixed constant handed down from
+  // scene.h -- it must never follow the fidelity weather sky, or a depth cue
+  // would start encoding fidelity.
+  bool halo = (uHalo == 1) && abs(vEdgePx) > vCoreHalfPx;
   if (uStipple == 1) {
     // T4 (55): a fragment survives with probability c.a (uColor's own alpha,
     // 0.45 for a statistical line) and is then drawn FULLY OPAQUE -- the
@@ -310,6 +438,11 @@ void main(){
     if (ign(gl_FragCoord.xy) > c.a) discard;
     c.a = 1.0;
   }
+  // The halo shares the line's stipple mask above by construction (the discard
+  // is evaluated on gl_FragCoord, before this branch), so a statistical line's
+  // gaps stay gaps and still show what is behind them. An opaque halo would
+  // fill them and launder a sampled survey into a solid, exact-looking path.
+  if (halo) { frag = uHaloColor; return; }
   if (uHasHead == 1 && abs(vY - uHeadY) < uTailHalf) {
     c = vec4(mix(c.rgb, vec3(1.0), 0.6), max(c.a, 0.95)); // comet tail
   }

@@ -53,6 +53,12 @@ unsigned gl_link_program(const char *vs, const char *fs, bool has_vid, bool pick
     // does not declare is a no-op, so one call site covers both.
     glBindAttribLocation(p, kAttrPos, "cell");
     glBindAttribLocation(p, kAttrPos, "pos");
+    // 55 T6 step 1: bound unconditionally, on the same reasoning as the two
+    // spellings above — binding a name that is not an active attribute is not
+    // an error, it simply has no effect — so the quad-expanded line layout
+    // needs no second link path.
+    glBindAttribLocation(p, kAttrOther, "other");
+    glBindAttribLocation(p, kAttrSide, "side");
     if (has_vid)
         glBindAttribLocation(p, kAttrVid, "vid");
     if (has_col)

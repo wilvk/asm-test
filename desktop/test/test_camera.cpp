@@ -2,6 +2,9 @@
 // 10-spacetime-3d-overview.md T4 step 4). Null harness, no display, no GL: this
 // binary links NOTHING but the header-only camera (and linmath.h), which is the
 // proof the camera is engine- and GL-free and can be reasoned about headlessly.
+// 55 T6 step 1 added a second header-only citizen on the same terms —
+// scene3d/linequad.h, the CPU half of the portable line width — for the same
+// reason: geometry that can be checked with no context at all should be.
 //
 // The properties pinned: the eye rides a sphere of the given radius about the
 // target; orbit clamps pitch off the poles and dolly clamps radius to its working
@@ -22,6 +25,10 @@
 
 #include "scene3d/camera.h"
 #include "scene3d/lod.h"
+#include <vector>
+
+#include "scene3d/camera.h"
+#include "scene3d/linequad.h" // T6 (55) step 1: the pure quad expansion
 
 using asmdesk::scene3d::Camera;
 using asmdesk::scene3d::LodTier;
@@ -484,6 +491,114 @@ int main() {
               p.find("access spurs") == std::string::npos &&
                   p.find("convergence arcs") == std::string::npos,
               "placard was: " + p);
+    }
+
+    // === T6 (55-scene-render-quality) step 1: the quad expansion's pure ====
+    // === maths -- the half that has to be right before any pixel can be. ===
+    //
+    // The brief asks for exactly this here ("test_camera.cpp covers the pure
+    // maths of the expansion if it is factored out (it should be)"), and it
+    // calls the SHIPPED function (scene3d/linequad.h, which scene.cpp uses to
+    // build its buffers), never a re-derivation of it.
+    {
+        using asmdesk::scene3d::expand_line_quads;
+        using asmdesk::scene3d::kQuadStrideFloats;
+        using asmdesk::scene3d::kQuadVertsPerSegment;
+        using asmdesk::scene3d::line_quad_segments;
+
+        // A 3-vertex strip -> 2 segments; the same 3 vertices as disjoint
+        // pairs -> 1 segment (the odd vertex has no partner and is dropped,
+        // exactly as GL_LINES itself drops it).
+        const std::vector<float> pts = {0, 0, 0, 1, 0, 0, 1, 0, 1};
+        std::vector<float> strip, pairs;
+        expand_line_quads(pts, /*strip=*/true, strip);
+        expand_line_quads(pts, /*strip=*/false, pairs);
+        check("linequad: a strip of 3 vertices expands to 2 segments",
+              strip.size() == 2u * kQuadVertsPerSegment * kQuadStrideFloats,
+              "wrong vertex count for a 3-vertex strip");
+        check("linequad: 3 vertices as PAIRS expand to 1 segment",
+              pairs.size() == 1u * kQuadVertsPerSegment * kQuadStrideFloats,
+              "an unpaired trailing vertex must not invent a segment");
+        check("linequad: line_quad_segments agrees with the expansion",
+              line_quad_segments(3, true) == 2 &&
+                  line_quad_segments(3, false) == 1 &&
+                  line_quad_segments(1, true) == 0,
+              "the segment count a caller sizes its id array with is wrong");
+
+        // Every corner carries BOTH endpoints and a unit side, and the six
+        // corners of one segment use each (endpoint, side) combination the
+        // shader needs: two at A (+1, -1) and two at B (+1, -1), with the
+        // shared corners appearing twice because the two triangles share an
+        // edge.
+        int at_a[2] = {0, 0}, at_b[2] = {0, 0};
+        for (size_t v = 0; v + kQuadStrideFloats <= pairs.size();
+             v += kQuadStrideFloats) {
+            const float *c = &pairs[v];
+            const float side = c[6];
+            check("linequad: side is exactly +1 or -1",
+                  side == 1.0f || side == -1.0f,
+                  "a corner carried a side that is not a unit sign");
+            const bool is_a = (c[0] == 0.0f && c[1] == 0.0f && c[2] == 0.0f);
+            const bool partner_ok =
+                is_a ? (c[3] == 1.0f && c[4] == 0.0f && c[5] == 0.0f)
+                     : (c[3] == 0.0f && c[4] == 0.0f && c[5] == 0.0f);
+            check("linequad: a corner's `other` is the segment's far end",
+                  partner_ok, "a corner named the wrong partner endpoint");
+            (is_a ? at_a : at_b)[side > 0 ? 0 : 1]++;
+        }
+        check("linequad: both sides are emitted at both endpoints",
+              at_a[0] > 0 && at_a[1] > 0 && at_b[0] > 0 && at_b[1] > 0,
+              "a quad missing one of its four corners cannot be a rectangle");
+
+        // The bowtie guard, and the one thing a reader of linequad.h is most
+        // likely to get wrong: because the shader derives the perpendicular
+        // from (other - pos), the perpendicular at B points the OPPOSITE way
+        // to the one at A -- so the corner physically opposite (A,+1) must be
+        // recorded as (B,+1), not (B,-1). Re-derive that here by applying the
+        // shader's own screen-space rule (mirrored below, the same convention
+        // test_scene_fbo already uses for kTrajFrag's ign()) rather than
+        // trusting linequad.h's comment.
+        auto screen_offset = [](float px, float py, float ox, float oy, float w,
+                                float side, float *out_x, float *out_y) {
+            float dx = ox - px, dy = oy - py;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len > 1e-6f) {
+                dx /= len;
+                dy /= len;
+            } else {
+                dx = 1.0f;
+                dy = 0.0f;
+            }
+            const float hw = w * 0.5f;
+            *out_x = px + (-dy) * hw * side - dx * hw;
+            *out_y = py + (dx)*hw * side - dy * hw;
+        };
+        // Segment A=(0,0) -> B=(4,0) in screen pixels, width 2.
+        float ax_p, ay_p, ax_m, ay_m, bx_p, by_p;
+        screen_offset(0, 0, 4, 0, 2.0f, +1.0f, &ax_p, &ay_p);
+        screen_offset(0, 0, 4, 0, 2.0f, -1.0f, &ax_m, &ay_m);
+        screen_offset(4, 0, 0, 0, 2.0f, +1.0f, &bx_p, &by_p);
+        check("linequad: half the width lands on each side of the centreline",
+              std::fabs(ay_p - 1.0f) < 1e-5f && std::fabs(ay_m + 1.0f) < 1e-5f,
+              "a width-2 line must reach 1px either side of its centreline");
+        check("linequad: (B,+1) is the corner OPPOSITE (A,+1)",
+              (ay_p > 0.0f) != (by_p > 0.0f),
+              "the side sign does not invert at the far endpoint -- the quad "
+              "would be a bowtie");
+        check("linequad: the square cap extends half a width past each end",
+              std::fabs(ax_p + 1.0f) < 1e-5f && std::fabs(bx_p - 5.0f) < 1e-5f,
+              "the cap that closes a polyline's joins is missing or wrong");
+        check("linequad: the expanded width is exactly the width asked for",
+              std::fabs((ay_p - ay_m) - 2.0f) < 1e-5f,
+              "a width-2 line did not span 2 screen pixels across");
+
+        // A degenerate (zero-length) segment must not normalize a zero vector.
+        float dx0 = 0.0f, dy0 = 0.0f;
+        screen_offset(2, 2, 2, 2, 3.0f, +1.0f, &dx0, &dy0);
+        check("linequad: a zero-length segment produces finite corners",
+              std::isfinite(dx0) && std::isfinite(dy0),
+              "a degenerate segment produced NaN/inf instead of collapsing to "
+              "a dot");
     }
 
     if (failures) {

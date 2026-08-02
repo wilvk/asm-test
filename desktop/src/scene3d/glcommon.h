@@ -37,7 +37,14 @@ namespace asmdesk::scene3d {
 inline constexpr unsigned kAttrPos = 0; // "cell" (terrain) / "pos" (lines)
 inline constexpr unsigned kAttrVid = 1; // "vid"  (pick ids)
 inline constexpr unsigned kAttrCol = 2; // "col"  (per-vertex colour, 59)
-inline constexpr unsigned kFragId = 0;  // "fragid" (integer pick output)
+// 55 T6 step 1: the quad-expanded line layout's two extra attributes
+// (shaders/embedded.h's kLineVert) — the segment's OTHER endpoint, and which
+// side of the centreline this corner sits on. Slots 3 and 4 because 59's
+// kAttrCol already holds 2; the numbers are arbitrary but must be agreed in
+// exactly one place, which is the whole point of this header.
+inline constexpr unsigned kAttrOther = 3; // "other" (the far endpoint)
+inline constexpr unsigned kAttrSide = 4;  // "side"  (-1 / +1 across the line)
+inline constexpr unsigned kFragId = 0;    // "fragid" (integer pick output)
 
 // Compile + link a program from two GLSL sources, binding the attribute names
 // above. `has_vid` binds "vid"; `has_col` binds "col"; `pick` binds the integer

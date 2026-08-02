@@ -132,6 +132,16 @@ struct SceneLayers {
     // T5 (57): the dominant-path ridge — which successor control usually
     // takes at each fork. An AGGREGATE, never a path (see space/ridge.h).
     bool ridge = true;
+    // T2 (55-scene-render-quality): depth-dependent halos on the line sets
+    // (Everts, Bekker, Roerdink & Isenberg, IEEE TVCG 15(6) 2009), together
+    // with the depth-cued width attenuation the same paper pairs with them.
+    // Default ON, matching `edl` above rather than `confidence`/`opcode`: like
+    // EDL this is a DEPTH CUE over geometry that is already drawn — it restates
+    // which mark is in front and adds no quantity of its own — where those two
+    // re-lift the same terrain into a different reading. Off means neither the
+    // halo pass nor the attenuation runs at all (never a pass that runs and
+    // does nothing).
+    bool halos = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -142,6 +152,55 @@ struct SceneLayers {
 // disappearing into false shading).
 inline constexpr float kEdlStrengthDefault = 1.2f;
 inline constexpr float kEdlRadiusPxDefault = 2.0f;
+
+// T6 (55-scene-render-quality) step 1: the line widths, in SCREEN PIXELS, now
+// that they come from geometry (kLineVert) rather than glLineWidth. Width
+// separates mark CLASSES here and is never a magnitude (this brief's own
+// fidelity note) — spurs thinnest, paths, convergence arcs widest.
+inline constexpr float kSpurWidthPx = 1.5f;
+inline constexpr float kTrajWidthPx = 2.0f;
+inline constexpr float kConvWidthPx = 3.0f;
+// The floor every quad-expanded width is clamped to. Two reasons, both real:
+// (a) T2's own bound — a depth-attenuated far line must never thin to nothing,
+// which would render an unknown as an absence; (b) a screen-space quad thinner
+// than about a pixel can fall entirely BETWEEN pixel centres and vanish, where
+// GL's own line rasterizer guarantees a connected 1px chain. This is also why
+// the access spurs' nominal width rose from the old glLineWidth(1.0) to 1.5.
+inline constexpr float kMinLineWidthPx = 1.5f;
+// T6 step 1: the pick pass's click-target widening, unchanged in value from
+// the glLineWidth(6)/(5) calls it replaces on the quad route.
+inline constexpr float kPickConvWidthPx = 6.0f;
+inline constexpr float kPickSpurWidthPx = 5.0f;
+
+// T2 (55-scene-render-quality): the depth-dependent halo. Each line set is
+// drawn twice — first this much wider on EACH side, in the scene's background
+// colour and offset away from the viewer, then the line itself — so a nearer
+// line visibly CUTS the ones behind it and a bundle reads as a bundle.
+// The ring is this many pixels PER SIDE, and it is not depth-attenuated: a far
+// line thins (T2 step 3) but keeps a constant-width ring, so it never loses the
+// ability to cut. Modest on purpose — width here separates mark classes, and a
+// 1.5px spur wearing a band three times its own width would read as a fatter
+// class than it is (T6's fidelity note).
+inline constexpr float kHaloPadPx = 1.5f;
+// The ring's colour: the scene's own clear colour, at PARTIAL alpha, and FIXED.
+//
+// Two deliberate departures from the paper, both for the same reason — this
+// plane is not the paper's empty background, it is the terrain, and the
+// terrain's brightness IS a measurement:
+//   - the ring washes toward the background rather than replacing it, so a
+//     cell's own density reading survives underneath every worldline that
+//     crosses it. An opaque ring erases it, which matters most in exactly the
+//     view the family prescribes for READING a cell (the top-down preset).
+//     The cut itself does not depend on this: it comes from the ring's DEPTH
+//     write, which stops a farther line being drawn at all, not from the
+//     colour it paints.
+//   - the colour must never follow the fidelity weather sky
+//     (scene3d/atmosphere.h), whose hue is derived from fidelity severity. A
+//     depth cue whose colour moved with fidelity would be read as an encoding,
+//     which is what this brief's D7 note forbids. With the sky on, the ring
+//     therefore reads as a dark outline rather than an exact background match
+//     — stated here rather than hidden.
+inline constexpr float kHaloColor[4] = {0.02f, 0.02f, 0.03f, 0.55f};
 
 class Scene {
   public:
@@ -159,19 +218,40 @@ class Scene {
 
     // T6 (55-scene-render-quality) step 2: the driver's own answer to "how
     // wide can glLineWidth actually go here", queried once at init_gl —
-    // [1,1] (the spec's guaranteed floor) until then. This tree draws
-    // trajectories/arcs at 2-3px via glLineWidth (portable only on a
-    // COMPATIBILITY profile; a core+forward-compatible context, which is
-    // what this app's OWN Apple path requests, may report exactly [1,1] and
-    // silently clamp or GL_INVALID_VALUE above it) — recorded here so the
-    // next person to wonder has the driver's actual answer in hand, rather
-    // than re-deriving it. T6 step 1 (quad-expansion, the actual portable
-    // fix) is NOT implemented by this brief's landing: it would need to
-    // redesign how the pick pass shares position buffers with the colour
-    // pass for all three line categories (trajectories, spurs, convergence
-    // arcs) — see this brief's own status note for the reasoning — so this
-    // query is deliberately the diagnostic half only, landed on its own.
+    // [1,1] (the spec's guaranteed floor) until then. Wide lines are portable
+    // only on a COMPATIBILITY profile; a core+forward-compatible context,
+    // which is what this app's OWN Apple path requests, may report exactly
+    // [1,1] and silently clamp or raise GL_INVALID_VALUE above it.
+    //
+    // T6 step 1 (landed after): the COLOUR pass no longer calls glLineWidth at
+    // all — every line is quad-expanded in the vertex shader (kLineVert), so
+    // this query no longer gates anything a viewer sees. It still drives the
+    // PICK pass's click-target widening, which selects its route from this
+    // range (see pick_widening below).
     float aliased_line_width_range[2] = {1.0f, 1.0f};
+
+    // T6 (55) step 1: how the PICK pass widens its click targets (the 5-6px
+    // over-draw that makes a 1px arc/spur actually clickable).
+    //
+    // The pick pass is sacred (D7): a changed id breaks every drill-in in the
+    // app. So the wide-line route is kept EXACTLY as it was — same buffers,
+    // same draw calls, same glLineWidth values — and stays the default
+    // wherever the driver really supports those widths, which makes this
+    // brief's change byte-for-byte invisible to picking on every lane that can
+    // check it. Where the driver CANNOT (a core profile reporting [1,1], the
+    // very defect T6 exists to fix), a 6px click target would silently shrink
+    // to one pixel and the overlays would become unclickable — so there the
+    // pick pass takes the same quad expansion the colour pass uses, at the
+    // same widths.
+    //
+    // `Lines`/`Quads` force one route regardless of the driver: a lane that
+    // HAS wide lines can then still exercise, and assert the id-equivalence
+    // of, the quad route (a path only reachable on hardware nobody here runs
+    // would not be a tested path at all — CLAUDE.md).
+    enum class PickWidening { Auto, Lines, Quads };
+    PickWidening pick_widening = PickWidening::Auto;
+    // Which route Auto resolves to on this driver, for the test and the HUD.
+    bool pick_uses_quads() const;
 
     // Vertical scale: world Y per trace step for the trajectory. 0 => auto from
     // nsteps at upload time. Set (with nsteps) BEFORE set_trajectories.
@@ -427,6 +507,33 @@ class Scene {
     unsigned prog_stat_ = 0; // T4: the ghost-fog terrain program
     unsigned prog_sky_ = 0;  // T3: the weather sky quad program
     unsigned prog_canopy_ = 0; // T3 (56): the module-canopy quad program
+    // T6 (55) step 1: the quad-expanded line programs — the same kLineVert
+    // vertex shader against the two existing fragment shaders, so the colour
+    // and id passes widen identically by construction (embedded.h's own note).
+    unsigned prog_line_ = 0;      // kLineVert + kTrajFrag  (colour)
+    unsigned prog_pick_line_ = 0; // kLineVert + kPickPointFrag (ids)
+
+    // T6 (55) step 1: one line set's quad-expanded geometry — SIX vertices of
+    // seven floats (pos.xyz, other.xyz, side) per SEGMENT, the layout
+    // kLineVert reads. `pick_vao` (where a set is pickable) reuses THIS SAME
+    // position buffer and adds only a parallel per-vertex id array — the exact
+    // sharing shape the wide-line pick VAOs already use against the line
+    // buffers, carried over to the quad layout.
+    struct QuadLine {
+        unsigned vao = 0, vbo = 0;
+        int verts = 0; // 6 * segments
+        unsigned pick_vao = 0, pick_vbo_id = 0;
+    };
+    void free_quad_line(QuadLine &q);
+    // Upload one already-expanded quad buffer (7 floats/vertex), replacing
+    // whatever the QuadLine held.
+    void upload_quad_line(QuadLine &q, const std::vector<float> &verts);
+    // Attach the pick twin: a parallel per-vertex id array plus a VAO binding
+    // it alongside the SAME position buffer upload_quad_line just made. Split
+    // from the upload because the spur band's ids are only knowable once
+    // set_convergences has fixed nconv_ (see pick_id_spur), exactly as the
+    // wide-line spur pick VAO already is.
+    void attach_quad_pick(QuadLine &q, const std::vector<unsigned> &ids);
 
     // T3 (56): one CPU-retained draw per canopy — a handful of regions, so a
     // draw call each (rather than packing colour into one shared VBO) is the
@@ -443,15 +550,16 @@ class Scene {
     // polylines, one draw per arc — the same "a handful" scale canopies
     // assume) and site columns (two lines per site: an outer sheath, an
     // inner core). Reuses prog_traj_ (kTrajVert/kTrajFrag): no new shader.
+    // T6 (55) step 1: `quads` replaced the GL_LINE_STRIP/GL_LINES draws these
+    // used to make; `line_width` is now a width in PIXELS handed to kLineVert,
+    // not a glLineWidth argument.
     struct MispredArcDraw {
-        unsigned vao = 0, vbo = 0;
-        int count = 0; // vertex count for GL_LINE_STRIP
+        QuadLine quads;
         float color[4] = {0.3f, 0.5f, 0.9f, 0.85f};
         float line_width = 2.0f;
     };
     struct MispredColumnDraw {
-        unsigned vao_sheath = 0, vbo_sheath = 0;
-        unsigned vao_core = 0, vbo_core = 0;
+        QuadLine sheath, core;
         float sheath_color[4] = {0.6f, 0.6f, 0.65f, 0.35f};
         float core_color[4] = {0.3f, 0.5f, 0.9f, 0.9f};
     };
@@ -541,6 +649,12 @@ class Scene {
         // thread forward even though it draws them separately.
         int32_t tid = -1;
         float color[4] = {1, 1, 1, 1};
+        // T6 (55) step 1: the SAME polyline, quad-expanded, for the colour
+        // pass. `vao`/`vbo`/`count` above are kept because the PICK pass still
+        // draws them as wide GL_LINES on its default route (see
+        // Scene::pick_widening) — the two representations are built from one
+        // upload and never diverge.
+        QuadLine quads;
         // T6: CPU-retained per-PC-vertex facts, parallel arrays over every
         // `!is_access` TrajPoint this trajectory offered to the plane (upload
         // order == pick_vertex_order's order for this trajectory), so the
@@ -571,6 +685,12 @@ class Scene {
     // pick_bands() reports: nconv_ = the number of ConvergenceMark units (one
     // id per WHOLE arc, not per tessellated segment); nspur_ = the number of
     // spur line segments (one id per spur, i.e. per vertex PAIR).
+    //
+    // T6 (55) step 1: these are the WIDE-LINE route's VAOs and are unchanged —
+    // same buffers, same ids, same draw. The quad route's twins live on
+    // conv_arcs_.quads / access_spurs_.quads (pick_vao/pick_vbo_id), built
+    // from the same per-mark ids, so the two routes differ only in how the
+    // click target is widened, never in what it resolves to.
     unsigned vao_conv_pick_ = 0, vbo_conv_pick_id_ = 0;
     unsigned vao_spur_pick_ = 0, vbo_spur_pick_id_ = 0;
     int nconv_ = 0, nspur_ = 0;
@@ -627,7 +747,22 @@ class Scene {
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
     void draw_canopies(const float mvp[16]); // T3 (56)
-    void draw_mispred(const float mvp[16]);  // T5 (56)
+    // T5 (56): now drawn through prog_line_ (T6 step 1), so it needs the same
+    // per-frame screen-space facts every other line draw does.
+    void draw_mispred(const float mvp[16], int fbw, int fbh, bool halos,
+                      float depth_cue_ref);
+    // T6 (55) step 1: bind prog_line_ and set the uniforms that do not change
+    // between line draws in one frame (matrix, viewport, floor). `halos`
+    // (T2) drives BOTH of that task's parts at once — the depth-cued width
+    // attenuation and the halo ring — because they are one layer toggle and
+    // one idea: how far away is this line, and what is in front of it.
+    void begin_line_pass(unsigned prog, const float mvp[16], int fbw, int fbh,
+                         bool halos, float depth_cue_ref);
+    // One quad-expanded line draw at `width_px` — the mark class's own CORE
+    // width; any halo ring is added outside it by the shader. The program must
+    // already be bound (begin_line_pass) and uColor/uStipple already set by
+    // the caller, which owns what the mark MEANS; this owns only its width.
+    void draw_quad_line(unsigned prog, const QuadLine &q, float width_px);
     // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)
     // trajectory by either axis — the first trajectory (lowest tid, matching
     // by_tid's ascending iteration in trajectory.cpp) that yields a match.

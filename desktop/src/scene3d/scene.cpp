@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "scene3d/glcommon.h" // T1 (59): the SHARED program link + pick target
+#include "scene3d/linequad.h" // T6 (55) step 1: the pure quad expansion
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
 #include "scene3d/shaders/embedded.h"
@@ -68,6 +69,126 @@ void tid_color(int idx, float out[4]) { tid_palette(idx, out); }
 
 Scene::~Scene() { shutdown(); }
 
+// T6 (55) step 1 --------------------------------------------------------------
+
+void Scene::free_quad_line(QuadLine &q) {
+    if (q.pick_vbo_id)
+        glDeleteBuffers(1, &q.pick_vbo_id);
+    if (q.pick_vao)
+        glDeleteVertexArrays(1, &q.pick_vao);
+    if (q.vbo)
+        glDeleteBuffers(1, &q.vbo);
+    if (q.vao)
+        glDeleteVertexArrays(1, &q.vao);
+    q = QuadLine{};
+}
+
+namespace {
+// Point the three quad attributes at the currently-bound array buffer.
+void bind_quad_attribs() {
+    const GLsizei stride =
+        static_cast<GLsizei>(kQuadStrideFloats * sizeof(float));
+    glEnableVertexAttribArray(kAttrPos);
+    glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+    glEnableVertexAttribArray(kAttrOther);
+    glVertexAttribPointer(kAttrOther, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<const void *>(3 * sizeof(float)));
+    glEnableVertexAttribArray(kAttrSide);
+    glVertexAttribPointer(kAttrSide, 1, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<const void *>(6 * sizeof(float)));
+}
+} // namespace
+
+void Scene::upload_quad_line(QuadLine &q, const std::vector<float> &verts) {
+    free_quad_line(q);
+    if (verts.empty())
+        return;
+    q.verts = static_cast<int>(verts.size() / kQuadStrideFloats);
+    glGenVertexArrays(1, &q.vao);
+    glGenBuffers(1, &q.vbo);
+    glBindVertexArray(q.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, q.vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                 verts.data(), GL_STATIC_DRAW);
+    bind_quad_attribs();
+    glBindVertexArray(0);
+}
+
+void Scene::attach_quad_pick(QuadLine &q, const std::vector<unsigned> &ids) {
+    if (q.pick_vbo_id)
+        glDeleteBuffers(1, &q.pick_vbo_id);
+    if (q.pick_vao)
+        glDeleteVertexArrays(1, &q.pick_vao);
+    q.pick_vao = q.pick_vbo_id = 0;
+    if (!q.vbo || ids.empty())
+        return;
+    // The SAME position buffer (reused, never re-uploaded) plus the parallel
+    // id array — the sharing shape the wide-line pick VAOs already use,
+    // carried over to this layout.
+    glGenVertexArrays(1, &q.pick_vao);
+    glGenBuffers(1, &q.pick_vbo_id);
+    glBindVertexArray(q.pick_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, q.vbo);
+    bind_quad_attribs();
+    glBindBuffer(GL_ARRAY_BUFFER, q.pick_vbo_id);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(ids.size() * sizeof(unsigned)),
+                 ids.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(kAttrVid);
+    glVertexAttribIPointer(kAttrVid, 1, GL_UNSIGNED_INT, 0, nullptr);
+    glBindVertexArray(0);
+}
+
+// Which route the pick pass's click-target widening takes on this driver (see
+// Scene::pick_widening). Auto keeps the pre-T6 wide-line draw wherever the
+// driver really supports the widths it asks for, and falls to the quad
+// expansion only where it does not.
+bool Scene::pick_uses_quads() const {
+    switch (pick_widening) {
+    case PickWidening::Lines:
+        return false;
+    case PickWidening::Quads:
+        return true;
+    case PickWidening::Auto:
+    default:
+        return aliased_line_width_range[1] <
+               std::max(kPickConvWidthPx, kPickSpurWidthPx);
+    }
+}
+
+void Scene::begin_line_pass(unsigned prog, const float mvp[16], int fbw,
+                            int fbh, bool halos, float depth_cue_ref) {
+    glUseProgram(prog);
+    glUniformMatrix4fv(glGetUniformLocation(prog, "uMVP"), 1, GL_FALSE, mvp);
+    glUniform2f(glGetUniformLocation(prog, "uViewportPx"),
+                static_cast<float>(fbw > 0 ? fbw : 1),
+                static_cast<float>(fbh > 0 ? fbh : 1));
+    glUniform1f(glGetUniformLocation(prog, "uMinWidthPx"), kMinLineWidthPx);
+    glUniform1i(glGetUniformLocation(prog, "uDepthCue"), halos ? 1 : 0);
+    glUniform1f(glGetUniformLocation(prog, "uDepthCueRef"), depth_cue_ref);
+    // T2 (55): halos off means the quad is exactly the core — the geometry is
+    // then byte-for-byte what it was before this task, which is what makes the
+    // toggle "the halo does not exist" rather than "it is drawn transparent".
+    glUniform1f(glGetUniformLocation(prog, "uHaloPadPx"),
+                halos ? kHaloPadPx : 0.0f);
+    const GLint uHalo = glGetUniformLocation(prog, "uHalo");
+    if (uHalo >= 0)
+        glUniform1i(uHalo, halos ? 1 : 0);
+    const GLint uHaloColor = glGetUniformLocation(prog, "uHaloColor");
+    if (uHaloColor >= 0)
+        glUniform4fv(uHaloColor, 1, kHaloColor);
+}
+
+void Scene::draw_quad_line(unsigned prog, const QuadLine &q, float width_px) {
+    if (!q.vao || q.verts <= 0)
+        return;
+    glUniform1f(glGetUniformLocation(prog, "uWidthPx"), width_px);
+    glBindVertexArray(q.vao);
+    glDrawArrays(GL_TRIANGLES, 0, q.verts);
+    glBindVertexArray(0);
+}
+
 bool Scene::init_gl(std::string *err) {
     std::string e;
     prog_terrain_ = link_program(shaders::kTerrainVert, shaders::kTerrainFrag,
@@ -101,7 +222,17 @@ bool Scene::init_gl(std::string *err) {
     if (prog_edl_)
         prog_canopy_ = link_program(shaders::kCanopyVert, shaders::kCanopyFrag,
                                     false, false, e);
-    if (!prog_canopy_) {
+    // T6 (55) step 1: the quad-expanded line programs. Both are REQUIRED (the
+    // colour one draws every line in the scene), so they join the same chain:
+    // a driver that will not build them fails ready() loudly rather than
+    // silently rendering a scene with no trajectories in it.
+    if (prog_canopy_)
+        prog_line_ = link_program(shaders::kLineVert, shaders::kTrajFrag, true,
+                                  false, e);
+    if (prog_line_)
+        prog_pick_line_ = link_program(shaders::kLineVert,
+                                       shaders::kPickPointFrag, true, true, e);
+    if (!prog_pick_line_) {
         err_ = e;
         if (err)
             *err = e;
@@ -530,22 +661,12 @@ void Scene::set_module_canopies(const std::vector<space::ModuleCanopy> &canopies
 }
 
 void Scene::free_mispred() {
-    for (MispredArcDraw &d : mispred_arcs_) {
-        if (d.vbo)
-            glDeleteBuffers(1, &d.vbo);
-        if (d.vao)
-            glDeleteVertexArrays(1, &d.vao);
-    }
+    for (MispredArcDraw &d : mispred_arcs_)
+        free_quad_line(d.quads);
     mispred_arcs_.clear();
     for (MispredColumnDraw &d : mispred_columns_) {
-        if (d.vbo_sheath)
-            glDeleteBuffers(1, &d.vbo_sheath);
-        if (d.vao_sheath)
-            glDeleteVertexArrays(1, &d.vao_sheath);
-        if (d.vbo_core)
-            glDeleteBuffers(1, &d.vbo_core);
-        if (d.vao_core)
-            glDeleteVertexArrays(1, &d.vao_core);
+        free_quad_line(d.sheath);
+        free_quad_line(d.core);
     }
     mispred_columns_.clear();
 }
@@ -592,7 +713,6 @@ void Scene::set_mispred_layer(const space::MispredLayer &layer) {
             pts.push_back(o * o * a.va + 2 * o * s * cz + s * s * a.vb);
         }
         MispredArcDraw d;
-        d.count = kSteps + 1;
         const double ratio =
             a.count > 0 ? static_cast<double>(a.mispred) / a.count : 0.0;
         mispred_ramp(ratio, &d.color[0], &d.color[1], &d.color[2]);
@@ -602,16 +722,12 @@ void Scene::set_mispred_layer(const space::MispredLayer &layer) {
         d.color[3] = a.is_return ? 0.55f : 0.85f;
         d.line_width =
             std::min(4.0f, std::max(1.0f, 1.0f + static_cast<float>(logCount)));
-        glGenVertexArrays(1, &d.vao);
-        glGenBuffers(1, &d.vbo);
-        glBindVertexArray(d.vao);
-        glBindBuffer(GL_ARRAY_BUFFER, d.vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                    static_cast<GLsizeiptr>(pts.size() * sizeof(float)),
-                    pts.data(), GL_STATIC_DRAW);
-        glEnableVertexAttribArray(kAttrPos);
-        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-        glBindVertexArray(0);
+        // T6 (55) step 1: quad-expanded, like every other line in the scene —
+        // d.line_width is now a width in PIXELS for kLineVert, not a
+        // glLineWidth argument that a core profile would refuse.
+        std::vector<float> quads;
+        expand_line_quads(pts, /*strip=*/true, quads);
+        upload_quad_line(d.quads, quads);
         mispred_arcs_.push_back(d);
     }
 
@@ -632,22 +748,14 @@ void Scene::set_mispred_layer(const space::MispredLayer &layer) {
         // that is absent (T5's own fidelity note).
         const float sheath[6] = {s.u, 0.0f, s.v, s.u, sheath_h, s.v};
         const float core[6] = {s.u, 0.0f, s.v, s.u, core_h, s.v};
-        glGenVertexArrays(1, &d.vao_sheath);
-        glGenBuffers(1, &d.vbo_sheath);
-        glBindVertexArray(d.vao_sheath);
-        glBindBuffer(GL_ARRAY_BUFFER, d.vbo_sheath);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(sheath), sheath, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(kAttrPos);
-        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-        glBindVertexArray(0);
-        glGenVertexArrays(1, &d.vao_core);
-        glGenBuffers(1, &d.vbo_core);
-        glBindVertexArray(d.vao_core);
-        glBindBuffer(GL_ARRAY_BUFFER, d.vbo_core);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(core), core, GL_STATIC_DRAW);
-        glEnableVertexAttribArray(kAttrPos);
-        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-        glBindVertexArray(0);
+        // T6 (55) step 1: both segments quad-expanded (see the arcs above).
+        std::vector<float> qs, qc;
+        expand_line_quads(std::vector<float>(sheath, sheath + 6),
+                          /*strip=*/false, qs);
+        expand_line_quads(std::vector<float>(core, core + 6), /*strip=*/false,
+                          qc);
+        upload_quad_line(d.sheath, qs);
+        upload_quad_line(d.core, qc);
         mispred_columns_.push_back(d);
     }
 }
@@ -658,12 +766,14 @@ void Scene::free_traj() {
             glDeleteBuffers(1, &l.vbo);
         if (l.vao)
             glDeleteVertexArrays(1, &l.vao);
+        free_quad_line(l.quads); // T6 (55) step 1
     }
     traj_lines_.clear();
     if (access_spurs_.vbo)
         glDeleteBuffers(1, &access_spurs_.vbo);
     if (access_spurs_.vao)
         glDeleteVertexArrays(1, &access_spurs_.vao);
+    free_quad_line(access_spurs_.quads); // T6 (55) step 1
     access_spurs_ = Line{};
     if (vbo_pts_pos_)
         glDeleteBuffers(1, &vbo_pts_pos_);
@@ -760,6 +870,16 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
             glEnableVertexAttribArray(kAttrPos);
             glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
             glBindVertexArray(0);
+            // T6 (55) step 1: the same strip, quad-expanded, for the colour
+            // pass (the buffer above is what the pick pass's wide-line route
+            // still draws). Trajectories carry no pick id of their own — a
+            // click resolves against the PC-vertex points, not the tube — so
+            // no id array here.
+            {
+                std::vector<float> quads;
+                expand_line_quads(line, /*strip=*/true, quads);
+                upload_quad_line(l.quads, quads);
+            }
             l.pt_t = std::move(pt_t);
             l.pt_placed = std::move(pt_placed);
             l.pt_pos = std::move(pt_pos);
@@ -785,6 +905,14 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
         glEnableVertexAttribArray(kAttrPos);
         glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glBindVertexArray(0);
+        // T6 (55) step 1: the colour pass's quad twin. Its pick-id array is
+        // NOT built here — pick_id_spur needs nconv_, which only
+        // set_convergences knows (see that function's own comment), so the
+        // spur quads' pick VAO is attached there, exactly as the wide-line
+        // spur pick VAO already is.
+        std::vector<float> quads;
+        expand_line_quads(spur_verts, /*strip=*/false, quads);
+        upload_quad_line(l.quads, quads);
     }
 
     if (!pts_pos.empty()) {
@@ -812,6 +940,7 @@ void Scene::free_conv() {
         glDeleteBuffers(1, &conv_arcs_.vbo);
     if (conv_arcs_.vao)
         glDeleteVertexArrays(1, &conv_arcs_.vao);
+    free_quad_line(conv_arcs_.quads); // T6 (55) step 1
     conv_arcs_ = Line{};
     // T3 (47): the conv/spur PICK id buffers are built together below (both
     // need `npts`, and the spur band's own encoding additionally needs
@@ -828,6 +957,10 @@ void Scene::free_conv() {
     if (vao_spur_pick_)
         glDeleteVertexArrays(1, &vao_spur_pick_);
     vbo_spur_pick_id_ = vao_spur_pick_ = 0;
+    // T6 (55) step 1: the spur QUAD route's pick twin is attached here too
+    // (same reason: it needs nconv_), so it is detached here too. Its position
+    // buffer belongs to set_trajectories and is deliberately left alone.
+    attach_quad_pick(access_spurs_.quads, {});
     nspur_ = 0;
 }
 
@@ -922,6 +1055,23 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
         glEnableVertexAttribArray(kAttrVid);
         glVertexAttribIPointer(kAttrVid, 1, GL_UNSIGNED_INT, 0, nullptr);
         glBindVertexArray(0);
+
+        // T6 (55) step 1: the same arcs, quad-expanded — the colour pass draws
+        // this, and the pick pass draws it too where it takes the quad route.
+        // conv_ids holds one id per VERTEX of the GL_LINES buffer (both ends
+        // of a segment share the arc's id), so every other entry is one
+        // segment's id — which is exactly the per-segment array expand_quads
+        // wants, and it is derived from conv_ids rather than recomputed so the
+        // two routes can never label the same arc differently.
+        std::vector<unsigned> seg_ids;
+        seg_ids.reserve(conv_ids.size() / 2);
+        for (size_t i = 0; i + 1 < conv_ids.size(); i += 2)
+            seg_ids.push_back(conv_ids[i]);
+        std::vector<float> quads;
+        std::vector<unsigned> quad_ids;
+        expand_line_quads(segs, /*strip=*/false, quads, &seg_ids, &quad_ids);
+        upload_quad_line(l.quads, quads);
+        attach_quad_pick(l.quads, quad_ids);
     }
 
     // T3: the access-spur pick-id buffer — built HERE (not in
@@ -953,6 +1103,17 @@ void Scene::set_convergences(const space::ConvergenceSet &cs,
         glEnableVertexAttribArray(kAttrVid);
         glVertexAttribIPointer(kAttrVid, 1, GL_UNSIGNED_INT, 0, nullptr);
         glBindVertexArray(0);
+
+        // T6 (55) step 1: the quad route's twin — six ids per spur SEGMENT
+        // against the quad positions set_trajectories already uploaded, taken
+        // from the SAME spur_ids array the wide-line route uses so the two can
+        // never disagree about which spur a pixel belongs to.
+        std::vector<unsigned> quad_ids;
+        quad_ids.reserve(static_cast<size_t>(nspur_) * 6);
+        for (int si = 0; si < nspur_; ++si)
+            for (int k = 0; k < 6; k++)
+                quad_ids.push_back(spur_ids[static_cast<size_t>(si) * 2]);
+        attach_quad_pick(access_spurs_.quads, quad_ids);
     }
 }
 
@@ -1105,16 +1266,19 @@ void Scene::draw_canopies(const float mvp[16]) {
 // trajectories, and this layer already carries its own STATISTICAL label in
 // the HUD, not a second stipple technique), uHasHead=0, uHasTimeCut=0 (this
 // layer is not on the trace-time axis at all).
-void Scene::draw_mispred(const float mvp[16]) {
-    if (!prog_traj_ || (mispred_arcs_.empty() && mispred_columns_.empty()))
+void Scene::draw_mispred(const float mvp[16], int fbw, int fbh, bool halos,
+                         float depth_cue_ref) {
+    if (!prog_line_ || (mispred_arcs_.empty() && mispred_columns_.empty()))
         return;
-    glUseProgram(prog_traj_);
-    glUniformMatrix4fv(glGetUniformLocation(prog_traj_, "uMVP"), 1, GL_FALSE,
-                       mvp);
-    const GLint uColor = glGetUniformLocation(prog_traj_, "uColor");
-    const GLint uStipple = glGetUniformLocation(prog_traj_, "uStipple");
-    const GLint uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
-    const GLint uHasTimeCut = glGetUniformLocation(prog_traj_, "uHasTimeCut");
+    // T6 (55) step 1: drawn through the quad-expanded line program now, so its
+    // widths survive a core profile. The depth cue rides SceneLayers::halos
+    // with every other line set (T2), so this layer's marks do not attenuate
+    // on a different rule from the trajectories they sit beside.
+    begin_line_pass(prog_line_, mvp, fbw, fbh, halos, depth_cue_ref);
+    const GLint uColor = glGetUniformLocation(prog_line_, "uColor");
+    const GLint uStipple = glGetUniformLocation(prog_line_, "uStipple");
+    const GLint uHasHead = glGetUniformLocation(prog_line_, "uHasHead");
+    const GLint uHasTimeCut = glGetUniformLocation(prog_line_, "uHasTimeCut");
     glUniform1i(uStipple, 0);
     glUniform1i(uHasHead, 0);
     glUniform1i(uHasTimeCut, 0);
@@ -1122,19 +1286,13 @@ void Scene::draw_mispred(const float mvp[16]) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     for (const MispredArcDraw &d : mispred_arcs_) {
         glUniform4fv(uColor, 1, d.color);
-        glLineWidth(d.line_width);
-        glBindVertexArray(d.vao);
-        glDrawArrays(GL_LINE_STRIP, 0, d.count);
+        draw_quad_line(prog_line_, d.quads, d.line_width);
     }
     for (const MispredColumnDraw &d : mispred_columns_) {
-        glLineWidth(3.0f);
         glUniform4fv(uColor, 1, d.sheath_color);
-        glBindVertexArray(d.vao_sheath);
-        glDrawArrays(GL_LINES, 0, 2);
-        glLineWidth(1.5f);
+        draw_quad_line(prog_line_, d.sheath, 3.0f);
         glUniform4fv(uColor, 1, d.core_color);
-        glBindVertexArray(d.vao_core);
-        glDrawArrays(GL_LINES, 0, 2);
+        draw_quad_line(prog_line_, d.core, 1.5f);
     }
     glBindVertexArray(0);
     glDisable(GL_BLEND);
@@ -1251,8 +1409,13 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
 
     // T5 (56): the misprediction survey layer — statistical, never merged
     // into the exact terrain/trajectories below.
+    // The depth cue rides SceneLayers::halos with every other line set (T2),
+    // so this layer's marks do not attenuate on a different rule from the
+    // trajectories beside them. It gets no HALO: halos are scoped to the three
+    // sets T2 names (trajectories, spurs, arcs), and this is a statistical
+    // survey overlay that already carries its own STATISTICAL label.
     if (layers.mispred)
-        draw_mispred(mvp);
+        draw_mispred(mvp, fbw, fbh, layers.halos, cam.radius);
 
     // 58 (memory data-cell family): the five data-half layers, in ONE call —
     // their upload + draw code lives in scene3d/data_layers_gl.cpp so this
@@ -1281,19 +1444,29 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     const bool have_front = layers.exact && find_front(front_pos, nullptr);
 
     // Trajectories over the terrain.
-    glUseProgram(prog_traj_);
-    glUniformMatrix4fv(glGetUniformLocation(prog_traj_, "uMVP"), 1, GL_FALSE,
-                       mvp);
-    glUniform1f(glGetUniformLocation(prog_traj_, "uPointSize"), 1.0f);
+    // T6 (55) step 1: every line set below is drawn as quad-expanded geometry
+    // (prog_line_ / kLineVert) at a width in PIXELS. No glLineWidth call
+    // survives on this path, so the widths that separate the mark classes hold
+    // on a core profile (which may refuse anything above 1.0) exactly as they
+    // do on this tree's Linux compatibility context.
+    // T2 (55): halos + the depth-cued width attenuation they are paired with.
+    // The halo is the OUTER RING of each line's own quad, not a second wider
+    // primitive drawn behind it — see kLineVert for why that distinction is
+    // load-bearing on a tessellated polyline — so there is no second pass and
+    // no draw-order rule to get wrong here. A nearer mark still cuts a farther
+    // one, by the ordinary z-test its own (now wider) quad already wins.
+    // Attenuation is floored at kMinLineWidthPx, so a distant bundle can never
+    // thin away into an absence.
+    begin_line_pass(prog_line_, mvp, fbw, fbh, layers.halos, cam.radius);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    GLint uColor = glGetUniformLocation(prog_traj_, "uColor");
-    GLint uStipple = glGetUniformLocation(prog_traj_, "uStipple");
-    GLint uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
-    GLint uHeadY = glGetUniformLocation(prog_traj_, "uHeadY");
-    GLint uTailHalf = glGetUniformLocation(prog_traj_, "uTailHalf");
-    GLint uTimeCutY = glGetUniformLocation(prog_traj_, "uTimeCutY");
-    GLint uHasTimeCut = glGetUniformLocation(prog_traj_, "uHasTimeCut");
+    GLint uColor = glGetUniformLocation(prog_line_, "uColor");
+    GLint uStipple = glGetUniformLocation(prog_line_, "uStipple");
+    GLint uHasHead = glGetUniformLocation(prog_line_, "uHasHead");
+    GLint uHeadY = glGetUniformLocation(prog_line_, "uHeadY");
+    GLint uTailHalf = glGetUniformLocation(prog_line_, "uTailHalf");
+    GLint uTimeCutY = glGetUniformLocation(prog_line_, "uTimeCutY");
+    GLint uHasTimeCut = glGetUniformLocation(prog_line_, "uHasTimeCut");
     const float head_y = static_cast<float>(follow_step) * traj_scale_;
     const float tail_half = 3.0f * traj_scale_; // ~3 steps either side
     // T1 (49): clip the path to the terrain playhead — no cut (byte-identical
@@ -1302,7 +1475,6 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     const float time_cut_y = static_cast<float>(slice_step) * traj_scale_;
     glUniform1f(uTimeCutY, time_cut_y);
     glUniform1i(uHasTimeCut, has_time_cut ? 1 : 0);
-    glLineWidth(2.0f);
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
         const Line &l = traj_lines_[li];
         if (l.statistical && !layers.statistical)
@@ -1330,16 +1502,13 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
             glUniform1f(uHeadY, head_y);
             glUniform1f(uTailHalf, tail_half);
         }
-        glBindVertexArray(l.vao);
-        glDrawArrays(GL_LINE_STRIP, 0, l.count);
+        draw_quad_line(prog_line_, l.quads, kTrajWidthPx);
     }
     glUniform1i(uHasHead, 0); // T6: never leak the tail effect onto spurs/arcs
     if (layers.access_marks && access_spurs_.count) {
         glUniform4fv(uColor, 1, access_spurs_.color);
         glUniform1i(uStipple, 0);
-        glLineWidth(1.0f);
-        glBindVertexArray(access_spurs_.vao);
-        glDrawArrays(GL_LINES, 0, access_spurs_.count);
+        draw_quad_line(prog_line_, access_spurs_.quads, kSpurWidthPx);
     }
     // Convergence arcs last, so the hint rides over the paths it links. Solid (never
     // stippled — a stipple is the statistical mark) and thick, so it pops.
@@ -1351,11 +1520,27 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     if (layers.convergence && conv_arcs_.count) {
         glUniform4fv(uColor, 1, conv_arcs_.color);
         glUniform1i(uStipple, 0);
-        glLineWidth(3.0f);
-        glBindVertexArray(conv_arcs_.vao);
-        glDrawArrays(GL_LINES, 0, conv_arcs_.count);
+        draw_quad_line(prog_line_, conv_arcs_.quads, kConvWidthPx);
     }
     glBindVertexArray(0);
+
+    // The two point glyphs below are POINTS, not lines, so they keep the
+    // original point program (kTrajVert's gl_PointSize path) — T6 step 1 is
+    // about line WIDTH and has nothing to widen here. Its uniform locations
+    // are a different program's, so they are re-fetched rather than reused.
+    glUseProgram(prog_traj_);
+    glUniformMatrix4fv(glGetUniformLocation(prog_traj_, "uMVP"), 1, GL_FALSE,
+                       mvp);
+    uColor = glGetUniformLocation(prog_traj_, "uColor");
+    uStipple = glGetUniformLocation(prog_traj_, "uStipple");
+    uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
+    glUniform1i(glGetUniformLocation(prog_traj_, "uHasTimeCut"), 0);
+    // Shares kTrajFrag with the line program, so say it explicitly rather than
+    // relying on a uniform this program happens never to have been given: a
+    // point has no width, and nothing about it is a halo.
+    glUniform1i(glGetUniformLocation(prog_traj_, "uHalo"), 0);
+    glUniform1i(uStipple, 0);
+    glUniform1i(uHasHead, 0);
 
     // T6: the head glyph — a single bright point at head_pos, tid-coloured
     // (the followed line's own colour), reusing prog_traj_'s existing
@@ -1479,11 +1664,40 @@ int Scene::render_pick_into_fbo(const Camera &cam, int fbw, int fbh) {
     // so it needs no changes to serve GL_LINES instead of GL_POINTS). A
     // widened line width makes a thin arc/spur actually clickable, mirroring
     // why the pick points are drawn larger than they render.
+    //
+    // T6 (55) step 1: two routes to that widening, same ids either way — see
+    // Scene::pick_widening. The WIDE-LINE route below is byte-for-byte the
+    // draw this pass has always made (same VAOs, same buffers, same
+    // glLineWidth values) and is what every driver that really supports those
+    // widths still takes; the QUAD route exists because a core profile may
+    // report GL_ALIASED_LINE_WIDTH_RANGE = [1,1], where a 6px click target
+    // would silently collapse to one pixel and these overlays would stop
+    // being clickable at all.
+    const bool quad_pick = pick_uses_quads();
+    if (quad_pick) {
+        begin_line_pass(prog_pick_line_, mvp, fbw, fbh, /*depth_cue=*/false,
+                        cam.radius);
+        if (conv_arcs_.quads.pick_vao && nconv_ > 0) {
+            glBindVertexArray(conv_arcs_.quads.pick_vao);
+            glUniform1f(glGetUniformLocation(prog_pick_line_, "uWidthPx"),
+                        kPickConvWidthPx);
+            glDrawArrays(GL_TRIANGLES, 0, conv_arcs_.quads.verts);
+            glBindVertexArray(0);
+        }
+        if (access_spurs_.quads.pick_vao && nspur_ > 0) {
+            glBindVertexArray(access_spurs_.quads.pick_vao);
+            glUniform1f(glGetUniformLocation(prog_pick_line_, "uWidthPx"),
+                        kPickSpurWidthPx);
+            glDrawArrays(GL_TRIANGLES, 0, access_spurs_.quads.verts);
+            glBindVertexArray(0);
+        }
+        return prev_fbo;
+    }
     if (vao_conv_pick_ && nconv_ > 0) {
         glUseProgram(prog_pick_pt_);
         glUniformMatrix4fv(glGetUniformLocation(prog_pick_pt_, "uMVP"), 1,
                            GL_FALSE, mvp);
-        glLineWidth(6.0f);
+        glLineWidth(kPickConvWidthPx);
         glBindVertexArray(vao_conv_pick_);
         glDrawArrays(GL_LINES, 0, conv_arcs_.count);
         glBindVertexArray(0);
@@ -1492,12 +1706,12 @@ int Scene::render_pick_into_fbo(const Camera &cam, int fbw, int fbh) {
         glUseProgram(prog_pick_pt_);
         glUniformMatrix4fv(glGetUniformLocation(prog_pick_pt_, "uMVP"), 1,
                            GL_FALSE, mvp);
-        glLineWidth(5.0f);
+        glLineWidth(kPickSpurWidthPx);
         glBindVertexArray(vao_spur_pick_);
         glDrawArrays(GL_LINES, 0, access_spurs_.count);
         glBindVertexArray(0);
     }
-    glLineWidth(1.0f); // restore: the colour pass sets its own width per layer
+    glLineWidth(1.0f); // restore: nothing else in this pass sets a width
     return prev_fbo;
 }
 
@@ -1565,7 +1779,7 @@ void Scene::shutdown() {
     free_compose_targets(); // T1/T5 (55)
     for (unsigned p : {prog_terrain_, prog_traj_, prog_pick_terrain_,
                        prog_pick_pt_, prog_stat_, prog_sky_, prog_edl_,
-                       prog_canopy_})
+                       prog_canopy_, prog_line_, prog_pick_line_})
         if (p)
             glDeleteProgram(p);
     vbo_cell_ = ibo_grid_ = vao_grid_ = tex_height_ = tex_flags_ = 0;
@@ -1580,6 +1794,7 @@ void Scene::shutdown() {
     // so there are no raw pick handles left here to reset.
     prog_terrain_ = prog_traj_ = prog_pick_terrain_ = prog_pick_pt_ = 0;
     prog_stat_ = prog_sky_ = prog_edl_ = prog_canopy_ = 0;
+    prog_line_ = prog_pick_line_ = 0; // T6 (55) step 1
     ready_ = false;
     n_ = 0;
 }

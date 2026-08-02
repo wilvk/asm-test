@@ -498,8 +498,12 @@ $(BUILD)/desktop/test/t/test_drillin.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_D
 # two GENERATED golden scenes (and the hand-authored rich-`mem` one under
 # scenes/) from the corpus, and the reused obs-survey-ibs fixture for the
 # statistical scene — rather than a second survey fixture saying the same thing.
+# ASMTEST_DESKTOP_SRC_DIR (55 T6 step 1): the FBO smoke's pure half scans
+# scene3d/scene.cpp for surviving wide glLineWidth calls — the same
+# source-scanning idiom test_theme.o already uses below.
 $(BUILD)/desktop/test/t/test_scene_fbo.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"' \
+                         -DASMTEST_DESKTOP_SRC_DIR='"desktop/src"' \
                          -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_loom_golden.o \
 $(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
