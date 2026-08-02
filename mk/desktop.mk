@@ -619,7 +619,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
   $(BUILD)/desktop/$(1)/sp/canopy.o $(BUILD)/desktop/$(1)/sp/opcode_terrain.o \
-  $(BUILD)/desktop/$(1)/sp/stepplace.o \
+  $(BUILD)/desktop/$(1)/sp/stepplace.o $(BUILD)/desktop/$(1)/sp/taint.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/causal.o \
   $(BUILD)/desktop/$(1)/vw/crossing.o \
@@ -1147,6 +1147,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
                  $(BUILD)/desktop_test_stepplace \
+                 $(BUILD)/desktop_test_taint \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
@@ -1568,6 +1569,19 @@ $(BUILD)/desktop_test_locate: $(BUILD)/desktop/test/t/test_locate.o \
 # locate.o (which it ADAPTS, never duplicates) + projection.o + terrain.o
 # (regions_from_codeimage, the fixtures' region builder) + the doc model.
 # Exactly test_locate's own closure plus the one new TU.
+# 57 T3 (causal-layers): the taint isochrone. taint.o + stepplace.o's plane
+# arithmetic + analysis/slice.o's dt_walk_depth (54 T5) + the doc model.
+# Exact-only BY TYPE: the builder takes a DataflowStream, so a SurveyEdge has
+# nowhere to enter.
+$(BUILD)/desktop_test_taint: $(BUILD)/desktop/test/t/test_taint.o \
+    $(BUILD)/desktop/test/sp/taint.o $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_stepplace: $(BUILD)/desktop/test/t/test_stepplace.o \
     $(BUILD)/desktop/test/sp/stepplace.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/projection.o \
@@ -1593,6 +1607,7 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/s3/causal.o \
+    $(BUILD)/desktop/test/sp/stepplace.o $(BUILD)/desktop/test/sp/taint.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
@@ -1882,7 +1897,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/sp/canopy.o $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/sp/mnemonic.o \
-    $(BUILD)/desktop/test/sp/stepplace.o \
+    $(BUILD)/desktop/test/sp/stepplace.o $(BUILD)/desktop/test/sp/taint.o \
     $(BUILD)/desktop/test/vw/crossing.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \

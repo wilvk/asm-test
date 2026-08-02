@@ -105,6 +105,8 @@ class GlSceneHost : public SceneHost {
             static const space::CrossingLayer kNoCrossings;
             scene_.set_crossing_layer(f.crossings ? *f.crossings
                                                   : kNoCrossings);
+            static const space::TaintFront kNoTaint;
+            scene_.set_taint_front(f.taint ? *f.taint : kNoTaint);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

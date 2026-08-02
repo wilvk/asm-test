@@ -24,6 +24,7 @@
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
 #include "space/crossing.h" // T2 (57): CrossingLayer, SceneFrame::crossings
+#include "space/taint.h"    // T3 (57): TaintFront, SceneFrame::taint
 #include "space/mispred.h"  // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/terrain.h"
@@ -64,6 +65,7 @@ struct SceneFrame {
     // not about a playhead position), so all upload on the same gate. nullptr
     // is treated exactly like a default-constructed, disabled layer.
     const space::CrossingLayer *crossings = nullptr; // T2
+    const space::TaintFront *taint = nullptr;        // T3
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

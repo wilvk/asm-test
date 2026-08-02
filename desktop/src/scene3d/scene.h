@@ -24,6 +24,7 @@
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
 #include "space/crossing.h" // T2 (57): CrossingLayer, set_crossing_layer
+#include "space/taint.h"    // T3 (57): TaintFront, set_taint_front
 #include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
@@ -89,6 +90,10 @@ struct SceneLayers {
     // shown ON the worldline being read. Claims no duration (see
     // space/crossing.h).
     bool crossings = true;
+    // T3 (57): the taint isochrone — how far a chosen definition spread, on
+    // the DEF-USE generation axis (never the terrain playhead). Self-gates to
+    // nothing when the recording names no origin.
+    bool taint = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -202,6 +207,9 @@ class Scene {
     // weave: a spur hangs on a worldline vertex at world Y = t * traj_scale(),
     // and that scale is fixed by the trajectory upload.
     void set_crossing_layer(const space::CrossingLayer &layer);
+    // T3: the taint isochrone. Independent of set_crossing_layer — each
+    // set_*_ below replaces ONLY its own layer's geometry.
+    void set_taint_front(const space::TaintFront &front);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -353,6 +361,7 @@ class Scene {
     // whole family costs scene.h this block and scene.cpp two call sites.
     struct CausalGL;
     CausalGL *causal_ = nullptr;
+    void ensure_causal();
     void draw_causal(const float mvp[16], const SceneLayers &layers);
     void free_causal();
 

@@ -174,7 +174,24 @@ struct Scene::CausalGL {
     std::vector<Prim> crossing_spurs;  // one per hue bucket, GL_LINES
     std::vector<Prim> crossing_glyphs; // one per payload-magnitude bucket
     Prim crossing_hollow;              // the hollow anchor rings, GL_LINES
+
+    // T3: the taint front. Solid marks are points bucketed by BFS depth (one
+    // draw per depth band); hollow routes, escape glyphs and unknown frays are
+    // line geometry, because each is a DIFFERENT KIND of statement and a
+    // reader must be able to tell them apart without a legend lookup.
+    std::vector<Prim> taint_solid;  // GL_POINTS, one per depth band
+    Prim taint_hollow;              // GL_LINES: value observed, value unknown
+    Prim taint_escape;              // GL_LINES: a recorded region-kind change
+    Prim taint_unknown;             // GL_LINES: the front runs into a gap
 };
+
+// Each set_* below replaces ONLY its own layer's geometry, so the four
+// uploads are order-independent and a caller that re-uploads one does not
+// silently wipe the other three.
+void Scene::ensure_causal() {
+    if (!causal_)
+        causal_ = new CausalGL();
+}
 
 void Scene::free_causal() {
     if (!causal_)
@@ -184,6 +201,11 @@ void Scene::free_causal() {
     for (Prim &p : causal_->crossing_glyphs)
         free_prim(p);
     free_prim(causal_->crossing_hollow);
+    for (Prim &p : causal_->taint_solid)
+        free_prim(p);
+    free_prim(causal_->taint_hollow);
+    free_prim(causal_->taint_escape);
+    free_prim(causal_->taint_unknown);
     delete causal_;
     causal_ = nullptr;
 }
@@ -204,8 +226,14 @@ void Scene::free_causal() {
 // itself is one of the draws that WANTS a heavier stroke and is listed as such
 // in 57's status note.
 void Scene::set_crossing_layer(const space::CrossingLayer &layer) {
-    free_causal();
-    causal_ = new CausalGL();
+    ensure_causal();
+    for (Prim &p : causal_->crossing_spurs)
+        free_prim(p);
+    causal_->crossing_spurs.clear();
+    for (Prim &p : causal_->crossing_glyphs)
+        free_prim(p);
+    causal_->crossing_glyphs.clear();
+    free_prim(causal_->crossing_hollow);
     if (!layer.enabled || layer.spurs.empty())
         return;
 
@@ -281,13 +309,123 @@ void Scene::set_crossing_layer(const space::CrossingLayer &layer) {
     }
 }
 
+// T3 (57-causal-layers): the taint isochrone.
+//
+// EVERY MARK SITS ON THE PLANE, at world Y just above it — the depth is a HUE,
+// never a height. Height on this plane already encodes access density, and
+// giving the def-use generation the same axis would make two quantities share
+// one channel, which is precisely 46 G8's complaint about the vertical. It
+// would also silently fuse the def-use clock with the terrain's, which 34
+// deliberately left unfused.
+//
+// Four distinct idioms, because each is a different KIND of statement:
+//   solid point   — the value reached here, and the value is known;
+//   hollow ring   — the value reached here and the VALUE was not captured
+//                   (the flow was observed; only its content was not);
+//   escape cross  — this cell's RECORDED region kind differs from the
+//                   origin's: the layer's actual finding;
+//   fray ticks    — the front runs from here into a step the recording never
+//                   described. A POSITIVE mark, because "did not spread" and
+//                   "not recorded" both render as nothing by default, and
+//                   keeping them apart is the whole point of this layer.
+void Scene::set_taint_front(const space::TaintFront &front) {
+    ensure_causal();
+    for (Prim &p : causal_->taint_solid)
+        free_prim(p);
+    causal_->taint_solid.clear();
+    free_prim(causal_->taint_hollow);
+    free_prim(causal_->taint_escape);
+    free_prim(causal_->taint_unknown);
+    if (!front.enabled || front.reached.empty())
+        return;
+
+    // Depth bands: NEAR is hot, far is cool. Eight bands is enough to read
+    // "how far" without turning the ramp into noise, and it keeps the layer at
+    // eight draw calls however many cells it covers.
+    constexpr int kBands = 8;
+    std::vector<float> band[kBands];
+    std::vector<float> hollow, escape, unknown;
+    const int span = front.depth_max > 0 ? front.depth_max : 1;
+
+    for (const space::TaintReach &tr : front.reached) {
+        const float y = 0.004f; // a hair above the terrain, never a height
+        const float c[3] = {tr.u, y, tr.v};
+        if (tr.hollow)
+            push_ring(hollow, c, 0.005f);
+        else {
+            int b = static_cast<int>((static_cast<float>(tr.depth) / span) *
+                                     (kBands - 1) + 0.5f);
+            if (b < 0)
+                b = 0;
+            if (b >= kBands)
+                b = kBands - 1;
+            band[b].insert(band[b].end(), {c[0], c[1], c[2]});
+        }
+        if (tr.escape) {
+            // A cross, not a ring: the finding must not be mistakable for the
+            // hollow "value unknown" idiom at a glance.
+            const float r = 0.009f;
+            const float a1[3] = {c[0] - r, y, c[2] - r};
+            const float b1[3] = {c[0] + r, y, c[2] + r};
+            const float a2[3] = {c[0] - r, y, c[2] + r};
+            const float b2[3] = {c[0] + r, y, c[2] - r};
+            push_seg(escape, a1, b1);
+            push_seg(escape, a2, b2);
+        }
+        // A bounded walk's OWN rim is a lower bound too (dt_walk::bounded), so
+        // the deepest band frays exactly as an unknown-gap cell does — same
+        // idiom, because it is the same claim: "this is where we stopped
+        // looking", not "this is where the value stopped".
+        const bool rim = front.bounded && tr.depth == front.depth_max;
+        if (tr.unknown_beyond || rim) {
+            const float r0 = 0.007f, r1 = 0.013f;
+            const float dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (const auto &d : dirs) {
+                const float a[3] = {c[0] + d[0] * r0, y, c[2] + d[1] * r0};
+                const float b[3] = {c[0] + d[0] * r1, y, c[2] + d[1] * r1};
+                push_seg(unknown, a, b);
+            }
+        }
+    }
+
+    for (int b = 0; b < kBands; b++) {
+        if (band[b].empty())
+            continue;
+        const float t = static_cast<float>(b) / (kBands - 1);
+        // near-hot: a bright warm origin cooling with each hop.
+        const float rgba[4] = {1.0f - 0.55f * t, 0.85f - 0.30f * t,
+                               0.35f + 0.45f * t, 0.9f - 0.25f * t};
+        causal_->taint_solid.push_back(
+            upload(band[b], GL_POINTS, rgba, 6.0f - 3.0f * t));
+    }
+    if (!hollow.empty()) {
+        const float rgba[4] = {0.95f, 0.85f, 0.55f, 0.8f};
+        causal_->taint_hollow = upload(hollow, GL_LINES, rgba);
+    }
+    if (!escape.empty()) {
+        const float rgba[4] = {1.0f, 0.35f, 0.75f, 0.95f};
+        causal_->taint_escape = upload(escape, GL_LINES, rgba);
+    }
+    if (!unknown.empty()) {
+        // The UNKNOWN grey-violet, deliberately not on the depth ramp: it is
+        // not a distance, it is an absence of evidence.
+        const float rgba[4] = {0.70f, 0.66f, 0.85f, 0.85f};
+        causal_->taint_unknown = upload(unknown, GL_LINES, rgba);
+    }
+}
+
 void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
     if (!causal_ || !prog_traj_)
         return;
-    const bool any = layers.crossings && (!causal_->crossing_spurs.empty() ||
-                                          !causal_->crossing_glyphs.empty() ||
-                                          causal_->crossing_hollow.count > 0);
-    if (!any)
+    const bool any_crossing =
+        layers.crossings &&
+        (!causal_->crossing_spurs.empty() || !causal_->crossing_glyphs.empty() ||
+         causal_->crossing_hollow.count > 0);
+    const bool any_taint =
+        layers.taint &&
+        (!causal_->taint_solid.empty() || causal_->taint_hollow.count > 0 ||
+         causal_->taint_escape.count > 0 || causal_->taint_unknown.count > 0);
+    if (!any_crossing && !any_taint)
         return;
 
     glUseProgram(prog_traj_);
@@ -317,12 +455,19 @@ void Scene::draw_causal(const float mvp[16], const SceneLayers &layers) {
         glDrawArrays(p.mode, 0, p.count);
     };
 
-    if (layers.crossings) {
+    if (any_crossing) {
         for (const Prim &p : causal_->crossing_spurs)
             draw(p);
         draw(causal_->crossing_hollow);
         for (const Prim &p : causal_->crossing_glyphs)
             draw(p);
+    }
+    if (any_taint) {
+        for (const Prim &p : causal_->taint_solid)
+            draw(p);
+        draw(causal_->taint_hollow);
+        draw(causal_->taint_escape);
+        draw(causal_->taint_unknown);
     }
 
     glBindVertexArray(0);

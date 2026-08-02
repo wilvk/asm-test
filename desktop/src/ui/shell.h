@@ -27,6 +27,7 @@
 #include "space/converge.h"
 #include "space/locate.h" // Located, SceneView::highlight (50 T2)
 #include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
+#include "space/taint.h"    // TaintFront (57 T3): SceneView::taint
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -179,6 +180,15 @@ struct SceneView {
     // overlap and a block-transition histogram are whole-recording facts, not
     // playhead-gated ones).
     space::CrossingLayer crossings; // T2
+    // T3: the taint front, and the origin it was built for. Unlike the other
+    // three this one depends on a CHOSEN origin (blame where the recording
+    // has it, else the flat views' Selection), so it is recomputed on the
+    // same epoch/growth gate `highlight` uses rather than only at weave time.
+    space::TaintFront taint;
+    bool taint_has_origin = false;
+    uint32_t taint_origin = 0;
+    uint64_t taint_epoch = UINT64_MAX;
+    uint64_t taint_gen = UINT64_MAX;
 };
 
 struct ShellState {

@@ -1002,6 +1002,49 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         }
     }
 
+    // 57 T3 (causal-layers): the taint front's ORIGIN — `Streams::blame` where
+    // the recording carries it (a producer-stated attribution beats a UI
+    // selection), otherwise the flat views' Selection step. Recomputed on the
+    // same epoch/growth gate the highlight above uses, because unlike the
+    // other three causal layers this one depends on a chosen origin. No
+    // origin means the layer draws nothing AND says why — never a silent
+    // blank.
+    {
+        const uint64_t gen = r.event_count();
+        bool have_origin = false;
+        uint32_t origin = 0;
+        if (!a.blame.empty()) {
+            origin = a.blame.front().step;
+            have_origin = true;
+        } else if (s.selection.rec == a.id && s.selection.step.has_value()) {
+            origin = static_cast<uint32_t>(*s.selection.step);
+            have_origin = true;
+        }
+        if (sv.taint_epoch != s.selection.epoch || sv.taint_gen != gen ||
+            sv.taint_has_origin != have_origin ||
+            sv.taint_origin != origin) {
+            sv.taint_epoch = s.selection.epoch;
+            sv.taint_gen = gen;
+            sv.taint_has_origin = have_origin;
+            sv.taint_origin = origin;
+            if (have_origin) {
+                // The cap is the pass's own step count: a visited-once BFS
+                // never needs more hops than that, so this is the UNBOUNDED
+                // walk (analysis/slice.h's own note) and `bounded` stays a
+                // real signal rather than an artefact of an arbitrary cap.
+                sv.taint = space::build_taint_front(
+                    a.df, sv.terr.proj, origin,
+                    static_cast<int32_t>(a.df.nsteps), r.truncated());
+            } else {
+                sv.taint = space::TaintFront{};
+                sv.taint.disabled_reason =
+                    "no origin to spread from — this recording carries no "
+                    "`blame` attribution, and nothing is selected in it. "
+                    "Select a step in a flat view to seed the front.";
+            }
+        }
+    }
+
     // The HUD (its own window): provenance chips, playhead, layer toggles, camera
     // presets, region legend. Pure ImGui — drawn even under the null backend. It
     // reports the user's intent back through sv.hud; we apply it here (04's rule:
@@ -1028,6 +1071,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.crossings.enabled ? std::string() : sv.crossings.disabled_reason;
     sv.hud.crossings_before_first_insn = sv.crossings.before_first_insn;
     sv.hud.crossings_off_plane = sv.crossings.off_plane;
+    // 57 T3: what the taint front could not draw, each reason kept distinct.
+    sv.hud.taint_disabled_reason =
+        sv.taint.enabled ? std::string() : sv.taint.disabled_reason;
+    sv.hud.taint_bounded = sv.taint.bounded;
+    sv.hud.taint_truncated = sv.taint.truncated;
+    sv.hud.taint_reg_only_writes = sv.taint.reg_only_writes;
+    sv.hud.taint_off_relative_writes = sv.taint.off_relative_writes;
+    sv.hud.taint_unknown_steps = sv.taint.unknown_steps;
+    sv.hud.taint_off_plane = sv.taint.off_plane;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1245,6 +1297,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.opcode_cells = &sv.opcode_cells; // 56 T4
     f.mispred = &sv.mispred;           // 56 T5
     f.crossings = &sv.crossings;       // 57 T2
+    f.taint = &sv.taint;               // 57 T3
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant

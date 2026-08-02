@@ -680,6 +680,47 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                    s.crossings_off_plane);
         }
     }
+    // T3 (57): the taint front. The AXIS disclaimer is unconditional while
+    // the layer is on — a front that advances across a plane is exactly the
+    // shape a reader will otherwise read as time.
+    if (s.layers.taint) {
+        if (!s.taint_disabled_reason.empty()) {
+            ImGui::TextColored(kWarn, "taint: %s",
+                               s.taint_disabled_reason.c_str());
+        } else {
+            ImGui::TextColored(kDim, "taint: %s",
+                               space::TaintFront::axis_note());
+            if (s.taint_bounded)
+                ImGui::TextColored(kWarn, "taint: %s",
+                                   space::TaintFront::bounded_note());
+            if (s.taint_truncated)
+                ImGui::TextColored(
+                    kWarn,
+                    "taint: the recording is truncated — the front's extent "
+                    "is a stated lower bound");
+            if (s.taint_unknown_steps > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u reached step(s) the recording never described — "
+                    "unknown, NOT \"the value did not go there\"",
+                    s.taint_unknown_steps);
+            if (s.taint_reg_only_writes > 0)
+                ImGui::TextColored(
+                    kDim,
+                    "%u register-only write(s) tint nothing (no address to "
+                    "place)",
+                    s.taint_reg_only_writes);
+            if (s.taint_off_relative_writes > 0)
+                ImGui::TextColored(
+                    kWarn,
+                    "%u region-relative memory write(s) not placed (the wire "
+                    "states no base for data)",
+                    s.taint_off_relative_writes);
+            if (s.taint_off_plane > 0)
+                ImGui::TextColored(kWarn, "%u taint write(s) off-plane",
+                                   s.taint_off_plane);
+        }
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

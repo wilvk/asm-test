@@ -18,7 +18,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 2/5 landed 2026-08-03.**
+> **Status — ◐ 3/5 landed 2026-08-03.**
 > T1 landed as `desktop/src/space/stepplace.{h,cpp}` — a THIN ADAPTER over
 > [50](50-two-way-brushing.md)'s `space::StepAddrResolver`
 > (`desktop/src/space/locate.h`), not a second resolver. 50 landed first, so
@@ -63,6 +63,32 @@
 > `uStipple` shader mode: the stipple is this family's stated STATISTICAL
 > mark, and reusing it for "withheld at record time" would make one idiom
 > carry two unrelated claims.
+>
+> **T3** landed as `space/taint.{h,cpp}` (pure, engine-free) + its geometry in
+> `scene3d/causal.cpp`. It is EXACT-ONLY BY TYPE: the builder's input is a
+> `DataflowStream`, so a `SurveyEdge` has physically nowhere to enter — D7
+> invariant 1 as a property of the signature rather than a rule to remember.
+> Generation comes from `dt_walk_depth` (54 T5), never `dt_slice_forward`.
+>
+> **One deliberate narrowing of step 2's selector, and why.** The brief says
+> to tint a reached step's memory write where `write && space in {"abs",
+> "off"}`. `"abs"` places. An `"off"` record is region-RELATIVE, and the wire
+> states no base for *data* — `df_step.rbase` is the CODE base, so placing a
+> data offset against it would be a fabrication of a different kind from the
+> one step 3 forbids. Those writes are therefore counted
+> (`TaintFront::off_relative_writes`) and stated in the HUD rather than
+> placed, which is exactly what `observed_data_spans` (`space/projection.h`)
+> already does with the same records for the same reason.
+>
+> **The "not reached" vs "not recorded" distinction is a POSITIVE mark**, per
+> the brief's own warning that an implementation loses it first because both
+> render as nothing. `TaintReach::unknown_beyond` marks the placeable cell the
+> front runs OFF into an undescribed step, drawn as radial fray ticks in a
+> deliberately off-ramp grey-violet (it is not a distance, so it is not on the
+> distance ramp), and a `bounded` walk's own rim frays identically because it
+> is the same claim. Depth is a HUE and never a height: giving the def-use
+> generation the vertical would make two quantities share one axis (46 G8) and
+> would silently fuse two clocks 34 left unfused.
 
 ## Why this work exists
 
@@ -239,7 +265,7 @@ golden corpus file, so none was regenerated.
 **Done when.** Kernel crossings appear in situ, claim no duration, and never
 anchor by fabrication.
 
-### T3 — Taint isochrone: the forward-spread front (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T5*
+### T3 — ☑ Taint isochrone: the forward-spread front (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T5*
 
 **Goal.** From a chosen definition, how far and where a value spreads across the
 plane — and whether it escapes into a different kind of region.
@@ -278,6 +304,14 @@ depth; a register-only write produces no tinted cell (assert the cell set is
 empty, not that cell 0 is untinted); a `value_valid == false` record produces a
 hollow mark; a `steps_missing` gap renders as unknown rather than closing the
 front; a `bounded` walk frays its rim.
+
+Landed as `desktop/test/test_taint.cpp` with all five, plus: an escape is a
+comparison of two RECORDED region kinds (and is never marked when either side's
+kind is unknown), the front CONTINUES past a gap rather than closing at it (the
+edges through the gap are recorded even where the step body is not), a truncated
+recording carries the lower-bound fact, and both refusals (no dataflow pass, an
+out-of-range origin) state a reason and emit no geometry. `test_slice.cpp`'s own
+`dt_walk_depth` coverage landed with 54 T5 and is unchanged.
 
 **Done when.** The front shows distance, marks escapes, and distinguishes "did not
 spread here" from "not recorded".

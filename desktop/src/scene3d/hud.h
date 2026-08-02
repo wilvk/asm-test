@@ -259,6 +259,20 @@ struct HudState {
     std::string crossings_disabled_reason;
     uint32_t crossings_before_first_insn = 0;
     uint32_t crossings_off_plane = 0;
+
+    // T3: the taint front. Every one of these is a thing the front could NOT
+    // draw, and each is a DIFFERENT reason — a register write with no
+    // address, a region-relative write with no stated data base, a step the
+    // recording never described, an address the plane does not map. Collapsing
+    // them into one number would lose exactly the distinction the layer
+    // exists to preserve.
+    std::string taint_disabled_reason;
+    bool taint_bounded = false;
+    bool taint_truncated = false;
+    uint32_t taint_reg_only_writes = 0;
+    uint32_t taint_off_relative_writes = 0;
+    uint32_t taint_unknown_steps = 0;
+    uint32_t taint_off_plane = 0;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

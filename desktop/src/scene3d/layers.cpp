@@ -44,6 +44,13 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"crossings", "crossings",
          "where did control leave userspace, and roughly where on the path?",
          G::Activity, LayerGrade::Derived, &SceneLayers::crossings},
+        // T3: Derived — the def-use edges are recorded exactly, but the BFS
+        // GENERATION is an aggregate over them and the escape mark is a
+        // comparison this layer computes, not a field the wire carries.
+        {"taint", "taint",
+         "how far did a chosen value spread, and did it escape into a "
+         "different kind of region?",
+         G::Activity, LayerGrade::Derived, &SceneLayers::taint},
         // --- fidelity: how much can this be trusted --------------------------
         {"weather", "weather", "how much can this session's data be trusted overall?",
          G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},
