@@ -623,6 +623,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/s3/goto.o \
   $(BUILD)/desktop/$(1)/s3/hud.o \
   $(BUILD)/desktop/$(1)/s3/layers.o \
+  $(BUILD)/desktop/$(1)/s3/focus.o \
   $(BUILD)/desktop/$(1)/pf/window_picker.o
 # regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
 # the emulator (emu.o), so — like forks.o — it is APP-ONLY (never in the viewer's
@@ -1141,6 +1142,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_camera \
+                 $(BUILD)/desktop_test_focus \
                  $(BUILD)/desktop_test_goto \
                  $(BUILD)/desktop_test_locate \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
@@ -1511,6 +1513,20 @@ $(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
 $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# 51 T1/T2/T3 (scene-focus-and-scale.md): the SUBJECT filter's pure half —
+# scene3d/focus.o (the ghost-alpha rule, the thread roster, the region mask,
+# the filter wording) + space/projection.o (region_cells / region_style /
+# project, the ONE membership rule it routes through) + the doc model
+# (projection.o reaches decode_streams for 54 T1's observed-data spans). The
+# TrajectorySets are hand-built here, so space/trajectory.o is deliberately
+# NOT linked: the roster must be a function of the MODEL, not of a decoder.
+# No ImGui, no GL, no engine — the same closure proof test_projection makes.
+$(BUILD)/desktop_test_focus: $(BUILD)/desktop/test/t/test_focus.o \
+    $(BUILD)/desktop/test/s3/focus.o \
+    $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/doc/recording.o $(BUILD)/desktop/test/doc/streams.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The camera-navigation resolvers (48-scene-navigation-and-goto.md T2/T3/T4):
 # scene3d/goto.o + the GL-free pick id space (scene3d/pick.o, for Pick/
 # decode_pick only — no GL) + the pure space/ models it points a camera at +
@@ -1558,6 +1574,7 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/s3/focus.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o \
@@ -1849,6 +1866,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/sp/mnemonic.o \
     $(BUILD)/desktop/test/s3/hud.o \
     $(BUILD)/desktop/test/s3/layers.o \
+    $(BUILD)/desktop/test/s3/focus.o \
     $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
     $(DESKTOP_TEST_IG) \
     $(BUILD)/desktop/test/pf/window_picker.o

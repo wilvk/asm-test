@@ -16,6 +16,7 @@
 
 #include "imgui.h" // 49 T4: ImDrawList/ImVec2 in draw_trajectory_ruler's signature
 #include "scene3d/camera.h" // 49 T4: draw_trajectory_ruler's projection
+#include "scene3d/focus.h"  // 51 T1/T2: SceneFocus, the thread roster
 #include "scene3d/scene.h"
 #include "space/mnemonic.h" // T4 (56): OpClass, OpClassSwatch::cls
 #include "space/terrain.h"
@@ -244,6 +245,13 @@ struct HudState {
     // could not place is COUNTED, never silently dropped (T5 step 3's own
     // bar). Shown only while SceneLayers::mispred is on.
     uint32_t mispred_off_plane = 0;
+
+    // 51 T1/T2 (scene-focus-and-scale): the SUBJECT filter, sitting beside
+    // `layers` above and deliberately NOT merged into it — layers grade
+    // EVIDENCE, this chooses SUBJECT (focus_axis_note()). Owned here (like
+    // `layers`) so it persists per recording through SceneView, and read
+    // straight out by the caller into SceneFrame each frame.
+    SceneFocus focus;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

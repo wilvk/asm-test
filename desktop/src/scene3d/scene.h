@@ -20,6 +20,7 @@
 
 #include "scene3d/atmosphere.h" // T3 (44): the fidelity weather sky's pure config
 #include "scene3d/camera.h"
+#include "scene3d/focus.h" // 51 T1/T2: SceneFocus (the pure subject filter)
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
@@ -240,6 +241,27 @@ class Scene {
     // shaders/embedded.h's kTerrainFrag).
     int32_t highlight_cell = -1;
 
+    // 51 T1/T2 (scene-focus-and-scale): the SUBJECT filter — which thread /
+    // region / kinds the reader is looking at. A draw-time value like
+    // follow_step and highlight_cell above (no upload, set every frame before
+    // render()); its rules are pure and live in scene3d/focus.h, so the HUD
+    // and this renderer read one table rather than two. A default-constructed
+    // SceneFocus leaves every draw call byte-identical to the pre-51 render.
+    // The region half additionally needs the per-cell mask below, because a
+    // Hilbert footprint cannot be derived in a fragment shader.
+    SceneFocus focus;
+    // 51 T2: upload the per-cell "is this cell the focused region's" mask
+    // (scene3d/focus.h's build_focus_mask) as an R8UI texture — clones
+    // set_zoning's shape exactly. Depends only on (Projection, region index),
+    // so the caller re-uploads it when the FOCUSED REGION changes, never on a
+    // playhead scrub. An empty vector clears it (see clear_focus_mask).
+    void set_focus_mask(const std::vector<uint8_t> &mask, uint32_t w,
+                        uint32_t h);
+    // No region focused (or the mask could not be built): the terrain shader
+    // stops consulting it. The texture is left allocated, just unused —
+    // clear_stat_terrain()'s own discipline.
+    void clear_focus_mask() { has_focus_mask_ = false; }
+
     // Draw the lit scene into the currently-bound framebuffer (viewport fbw*fbh).
     // T1/T5 (55-scene-render-quality): internally multi-pass now — the raw
     // geometry is drawn into Scene's OWN offscreen target (possibly
@@ -326,6 +348,8 @@ class Scene {
     unsigned tex_height_ = 0, tex_flags_ = 0;
     unsigned tex_kind_ = 0; // T1: R8UI region-kind-per-cell texture
     unsigned tex_opclass_ = 0; // T4 (56): R8UI dominant-opcode-class-per-cell
+    unsigned tex_focus_ = 0;   // 51 T2: R8UI focused-region mask (1 = in it)
+    bool has_focus_mask_ = false;
 
     // T4: the SEPARATE statistical terrain's height/flags texture pair (same
     // upload shape as tex_height_/tex_flags_, a different pair of GL objects
@@ -356,6 +380,12 @@ class Scene {
         unsigned vao = 0, vbo = 0;
         int count = 0;
         bool statistical = false;
+        // 51 T1: which thread this strip belongs to (space::Trajectory::tid;
+        // -1 for a single-trajectory replay or the statistical layer). The
+        // per-thread split was ALREADY in the geometry — one Line per tid —
+        // and only the identity was missing, so render() could not bring one
+        // thread forward even though it draws them separately.
+        int32_t tid = -1;
         float color[4] = {1, 1, 1, 1};
         // T6: CPU-retained per-PC-vertex facts, parallel arrays over every
         // `!is_access` TrajPoint this trajectory offered to the plane (upload
