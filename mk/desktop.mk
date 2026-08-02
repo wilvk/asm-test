@@ -575,7 +575,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/vm_compat.o $(BUILD)/desktop/$(1)/src/main.o \
   $(BUILD)/desktop/$(1)/src/nav.o \
   $(BUILD)/desktop/$(1)/doc/recording.o $(BUILD)/desktop/$(1)/doc/workspace.o \
-  $(BUILD)/desktop/$(1)/doc/streams.o \
+  $(BUILD)/desktop/$(1)/doc/streams.o $(BUILD)/desktop/$(1)/doc/df_passes.o \
   $(BUILD)/desktop/$(1)/an/slice.o $(BUILD)/desktop/$(1)/an/diff.o \
   $(BUILD)/desktop/$(1)/an/stepindex.o \
   $(BUILD)/desktop/$(1)/da/features_data.o \
@@ -696,7 +696,8 @@ DESKTOP_TEST_IG  := $(addprefix $(BUILD)/desktop/test/ig/,$(addsuffix .o,$(DESKT
 DESKTOP_TEST_DOC := $(BUILD)/desktop/test/doc/recording.o \
                     $(BUILD)/desktop/test/doc/workspace.o \
                     $(BUILD)/desktop/test/doc/workspace_state.o \
-                    $(BUILD)/desktop/test/doc/streams.o
+                    $(BUILD)/desktop/test/doc/streams.o \
+                    $(BUILD)/desktop/test/doc/df_passes.o
 # The analysis/ + views/ builders under test. They are pure (no ImGui, no I/O)
 # and engine-free, which is what lets the same objects link into asmtest-viewer.
 DESKTOP_TEST_AN  := $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/an/diff.o

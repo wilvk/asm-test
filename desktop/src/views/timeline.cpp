@@ -175,15 +175,10 @@ dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone) {
         r.style = dt_row_style(cone, step);
         t.rows.push_back(r);
     }
-    // The distinct regions the rows actually span. A dropped step (`missing`)
-    // contributes none — its base is unknown, not zero, and counting it would
-    // invent a region the recording never named.
-    for (const dt_timeline_row &r : t.rows)
-        if (!r.missing && r.rbase != 0)
-            t.regions.push_back(r.rbase);
-    std::sort(t.regions.begin(), t.regions.end());
-    t.regions.erase(std::unique(t.regions.begin(), t.regions.end()),
-                    t.regions.end());
+    // The distinct regions the rows span, from the stream's own definition
+    // (streams.h) — not recounted here, so the timeline's region column and the
+    // pass pager's label can never disagree about how many regions exist.
+    t.regions = df.regions();
     return t;
 }
 

@@ -104,6 +104,14 @@ struct DataflowStream {
         return step < step_present.size() && step_present[step] != 0;
     }
 
+    // The distinct region bases this stream's steps carry (37 T1), ascending.
+    // A step the recording never described contributes none — its base is
+    // unknown, not zero — and a base the wire never stated is not a region.
+    // ONE definition, because every view that distinguishes regions must agree
+    // about how many there are: the timeline's region column and the pass
+    // pager's label both read this rather than each counting for itself.
+    std::vector<uint64_t> regions() const;
+
     bool present() const { return nsteps > 0; }
 };
 

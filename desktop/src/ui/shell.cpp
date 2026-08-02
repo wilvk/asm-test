@@ -33,6 +33,7 @@
 
 #include "analysis/diff.h" // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
+#include "doc/df_passes.h" // 37 T1: the pass pager's region words
 #include "live/inspect.h" // live_session_toasts (16 T1)
 #include "scene3d/focus.h" // 51 T1/T2: SceneFocus, build_focus_mask
 #include "scene3d/goto.h"
@@ -2128,12 +2129,24 @@ static void shell_df_pass_pager(ShellState &s) {
         s.df_pass[i] = (cur == latest) ? -1 : cur;
     size_t applied = shell_apply_df_pass(s, i);
     ImGui::SameLine();
+    // 37 T1: the pass's REGION, when the recording spans more than one. The
+    // producer arms one region per invocation, so paging here can change which
+    // code is on screen — and every offset the dataflow views show is relative
+    // to a base that just moved. An ordinal alone would not say so.
+    const std::string desc = df_pass_desc(s.seg_df[i], applied);
     if (i < s.df_pass.size() && s.df_pass[i] < 0)
-        ImGui::TextDisabled("· pass %zu of %d — following the latest",
-                            applied + 1, npasses);
+        ImGui::TextDisabled("· %s — following the latest", desc.c_str());
     else
-        ImGui::TextDisabled("· pass %zu of %d — pinned (latest is %d)",
-                            applied + 1, npasses, npasses);
+        ImGui::TextDisabled("· %s — pinned (latest is %d)", desc.c_str(),
+                            npasses);
+    const std::vector<uint64_t> regs = df_pass_regions(s.seg_df[i]);
+    if (regs.size() > 1) {
+        ImGui::SameLine();
+        ImGui::TextColored(dt_warn_col(),
+                           "· %d passes over %zu regions — paging changes "
+                           "region",
+                           npasses, regs.size());
+    }
 }
 
 // The Loom's reweave input (42 T1): a plain-data view of the Author door's

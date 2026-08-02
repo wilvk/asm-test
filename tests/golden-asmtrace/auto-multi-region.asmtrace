@@ -1,0 +1,47 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"auto-multi-region","sha256":"85eb12392796c2989702459300f0b75f046a4ed0ca516450cddf70bcb9dc915d","len":18}}
+{"k":"note","text":"continuous `auto` candidate-walk golden: scene_hot_loop(3) recorded THREE times — `df_invocation` passes armed on span 0x100000, then 0x100000, then 0x110000. Every pass restarts at step 0 and carries ONE `rbase`, which is how the producer emits a multi-region capture (one region per invocation, never several inside one pass). The walk re-arms on the first span before moving on, so pass->region is NOT a rotation. A reader showing only the latest pass shows only the LAST region."}
+{"k":"codeimage","base":1048576,"len":18,"version":0,"when":0,"bytes":"4889f84831c94801c148ffc875f84889c8c3"}
+{"k":"codeimage","base":1114112,"len":18,"version":0,"when":0,"bytes":"4889f84831c94801c148ffc875f84889c8c3"}
+{"k":"df_invocation","pass":0,"result":0,"steps":13,"truncated":false}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov rax, rdi"}
+{"k":"df_step","step":1,"off":3,"rbase":1048576,"disasm":"xor rcx, rcx"}
+{"k":"df_step","step":2,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":3,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":4,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":5,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":6,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":7,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":8,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":9,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":10,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":11,"off":14,"rbase":1048576,"disasm":"mov rax, rcx"}
+{"k":"df_step","step":12,"off":17,"rbase":1048576,"disasm":"ret"}
+{"k":"df_invocation","pass":1,"result":0,"steps":13,"truncated":false}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov rax, rdi"}
+{"k":"df_step","step":1,"off":3,"rbase":1048576,"disasm":"xor rcx, rcx"}
+{"k":"df_step","step":2,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":3,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":4,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":5,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":6,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":7,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":8,"off":6,"rbase":1048576,"disasm":"add rcx, rax"}
+{"k":"df_step","step":9,"off":9,"rbase":1048576,"disasm":"dec rax"}
+{"k":"df_step","step":10,"off":12,"rbase":1048576,"disasm":"jne 0x100006"}
+{"k":"df_step","step":11,"off":14,"rbase":1048576,"disasm":"mov rax, rcx"}
+{"k":"df_step","step":12,"off":17,"rbase":1048576,"disasm":"ret"}
+{"k":"df_invocation","pass":2,"result":0,"steps":13,"truncated":false}
+{"k":"df_step","step":0,"off":0,"rbase":1114112,"disasm":"mov rax, rdi"}
+{"k":"df_step","step":1,"off":3,"rbase":1114112,"disasm":"xor rcx, rcx"}
+{"k":"df_step","step":2,"off":6,"rbase":1114112,"disasm":"add rcx, rax"}
+{"k":"df_step","step":3,"off":9,"rbase":1114112,"disasm":"dec rax"}
+{"k":"df_step","step":4,"off":12,"rbase":1114112,"disasm":"jne 0x100006"}
+{"k":"df_step","step":5,"off":6,"rbase":1114112,"disasm":"add rcx, rax"}
+{"k":"df_step","step":6,"off":9,"rbase":1114112,"disasm":"dec rax"}
+{"k":"df_step","step":7,"off":12,"rbase":1114112,"disasm":"jne 0x100006"}
+{"k":"df_step","step":8,"off":6,"rbase":1114112,"disasm":"add rcx, rax"}
+{"k":"df_step","step":9,"off":9,"rbase":1114112,"disasm":"dec rax"}
+{"k":"df_step","step":10,"off":12,"rbase":1114112,"disasm":"jne 0x100006"}
+{"k":"df_step","step":11,"off":14,"rbase":1114112,"disasm":"mov rax, rcx"}
+{"k":"df_step","step":12,"off":17,"rbase":1114112,"disasm":"ret"}
+{"k":"end","events":45,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":13}

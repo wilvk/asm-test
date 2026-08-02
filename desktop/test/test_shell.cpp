@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_internal.h" // 19: FindWindowByName + ImGuiWindow::{WasActive,DockId}
 
+#include "doc/df_passes.h" // 37 T1: the pass pager's region words
 #include "doc/recording.h"
 #include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
 #include "scene3d/hud.h"         // 36 T4: placement_chips (fidelity chrome)
@@ -2765,6 +2766,59 @@ int main() {
             check("dfpass/oneshot-one-pass",
                   ps.seg_df[static_cast<size_t>(oi)].passes.size() == 1,
                   "a one-shot recording has a single pass and no pager");
+    }
+
+    // ---- 37 T1 + 40 T2: the pager must name the REGION a pass covers -------
+    // The producer stamps ONE region per invocation (asmspy.c dataflow_record),
+    // so an `auto` candidate walk reaches a reader as several passes whose
+    // regions differ. Paging then silently changes WHICH CODE is on screen, and
+    // an ordinal alone ("pass 2 of 3") does not say so. The walk in this fixture
+    // re-arms on span A twice before moving to B, so pass->region is NOT a
+    // rotation of the region set: a label keyed on the pass ordinal
+    // (regions[p % n]) yields A, B, A and is wrong for two of the three passes.
+    {
+        ShellState ps;
+        std::string err;
+        int ci = shell_open(ps, gd("auto-multi-region.asmtrace"), err);
+        check("dfregion/open", ci >= 0, err.c_str());
+        if (ci >= 0) {
+            size_t i = static_cast<size_t>(ci);
+            const SegmentedDataflow &seg = ps.seg_df[i];
+            check("dfregion/three-passes", seg.passes.size() == 3,
+                  "the candidate walk recorded three invocation passes");
+            check("dfregion/two-regions", df_pass_regions(seg).size() == 2,
+                  "three passes visiting two distinct spans");
+            if (seg.passes.size() == 3) {
+                std::string p0 = df_pass_desc(seg, 0);
+                std::string p1 = df_pass_desc(seg, 1);
+                std::string p2 = df_pass_desc(seg, 2);
+                check("dfregion/pass0-names-A",
+                      p0.find("0x100000") != std::string::npos, p0.c_str());
+                // The walk re-arms on A: pass 1 is region A again, NOT the
+                // second region an ordinal-keyed label would name here.
+                check("dfregion/pass1-is-A-again",
+                      p1.find("0x100000") != std::string::npos, p1.c_str());
+                check("dfregion/pass1-is-not-B",
+                      p1.find("0x110000") == std::string::npos,
+                      "pass 1 re-armed on span A, not B");
+                check("dfregion/pass2-names-B",
+                      p2.find("0x110000") != std::string::npos, p2.c_str());
+                check("dfregion/pass2-is-not-A",
+                      p2.find("0x100000") == std::string::npos,
+                      "pass 2 is span B alone");
+            }
+        }
+        // A single-region recording names no region: with nothing to disambiguate
+        // the label would be chrome that never changes.
+        int oi = shell_open(ps, gd("low-fidelity/continuous-df.asmtrace"), err);
+        check("dfregion/singleregion-open", oi >= 0, err.c_str());
+        if (oi >= 0) {
+            const SegmentedDataflow &seg = ps.seg_df[static_cast<size_t>(oi)];
+            check("dfregion/singleregion-no-region-chrome",
+                  df_pass_desc(seg, 0).find("region") ==
+                      std::string::npos,
+                  "a recording with no stated region must claim none");
+        }
     }
 
     // === 44-faithful-city-phase-a T3: scene_atmosphere_for_tier ==============

@@ -204,6 +204,16 @@ DataflowStream decode_dataflow(const std::vector<const Event *> &step_evs,
 
 } // namespace
 
+std::vector<uint64_t> DataflowStream::regions() const {
+    std::vector<uint64_t> v;
+    for (size_t i = 0; i < insn_rbase.size(); i++)
+        if (insn_rbase[i] != 0 && has_step(static_cast<uint32_t>(i)))
+            v.push_back(insn_rbase[i]);
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+    return v;
+}
+
 std::string recording_id(const std::string &path) {
     auto slash = path.find_last_of('/');
     return slash == std::string::npos ? path : path.substr(slash + 1);

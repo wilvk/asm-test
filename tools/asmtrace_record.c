@@ -1798,6 +1798,130 @@ static int record_scene_df_multi(const char *dir, const char *out,
     return 0;
 }
 
+/* The `auto` candidate walk's shape: several `df_invocation`-delimited passes
+ * in ONE recording, each pass armed on a DIFFERENT region (35 T1 + 37 T1
+ * together). The producer stamps one `rbase` per invocation (asmspy.c's
+ * dataflow_record), so this is how a multi-region capture actually reaches a
+ * reader — not as several regions inside one pass, but as several passes whose
+ * regions differ. Each pass restarts at step 0, so the passes are only
+ * separable by their markers, and only distinguishable by their rbase.
+ *
+ * The walk re-arms on span A twice before moving to B, so the pass->region map
+ * is NOT a rotation of the region set. A reader that keyed a pass's region on
+ * its ordinal would survive an alternating fixture and is caught by this one. */
+static int record_df_passes(const char *dir, const char *out, const char *label,
+                            const uint8_t *code, size_t code_len,
+                            const long *args, int nargs) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    char path[1024], body[65536], text[1024];
+    char hexbytes[2 * REC_WINDOW + 1];
+    size_t nsteps, s;
+    unsigned p;
+    int rc;
+    const unsigned long long baseA = (unsigned long long)REC_CODE_BASE;
+    const unsigned long long baseB =
+        (unsigned long long)REC_CODE_BASE + 0x10000ULL;
+    /* Pass -> region: A, A, B. Deliberately NOT a rotation of the region set:
+     * a reader that derived a pass's region from its ordinal (regions[p % n])
+     * would produce A, B, A here and be wrong for two of the three passes. An
+     * alternating walk would let that bug pass. */
+    const unsigned long long pass_base[3] = {baseA, baseA, baseB};
+    const unsigned npasses = 3;
+
+    if (code_len > REC_WINDOW) {
+        fprintf(stderr,
+                "asmtrace_record: scene %s exceeds the %d-byte window\n", out,
+                REC_WINDOW);
+        return -1;
+    }
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr, "asmtrace_record: emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    nsteps = vt->steps_len;
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        int o = snprintf(text, sizeof text,
+                         "continuous `auto` candidate-walk golden: %s(", label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(text + o, sizeof text - (size_t)o,
+                 ") recorded THREE times — `df_invocation` passes armed on span "
+                 "0x%llx, then 0x%llx, then 0x%llx. Every pass restarts at step "
+                 "0 and carries ONE `rbase`, which is how the producer emits a "
+                 "multi-region capture (one region per invocation, never "
+                 "several inside one pass). The walk re-arms on the first span "
+                 "before moving on, so pass->region is NOT a rotation. A reader "
+                 "showing only the latest pass shows only the LAST region.",
+                 pass_base[0], pass_base[1], pass_base[2]);
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    for (s = 0; s < code_len; s++)
+        snprintf(hexbytes + 2 * s, 3, "%02x", code[s]);
+    hexbytes[2 * code_len] = '\0';
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   baseA, (unsigned long long)code_len, hexbytes);
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   baseB, (unsigned long long)code_len, hexbytes);
+
+    for (p = 0; p < npasses; p++) {
+        asmtrace_df_invocation_body(body, sizeof body, p, 0,
+                                    (unsigned long long)nsteps, 0);
+        asmtrace_emit(&w, "df_invocation", body);
+        for (s = 0; s < nsteps; s++) {
+            char dis[160] = "";
+            unsigned long long off = (unsigned long long)vt->insn_off[s];
+            if (emu_disas_available())
+                emu_disas(EMU_ARCH_X86_64, code, code_len, REC_CODE_BASE,
+                          vt->insn_off[s], dis, sizeof dis);
+            if (dis[0]) {
+                asmtrace_escape(body, sizeof body, dis);
+                asmtrace_emitf(&w, "df_step",
+                               "\"step\":%zu,\"off\":%llu,\"rbase\":%llu,"
+                               "\"disasm\":\"%s\"",
+                               s, off, pass_base[p], body);
+            } else {
+                asmtrace_emitf(&w, "df_step",
+                               "\"step\":%zu,\"off\":%llu,\"rbase\":%llu", s,
+                               off, pass_base[p]);
+            }
+        }
+    }
+
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, 0, 0, NULL);
+    asmtest_valtrace_free(vt);
+    printf("  %-28s %u pass(es) x %zu step(s), 2 regions (A,A,B)\n", out,
+           npasses, nsteps);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* The ABI x-ray's paired goldens (09-teaching-producers.md T4)        */
 /*                                                                     */
@@ -2272,6 +2396,14 @@ int main(int argc, char **argv) {
         if (record_scene_df_multi(dir, "scene-df-two-span", "scene_hot_loop",
                                   SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP,
                                   scene_args, 1) != 0)
+            failed++;
+        /* The multi-region capture as the PRODUCER actually emits one: several
+         * df_invocation passes, one region each. The two-span golden above puts
+         * both regions in a single pass, which no producer path does — so it
+         * cannot exercise a reader's pass/region pairing. This one does. */
+        if (record_df_passes(dir, "auto-multi-region", "scene_hot_loop",
+                             SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
+                             1) != 0)
             failed++;
     }
 
