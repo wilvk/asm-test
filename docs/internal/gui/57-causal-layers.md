@@ -54,15 +54,8 @@
 > call) and `scene.h` one contiguous block, which is what keeps this brief out
 > of the way of the four sibling briefs editing those files at the same time.
 >
-> **Scope landed against T2's steps.** Steps 1-5 in full. Step 6 (pick →
-> the syscalls row) landed as far as the DATA — every spur carries
-> `CrossingSpur::row`, the drill-in target, and the layer test pins it — but
-> the pick-pass wiring (a fifth `PickBands` band, decoded in `pick.cpp` and
-> routed in `shell.cpp`) is NOT in this landing. It would mean reworking the
-> shared pick id space and its band decode, which is exactly the kind of edit
-> four concurrent briefs cannot resolve, and 56 T5 set the same precedent for
-> `MispredLayer` (drawn, not yet pickable). Stated here rather than quietly
-> dropped.
+> **Scope landed against T2's steps.** Steps 1-5 in full; step 6 (drill-in) is
+> covered by the family-wide note below.
 >
 > **Two rendering deviations, both forced and both stated.** (a) Line width:
 > 55 T6 is concurrently removing every `glLineWidth(>1.0)` call because it is
@@ -132,10 +125,7 @@
 > cone entry as step 0, which is worth recording because it produces a
 > *plausible* forest (one huge spike at step 0) rather than an obvious
 > failure.
->
-> **Step 4's drill-in** is data-only in this landing, on the same terms as
-> T2's: every producer carries its `step` and every sink its `step`/`off`, but
-> the pick-pass wiring is deferred (see T2's note).
+
 >
 > **T5** landed as `space/ridge.{h,cpp}` (the exact ridge) +
 > `views/hotedges.cpp`'s `build_ridge_survey` (the survey fallback, returning
@@ -170,6 +160,22 @@
 > `trace` event, and omitting it sets `TraceStream::basis_error`, which this
 > layer (correctly) treats as a refusal. Worth knowing when hand-writing a
 > fixture.
+>
+> **DRILL-IN, ALL FOUR LAYERS: the TARGET landed, the PICK PASS did not.**
+> Each layer's steps ask for pick → a flat view. Every element carries its
+> deep-link target as data, and each layer test pins it: a `CrossingSpur`
+> carries `row` (the syscalls row), a `TaintReach` carries `step` (the writing
+> step, for the slice), a `BlameConvergence`/`BlameSink` carries `step` (the
+> shared step / the sink, for slice and blame), a `RidgeSegment` carries
+> `from_addr`/`to_addr` and a `RidgeFork` its block address (for canvas/disasm
+> and for the hotedges split). What is NOT here is the pick-pass wiring: four
+> new `PickBands` bands, their id encode in `scene.cpp`'s pick pass, their
+> decode in `pick.cpp`, and their routing in `shell.cpp`. That is a rework of
+> the SHARED pick id space — precisely the edit five concurrently-implemented
+> briefs cannot merge — and [56](../archive/gui/56-fidelity-and-module-layers.md)
+> T5 set the same precedent one brief earlier (`MispredLayer`: drawn, not yet
+> pickable). Stated here rather than quietly dropped; it is a clean follow-on
+> once the 3D family stops being worked in parallel.
 
 ## Why this work exists
 
