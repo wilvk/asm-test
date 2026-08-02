@@ -136,37 +136,29 @@ int main() {
         // SAME per-guest value-fabric producer as arm64 (a different guest,
         // not a second code path).
         check("arm32 runs", author_arch(ASM_ARM32)->can_run, "");
+        // 60-arm32-riscv-author-mode.md T3: riscv64 now runs too, through the
+        // SAME per-guest value-fabric producer as arm64/arm32 — the Keystone
+        // gap this doc's spike closed (a pinned pre-release upstream commit
+        // with a verified-working RISCV backend). No architecture is left
+        // refusing run/trace any more.
         {
             const author_arch_row *row = author_arch(ASM_RISCV64);
-            check("v1 does not run RISC-V 64", !row->can_run, "");
-            check("RISC-V states the limit on its row",
-                  std::string(row->note).find(
-                      "RISC-V is the only architecture without run/trace") !=
+            check("riscv64 runs", row->can_run, "");
+            check("its note describes the shared value-fabric shape",
+                  std::string(row->note).find("value fabric") !=
                       std::string::npos,
                   row->note);
         }
-        check("the shared refusal label now names only RISC-V",
-              std::string(kAuthorArchLimit)
-                      .find("RISC-V is the only architecture without "
-                            "run/trace") != std::string::npos,
+        check("the shared refusal label no longer names any one architecture",
+              std::string(kAuthorArchLimit).find("RISC-V") ==
+                  std::string::npos,
               kAuthorArchLimit);
-        // A non-runnable arch (RISC-V) still assembles, still shows bytes,
-        // and carries the labelled limit — never a silent no-op. Its limit
-        // note is the ROW's own note (author_apply_run prefers row->note
-        // over kAuthorArchLimit whenever the row exists), which is its own,
-        // more specific string, not object-identical to the shared label.
-        author_result_t a = author_from_assemble(&ok);
-        author_apply_run(a, ASM_RISCV64, nullptr, "", false);
-        check("a RISC-V source still shows its bytes",
-              a.hexdump == "48 89 f8 c3", a.hexdump);
-        check("...is not marked as run", !a.ran, "");
-        check("...and carries its row's own limit note",
-              a.limit_note == std::string(author_arch(ASM_RISCV64)->note),
-              a.limit_note);
 
-        // The shared kAuthorArchLimit constant itself is the FALLBACK for an
-        // arch with no row at all (author_apply_run's `row == nullptr`
-        // branch) — exercised directly with an out-of-table arch id.
+        // The shared kAuthorArchLimit constant is the FALLBACK for an arch
+        // with no row at all (author_apply_run's `row == nullptr` branch) —
+        // exercised directly with an out-of-table arch id. Every real
+        // asm_arch_t value now has can_run=true, so this path is reachable
+        // only for a value outside the enum altogether.
         author_result_t u = author_from_assemble(&ok);
         author_apply_run(u, /*unknown arch*/ -1, nullptr, "", false);
         check("an unknown arch falls back to the shared kAuthorArchLimit",
@@ -295,6 +287,68 @@ int main() {
         author_result_t d = author_from_assemble(&ok);
         author_apply_run_vf(d, setup_fail);
         check("an arm32 setup failure is reported, not silently empty",
+              !d.vf_note.empty() && !d.vf_ok, d.vf_note);
+    }
+
+    // --- RULE 3d: the SAME four fidelity branches, exercised for riscv64 ---
+    // (60-arm32-riscv-author-mode.md T3). author_apply_run_vf takes no arch
+    // parameter — riscv64 is a THIRD guest through the same arch-agnostic
+    // fold (ui/author_door.cpp's author_run_vf now dispatches ASM_ARM64,
+    // ASM_ARM32, AND ASM_RISCV64 here), so this block pins the same four
+    // branches again over riscv64-shaped data (a straight-line a0/a2/a3
+    // chain) rather than re-deriving new logic — there is no separate
+    // riscv64 code path to diverge from arm64's/arm32's.
+    {
+        // A clean riscv64 run: def-use edges + steps, and NOTHING pretending
+        // to be an emu_result_t register/fault snapshot.
+        author_valuefabric_t vf;
+        vf.ran = true;
+        vf.ok = true;
+        vf.insn_off = {0, 4, 8, 12}; /* add a2,a0,a1 / add a3,a2,a2 / mv a0,a3 / ret */
+        vf.edges.resize(2);         /* 0->1 (a2), 1->2 (a3) */
+        author_result_t a = author_from_assemble(&ok);
+        author_apply_run_vf(a, vf);
+        check("the riscv64 value-fabric run is marked as such",
+              a.ran_value_fabric, "");
+        check("...but NOT via the emu_result_t 'ran' path (no a0/a1/… behind "
+              "it)",
+              !a.ran, "");
+        check("...records its step/edge counts",
+              a.vf_steps == 4 && a.vf_edges == 2, author_dump(a));
+        check("no fault card is fabricated for the riscv64 value-fabric path",
+              !a.faulted, "");
+
+        // The guest did not reach a clean stop (ret never ran): faithful
+        // about NOT having a fault kind/address.
+        author_valuefabric_t bad;
+        bad.ran = true;
+        bad.ok = false;
+        bad.insn_off = {0};
+        author_result_t b = author_from_assemble(&ok);
+        author_apply_run_vf(b, bad);
+        check("an unclean riscv64 stop is NOT marked ok", !b.vf_ok, "");
+        check("...and names the fault kind/address gap explicitly",
+              b.vf_note.find("fault kind or address") != std::string::npos,
+              b.vf_note);
+
+        // A truncated fabric says so rather than looking like a clean run.
+        author_valuefabric_t trunc;
+        trunc.ran = true;
+        trunc.ok = true;
+        trunc.truncated = true;
+        trunc.insn_off = {0};
+        author_result_t c = author_from_assemble(&ok);
+        author_apply_run_vf(c, trunc);
+        check("a truncated riscv64 fabric says it is a lower bound",
+              c.vf_note.find("lower bound") != std::string::npos, c.vf_note);
+
+        // A producer setup failure (e.g. asmtest_valtrace_new returned NULL,
+        // the exact ui/author_door.cpp::author_run_vf branch for a failed
+        // allocation) degrades gracefully, never silently.
+        author_valuefabric_t setup_fail;
+        author_result_t d = author_from_assemble(&ok);
+        author_apply_run_vf(d, setup_fail);
+        check("a riscv64 setup failure is reported, not silently empty",
               !d.vf_note.empty() && !d.vf_ok, d.vf_note);
     }
 
@@ -545,6 +599,101 @@ int main() {
         Recording rec2 =
             author_recording(r3, ASM_ARM32, image3, 0x100000, &not_ran);
         check("mat/vf32-unran-carries-no-trace",
+              rec2.by_kind.count("trace") == 0,
+              "a producer that never ran must not fabricate an empty stream");
+    }
+
+    // --- 60-arm32-riscv-author-mode.md T3: a riscv64 value-fabric run ->
+    // Recording materialisation ---------------------------------------------
+    // The SAME round-trip as the arm64/arm32 blocks above, over
+    // ASM_RISCV64 — proves author_recording's `vf` path is genuinely
+    // arch-generic across a THIRD guest (arch_wire_name already mapped
+    // ASM_RISCV64 -> "riscv64" before this brief; this pins that the
+    // trace/df_step/df_edge materialisation is too, no per-arch branch to
+    // add).
+    {
+        author_result_t r4;
+        r4.assembled = true;
+        r4.bytes = 16;
+        std::vector<uint8_t> image4(16, 0);
+
+        // riscv64_df_chain(7, 5): add a2,a0,a1 / add a3,a2,a2 / mv a0,a3 /
+        // ret (tools/asmtrace_record.c's own riscv-df-chain golden fixture)
+        // — the exact shape asmtest_dataflow_emu_run_arch would have
+        // produced.
+        author_valuefabric_t vf;
+        vf.ran = true;
+        vf.ok = true;
+        vf.insn_off = {0, 4, 8, 12};
+        vf.disasm = {"add a2, a0, a1", "add a3, a2, a2", "mv a0, a3", "ret"};
+        at_val_rec_t w{};
+        w.kind = AT_LOC_REG;
+        w.reg = 12; // an arbitrary Capstone-shaped reg id for the test
+        w.size = 8; // RV64I GP registers are 64-bit
+        w.is_write = true;
+        w.value_valid = true;
+        w.value = 24;
+        w.step = 1;
+        vf.recs = {w};
+        asmtest_defuse_edge_t e{};
+        e.from_step = 0;
+        e.to_step = 1;
+        e.loc = w;
+        vf.edges = {e};
+
+        Recording rec =
+            author_recording(r4, ASM_RISCV64, image4, 0x100000, &vf);
+        check("mat/vf64-arch", rec.arch == "riscv64", rec.arch);
+        check("mat/vf64-carries-trace",
+              rec.by_kind.count("trace") == 1 &&
+                  rec.by_kind["trace"].size() == 4,
+              "the value fabric's executed steps ride as `trace` events");
+        check("mat/vf64-trace-disasm",
+              rec.by_kind["trace"][0].body.value("disasm", std::string()) ==
+                  "add a2, a0, a1",
+              rec.by_kind["trace"][0].body.dump());
+        check("mat/vf64-carries-df_step",
+              rec.by_kind.count("df_step") == 1 &&
+                  rec.by_kind["df_step"].size() == 4,
+              "one df_step per captured step");
+        check("mat/vf64-df_step-ops",
+              rec.by_kind["df_step"][1].body["ops"].size() == 1,
+              rec.by_kind["df_step"][1].body.dump());
+        check("mat/vf64-carries-df_edge",
+              rec.by_kind.count("df_edge") == 1 &&
+                  rec.by_kind["df_edge"].size() == 1,
+              "the def-use graph rides as df_edge events");
+        check("mat/vf64-no-regstate", rec.by_kind.count("regstate") == 0,
+              "the Author door arms no per-step register ring for riscv64");
+
+        std::string vtext = recording_to_asmtrace(rec);
+        std::istringstream vin(vtext);
+        std::string verr;
+        auto vreloaded = load_recording(vin, verr);
+        check("mat/vf64-reloads", vreloaded.has_value(),
+              std::string("the riscv64 value-fabric recording must reload: ") +
+                  verr);
+        if (vreloaded) {
+            check("mat/vf64-reload-not-torn", !vreloaded->torn,
+                  "a finished riscv64 run reloads complete, not torn");
+            check("mat/vf64-reload-df_step",
+                  vreloaded->by_kind.count("df_step") == 1 &&
+                      vreloaded->by_kind["df_step"].size() == 4,
+                  "df_step events survive the round-trip");
+            check("mat/vf64-reload-df_edge",
+                  vreloaded->by_kind.count("df_edge") == 1 &&
+                      vreloaded->by_kind["df_edge"].size() == 1,
+                  "df_edge events survive the round-trip");
+            check("mat/vf64-reload-arch", vreloaded->arch == "riscv64",
+                  vreloaded->arch);
+        }
+
+        // A run whose producer never ran (setup failure) carries no fabric
+        // events — never an empty/fake trace pretending to be a real one.
+        author_valuefabric_t not_ran;
+        Recording rec2 =
+            author_recording(r4, ASM_RISCV64, image4, 0x100000, &not_ran);
+        check("mat/vf64-unran-carries-no-trace",
               rec2.by_kind.count("trace") == 0,
               "a producer that never ran must not fabricate an empty stream");
     }

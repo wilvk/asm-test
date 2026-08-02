@@ -15,15 +15,15 @@
 //     that tells the user what to do.
 //  2. **A fault is a CARD, not an error.** The emulator turned a crash into
 //     data; the door renders kind + address + registers rather than a toast.
-//  3. **v1 runs the x86-64, arm64, AND (60-arm32-riscv-author-mode.md T2)
-//     arm32 guests, each faithfully, and says so per-arch.** The remaining
-//     arch (RISC-V) assembles and shows bytes with a labelled limit — never a
+//  3. **v1 runs ALL FOUR guests — x86-64, arm64, arm32, AND (60-arm32-riscv-
+//     author-mode.md T3) riscv64 — each faithfully, and says so per-arch.**
+//     No architecture is left with only a labelled limit any more — never a
 //     greyed button with no explanation, and never a silent wrong run. The
-//     three runnable guests do not share a result SHAPE: x86-64 runs through
-//     `emu_call_traced` (an `emu_result_t` register/fault snapshot); arm64
-//     and arm32 both run through the per-guest value-fabric producer
+//     four runnable guests do not share a result SHAPE: x86-64 runs through
+//     `emu_call_traced` (an `emu_result_t` register/fault snapshot); arm64,
+//     arm32, and riscv64 all run through the per-guest value-fabric producer
 //     (`src/dataflow_emu.c`, 32-per-guest-value-producer.md R5 T3 / doc 60
-//     T1) — def-use edges + per-step operand values, with NO register file
+//     T1/T3) — def-use edges + per-step operand values, with NO register file
 //     and NO fault kind/address to show. The door renders each shape as what
 //     it actually is (`author_result_t::ran` vs `::ran_value_fabric`) rather
 //     than forcing one onto the other (D7).

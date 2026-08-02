@@ -9,32 +9,33 @@ namespace asmdesk {
 const char *const kAuthorFaultCopy =
     "the emulator turned this into data; on real hardware this would have been "
     "a crash";
-// 60-arm32-riscv-author-mode.md T2: narrowed again now that arm32 runs too —
-// RISC-V is the only arch this label still names, verbatim wherever quoted
-// elsewhere (per doc 32's own instruction for its own label edit).
+// 60-arm32-riscv-author-mode.md T3: unconditional now that RISC-V runs too —
+// every architecture in author_arch_table() has can_run=true, so this label
+// is reachable only for an arch value outside the table altogether (not a
+// real asm_arch_t member); it no longer names any one architecture.
 const char *const kAuthorArchLimit =
-    "assembled, not run — RISC-V is the only architecture without run/trace "
-    "in v1";
+    "assembled, not run — this architecture has no run/trace support";
 const char *const kAuthorRenderOnly =
     "Author mode requires the full (GPL-2.0) build";
 
 const std::vector<author_arch_row> &author_arch_table() {
-    // v1's real limit: the value/replay tier runs three guests — x86-64,
-    // arm64, and (60-arm32-riscv-author-mode.md T2) arm32 — NOT the same
-    // result shape for all three (see author_vm.h's RULE 3): x86-64 alone
-    // runs through emu_call_traced; arm64 and arm32 both run through the
-    // per-guest value-fabric producer. RISC-V still only assembles (Keystone
-    // handles it where its build has the backend), with the reason on the
-    // row rather than in a footnote.
+    // 60-arm32-riscv-author-mode.md T3: the value/replay tier now runs all
+    // FOUR guests — x86-64, arm64, arm32, and riscv64 — NOT the same result
+    // shape for all four (see author_vm.h's RULE 3): x86-64 alone runs
+    // through emu_call_traced; arm64, arm32, and riscv64 all run through the
+    // same per-guest value-fabric producer (asmtest_dataflow_emu_run_arch).
+    // No row refuses run/trace any more; kAuthorArchLimit is now unreachable
+    // for any real asm_arch_t value.
     static const std::vector<author_arch_row> t = {
         {ASM_X86_64, "x86-64", true, "assembles, runs, records"},
         {ASM_ARM64, "AArch64", true,
          "assembles, runs, records a value fabric (def-use edges + per-step "
          "operand values — no register file, no fault card: that is the "
          "x86-64 path only)"},
-        {ASM_RISCV64, "RISC-V 64", false,
-         "assembles only where the Keystone build has the RISC-V backend; "
-         "RISC-V is the only architecture without run/trace in v1"},
+        {ASM_RISCV64, "RISC-V 64", true,
+         "assembles, runs, records a value fabric (def-use edges + per-step "
+         "operand values — no register file, no fault card: that is the "
+         "x86-64 path only), the same shape as AArch64's and ARM32's"},
         {ASM_ARM32, "ARM32", true,
          "assembles, runs, records a value fabric (def-use edges + per-step "
          "operand values — no register file, no fault card: that is the "
