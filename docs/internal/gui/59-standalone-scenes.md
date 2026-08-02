@@ -16,7 +16,7 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 2/5, in progress (2026-08-03).** T1 landed the second
+> **Status — ◐ 3/5, in progress (2026-08-03).** T1 landed the second
 > substrate: `scene3d/scene_kind.h` (the `SceneKind` discriminant + the
 > required axis contract), the outer pick-id band inside 47 T3's own
 > `PickBands`, `scene3d/glcommon.{h,cpp}` (the shared program link + R32UI
@@ -182,7 +182,7 @@ explicit note when statediff is empty.
 **Done when.** Two recordings' divergence is legible and every uncertainty in it is
 a visible mark.
 
-### T3 — Invocation stack (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T6*
+### T3 — ✅ Invocation stack (M) · *needs [54](54-3d-catalog-phase0-plumbing.md) T6*
 
 **Goal.** How one routine's control flow varies **across its calls** — where the
 region view's pager shows one invocation at a time.

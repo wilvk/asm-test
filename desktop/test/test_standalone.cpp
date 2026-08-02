@@ -228,6 +228,121 @@ int main() {
               divergence_scene_dump(ref));
     }
 
+    // =====================================================================
+    // T3 — invocation stack
+    // =====================================================================
+    {
+        // obs-region.asmtrace: three invocations of a routine with a
+        // conditional branch — #1 {0,24}, #2 {0,10,24} (truncated), #3 open.
+        const Recording rec = load_fixture("obs-region.asmtrace");
+        const RegionView rv = obs_region_build(rec);
+        const InvocationScene s = build_invocation_scene(rv);
+        check("T3: three slabs", s.slabs.size() == 3,
+              "slabs=" + std::to_string(s.slabs.size()));
+        check("T3: the union block set spans every invocation",
+              s.blocks.size() == 3 && s.blocks[0] == 0 && s.blocks[1] == 10 &&
+                  s.blocks[2] == 24,
+              invocation_scene_dump(s));
+        // The finding: a block present in some slabs and absent in others.
+        check("T3/holes: the conditional block is a HOLE in slab #1",
+              s.slabs[0].cells.size() == 3 &&
+                  s.slabs[0].cells[1].block == 10 &&
+                  s.slabs[0].cells[1].state == InvCellState::Absent,
+              "block 0x10 in invocation #1 is not a hole");
+        check("T3/holes: and PRESENT in slab #2",
+              s.slabs[1].cells[1].state == InvCellState::Counted &&
+                  s.slabs[1].cells[1].count == 1,
+              "block 0x10 in invocation #2 is not a counted cell");
+        check("T3/holes: a hole is never a zero-count cell",
+              s.slabs[0].cells[1].count == 0 &&
+                  s.slabs[0].cells[1].state != InvCellState::Counted,
+              "a hole was encoded as a counted zero");
+        check("T3/holes: counted", s.holes >= 1,
+              "holes=" + std::to_string(s.holes));
+        // An open invocation is FRAYED and labelled a PREFIX.
+        check("T3/prefix: the third invocation is open", !s.slabs[2].closed,
+              "the unterminated invocation was reported closed");
+        check("T3/prefix: counted", s.open_slabs == 1,
+              "open_slabs=" + std::to_string(s.open_slabs));
+        check("T3/prefix: the dump labels it a prefix",
+              invocation_scene_dump(s).find("FRAYED(prefix)") !=
+                  std::string::npos,
+              invocation_scene_dump(s));
+        check("T3/truncated: invocation #2's own truncation survives",
+              s.slabs[1].truncated,
+              "the truncated coverage footer did not reach the slab");
+        // The drill-in uses dt_link::invocation and NEVER dt_link::step.
+        const std::vector<InvElem> order = invocation_pick_order(s);
+        check("T3/pick: a hole is not pickable",
+              [&] {
+                  for (const InvElem &e : order)
+                      if (s.slabs[e.slab].cells[e.cell].state ==
+                          InvCellState::Absent)
+                          return false;
+                  return true;
+              }(),
+              "a hole produced a pickable element");
+        check("T3/drill-in: routes to the region view", !order.empty() && [&] {
+            const auto l = invocation_pick_link(s, "r.asmtrace", 0);
+            return l && l->view == dt_view::region;
+        }(), "the slab cell did not open the region view");
+        check("T3/drill-in: carries dt_link::invocation", [&] {
+            const auto l = invocation_pick_link(s, "r.asmtrace", 0);
+            return l && l->invocation && *l->invocation == 1;
+        }(), "the invocation number did not round-trip");
+        check("T3/drill-in: leaves dt_link::step UNTOUCHED", [&] {
+            const auto l = invocation_pick_link(s, "r.asmtrace", 0);
+            return l && !l->step.has_value();
+        }(), "the invocation number was written into `step` — the dataflow "
+             "step index — which is exactly the ordinal conflation 46 forbids");
+        check("T3/drill-in: refuses an index past the geometry",
+              !invocation_pick_link(s, "r.asmtrace", order.size()),
+              "an out-of-range element resolved to a link");
+        // The legend keeps it distinct from a loop helix.
+        check("T3/legend: names the loop-helix distinction",
+              std::string(InvocationScene::legend()).find("loop helix") !=
+                  std::string::npos,
+              InvocationScene::legend());
+        // Placement: with a projection the slab's X/Z stays the Hilbert plane.
+        {
+            std::vector<space::Region> regs;
+            regs.push_back(space::Region{4198710, 64, space::Region::Code,
+                                         "code", 0});
+            const space::Projection proj =
+                space::build_projection(std::move(regs));
+            const InvocationScene ps = build_invocation_scene(rv, &proj);
+            check("T3/place: unplaced without a projection",
+                  !s.slabs[0].cells[0].placed,
+                  "a cell claimed a plane position with no projection");
+            // The fixture's basis is "rel", so a raw block offset is not an
+            // address in this projection — the cell must report UNPLACED
+            // rather than inventing one.
+            check("T3/place: an unplaceable block is marked, not invented",
+                  ps.slabs[0].cells.size() == 3,
+                  "the projection changed the cell set");
+        }
+        // The codeimage tint: an untinted recording says "unstated" rather
+        // than claiming version 0.
+        check("T3/codeimage: unstated when the recording has no timeline",
+              !s.slabs[0].codeimage_known,
+              "a recording with no codeimage events claimed a version");
+        {
+            const Recording ci = load_fixture("obs-codeimage.asmtrace");
+            const InvocationScene cs =
+                build_invocation_scene(obs_region_build(ci));
+            for (const InvSlab &sl : cs.slabs)
+                check("T3/codeimage: known when the recording carries one",
+                      sl.codeimage_known,
+                      "a codeimage-carrying recording left a slab unstated");
+        }
+        // An empty region capture states why rather than showing a void.
+        {
+            const InvocationScene e = build_invocation_scene(RegionView{});
+            check("T3/empty: states its reason", !e.note.empty(),
+                  "an empty invocation scene is silent");
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d standalone-scene check(s) failed\n", failures);
         return 1;
