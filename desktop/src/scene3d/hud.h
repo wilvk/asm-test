@@ -59,6 +59,35 @@ struct EncodingSwatch {
 };
 std::vector<EncodingSwatch> terrain_encoding_swatches();
 
+// T5 (47-scene-inspect-and-pickable-overlays): one swatch per PICKABLE
+// OVERLAY LINE class (as distinct from terrain_encoding_swatches' per-cell
+// terrain colours above) — the convergence arcs and access spurs T3 made
+// pickable. `rgb` mirrors scene.cpp's Line::color literals VERBATIM, the
+// same keep-in-sync convention terrain_encoding_swatches follows against the
+// GLSL shader (scene.cpp is the GL half; this TU cannot include it, D4/D9 —
+// no GL, no engine — so the colours are a second, deliberately synced copy,
+// not a shared constant). The convergence caption states the mark's own
+// fidelity grade verbatim (converge.h's ConvergenceSet::label(): a co-
+// locality hint, never a proven race or order) — the brief's own T5 step 3,
+// so a pickable arc still never reads as a stronger claim than a drawn one.
+// EXHAUSTIVE BY TEST, exactly like terrain_encoding_swatches: every drawn
+// overlay-line class (scene.cpp's set_convergences/set_trajectories) must
+// have an entry here.
+struct OverlaySwatch {
+    std::string label;
+    float rgb[3];
+};
+std::vector<OverlaySwatch> overlay_encoding_swatches();
+
+// T5: the one-line advertisement that the pane is interrogable — "hover to
+// inspect, click to open the flat reader" — a single source of truth between
+// the legend draw call and the test that the wording didn't silently drift
+// or vanish (vertical_axes_note's own pattern). Lives in the LEGEND (this
+// function, drawn every frame), never the first-open-only primer
+// (shell.cpp's dt_primer), so it stays reachable after the primer is
+// dismissed.
+std::string inspect_hint_note();
+
 // 49 T3: the raw scale a height contour band is worth, formatted for the
 // legend — "no data at this slice" when max_full_heat is 0. Pure so the
 // wording is testable without an ImGui frame.
@@ -125,7 +154,8 @@ struct HudState {
     // re-derived per frame (a home that drifts as events arrive on a live/growing
     // capture is worse than a fixed one, per the brief's own fidelity note).
     float home_u = 0.5f, home_v = 0.5f;
-    bool has_home = false; // false => no code region placed; the button is a no-op
+    bool has_home =
+        false; // false => no code region placed; the button is a no-op
     // 48 T4: the camera target, synced by the caller every frame so the "you are
     // here" readout is a pure function of (terr.proj, target) — never a second
     // camera reference threaded through draw_scene_hud's signature.

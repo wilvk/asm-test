@@ -104,6 +104,24 @@ std::vector<EncodingSwatch> terrain_encoding_swatches() {
     };
 }
 
+std::vector<OverlaySwatch> overlay_encoding_swatches() {
+    // Mirrors scene.cpp's Line::color literals VERBATIM (set_convergences /
+    // set_trajectories' access_spurs_ setup) — see this function's own doc
+    // comment in hud.h for why the colours are a synced copy, not a shared
+    // constant.
+    return {
+        {"convergence: co-locality hint (same cell, stated gap) — never a "
+         "proven race or order",
+         {1.0f, 0.25f, 0.85f}}, // scene.cpp set_convergences' bright magenta
+        {"access spur: a PC vertex's data access, at the same height",
+         {0.85f, 0.85f, 0.90f}}, // scene.cpp set_trajectories' lavender
+    };
+}
+
+std::string inspect_hint_note() {
+    return "hover to inspect, click to open the flat reader";
+}
+
 std::string height_scale_note(uint64_t max_full_heat) {
     if (max_full_heat == 0)
         return "height: log(1 + access count) — no data at this slice";
@@ -133,11 +151,10 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
 
 std::string vertical_axes_note() {
     return "two vertical meanings share this screen axis: terrain height = "
-          "access density (log), path height = trace time (steps)";
+           "access density (log), path height = trace time (steps)";
 }
 
-std::string camera_here_text(const space::Projection &proj, float u,
-                             float v) {
+std::string camera_here_text(const space::Projection &proj, float u, float v) {
     uint64_t addr = 0;
     const space::Region *r = nullptr;
     if (!proj.unproject(u, v, &addr, &r) || r == nullptr)
@@ -145,8 +162,8 @@ std::string camera_here_text(const space::Projection &proj, float u,
     char buf[192];
     space::RegionStyle st = space::region_style(r->kind);
     std::snprintf(buf, sizeof buf, "you are here: 0x%llx (%s)",
-                 static_cast<unsigned long long>(addr),
-                 r->label.empty() ? st.name : r->label.c_str());
+                  static_cast<unsigned long long>(addr),
+                  r->label.empty() ? st.name : r->label.c_str());
     return buf;
 }
 
@@ -213,8 +230,7 @@ std::vector<std::string> scene_control_lines() {
 void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
                            ImVec2 origin, ImVec2 size, uint64_t nsteps,
                            float traj_scale) {
-    if (draw_list == nullptr || nsteps == 0 || size.x <= 0.0f ||
-        size.y <= 0.0f)
+    if (draw_list == nullptr || nsteps == 0 || size.x <= 0.0f || size.y <= 0.0f)
         return;
     float m[16];
     cam.mvp(m, size.x / size.y); // the SAME aspect the viewport rendered at
@@ -222,8 +238,8 @@ void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
     ImVec2 prev{};
     bool have_prev = false;
     for (uint64_t t : trajectory_axis_ticks(nsteps)) {
-        const float world[4] = {0.0f, static_cast<float>(t) * traj_scale,
-                                0.0f, 1.0f};
+        const float world[4] = {0.0f, static_cast<float>(t) * traj_scale, 0.0f,
+                                1.0f};
         float clip[4];
         for (int r = 0; r < 4; r++)
             clip[r] = m[0 * 4 + r] * world[0] + m[1 * 4 + r] * world[1] +
@@ -238,7 +254,7 @@ void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
         draw_list->AddCircleFilled(p, 2.5f, col);
         char buf[24];
         std::snprintf(buf, sizeof buf, "%llu",
-                     static_cast<unsigned long long>(t));
+                      static_cast<unsigned long long>(t));
         draw_list->AddText(ImVec2(p.x + 4.0f, p.y - 6.0f), col, buf);
         if (have_prev)
             draw_list->AddLine(prev, p, col, 1.0f);
@@ -353,6 +369,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::Checkbox("statistical", &s.layers.statistical);
     ImGui::SameLine();
     ImGui::Checkbox("access", &s.layers.access_marks);
+    // T5 (47-scene-inspect-and-pickable-overlays): the convergence-arc toggle
+    // — the plumbing (SceneLayers::convergence, scene.cpp's draw gate) has
+    // existed since 10-T5; only this checkbox was missing.
+    ImGui::SameLine();
+    ImGui::Checkbox("convergence", &s.layers.convergence);
     // T7 (44-faithful-city-phase-a): the four new city-reskin bools, extending
     // this same checkbox list — each independently toggleable, matching the
     // existing five.
@@ -402,15 +423,16 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
     const bool addr_enter = ImGui::InputTextWithHint(
-        "##goto_addr", "0x... address", s.goto_addr_buf,
-        sizeof s.goto_addr_buf, ImGuiInputTextFlags_EnterReturnsTrue);
+        "##goto_addr", "0x... address", s.goto_addr_buf, sizeof s.goto_addr_buf,
+        ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
     if (ImGui::Button("go##addr") || addr_enter) {
         char *end = nullptr;
         uint64_t addr =
             static_cast<uint64_t>(std::strtoull(s.goto_addr_buf, &end, 16));
         float gu = 0.0f, gv = 0.0f;
-        if (end != s.goto_addr_buf && scene_goto_addr(terr.proj, addr, &gu, &gv)) {
+        if (end != s.goto_addr_buf &&
+            scene_goto_addr(terr.proj, addr, &gu, &gv)) {
             s.req_goto = true;
             s.goto_u = gu;
             s.goto_v = gv;
@@ -434,9 +456,8 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::SameLine();
         ImGui::SetNextItemWidth(220.0f);
         std::string preview =
-            s.goto_region_sel >= 0 &&
-                   static_cast<size_t>(s.goto_region_sel) <
-                       terr.proj.regions.size()
+            s.goto_region_sel >= 0 && static_cast<size_t>(s.goto_region_sel) <
+                                          terr.proj.regions.size()
                 ? terr.proj.regions[static_cast<size_t>(s.goto_region_sel)]
                       .label
                 : std::string("region...");
@@ -501,7 +522,22 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::SameLine();
         ImGui::TextUnformatted(sw.label.c_str());
     }
+    // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
+    // spurs) — same row shape as the terrain swatches just above, a distinct
+    // list because they encode LINES, not per-cell terrain colour.
+    for (const OverlaySwatch &sw : overlay_encoding_swatches()) {
+        ImVec4 col{sw.rgb[0], sw.rgb[1], sw.rgb[2], 1.0f};
+        ImGui::ColorButton(("##ovl" + sw.label).c_str(), col,
+                           ImGuiColorEditFlags_NoTooltip |
+                               ImGuiColorEditFlags_NoPicker,
+                           ImVec2(12, 12));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(sw.label.c_str());
+    }
     ImGui::TextColored(kDim, "%s", vertical_axes_note().c_str());
+    // T5: advertise that the pane is interrogable — kept in the legend
+    // (drawn every frame), never the first-open-only primer.
+    ImGui::TextColored(kDim, "%s", inspect_hint_note().c_str());
 
     ImGui::Separator();
 

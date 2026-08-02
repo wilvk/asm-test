@@ -815,6 +815,104 @@ int main() {
               "a zero-step recording has no time axis to ruler");
     }
 
+    // T5 (47-scene-inspect-and-pickable-overlays): the overlay-line legend is
+    // EXHAUSTIVE BY TEST, mirroring 49 T3's own terrain-swatch pattern just
+    // above — every drawn overlay-line class (scene.cpp's conv_arcs_ and
+    // access_spurs_) must have exactly one entry here.
+    {
+        auto swatches = scene3d::overlay_encoding_swatches();
+        check("overlay legend: exactly two swatches (convergence + spur)",
+              swatches.size() == 2,
+              ("got " + std::to_string(swatches.size())).c_str());
+        bool has_conv = false, has_spur = false;
+        for (const auto &sw : swatches) {
+            if (sw.label.find("convergence") != std::string::npos)
+                has_conv = true;
+            if (sw.label.find("access spur") != std::string::npos)
+                has_spur = true;
+        }
+        check("overlay legend: covers convergence", has_conv,
+              "no convergence swatch");
+        check("overlay legend: covers access spur", has_spur,
+              "no access-spur swatch");
+        // T5 step 3: the arc's caption states its own fidelity grade — a
+        // co-locality hint, never a proven race or order (converge.h's own
+        // wording) — so a pickable arc cannot read as a stronger claim than
+        // a drawn one.
+        for (const auto &sw : swatches)
+            if (sw.label.find("convergence") != std::string::npos)
+                check("overlay legend: convergence caption states its own "
+                      "fidelity grade",
+                      sw.label.find("never a proven race or order") !=
+                          std::string::npos,
+                      sw.label.c_str());
+
+        // The colours are the keep-in-sync copy of scene.cpp's Line::color
+        // literals (hud.h's own doc comment) — pin them so a future colour
+        // change on either side fails a named check rather than silently
+        // drifting.
+        for (const auto &sw : swatches) {
+            if (sw.label.find("convergence") != std::string::npos)
+                check("overlay legend: convergence colour matches "
+                      "scene.cpp's magenta",
+                      sw.rgb[0] == 1.0f && sw.rgb[1] == 0.25f &&
+                          sw.rgb[2] == 0.85f,
+                      "colour drifted from scene.cpp's Line::color");
+            if (sw.label.find("access spur") != std::string::npos)
+                check("overlay legend: access-spur colour matches "
+                      "scene.cpp's lavender",
+                      sw.rgb[0] == 0.85f && sw.rgb[1] == 0.85f &&
+                          sw.rgb[2] == 0.90f,
+                      "colour drifted from scene.cpp's Line::color");
+        }
+
+        check("inspect hint: advertises hover-then-click",
+              scene3d::inspect_hint_note().find("hover") != std::string::npos &&
+                  scene3d::inspect_hint_note().find("click") !=
+                      std::string::npos,
+              scene3d::inspect_hint_note().c_str());
+    }
+
+    // T5: toggling the convergence checkbox is reflected in the SceneLayers
+    // the frame carries — driven through a real ImGui frame (draw_scene_hud
+    // itself), not just the HudState default, so the wiring from click to
+    // SceneLayers is what's actually asserted (the "plumbing already
+    // exists, only the checkbox was missing" claim T5's own brief makes).
+    {
+        ImGui::CreateContext();
+        ImGuiIO &io5 = ImGui::GetIO();
+        io5.IniFilename = nullptr;
+        unsigned char *p5 = nullptr;
+        int w5 = 0, h5 = 0;
+        io5.Fonts->GetTexDataAsRGBA32(&p5, &w5, &h5);
+        io5.DisplaySize = ImVec2(1280, 720);
+        io5.DeltaTime = 1.0f / 60.0f;
+
+        scene3d::HudState hs;
+        check("T5: convergence layer defaults on (SceneLayers's own default)",
+              hs.layers.convergence, "convergence should default true");
+
+        space::TerrainModel terr;
+        space::TrajectorySet traj;
+        ImGui::NewFrame();
+        scene3d::draw_scene_hud(hs, terr, traj);
+        ImGui::Render();
+        // No real mouse to click the checkbox under the null backend, but the
+        // field itself round-trips through the SAME HudState the checkbox
+        // writes — flip it as a click would and re-draw, asserting nothing
+        // in draw_scene_hud silently resets it.
+        hs.layers.convergence = false;
+        ImGui::NewFrame();
+        scene3d::draw_scene_hud(hs, terr, traj);
+        ImGui::Render();
+        check("T5: the convergence toggle survives a redraw (no silent "
+              "reset)",
+              !hs.layers.convergence,
+              "draw_scene_hud must not overwrite the layer toggle it did "
+              "not itself flip");
+        ImGui::DestroyContext();
+    }
+
     // --- 19 (dockable panes keystone): the docked shell draws REAL kPane* panes -
     // Every block above ran the NON-DOCKED path — the null backend leaves docking
     // off, so `draw_shell` drew the single-window tab layout and the dockspace,
