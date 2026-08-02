@@ -78,6 +78,16 @@ struct SceneLayers {
     // `statistical`/`ghost_fog` above, so default ON matches this struct's
     // compositing-layer convention.
     bool mispred = true;
+    // T2 (55-scene-render-quality): depth-dependent halos on the line sets
+    // (Everts, Bekker, Roerdink & Isenberg, IEEE TVCG 15(6) 2009), together
+    // with the depth-cued width attenuation the same paper pairs with them.
+    // Default ON, matching `edl` above rather than `confidence`/`opcode`: like
+    // EDL this is a DEPTH CUE over geometry that is already drawn — it restates
+    // which mark is in front and adds no quantity of its own — where those two
+    // re-lift the same terrain into a different reading. Off means neither the
+    // halo pass nor the attenuation runs at all (never a pass that runs and
+    // does nothing).
+    bool halos = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -107,6 +117,36 @@ inline constexpr float kMinLineWidthPx = 1.5f;
 // the glLineWidth(6)/(5) calls it replaces on the quad route.
 inline constexpr float kPickConvWidthPx = 6.0f;
 inline constexpr float kPickSpurWidthPx = 5.0f;
+
+// T2 (55-scene-render-quality): the depth-dependent halo. Each line set is
+// drawn twice — first this much wider on EACH side, in the scene's background
+// colour and offset away from the viewer, then the line itself — so a nearer
+// line visibly CUTS the ones behind it and a bundle reads as a bundle.
+// The ring is this many pixels PER SIDE, and it is not depth-attenuated: a far
+// line thins (T2 step 3) but keeps a constant-width ring, so it never loses the
+// ability to cut. Modest on purpose — width here separates mark classes, and a
+// 1.5px spur wearing a band three times its own width would read as a fatter
+// class than it is (T6's fidelity note).
+inline constexpr float kHaloPadPx = 1.5f;
+// The ring's colour: the scene's own clear colour, at PARTIAL alpha, and FIXED.
+//
+// Two deliberate departures from the paper, both for the same reason — this
+// plane is not the paper's empty background, it is the terrain, and the
+// terrain's brightness IS a measurement:
+//   - the ring washes toward the background rather than replacing it, so a
+//     cell's own density reading survives underneath every worldline that
+//     crosses it. An opaque ring erases it, which matters most in exactly the
+//     view the family prescribes for READING a cell (the top-down preset).
+//     The cut itself does not depend on this: it comes from the ring's DEPTH
+//     write, which stops a farther line being drawn at all, not from the
+//     colour it paints.
+//   - the colour must never follow the fidelity weather sky
+//     (scene3d/atmosphere.h), whose hue is derived from fidelity severity. A
+//     depth cue whose colour moved with fidelity would be read as an encoding,
+//     which is what this brief's D7 note forbids. With the sky on, the ring
+//     therefore reads as a dark outline rather than an exact background match
+//     — stated here rather than hidden.
+inline constexpr float kHaloColor[4] = {0.02f, 0.02f, 0.03f, 0.55f};
 
 class Scene {
   public:
@@ -524,13 +564,16 @@ class Scene {
     void draw_mispred(const float mvp[16], int fbw, int fbh, bool halos,
                       float depth_cue_ref);
     // T6 (55) step 1: bind prog_line_ and set the uniforms that do not change
-    // between line draws in one frame (matrix, viewport, floor, depth cue).
-    // Returns nothing; every per-draw uniform is set by draw_quad_line below.
+    // between line draws in one frame (matrix, viewport, floor). `halos`
+    // (T2) drives BOTH of that task's parts at once — the depth-cued width
+    // attenuation and the halo ring — because they are one layer toggle and
+    // one idea: how far away is this line, and what is in front of it.
     void begin_line_pass(unsigned prog, const float mvp[16], int fbw, int fbh,
-                         bool depth_cue, float depth_cue_ref);
-    // One quad-expanded line draw at `width_px`. The program must already be
-    // bound (begin_line_pass) and uColor/uStipple already set by the caller,
-    // which owns what the mark MEANS; this owns only its width.
+                         bool halos, float depth_cue_ref);
+    // One quad-expanded line draw at `width_px` — the mark class's own CORE
+    // width; any halo ring is added outside it by the shader. The program must
+    // already be bound (begin_line_pass) and uColor/uStipple already set by
+    // the caller, which owns what the mark MEANS; this owns only its width.
     void draw_quad_line(unsigned prog, const QuadLine &q, float width_px);
     // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)
     // trajectory by either axis — the first trajectory (lowest tid, matching

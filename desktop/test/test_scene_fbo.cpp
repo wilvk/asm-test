@@ -1200,6 +1200,16 @@ int main() {
         scene.follow_step = 999999; // no vehicle glyph in this frame
 
         SceneLayers layers; // terrain + exact, defaults
+        // T2 (55) halos OFF for this measurement, and it costs the check
+        // nothing: the halo pass draws with uHasTimeCut = 0, so it is not part
+        // of the playhead cut at all. What it WOULD add is a confound — the
+        // execution-front glyph moves when the playhead does, and the pixels it
+        // vacates then show background-coloured halo chrome rather than the
+        // terrain they used to. A pixel showing chrome is not a discarded
+        // worldline, but the luminance rule below cannot tell the difference.
+        // That a dimmed worldline is still visible WITH halos on is asserted
+        // separately, in T2's own case.
+        layers.halos = false;
 
         scene.slice_step = terr.nsteps; // at the end: step 4's no-op
         std::vector<unsigned char> px_end = capture(scene, cam, cf, layers);
@@ -1329,6 +1339,16 @@ int main() {
 
         // The terrain renders, and renders the recorded heat: the loop body's
         // cell is brighter than the prologue's.
+        //
+        // Measured from a TERRAIN-ONLY frame, not from `abs_frame`. The claim
+        // is about the terrain's own encoding, and pixel_of_id picks whichever
+        // pixel of the cell comes first in the buffer — which for a top-down
+        // view of a path that runs through the loop body is quite often a
+        // pixel the worldline itself covers. That was always a latent flaw
+        // (a line has always been drawn over the terrain); 55 T2's halo, by
+        // widening what each line occupies, made it fire. Reading the surface
+        // with the marks that sit on top of it turned off measures the thing
+        // this check is named for.
         uint32_t hot = cell_of(m.terr.proj, n, kLoopBody);
         uint32_t cold = cell_of(m.terr.proj, n, kLoopBase);
         int hot_px = pixel_of_id(scene, gcam, GW, GH, pick_id_cell(hot));
@@ -1337,11 +1357,18 @@ int main() {
               "hot cell not rendered");
         check("golden abs scene: the cold cell is on screen", cold_px >= 0,
               "cold cell not rendered");
-        if (hot_px >= 0 && cold_px >= 0)
+        if (hot_px >= 0 && cold_px >= 0) {
+            SceneLayers surface_only;
+            surface_only.exact = surface_only.statistical = false;
+            surface_only.access_marks = surface_only.convergence = false;
+            surface_only.vehicle = surface_only.canopy = false;
+            surface_only.mispred = false;
+            std::vector<unsigned char> surf =
+                capture(scene, gcam, gcf, surface_only);
             check("golden abs scene: the loop body renders brighter",
-                  lum(&abs_frame[hot_px * 4]) >
-                      lum(&abs_frame[cold_px * 4]) + 8.0f,
+                  lum(&surf[hot_px * 4]) > lum(&surf[cold_px * 4]) + 8.0f,
                   "hot not brighter");
+        }
 
         // The exact trajectory draws: switching its layer off changes pixels.
         SceneLayers no_exact;
@@ -1879,6 +1906,9 @@ int main() {
             arcs_only.canopy = arcs_only.mispred = false;
             arcs_only.weather = false; // the sky would fill the background
             arcs_only.edl = false;     // EDL darkens; the hue test is exact
+            // T2's depth cue attenuates a far line's width; this measurement
+            // is of the NOMINAL width, so it is taken with that off.
+            arcs_only.halos = false;
             std::vector<unsigned char> px = capture(scene, cam, cf, arcs_only);
             std::vector<bool> magenta(static_cast<size_t>(W) * H, false);
             for (size_t i = 0; i + 3 < px.size(); i += 4)
@@ -1946,6 +1976,196 @@ int main() {
                   "is being applied in world units, not pixels");
         }
         scene.y_scale = saved_y_scale;
+    }
+
+    // --- (m) T2 (55): depth-dependent halos --------------------------------
+    // Everts, Bekker, Roerdink & Isenberg (IEEE TVCG 15(6) 2009). Each line is
+    // drawn as a slightly wider quad whose OUTER RING is the background colour,
+    // so a nearer line visibly CUTS the ones behind it. What has to hold: the
+    // ring exists and is opaque at the line's own depth (that IS the cut), a
+    // mark is never eaten by its own halo, the attenuation is bounded, and —
+    // the fidelity bar, checked in (n) below — a statistical mark gets no more
+    // solid.
+    {
+        Recording rec = load(ndjson_threads());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        space::ConvergenceSet conv =
+            space::detect_convergences(traj, terr.proj);
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(conv, terr.proj);
+
+        // Confounds off: no sky (it would fill the background the halo is
+        // coloured after) and no EDL (a second pass answering the same
+        // "what is in front" question, with its own screen-space radius).
+        SceneLayers base;
+        base.weather = false;
+        base.edl = false;
+        base.vehicle = false;
+
+        auto frame = [&](bool halos, bool conv_on) {
+            SceneLayers l = base;
+            l.halos = halos;
+            l.convergence = conv_on;
+            return capture(scene, cam, cf, l);
+        };
+        auto arc_only = [&](bool halos) {
+            SceneLayers off = base;
+            off.halos = halos;
+            off.convergence = false;
+            return pixels_differ(frame(halos, true),
+                                 capture(scene, cam, cf, off));
+        };
+
+        // (1) the ring exists, and it is OPAQUE at the mark's own depth — which
+        // is precisely what makes a nearer mark cut a farther one, since every
+        // pixel of that wider footprint now wins the z-test against anything
+        // behind it. Measured as the pixels the convergence layer OWNS (its
+        // toggle changes them), which grows by the ring on every side.
+        const size_t owned_plain = arc_only(false);
+        const size_t owned_halo = arc_only(true);
+        check("T2 GL: the convergence arc is on screen at all (test setup)",
+              owned_plain > 0, "the arc layer owned no pixel");
+        check("T2 GL: a halo widens the footprint a mark occludes with",
+              owned_halo > owned_plain,
+              "turning halos on did not widen what the arc covers — the ring "
+              "is missing, or is not opaque, so nothing behind it is cut");
+
+        // (2) ...and a mark is never eaten by its OWN halo. The ring is the
+        // outer part of the SAME quad, so there is no depth relationship to
+        // get backwards — but a regression that reintroduced a separate,
+        // wider halo primitive would show up here immediately (measured: a
+        // 16-segment arc lost 78% of itself to exactly that).
+        auto magenta = [](const std::vector<unsigned char> &px) {
+            size_t n = 0;
+            for (size_t i = 0; i + 3 < px.size(); i += 4)
+                if (px[i] > 178 && px[i + 2] > 153 && px[i + 1] < 127)
+                    n++;
+            return n;
+        };
+        const size_t arc_plain = magenta(frame(false, true));
+        const size_t arc_halo = magenta(frame(true, true));
+        check("T2 GL: the halo does not swallow the mark it belongs to",
+              arc_halo > 0 && arc_halo * 4 >= arc_plain * 3,
+              "the convergence arc lost a quarter or more of itself once halos "
+              "turned on — its own halo is cutting it");
+
+        // (3) the layer toggle owns pixels: off means the pass does not run,
+        // never that it runs and does nothing.
+        check("T2 GL: the halos layer toggle owns pixels",
+              pixels_differ(frame(true, true), frame(false, true)) > 0,
+              "turning halos off changed nothing at all");
+
+        // (4) the depth-cued width attenuation is BOUNDED. At the far end of
+        // the dolly range a line must still be on screen: a mark thinned out
+        // of existence is an unknown rendered as an absence (invariant 3), and
+        // kMinLineWidthPx is the floor that prevents it.
+        {
+            Camera far_cam;
+            far_cam.frame(0.5f, 0.5f, Camera::kMaxRadius);
+            SceneLayers l = base;
+            l.halos = true;
+            SceneLayers no_lines = l;
+            no_lines.exact = no_lines.statistical = no_lines.convergence =
+                no_lines.access_marks = false;
+            check("T2 GL: a depth-attenuated line never thins away to nothing",
+                  pixels_differ(capture(scene, far_cam, cf, l),
+                                capture(scene, far_cam, cf, no_lines)) > 0,
+                  "at maximum camera distance the line sets drew no pixel at "
+                  "all — the attenuation is unbounded below");
+        }
+    }
+
+    // --- (m2) T2 (55): a worldline past the playhead still dims, with halos --
+    // The companion the T1 (49) dim/discard case defers to: that case measures
+    // with halos off (the execution-front glyph moves with the playhead, and
+    // the chrome it uncovers is background-coloured, which its luminance rule
+    // cannot tell from a discarded worldline). This says the property itself
+    // survives the halo.
+    {
+        Recording rec = load(ndjson_hotcold());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+        scene.follow_step = 999999; // no vehicle glyph in this frame
+
+        SceneLayers l; // defaults, halos ON
+        const uint64_t saved_slice = scene.slice_step;
+        scene.slice_step = terr.nsteps;
+        std::vector<unsigned char> at_end = capture(scene, cam, cf, l);
+        scene.slice_step = terr.nsteps / 2;
+        std::vector<unsigned char> at_half = capture(scene, cam, cf, l);
+        size_t dimmed = 0;
+        for (size_t i = 0; i + 3 < at_end.size(); i += 4) {
+            const float le = lum(&at_end[i]), lh = lum(&at_half[i]);
+            if (le > 40.0f && lh < le - 5.0f && lh > 8.0f)
+                dimmed++;
+        }
+        check("T2 GL: with halos on, a worldline past the playhead still DIMS "
+              "rather than disappearing",
+              dimmed > 0,
+              "no pixel dimmed and stayed visible — the halo may be burying "
+              "the clipped tail instead of ringing it");
+        scene.slice_step = saved_slice;
+    }
+
+    // --- (n) T2 (55) fidelity: a statistical mark gets no more solid --------
+    // A STATISTICAL line's halo is the outer ring of the same quad, and the
+    // stipple `discard` is evaluated BEFORE the ring branch on gl_FragCoord —
+    // so the ring inherits exactly the line's own screen-space IGN mask. Its
+    // gaps stay gaps and still show what is behind them. An opaque ring would
+    // instead fill them with background colour and launder a sampled survey
+    // into a solid, exact-looking path. This re-runs case (g)'s own
+    // IGN-agreement measurement with halos ON: every pixel the statistical
+    // layer owns — line AND ring — must still obey the mask.
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_FIXTURE_DIR, "obs-survey-ibs.asmtrace"),
+            {survey_window()});
+        upload(scene, m, m.terr.stat);
+
+        SceneLayers on;
+        on.edl = false; // as in (g): EDL shades neighbours, not the mark
+        on.halos = true;
+        SceneLayers off = on;
+        off.statistical = false;
+        std::vector<unsigned char> px_on = capture(scene, gcam, gcf, on);
+        std::vector<unsigned char> px_off = capture(scene, gcam, gcf, off);
+
+        std::vector<size_t> marked;
+        for (size_t i = 0, p = 0; i < px_on.size(); i += 4, p++)
+            if (px_on[i] != px_off[i] || px_on[i + 1] != px_off[i + 1] ||
+                px_on[i + 2] != px_off[i + 2])
+                marked.push_back(p);
+
+        constexpr float kStatTrajAlpha = 0.45f; // set_trajectories' own literal
+        int agree = 0;
+        for (size_t p : marked) {
+            const float x =
+                static_cast<float>(p % static_cast<size_t>(GW)) + 0.5f;
+            const float y =
+                static_cast<float>(p / static_cast<size_t>(GW)) + 0.5f;
+            if (ign_cpu(x, y) <= kStatTrajAlpha)
+                agree++;
+        }
+        const double agree_frac = marked.empty()
+                                      ? 0.0
+                                      : static_cast<double>(agree) /
+                                            static_cast<double>(marked.size());
+        check("T2 GL: with halos on, the statistical mark is still governed by "
+              "the SAME stipple mask",
+              !marked.empty() && agree_frac > 0.9,
+              "pixels the statistical layer owns stopped matching the shader's "
+              "own IGN discard formula once halos turned on — the ring is "
+              "filling the stipple's gaps, which launders a survey into an "
+              "exact path");
     }
 
     scene.shutdown();

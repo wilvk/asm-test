@@ -18,7 +18,10 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status — ◐ 5/6 landed, T6 step 1 landed 2026-08-03, T2 in flight.**
+> **Status — ☑ 6/6 tasks landed; T6 step 3 alone remains open, and cannot be
+> answered here.** T1–T5 and T6 step 1 + step 2 are all in. Step 3 is the
+> GLSL-130-on-Apple-core-profile question, which is verify-first on Darwin and
+> this tree has no macOS desktop lane — see the end of this banner.
 > T1 (Eye-Dome Lighting), T3 (contour bands), T4 (dithered translucency) and
 > T5 (MSAA) are fully landed, each via one internal multi-pass refactor of
 > `Scene::render()`: the raw geometry now always draws into Scene's OWN
@@ -83,9 +86,41 @@
 > `de7e5750c73fcbc9` both at the merge base and after (llvmpipe, EGL
 > surfaceless).
 >
-> **What's still open, and why.** T2 (depth-dependent halos) is the remaining
-> task; it reuses T6 step 1's quad expansion for its own width, which is now
-> in place. T6 **step 3** (the GLSL-130-on-Apple-core-profile question)
+> **T2 landed 2026-08-03.** Depth-dependent halos, on the quad expansion T6
+> step 1 put in place. The construction departs from the doc's own step 1 in
+> one way, and the reason is worth recording: a halo drawn as a SECOND, wider
+> primitive behind the line self-occludes on a tessellated polyline — a nearer
+> segment's halo wins the depth test against a neighbouring segment's core and
+> eats its own line (measured: a 16-segment convergence arc lost 78% of
+> itself). So the halo is instead the OUTER RING of each line's own quad: one
+> primitive, no depth relationship to get wrong, and a *different* mark still
+> cut by the ordinary z-test, which is the effect the paper is for. That also
+> removes the depth-offset pass the doc's step 1 called for. Two further
+> deliberate departures, both because this plane is not the paper's empty
+> background but the terrain, whose brightness is a measurement: the ring
+> washes toward the background rather than replacing it (the cut comes from
+> the ring's DEPTH write, not its colour), and its colour is a fixed constant
+> that must never follow the fidelity weather sky, or a depth cue would start
+> encoding fidelity. Depth-cued width attenuation (step 3) rides the same
+> `SceneLayers::halos` toggle and is floored at `kMinLineWidthPx`. A
+> STATISTICAL line's ring inherits the line's own screen-space IGN stipple
+> mask by construction — the `discard` is evaluated before the ring branch —
+> so its gaps stay gaps rather than being filled with an opaque band that
+> would launder a survey into an exact path.
+>
+> Two things this task turned up that were not defects in it:
+> - **`noperspective` is load-bearing.** `vEdgePx`/`vCoreHalfPx` carry
+>   screen-space pixel distances; with the default perspective-correct
+>   interpolation a foreshortened segment reports a fragment well outside the
+>   core as inside it, and ring pixels paint as line.
+> - **A golden-scene brightness check was sampling the wrong thing.** "the
+>   loop body renders brighter" read whichever pixel of the cell came first in
+>   the pick buffer, which under the top-down preset is often a pixel the
+>   worldline itself covers. A latent flaw (a line has always been drawn over
+>   the terrain) that the wider mark made fire; it now measures a
+>   terrain-only frame, which is what the check is named for.
+>
+> **What's still open, and why.** T6 **step 3** (the GLSL-130-on-Apple-core-profile question)
 > remains open and deliberately untouched: it is a verify-first item, this
 > tree still has no macOS desktop lane, and nothing in this session could
 > answer it — changing the version directive on the strength of the document
@@ -225,37 +260,77 @@ bundles while de-emphasising unstructured ones — which is the trajectory pane'
 job description.
 
 **Steps.**
-1. Draw each line set twice: first a halo pass in the background/sky colour at
-   greater width with a small depth offset away from the viewer, then the line
-   itself. Order matters — halo, then line, per line set, so a set does not halo
-   itself.
-2. **Width comes from geometry, not `glLineWidth`** — see T6. Expand each segment
-   into a screen-space quad in the vertex shader (two triangles per segment, the
-   segment's two endpoints plus a per-vertex side/offset attribute). This is the
-   same change T6 needs for portability, so do T6 first or do them together; the
-   halo is then just a second draw of the same buffer with a larger width
-   uniform.
-3. Depth-cued attenuation: scale width by distance so far lines thin out. Bound
-   it — a minimum width in pixels, or a distant bundle disappears entirely, which
-   is an unknown rendered as an absence (invariant 3).
-4. Apply to `traj_lines_`, `access_spurs_` and `conv_arcs_`
-   ([scene.h:186-189](../../../desktop/src/scene3d/scene.h#L186)), gated by one
-   `SceneLayers::halos` bool.
+1. ✅ ~~Draw each line set twice: first a halo pass in the background/sky colour
+   at greater width with a small depth offset away from the viewer, then the
+   line itself. Order matters — halo, then line, per line set, so a set does not
+   halo itself.~~ **Revised in implementation (2026-08-03), and the revision is
+   the point.** A separate wider primitive behind the line DOES self-occlude, and
+   "per line set" is not fine-grained enough to prevent it: within ONE polyline,
+   a nearer segment's halo wins the depth test against a neighbouring segment's
+   core. Measured on a 16-segment convergence arc: 78% of the arc gone. No
+   depth offset fixes it either — the offset would have to exceed the depth
+   change from one segment to the next, which is the same order as the
+   separation between two genuinely crossing lines, so it would stop cutting the
+   thing it exists to cut. The halo is therefore the **outer ring of the line's
+   own quad**: one primitive, classified per fragment by its screen-space
+   distance from the centreline (`vEdgePx` vs `vCoreHalfPx`, both
+   `noperspective` — see the status note). A nearer mark still cuts a farther
+   one because its now-wider quad wins the ordinary z-test. There is no second
+   pass and no `glPolygonOffset`.
+2. ✅ **Width comes from geometry, not `glLineWidth`** — T6 step 1, landed
+   first. The ring is `kHaloPadPx` (1.5px) on each side, and is deliberately
+   NOT depth-attenuated: a far line thins but keeps a constant-width ring, so it
+   never loses the ability to cut.
+3. ✅ Depth-cued attenuation, floored at `kMinLineWidthPx` — a distant bundle
+   that thinned away would be an unknown rendered as an absence (invariant 3).
+   Gated on the same bool, so "halos off" is byte-identical to the pre-T2
+   geometry rather than a pass that runs and does nothing.
+4. ✅ Applied to `traj_lines_`, `access_spurs_` and `conv_arcs_`, gated by one
+   `SceneLayers::halos` (default ON, matching `edl` — both are depth cues over
+   geometry that is already drawn). Doc 56's misprediction layer gets the
+   attenuation (so its marks do not attenuate on a different rule from the
+   trajectories beside them) but no ring: halos are scoped to the three sets
+   named here.
 
 **Fidelity.** The halo is background-coloured — it must not read as a second mark
 class, and it must not be applied to the stippled statistical trajectories in a
 way that fills their gaps. A statistical line's stipple is its fidelity grade
-([embedded.h:110-113](../../../desktop/src/scene3d/shaders/embedded.h#L110)); a
+([embedded.h](../../../desktop/src/scene3d/shaders/embedded.h)); a
 halo that made it look solid would launder a survey into an exact path. Halo the
 statistical lines with a **stippled halo** or not at all, and state which.
 
-**Tests.** `test_scene_fbo.cpp`: for a fixture with two crossing lines at
-different depths, the nearer line's pixels are contiguous across the crossing and
-the farther line's are interrupted; a statistical line's rendered coverage
-fraction does not increase when halos turn on.
+**As implemented:** a **stippled halo**, and it costs nothing to get right —
+because the ring is part of the line's own quad, the stipple `discard` runs
+BEFORE the ring branch and on `gl_FragCoord`, so the ring inherits the line's
+screen-space mask exactly. A gap in the line is a gap in its ring.
+Two further decisions, both departures from the paper, both because this plane
+is the terrain and the terrain's brightness is a measurement:
+- The ring **washes** toward the background (alpha `kHaloColor[3]`) rather than
+  replacing it, so a cell's own density reading survives under every worldline
+  crossing it — which matters most in exactly the view this family prescribes
+  for READING a cell. Nothing is lost: the cut comes from the ring's depth
+  write (a farther line is not drawn at all), not from the colour it paints.
+- The ring's colour is a **fixed constant** and must never follow the fidelity
+  weather sky, whose hue is derived from fidelity severity. A depth cue whose
+  colour moved with fidelity would be read as an encoding (D7). With the sky on
+  it therefore reads as a dark outline rather than an exact background match.
 
-**Done when.** Crossings are unambiguous in the golden scenes and no statistical
-mark got more solid.
+**Tests.** ✅ `test_scene_fbo.cpp`. The crossing case is stated as the property
+that produces it rather than as two hand-picked lines: turning halos on
+**widens the footprint a mark occludes with** (measured on the convergence
+layer's own toggle), which is exactly why a farther line is interrupted — every
+pixel of that wider footprint now wins the z-test against anything behind it.
+Alongside it: the halo does not swallow the mark it belongs to (a regression to
+a separate wider primitive fails this immediately — that is the 78% case);
+the layer toggle owns pixels; a depth-attenuated line at `kMaxRadius` still
+draws something; a worldline past the playhead still DIMS rather than
+disappearing with halos on. And the fidelity bar, re-running case (g)'s own
+IGN-agreement measurement with halos ON: every pixel the statistical layer owns
+— line AND ring — still matches the shader's own discard formula, so the ring
+cannot have filled a gap.
+
+**Done when.** ✅ A nearer mark demonstrably cuts what is behind it, and no
+statistical mark got more solid.
 
 ### T3 — Contour bands and a height key: make Y a quantity (M)
 
@@ -495,5 +570,7 @@ risks worth naming:
 - **T6 step 3 is a verify-first item with no local lane.** Do not change the
   version directive on the strength of this document; the doc's job is to make
   sure the question gets asked on a machine that can answer it.
-- **T2 depends on T6's quad expansion.** They are separable in principle and
-  needlessly duplicated work in practice — take them together.
+- ~~**T2 depends on T6's quad expansion.** They are separable in principle and
+  needlessly duplicated work in practice — take them together.~~ Confirmed in
+  practice (2026-08-03): T6 step 1 landed first and T2 was then almost entirely
+  a fragment-shader branch plus two uniforms.

@@ -217,15 +217,26 @@ bool Scene::pick_uses_quads() const {
 }
 
 void Scene::begin_line_pass(unsigned prog, const float mvp[16], int fbw,
-                            int fbh, bool depth_cue, float depth_cue_ref) {
+                            int fbh, bool halos, float depth_cue_ref) {
     glUseProgram(prog);
     glUniformMatrix4fv(glGetUniformLocation(prog, "uMVP"), 1, GL_FALSE, mvp);
     glUniform2f(glGetUniformLocation(prog, "uViewportPx"),
                 static_cast<float>(fbw > 0 ? fbw : 1),
                 static_cast<float>(fbh > 0 ? fbh : 1));
     glUniform1f(glGetUniformLocation(prog, "uMinWidthPx"), kMinLineWidthPx);
-    glUniform1i(glGetUniformLocation(prog, "uDepthCue"), depth_cue ? 1 : 0);
+    glUniform1i(glGetUniformLocation(prog, "uDepthCue"), halos ? 1 : 0);
     glUniform1f(glGetUniformLocation(prog, "uDepthCueRef"), depth_cue_ref);
+    // T2 (55): halos off means the quad is exactly the core — the geometry is
+    // then byte-for-byte what it was before this task, which is what makes the
+    // toggle "the halo does not exist" rather than "it is drawn transparent".
+    glUniform1f(glGetUniformLocation(prog, "uHaloPadPx"),
+                halos ? kHaloPadPx : 0.0f);
+    const GLint uHalo = glGetUniformLocation(prog, "uHalo");
+    if (uHalo >= 0)
+        glUniform1i(uHalo, halos ? 1 : 0);
+    const GLint uHaloColor = glGetUniformLocation(prog, "uHaloColor");
+    if (uHaloColor >= 0)
+        glUniform4fv(uHaloColor, 1, kHaloColor);
 }
 
 void Scene::draw_quad_line(unsigned prog, const QuadLine &q, float width_px) {
@@ -1413,8 +1424,13 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
 
     // T5 (56): the misprediction survey layer — statistical, never merged
     // into the exact terrain/trajectories below.
+    // The depth cue rides SceneLayers::halos with every other line set (T2),
+    // so this layer's marks do not attenuate on a different rule from the
+    // trajectories beside them. It gets no HALO: halos are scoped to the three
+    // sets T2 names (trajectories, spurs, arcs), and this is a statistical
+    // survey overlay that already carries its own STATISTICAL label.
     if (layers.mispred)
-        draw_mispred(mvp, fbw, fbh, /*halos=*/false, cam.radius);
+        draw_mispred(mvp, fbw, fbh, layers.halos, cam.radius);
 
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use
@@ -1437,7 +1453,15 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     // survives on this path, so the widths that separate the mark classes hold
     // on a core profile (which may refuse anything above 1.0) exactly as they
     // do on this tree's Linux compatibility context.
-    begin_line_pass(prog_line_, mvp, fbw, fbh, /*depth_cue=*/false, cam.radius);
+    // T2 (55): halos + the depth-cued width attenuation they are paired with.
+    // The halo is the OUTER RING of each line's own quad, not a second wider
+    // primitive drawn behind it — see kLineVert for why that distinction is
+    // load-bearing on a tessellated polyline — so there is no second pass and
+    // no draw-order rule to get wrong here. A nearer mark still cuts a farther
+    // one, by the ordinary z-test its own (now wider) quad already wins.
+    // Attenuation is floored at kMinLineWidthPx, so a distant bundle can never
+    // thin away into an absence.
+    begin_line_pass(prog_line_, mvp, fbw, fbh, layers.halos, cam.radius);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     GLint uColor = glGetUniformLocation(prog_line_, "uColor");
@@ -1503,6 +1527,10 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     uStipple = glGetUniformLocation(prog_traj_, "uStipple");
     uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
     glUniform1i(glGetUniformLocation(prog_traj_, "uHasTimeCut"), 0);
+    // Shares kTrajFrag with the line program, so say it explicitly rather than
+    // relying on a uniform this program happens never to have been given: a
+    // point has no width, and nothing about it is a halo.
+    glUniform1i(glGetUniformLocation(prog_traj_, "uHalo"), 0);
     glUniform1i(uStipple, 0);
     glUniform1i(uHasHead, 0);
 

@@ -61,14 +61,14 @@ int main() {
         return seen;
     };
     bool SceneLayers::*members[] = {
-        &SceneLayers::terrain,       &SceneLayers::exact,
-        &SceneLayers::statistical,   &SceneLayers::access_marks,
-        &SceneLayers::convergence,   &SceneLayers::zoning,
-        &SceneLayers::weather,       &SceneLayers::ghost_fog,
-        &SceneLayers::vehicle,       &SceneLayers::contours,
-        &SceneLayers::edl,          &SceneLayers::confidence,
-        &SceneLayers::canopy,       &SceneLayers::opcode,
-        &SceneLayers::mispred,
+        &SceneLayers::terrain,     &SceneLayers::exact,
+        &SceneLayers::statistical, &SceneLayers::access_marks,
+        &SceneLayers::convergence, &SceneLayers::zoning,
+        &SceneLayers::weather,     &SceneLayers::ghost_fog,
+        &SceneLayers::vehicle,     &SceneLayers::contours,
+        &SceneLayers::edl,         &SceneLayers::confidence,
+        &SceneLayers::canopy,      &SceneLayers::opcode,
+        &SceneLayers::mispred,     &SceneLayers::halos,
     };
     for (bool SceneLayers::*m : members)
         check("a SceneLayers member appears in exactly one row",

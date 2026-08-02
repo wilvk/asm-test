@@ -28,6 +28,12 @@ const std::vector<LayerDesc> &scene_layers_all() {
          LayerGrade::Derived, &SceneLayers::opcode},
         {"edl", "EDL", "which surface is nearer the camera?", G::Structure,
          LayerGrade::Derived, &SceneLayers::edl},
+        // T2 (55-scene-render-quality): the line-set counterpart of EDL —
+        // same group, same grade, same question asked of lines rather than
+        // surfaces. Derived, not Exact: a halo's width carries DEPTH, which
+        // is a property of the camera, not of the recording.
+        {"halos", "halos", "which line crosses in front of which?",
+         G::Structure, LayerGrade::Derived, &SceneLayers::halos},
         // --- activity: what happened, and when ------------------------------
         {"vehicle", "vehicle", "where is the followed thread right now?",
          G::Activity, LayerGrade::Exact, &SceneLayers::vehicle},
@@ -35,8 +41,9 @@ const std::vector<LayerDesc> &scene_layers_all() {
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},
         // --- fidelity: how much can this be trusted --------------------------
-        {"weather", "weather", "how much can this session's data be trusted overall?",
-         G::Fidelity, LayerGrade::Derived, &SceneLayers::weather},
+        {"weather", "weather",
+         "how much can this session's data be trusted overall?", G::Fidelity,
+         LayerGrade::Derived, &SceneLayers::weather},
         {"confidence", "confidence",
          "how much do I trust each region right now?", G::Fidelity,
          LayerGrade::Derived, &SceneLayers::confidence},
