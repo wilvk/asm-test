@@ -217,7 +217,7 @@ where it does not.
      re-derive it in the test rather than exporting the static, the way
      [examples/watchpoint_spike.c](../../../../examples/watchpoint_spike.c)
      re-derived DR7 per
-     [2026-07-15-hw-watchpoint-spike.md](../../analysis/2026-07-15-hw-watchpoint-spike.md)),
+     [2026-07-15-hw-watchpoint-spike.md](../analysis/2026-07-15-hw-watchpoint-spike.md)),
      `PTRACE_CONT`, then a WNOHANG + deadline wait loop copied from
      `probe_singlestep()` (lines 560–597 — hang-proof is mandatory). A SIGTRAP
      whose stop-PC equals the target → "fires"; deadline expiry → "armed but
@@ -658,7 +658,7 @@ T1 ──┬── T2 (hw-bp probe; tightens T1's allowlist)
 - **Data watchpoints** (`NT_ARM_HW_WATCH`, write/read-write mode) belong to
   the data-flow tier; this doc only exercises execute breakpoints
   (`NT_ARM_HW_BREAK`). The design groundwork is
-  [2026-07-15-hw-watchpoint-spike.md](../../analysis/2026-07-15-hw-watchpoint-spike.md).
+  [2026-07-15-hw-watchpoint-spike.md](../analysis/2026-07-15-hw-watchpoint-spike.md).
 - **Nightly auto-commit of box records**:
   [benchmarks-ci-followups.md](benchmarks-ci-followups.md).
 - **Extending the C §D3 stealth-stepper oracle test to AArch64**

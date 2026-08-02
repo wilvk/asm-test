@@ -1,7 +1,7 @@
 # One time truth — clip the worldline to the playhead, and make height readable
 
 > **Sources.** Gaps G7–G8 of [46-3d-functional-roadmap.md](46-3d-functional-roadmap.md),
-> which cuts this brief. Upstream: [UX/dataviz review](../analysis/2026-07-29-gui-ux-dataviz-review.md)
+> which cuts this brief. Upstream: [UX/dataviz review](../../analysis/2026-07-29-gui-ux-dataviz-review.md)
 > #50 ("Clip the 3D trajectory to the playhead and mark the execution front"),
 > #56 ("Add a vertical scale reference and clarify the dual vertical meaning"),
 > #37 ("Complete the 3D HUD legend: label the terrain's own encodings") and #40

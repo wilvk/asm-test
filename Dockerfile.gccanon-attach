@@ -3,7 +3,7 @@
 #
 # NOT a probe — the WIRING plus its live validation lane. F4's two halves both already existed: a
 # proven live GC-move feed (an attach-mode ICorProfilerCallback4::MovedReferences2 profiler —
-# docs/internal/analysis/f4-attach-profiler-probe-findings.md) and a landed pure transform
+# docs/internal/archive/analysis/f4-attach-profiler-probe-findings.md) and a landed pure transform
 # (asmtest_gcmove_canonicalize, src/dataflow_gcmove.c, whose only caller was its unit test). This
 # lane joins them on a LIVE ATTACH and proves the join with a NEGATIVE CONTROL: the same capture is
 # def-use-built twice, once WITHOUT canonicalization (the store->load edge across the compaction must

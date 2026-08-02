@@ -69,7 +69,7 @@ the argument and return registers.
 - **Scope.** x86-only and **test/oracle-only**: Intel Pin is proprietary freeware
   (digest-verified at test time, never linked into `libasmtest`, `libasmtest_emu`,
   or any shipped package), exactly as DynamoRIO is handled. Design note:
-  [capture-args-returns.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/capture-args-returns.md).
+  [capture-args-returns.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/capture-args-returns.md).
 
 ## Managed-runtime identity
 

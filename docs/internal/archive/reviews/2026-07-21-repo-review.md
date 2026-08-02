@@ -61,7 +61,7 @@ this review is self-contained, not to re-open them:
   T2 (high-severity doc-drift sweep). Two *concrete* drift instances not obviously
   inside that T2 are filed below as D1/D2.
 - **Data-flow def-use/slice half missing from 7 of 10 bindings** — noted in
-  [analysis/2026-07-17-dataflow-tier-open-followups.md](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
+  [archive/analysis/2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
   item 5. *Reconcile:* the implementations brief
   [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
   reports ✅4/4 over the same area — one of the two is stale; worth settling which.
@@ -327,7 +327,7 @@ separately-fixable instances:
   convention. Sphinx `-W` clean; neither page renders on the site any more.)*
   `docs/amd_tracing_review.md` (a code review with `src/file.c:line`
   finding IDs, premised on the now-superseded Zen-2 host — stale, and a duplicate
-  of `internal/analysis/2026-07-09-amd-tracing-review.md`) and
+  of `internal/archive/analysis/2026-07-09-amd-tracing-review.md`) and
   `docs/scoped-tracing-implementation.md` (an implementation ledger whose
   `../src/…` relative links point at non-doc sources) are `orphan: true` but
   still built. *Fix:* move both under `docs/internal/`.

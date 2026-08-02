@@ -5,7 +5,7 @@
 > feasibility analysis and its "single cheapest first step"),
 > [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) (the jitdump /
 > temporal-bytes background), and
-> [data-flow-capture.md](../../analysis/data-flow-capture.md) (the "IL-to-native
+> [data-flow-capture.md](../analysis/data-flow-capture.md) (the "IL-to-native
 > map or data flow stays at assembly level" boundary). Written 2026-07-17. If
 > this doc and a source disagree, this doc wins (sources may be stale); if the
 > CODE and this doc disagree, re-verify before implementing.

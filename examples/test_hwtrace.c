@@ -1265,7 +1265,7 @@ static void test_call_auto(void) {
              * capture to EITHER have escalated off AMD_LBR OR reconstruct that exact
              * full count. Without this, a live-AMD sampled-LBR flake that mis-reported
              * a 4-edge fragment (insns << baseline) as truncated=0 passed vacuously
-             * (see docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md);
+             * (see docs/internal/archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md);
              * now it is a HARD failure. Host-independent: where AMD LBR is absent the
              * fast tier self-skips, `lused.backend` is already the escalated floor, and
              * the OR's first arm holds trivially. */

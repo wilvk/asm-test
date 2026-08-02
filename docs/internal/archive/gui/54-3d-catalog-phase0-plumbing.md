@@ -1,6 +1,6 @@
 # Phase 0 — the seven shared changes the 3D catalog is gated on
 
-> **Sources.** §4 of the [3D visualization catalog](../analysis/2026-07-29-3d-visualization-catalog.md)
+> **Sources.** §4 of the [3D visualization catalog](../../analysis/2026-07-29-3d-visualization-catalog.md)
 > ("Phase 0 — shared plumbing"), its §9 open-limits list, and §2 of
 > [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md), which cuts
 > this brief and records what has moved since the catalog was authored. Read

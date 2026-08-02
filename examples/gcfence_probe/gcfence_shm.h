@@ -1,7 +1,7 @@
 /*
  * gcfence_shm.h — the PROBE-LOCAL shm channel for the F4 GC-fence FREEZE measurement
  * (docs/internal/plans/live-attach-dataflow-followup-plan.md F4; findings in
- * docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md).
+ * docs/internal/archive/analysis/f4-gc-fence-freeze-probe-findings.md).
  *
  * F4 stamps each MovedReferences2 {old,new,len} triple with an `asmtest_gcmove_t.step` — an index
  * into the value trace's insn_off[], i.e. HOW MANY in-region instructions the tracer has recorded

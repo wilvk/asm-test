@@ -1,5 +1,5 @@
 <!-- Managed victim for the F4 GC-fence FREEZE probe (live-attach-dataflow-followup-plan.md F4;
-     findings in docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md). A plain dotnet
+     findings in docs/internal/archive/analysis/f4-gc-fence-freeze-probe-findings.md). A plain dotnet
      process — NO CORECLR_* env vars — with a managed hot loop on an identifiable worker thread
      (it publishes its gettid) plus a main thread forcing compacting gen2 GCs. The harness attaches
      a profiler over the diagnostics port, then ptrace-single-steps the worker.

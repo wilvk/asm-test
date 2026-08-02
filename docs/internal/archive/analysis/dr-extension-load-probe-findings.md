@@ -1,19 +1,19 @@
 # Findings: DynamoRIO extension-load probe (taint tier, Increment 2)
 
 *Status: findings / empirical record. Produced by
-[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) **Increment 2**,
+[dynamorio-taint-tier-plan.md](../../archive/plans/dynamorio-taint-tier-plan.md) **Increment 2**,
 whose whole purpose is to turn the long-documented "the prebuilt DR extensions won't
 load under the private loader on modern glibc" claim into an empirical yes/no and to
 settle the `umbra`/`drx_buf` license question the tier's LGPL-clean claim rests on.
-The probe itself is [drclient/probe_extensions.c](../../../drclient/probe_extensions.c);
+The probe itself is [drclient/probe_extensions.c](../../../../drclient/probe_extensions.c);
 it runs in the throwaway `make docker-drext-probe` lane and the CI `drext-probe` job.*
 
 ## The question
 
-The shipped DR clients ([drtrace_client.c](../../../src/drtrace_client.c),
-[dataflow_dr_client.c](../../../src/dataflow_dr_client.c)) use **only** DynamoRIO's raw
+The shipped DR clients ([drtrace_client.c](../../../../src/drtrace_client.c),
+[dataflow_dr_client.c](../../../../src/dataflow_dr_client.c)) use **only** DynamoRIO's raw
 BSD core API. The stated reason, recorded verbatim in
-[drclient/CMakeLists.txt:19-21](../../../drclient/CMakeLists.txt#L19) and the client
+[drclient/CMakeLists.txt:19-21](../../../../drclient/CMakeLists.txt#L19) and the client
 header, is that the prebuilt release **extensions** (`drmgr`/`drreg`/`drx`/…) "fail to
 load under DR's private loader on modern glibc." Every in-repo mention of this blocker
 is generic — no glibc version boundary was ever pinned, and no build-from-source /
@@ -28,15 +28,15 @@ the cheap **(c)** probe first.
 
 ## Method
 
-[probe_extensions.c](../../../drclient/probe_extensions.c) is a DR client that
+[probe_extensions.c](../../../../drclient/probe_extensions.c) is a DR client that
 `use_DynamoRIO_extension()`s the stack, calls one real API from each
 (`drmgr_init` + a bb instrumentation event; `drreg_init` + a scratch-register
 reserve/unreserve in the insertion phase; `drx_init` + `drx_buf_create_trace_buffer`),
 counts instrumented instructions via a clean call, and prints a load-success line per
 extension plus the final count. It runs under `drrun -c <probe>.so -- /bin/true` in the
 pinned DR image (`DR_VERSION=11.91.20630`, the same pin as
-[Dockerfile.drtrace](../../../Dockerfile.drtrace) and
-[Dockerfile.drtrace-lang](../../../Dockerfile.drtrace-lang)). The lane records the
+[Dockerfile.drtrace](../../../../Dockerfile.drtrace) and
+[Dockerfile.drtrace-lang](../../../../Dockerfile.drtrace-lang)). The lane records the
 runner glibc first. `umbra` is behind an opt-in `-DPROBE_UMBRA` (see the license finding
 below) and is **not** part of the committed gate.
 
@@ -131,7 +131,7 @@ finding is a **split**, and it is not what the plan assumed:
    *(Pointer, 2026-07-21: the "built to avoid umbra" stance still holds by default, but
    opt-in compliance machinery to include LGPL-2.1 `drwrap`/`umbra` under the project's
    MIT terms was later added — commit `0a76717`,
-   [licenses/LGPL-2.1.txt](../../../licenses/LGPL-2.1.txt). The finding itself is
+   [licenses/LGPL-2.1.txt](../../../../licenses/LGPL-2.1.txt). The finding itself is
    unchanged.)*
 3. **No change to the shipped Increment-1 client.** It stays on the raw core API,
    untouched, as the oracle/fallback until Increment 3 regression-proves its replacement
@@ -140,13 +140,13 @@ finding is a **split**, and it is not what the plan assumed:
 
 ## Artifacts landed by this increment
 
-- [drclient/probe_extensions.c](../../../drclient/probe_extensions.c) — the throwaway
+- [drclient/probe_extensions.c](../../../../drclient/probe_extensions.c) — the throwaway
   probe (BSD stack default; `-DPROBE_UMBRA` opt-in).
-- [drclient/CMakeLists.txt](../../../drclient/CMakeLists.txt) — opt-in
+- [drclient/CMakeLists.txt](../../../../drclient/CMakeLists.txt) — opt-in
   `ASMTEST_BUILD_DREXT_PROBE` / `PROBE_UMBRA` targets; shipped clients unchanged.
-- [Dockerfile.drext-probe](../../../Dockerfile.drext-probe) + `make docker-drext-probe`
-  + `make drext-probe` ([mk/native-trace.mk](../../../mk/native-trace.mk),
-  [mk/docker.mk](../../../mk/docker.mk)).
-- CI `drext-probe` job ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml)) —
+- [Dockerfile.drext-probe](../../../../Dockerfile.drext-probe) + `make docker-drext-probe`
+  + `make drext-probe` ([mk/native-trace.mk](../../../../mk/native-trace.mk),
+  [mk/docker.mk](../../../../mk/docker.mk)).
+- CI `drext-probe` job ([.github/workflows/ci.yml](../../../../.github/workflows/ci.yml)) —
   fails red if any of `drmgr`/`drreg`/`drx` fails to load or zero instructions are
   instrumented.

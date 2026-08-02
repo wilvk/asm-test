@@ -28,7 +28,7 @@ changes here; the bindings consume the new symbols.
 The analysis is explicit that almost all the load-bearing machinery is already
 shared C and the per-binding delta is "small and repetitive," and it names four
 things that must be built once:
-[the lifecycle](../../analysis/scoped-inprocess-tracing.md#one-shared-core-thin-per-language-shims)
+[the lifecycle](../analysis/scoped-inprocess-tracing.md#one-shared-core-thin-per-language-shims)
 (exists), the **libipt decode-against-self-code-image glue** (the single
 highest-leverage shared investment), **per-thread hwtrace state** (second-highest),
 and the **two cheap C-layer fixes**. Two more shared gaps it calls out —
@@ -512,7 +512,7 @@ from `/proc/self/maps`.
   ([include/asmtest_codeimage.h:110-112](../../../../include/asmtest_codeimage.h#L110)),
   keyed to the trace position (`when`) so the temporal-bytes rule holds — the
   version live *during* the window, per
-  [the analysis's correctness rule](../../analysis/scoped-inprocess-tracing.md#byte-sources-are-orthogonal-to-all-of-the-above).
+  [the analysis's correctness rule](../analysis/scoped-inprocess-tracing.md#byte-sources-are-orthogonal-to-all-of-the-above).
   For file-backed regions with no recorder entry, fall back to reading the mapped
   file (resolve via `asmtest_proc_region_by_addr`,
   [include/asmtest_ptrace.h:291](../../../../include/asmtest_ptrace.h#L291)). Note the
@@ -774,7 +774,7 @@ reconstruction host-testable; PT live forward-look on Intel PT).
 
 Design rationale, the four-qualification analysis (thread-scope, runtime-noise,
 bandwidth, nesting), and the temporal-bytes correctness rule:
-[the scoped `using` analysis](../../analysis/scoped-inprocess-tracing.md#can-the-four-qualifications-be-fixed-in-code).
+[the scoped `using` analysis](../analysis/scoped-inprocess-tracing.md#can-the-four-qualifications-be-fixed-in-code).
 Shared decode/recorder background:
 [hardware-trace-plan.md](../../plans/hardware-trace-plan.md),
 [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md).

@@ -4,7 +4,7 @@
 > (Track A — publish the bindings), the archived
 > [2026-07-04 repo review](../archive/reviews/2026-07-04-repo-review.md) (finding
 > P1 — system package managers, still `⬜ Open`), the maintainer-actions section of
-> [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md),
+> [2026-07-04-plans-remaining-items.md](../archive/analysis/2026-07-04-plans-remaining-items.md),
 > and the release guides [docs/reference/packaging.md](../../reference/packaging.md)
 > and [docs/reference/releasing.md](../../reference/releasing.md). Written
 > 2026-07-17. If this doc and a source disagree, this doc wins (sources may be

@@ -1,7 +1,7 @@
 # asm-test — Intel Pin capabilities: one umbrella, four separable plans
 
 > **Context (2026-07-17).** This plan actions the surviving items of
-> [2026-07-17-intel-pin-vs-dynamorio.md](../../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+> [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > — the investigation into what Intel Pin makes possible that the shipped
 > DynamoRIO tier cannot. Four items survived; each is a **self-contained plan
 > track** below (`PIN-1..PIN-4`), ordered by how squarely it is a DynamoRIO
@@ -17,7 +17,7 @@
 > the Unicorn future-ISA ceiling this routes around
 > ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md),
 > F1 increment 2); the arg/return-capture note PIN-3 serves
-> ([capture-args-returns.md](../../analysis/capture-args-returns.md)).
+> ([capture-args-returns.md](../analysis/capture-args-returns.md)).
 
 > **Status (2026-07-21): ALL FOUR TRACKS LANDED — plan complete; archived.**
 > Each track is owned by its implementations brief: PIN-1
@@ -169,7 +169,7 @@ is launch-under-`pin` with the trace delivered over shm; zero diff under
 
 ## PIN-3 — Pin probe-mode arg/return capture *(LANDED — [pin-probe-mode-capture.md](../implementations/pin-probe-mode-capture.md) ✅ 7/7, live-verified on Zen 5, commit `fd00e46`)*
 
-The [capture-args-returns.md](../../analysis/capture-args-returns.md) "middle tier":
+The [capture-args-returns.md](../analysis/capture-args-returns.md) "middle tier":
 Pin **probe mode** trampolines at function entry/exit while the app runs its
 **original code natively** between probes — stronger than LD_PRELOAD (dynamic
 symbols only) and far cheaper than full DBI, with no code cache. DR has no
@@ -229,7 +229,7 @@ diff directly. Seeds are shared verbatim (`at_taint_seed_t` base/len/color).
    (`examples/dr_taint*.c`) under both the DR client and libdft64; assert the sink
    sets agree (same `off`/`ea`, compatible `tag` union). Where they differ,
    classify: a real DR-client bug, a libdft coverage gap (it famously skips
-   XMM/SSE — [data-flow-capture.md](../../analysis/data-flow-capture.md)), or a
+   XMM/SSE — [data-flow-capture.md](../analysis/data-flow-capture.md)), or a
    modelling difference — and record the boundary, do not paper over it.
 3. **Wire as an optional gate,** not a blocker: `docker-taint-oracle` runs the
    diff; a divergence in the covered subset fails, a known libdft coverage gap

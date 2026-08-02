@@ -1263,7 +1263,7 @@ int main(int argc, char **argv) {
      * (load_node_table blocked until the dumper's GCCANON_NODES_END), so the post feed reaches the
      * snapshot. T4 measured POST-move — GCBulkNode addresses are the objects' final resting places —
      * so the dump GC's own ranges BELONG and no gc_seq is filtered
-     * (docs/internal/analysis/f4-objid-snapshot-space-findings.md). Post moves that repeatedly reused
+     * (docs/internal/archive/analysis/f4-objid-snapshot-space-findings.md). Post moves that repeatedly reused
      * one slot share a step and overlap in `new`, so asmtest_objid_*'s own new-span disjointify drops
      * them for the inverse walk — the in-capture move is what keys the traced records. */
     uint32_t nm_now = g_ch->nmoves;

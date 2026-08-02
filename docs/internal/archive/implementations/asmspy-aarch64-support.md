@@ -5,7 +5,7 @@
 > line 140),
 > [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
 > (F3 carryover, the AArch64 `NT_ARM_HW_WATCH` analog),
-> [2026-07-15-hw-watchpoint-spike.md](../../analysis/2026-07-15-hw-watchpoint-spike.md)
+> [2026-07-15-hw-watchpoint-spike.md](../analysis/2026-07-15-hw-watchpoint-spike.md)
 > (the "AArch64 analog" section), and
 > [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md)
 > (the landed AArch64 library stepper this doc mirrors). Written 2026-07-17. If
@@ -759,7 +759,7 @@ drift). Sources inline.
   mode (WSL2 x86 gdb hardware watchpoints, microsoft/WSL#5741). **T7's probe must
   assert a delivered `SIGTRAP`, not just nonzero `dbg_info`** — matching the
   self-probe design in
-  [2026-07-15-hw-watchpoint-spike.md](../../analysis/2026-07-15-hw-watchpoint-spike.md).
+  [2026-07-15-hw-watchpoint-spike.md](../analysis/2026-07-15-hw-watchpoint-spike.md).
   ([perf-on-arm64 issue](https://github.com/actions/runner-images/issues/11689),
   [WSL#5741](https://github.com/microsoft/WSL/issues/5741))
 

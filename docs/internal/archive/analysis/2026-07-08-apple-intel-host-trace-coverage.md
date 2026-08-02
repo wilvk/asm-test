@@ -3,10 +3,10 @@
 *Status: analysis / findings, empirical. A point-in-time, live-verified answer to
 "which of asm-test's trace tiers can actually be exercised on an Apple **Intel**
 Mac?" — the host-specific instantiation of the capability tables in
-[trace-parity-matrix.md](trace-parity-matrix.md). Every "verified" claim below was
+[trace-parity-matrix.md](../../analysis/trace-parity-matrix.md). Every "verified" claim below was
 run on the box described; every "impossible" claim was probed, not assumed. Source
-of record for the gating logic: [src/hwtrace.c](../../../src/hwtrace.c),
-[src/ss_backend.c](../../../src/ss_backend.c), [mk/native-trace.mk](../../../mk/native-trace.mk).*
+of record for the gating logic: [src/hwtrace.c](../../../../src/hwtrace.c),
+[src/ss_backend.c](../../../../src/ss_backend.c), [mk/native-trace.mk](../../../../mk/native-trace.mk).*
 
 ## The host
 
@@ -50,7 +50,7 @@ Three tiers, by where the work can happen:
 
   The Linux-only variants (nested/concurrent single-step, ptrace W2, whole-window,
   AMD sample) self-skip cleanly. This confirms the "62-insn loop, live, on this box"
-  claim in [scoped-tracing-implementation.md](../scoped-tracing-implementation.md)
+  claim in [scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)
   and resolves the parity-matrix drift (below).
 - Also native here: quality lanes (`sanitize`, `tidy`, `fmt-check`), `macos-clean-test`,
   the emulator/Keystone/Capstone tiers, and the language-binding suites that build
@@ -61,7 +61,7 @@ Three tiers, by where the work can happen:
 `make hwtrace-test` **did not compile on this host** before this session — a
 regression from the §D3 out-of-process whole-window work (`a8f4f5e9`, `64223dd`,
 2026-07-06→08). Ten ptrace / whole-window test functions in
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c) were guarded
+[examples/test_hwtrace.c](../../../../examples/test_hwtrace.c) were guarded
 `#if defined(__x86_64__)` — **true on macOS Intel** — so their Linux-only bodies
 (`fork`/`ptrace`/`PTRACE_TRACEME`/`waitpid`, whose headers sit behind
 `#if defined(__linux__)`) compiled on macOS and failed with 9 undeclared-symbol
@@ -72,14 +72,14 @@ that printed "x86-64 only" on an x86-64 host.
 
 **Why this matters as a finding:** CI cannot catch it — the Linux lanes compile the
 guarded bodies fine, and the macOS packaging slot (`darwin-x86_64`, macos-13 nightly
-per [trace-parity-matrix.md Matrix 13](trace-parity-matrix.md)) does not run
+per [trace-parity-matrix.md Matrix 13](../../analysis/trace-parity-matrix.md)) does not run
 `hwtrace-test`. Only a build on real Intel-macOS hardware surfaces it. This host is
 the natural regression anchor for the macOS-Intel single-step front.
 
 > **Update 2026-07-21: resolved in CI.** The `test-macos-x86` nightly job now runs
 > on `macos-15-intel` and executes `make hwtrace-test` plus
 > `hwtrace-cpp-test`/`hwtrace-ruby-test`
-> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:400-460), so
+> ([.github/workflows/ci.yml](../../../../.github/workflows/ci.yml) ~:400-460), so
 > this class of macOS-Intel regression is caught without needing this box.
 > (GitHub retired the macos-13 image on 2025-12-08.)
 
@@ -111,7 +111,7 @@ and **Intel PT** (see below).
 No AMD silicon exists to expose — not natively, not in the VM. All AMD-LBR work
 (the recent Zen-focused commits) can only be validated on a real ~~Zen 3+~~
 **Zen 4+** host *(corrected 2026-07-21: per
-[implementations/_positions.md](../implementations/_positions.md) #2, Zen 3 BRS is
+[implementations/_positions.md](../../implementations/_positions.md) #2, Zen 3 BRS is
 never opened by this tree, so Zen 4+ LbrExtV2 is the actual floor)*.
 
 ### Intel PT — the interesting "no"
@@ -182,7 +182,7 @@ concrete paths, follow.
 
 PT is two halves: **capture** (program the CPU, collect the raw packet stream) and
 **decode** (replay packets into control flow). asm-test already has the decode half,
-OS-independently — [src/pt_backend.c](../../../src/pt_backend.c) over **libipt**. Only
+OS-independently — [src/pt_backend.c](../../../../src/pt_backend.c) over **libipt**. Only
 the **capture** half is macOS-missing. So the question is narrow: what would a macOS
 capture driver look like, and how much of it is actually hard?
 
@@ -233,7 +233,7 @@ Ordered by effort. All require **SIP disabled** (and, to load a kext, **Reduced
 Security**), and target Intel Macs only (Apple Silicon has no PT).
 
 **Reuse that already exists.** The PT **decode** path
-([src/pt_backend.c](../../../src/pt_backend.c) replaying packets into an
+([src/pt_backend.c](../../../../src/pt_backend.c) replaying packets into an
 `asmtest_trace_t` via libipt) is OS-independent and in-tree. Anything that produces a raw
 PT buffer on macOS feeds it (or `ptxed` offline). You build the capture half only.
 
@@ -249,7 +249,7 @@ with XNU's PMC use — test on an otherwise-idle core.
 
 **Path B — a real XNU capture kext (simple-pt / WindowsIntelPT-shaped).** *~Weeks.* An
 IOKit driver with a user client exposing `begin(entry, end)` / `end(&trace)` that mirrors
-[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), so the existing PT
+[include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h), so the existing PT
 backend's `available()`/`begin`/`end` seam lights up on macOS exactly as on Linux.
 Per-window: `thread_bind` to a CPU + an interrupt fence, single-range output (or
 ToPA+PMI for unbounded capture — then you must claim the PMC LVT the way `kpc` does), arm
@@ -269,7 +269,7 @@ single-step as the shipped macOS-Intel tier.
 
 ## Doc reconciliation done this session
 
-[trace-parity-matrix.md](trace-parity-matrix.md) contradicted itself on the
+[trace-parity-matrix.md](../../analysis/trace-parity-matrix.md) contradicted itself on the
 single-step Phase-5 fronts: Matrix 1 said macOS-Intel/Windows were *implemented*
 while the narrative, Matrix 2, and Matrix 9 still said *"planned."* Verified shipped
 here (87/0, live capture) and reconciled Matrices 2 & 9 + the narrative to match.

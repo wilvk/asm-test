@@ -52,7 +52,7 @@ make gcfence-probe             # host-direct; self-skips without dotnet/git; nee
 
 F4 consumes `MovedReferences2` `{old, new, len}` triples "stamped with the value-trace step boundary
 the compaction takes effect at" and runs `asmtest_gcmove_canonicalize` over a captured trace. That
-boundary is `asmtest_gcmove_t.step` ([asmtest_valtrace.h:320](../../../include/asmtest_valtrace.h#L320)),
+boundary is `asmtest_gcmove_t.step` ([asmtest_valtrace.h:320](../../../../include/asmtest_valtrace.h#L320)),
 which is **only an index into `insn_off[]`** — how many in-region instructions the tracer has
 recorded so far, stamped by `_append`. The design assumed the GC fence freezes that counter, so the
 boundary could be read after the fact, at drain time.
@@ -70,25 +70,25 @@ C/C++ toolchain + git (the pinned CoreCLR profiler headers, shared with the
 gcprofiler/attachprof probes) and, unlike [the attach probe](f4-attach-profiler-probe-findings.md),
 **`--cap-add=SYS_PTRACE`**, because the stepper ptrace-attaches to a *sibling* process.
 
-- [examples/gcfence_probe/gcfenceprof.cpp](../../../examples/gcfence_probe/gcfenceprof.cpp) — the
+- [examples/gcfence_probe/gcfenceprof.cpp](../../../../examples/gcfence_probe/gcfenceprof.cpp) — the
   measuring **attach-mode** profiler; `attachprof.cpp`'s sibling (same `CINTERFACE` C-vtable +
   generic-stub array-fill, same strict QI, same `InitializeForAttach` entry) plus the sampling of
   the tracer's step counter at both ends of both windows. Everything it does inside a GC callback is
   integer loads/stores on an already-mapped shm page: no allocation, no locks, no calls into the
   runtime.
-- [examples/gcfence_probe/gcfence_stepper.c](../../../examples/gcfence_probe/gcfence_stepper.c) — a
+- [examples/gcfence_probe/gcfence_stepper.c](../../../../examples/gcfence_probe/gcfence_stepper.c) — a
   minimal standalone ptrace stepper. It deliberately does **not** drag in
-  [src/dataflow_ptrace.c](../../../src/dataflow_ptrace.c): the whole tier brings region gating, JIT
+  [src/dataflow_ptrace.c](../../../../src/dataflow_ptrace.c): the whole tier brings region gating, JIT
   method resolution and signal policy, none of which the question needs.
-- [examples/gcfence_probe/gcfence_shm.h](../../../examples/gcfence_probe/gcfence_shm.h) — the
+- [examples/gcfence_probe/gcfence_shm.h](../../../../examples/gcfence_probe/gcfence_shm.h) — the
   probe-local shm channel, modelled on the DR tier's
-  [asmtest_taint_gcmove.h](../../../include/asmtest_taint_gcmove.h) but necessarily separate: that
+  [asmtest_taint_gcmove.h](../../../../include/asmtest_taint_gcmove.h) but necessarily separate: that
   tier is *in-process* with its target (so it can publish a function pointer), whereas here the
   tracer and the profiler are in **different processes**. The DR tier's shipping header is untouched.
-- [examples/gcfence_probe/victim/](../../../examples/gcfence_probe/victim/) — a **plain** dotnet
+- [examples/gcfence_probe/victim/](../../../../examples/gcfence_probe/victim/) — a **plain** dotnet
   process (`env -u CORECLR_ENABLE_PROFILING …`, enforced not assumed), with a managed hot loop on a
   worker thread that publishes its own `gettid`, plus a main thread forcing **compacting** gen2 GCs.
-- [examples/gcfence_probe/attacher/](../../../examples/gcfence_probe/attacher/) — the
+- [examples/gcfence_probe/attacher/](../../../../examples/gcfence_probe/attacher/) — the
   `DiagnosticsClient.AttachProfiler` harness.
 
 ### The two windows, kept apart
@@ -216,7 +216,7 @@ the same livelock (~19 s, ending at detach) after the first handful of GCs succe
    the target's GC interval, and treat a suspension that opens mid-region as a signal to let go.
    Worth confirming against `src/dataflow_ptrace.c`'s actual region residency before F4 wiring.
    *(Resolved 2026-07-21 — F4 wiring has since landed:
-   [dataflow-f4-object-identity.md](../archive/implementations/dataflow-f4-object-identity.md) T1–T6.)*
+   [dataflow-f4-object-identity.md](../../archive/implementations/dataflow-f4-object-identity.md) T1–T6.)*
 4. **The unglamorous good news.** The victim survived profiler attach + managed-thread
    single-stepping + detach in every run (`rc=0`, `GCFENCE_VICTIM_END` reached, no fatal signal) —
    notably unlike the DR managed-attach route, which took SIGSEGV at takeover

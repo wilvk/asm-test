@@ -8,13 +8,13 @@
 > of `key` alone. Kept for the file:line context and the reusable "identity vs.
 > state" analysis, not because anything below is still open — re-verified
 > 2026-07-31 while cutting
-> [../gui/43-faithful-city-roadmap.md](../gui/43-faithful-city-roadmap.md), whose
+> [../gui/43-faithful-city-roadmap.md](../../gui/43-faithful-city-roadmap.md), whose
 > Phase C previously assumed this was still an open dependency.
 
 Review date: 2026-07-30. Severity: **medium** (live-capture only; visual
 staleness, no crash and no data loss). Scope: the GL upload gate of the 3D
 spacetime overview under a growing `asmspy --serve` capture. Found during the
-[computer-as-city 3D ideation](2026-07-30-computer-as-city-3d.md); filed
+[computer-as-city 3D ideation](../../analysis/2026-07-30-computer-as-city-3d.md); filed
 separately so it is not lost behind that larger design.
 
 ## Summary
@@ -28,7 +28,7 @@ is unaffected.
 ## Evidence (verified against HEAD `49cfeea`)
 
 The GL host re-uploads on two different gates
-([`desktop/src/ui/gl_scene_host.cpp:64-79`](../../../desktop/src/ui/gl_scene_host.cpp#L64)):
+([`desktop/src/ui/gl_scene_host.cpp:64-79`](../../../../desktop/src/ui/gl_scene_host.cpp#L64)):
 
 ```cpp
 // trajectory + arcs: gated on the recording IDENTITY key
@@ -46,16 +46,16 @@ if (f.slice_t != up_t_) {
 ```
 
 But `f.key` is the recording's **identity**, not its **state**
-([`desktop/src/ui/scene_host.h:37`](../../../desktop/src/ui/scene_host.h#L37) —
+([`desktop/src/ui/scene_host.h:37`](../../../../desktop/src/ui/scene_host.h#L37) —
 `uint64_t key; // recording identity`), and it is built from the basename alone
-([`desktop/src/ui/shell.cpp:896`](../../../desktop/src/ui/shell.cpp#L896)):
+([`desktop/src/ui/shell.cpp:896`](../../../../desktop/src/ui/shell.cpp#L896)):
 
 ```cpp
 f.key = std::hash<std::string>{}(a.id);   // a.id = the recording basename
 ```
 
 A live capture keeps the **same basename** as it grows
-([`shell_sync_live_tab`](../../../desktop/src/ui/shell.cpp#L192) mirrors the
+([`shell_sync_live_tab`](../../../../desktop/src/ui/shell.cpp#L192) mirrors the
 growing recording as one tab — "the growing recording is not a second code path,
 it is the same model"). So `f.key` is invariant across the per-batch re-weave,
 `f.key != up_key_` is false after batch 1, and `set_trajectories` /
@@ -75,7 +75,7 @@ vertices, but the identity key does not change).
   often not the focused pane during a live capture.
 - `shell_sync_live_tab` already does the right thing upstream: it re-decodes the
   streams, rebuilds `sv.traj`, and forces a lazy 3D re-weave each batch
-  ([`shell.cpp:247-262`](../../../desktop/src/ui/shell.cpp#L247)) preserving the
+  ([`shell.cpp:247-262`](../../../../desktop/src/ui/shell.cpp#L247)) preserving the
   camera. The fresh, grown `TrajectorySet` reaches the GL host in `f.traj` — the
   host just never uploads it.
 
@@ -85,7 +85,7 @@ Fold the recording's **growth signal** into the upload key so the trajectory/arc
 buffers re-upload when the capture grows. `draw_scene_overview` already holds the
 `Recording& r`, and `s.live_built_events` already tracks the monotonic
 `event_count()` of the last-built state
-([`shell.cpp:272`](../../../desktop/src/ui/shell.cpp#L272)). Minimal change:
+([`shell.cpp:272`](../../../../desktop/src/ui/shell.cpp#L272)). Minimal change:
 
 ```cpp
 // shell.cpp draw_scene_overview — key on identity AND size, not identity alone

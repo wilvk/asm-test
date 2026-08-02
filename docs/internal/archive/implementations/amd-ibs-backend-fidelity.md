@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [amd-review-followup-plan.md](../plans/amd-review-followup-plan.md) (P1, P3,
 > P6, P7, P8), the
-> [2026-07-17 AMD hardware review](../../analysis/2026-07-17-amd-hardware-review.md)
+> [2026-07-17 AMD hardware review](../analysis/2026-07-17-amd-hardware-review.md)
 > (§2.3, §2.5, §2.6, §2.7, §4 row 3),
 > [asmspy-plan.md](../../plans/asmspy-plan.md) Theme E's REMAINING row (line 131),
 > [amd-hardware-validation.md](../../amd-hardware-validation.md) (the doc T2
@@ -196,7 +196,7 @@ made non-vacuous, and records its own staleness hazard.
 1. Read the doc. Three defects, all verified in the working tree today:
    - `:91-113` — section "OPEN finding to watch — `call_auto` AMD-LBR rung"
      says the bug is "**not yet fixed**". It was fixed in `5d8e0d2`;
-     [2026-07-12-zen5-privileged-lbr-findings.md](../../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+     [2026-07-12-zen5-privileged-lbr-findings.md](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
      §2 marks it `~~OPEN~~ RESOLVED`, deterministic across 16 privileged runs
      (every one escalates `backend=3 insns=77`).
    - `:124-126` — instructs treating `truncated=0` as "the known open finding,

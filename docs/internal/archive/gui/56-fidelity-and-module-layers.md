@@ -1,6 +1,6 @@
 # The fidelity and module layers — trust, module heat, work-kind, mispredictions
 
-> **Sources.** The [3D catalog](../analysis/2026-07-29-3d-visualization-catalog.md)
+> **Sources.** The [3D catalog](../../analysis/2026-07-29-3d-visualization-catalog.md)
 > §5 layers 1–4 (confidence terrain, per-module residency skyline, opcode-class
 > code terrain, misprediction survey layer) and its §7 Phase 1; cut by
 > [53-3d-catalog-build-roadmap.md](53-3d-catalog-build-roadmap.md) §4.1 (L1–L4).

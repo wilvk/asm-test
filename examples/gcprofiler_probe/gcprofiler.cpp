@@ -1,6 +1,6 @@
 // gcprofiler.cpp — MINIMAL CLR profiler for the DR-vs-profiler GC-move coexistence PROBE
 // (go/no-go for adopting ICorProfilerCallback4::MovedReferences2 to feed the DR taint
-// client's shadow remap; see docs/internal/analysis/gc-move-range-extraction-findings.md).
+// client's shadow remap; see docs/internal/archive/analysis/gc-move-range-extraction-findings.md).
 //
 // It does the smallest thing that answers the two questions:
 //   (1) does a CLR profiler .so load + Initialize + get GC callbacks inside a dotnet process

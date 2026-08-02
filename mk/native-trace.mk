@@ -775,7 +775,7 @@ endif
 # continued past the attach), and did it exit native. Prints `ATTACH PROBE OK` (GO) iff all hold,
 # else `ATTACH PROBE NO-GO`. Needs SYS_PTRACE for the ptrace-seize (the docker lane adds the cap).
 # THROWAWAY diagnostic (not a product artifact, not wired into the main CI gate — a no-go is a
-# valid research finding, recorded in docs/internal/analysis/dr-attach-probe-findings.md).
+# valid research finding, recorded in docs/internal/archive/analysis/dr-attach-probe-findings.md).
 $(BUILD)/attach_probe_victim: examples/attach_probe_victim.c $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) examples/attach_probe_victim.c -o $@
 
@@ -830,7 +830,7 @@ endif
 # `MANAGED ATTACH PROBE OK` (GO) iff all hold, else `MANAGED ATTACH PROBE NO-GO` with the failure
 # mode. Needs SYS_PTRACE (ptrace-seize) + the .NET SDK (the docker lane provides both). THROWAWAY
 # diagnostic — a no-go is a valid research finding (recorded in
-# docs/internal/analysis/dr-managed-attach-probe-findings.md); NOT wired into the main CI gate.
+# docs/internal/archive/analysis/dr-managed-attach-probe-findings.md); NOT wired into the main CI gate.
 MANAGED_ATTACH_OUT ?= $(BUILD)/managed_attach_victim_out
 # Increment-6 Option-1 sweep knobs (bounded experiments to see if a DR option/version flips the
 # NO-GO): PROBE_DROPS = DR runtime options placed in the [DR options] slot before -c (e.g.
@@ -1566,7 +1566,7 @@ endif
 # The go/no-go for the recommended Phase-4/Increment-7 mechanism: extract .NET compacting-GC
 # object-move {old,new,len} ranges via an in-process ICorProfilerCallback4::MovedReferences2
 # profiler and feed them to the DR taint client's shadow remap (at_gc_remap). The one untested
-# risk (docs/internal/analysis/gc-move-range-extraction-findings.md) is whether a CLR profiler
+# risk (docs/internal/archive/analysis/gc-move-range-extraction-findings.md) is whether a CLR profiler
 # .so coexists with a process running under DynamoRIO on Linux. This lane builds a MINIMAL
 # profiler (examples/gcprofiler_probe/gcprofiler.cpp), a workload that forces compacting GCs
 # (gcmover), and runs it BOTH natively and under `drrun -c <taint client>`, asserting the
@@ -1643,7 +1643,7 @@ endif
 # rejected / InitializeForAttach never fires; SetEventMask fails (e.g.
 # CORPROF_E_UNSUPPORTED_FOR_ATTACHING_PROFILER 0x80131363); no MovedReferences2 post-attach; victim
 # crashes or hangs. The body of `make docker-attachprof-probe`; findings in
-# docs/internal/analysis/f4-attach-profiler-probe-findings.md.
+# docs/internal/archive/analysis/f4-attach-profiler-probe-findings.md.
 ATTACHPROF_CLSID  ?= {C6D4E3F2-3333-4444-5555-666677778888}
 ATTACHPROF_ROUNDS ?= 30
 # Self-skip like the DR lanes do — but note the DIFFERENCE. The sibling probes write their tool
@@ -1745,7 +1745,7 @@ else
 	 if [ "$$fail" -eq 0 ]; then \
 	   echo "ATTACH PROFILER PROBE OK — GO: a CLR profiler attached to an already-running dotnet (no CORECLR_* env) and MovedReferences2 delivered GC-move ranges. The ptrace live-attach tier can have the F4 feed."; \
 	 else \
-	   echo "ATTACH PROFILER PROBE NO-GO — see the tripped kill criterion above; record it in docs/internal/analysis/f4-attach-profiler-probe-findings.md."; \
+	   echo "ATTACH PROFILER PROBE NO-GO — see the tripped kill criterion above; record it in docs/internal/archive/analysis/f4-attach-profiler-probe-findings.md."; \
 	 fi; \
 	 [ "$$fail" -eq 0 ]
 endif
@@ -2057,7 +2057,7 @@ endif
 # drmgr/drreg/drx loads under DR's private loader (the never-tested blocker gating
 # the whole Phase-5 taint re-platform) and that a non-zero instruction count was
 # instrumented. Self-skips without DynamoRIO. Body of the `make docker-drext-probe`
-# lane. See docs/internal/analysis/dr-extension-load-probe-findings.md.
+# lane. See docs/internal/archive/analysis/dr-extension-load-probe-findings.md.
 #
 # Set PROBE_DRWRAP=1 and/or PROBE_UMBRA=1 to ALSO load-check the LGPL-2.1 extensions
 # (drwrap is a DR core ext/ extension; umbra ships in the Dr. Memory Framework). Both
@@ -3276,7 +3276,7 @@ install-shared-drtrace: shared-drtrace
 
 # --- F4 GC-FENCE FREEZE probe: does a single-stepped managed thread retire ZERO ---------------
 # instructions across a GC fence? (live-attach-dataflow-followup-plan.md F4; findings in
-# docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md.)
+# docs/internal/archive/analysis/f4-gc-fence-freeze-probe-findings.md.)
 #
 # F4 stamps each MovedReferences2 {old,new,len} triple with an asmtest_gcmove_t.step — an index into
 # the value trace's insn_off[], i.e. how many in-region instructions the tracer has recorded so far.

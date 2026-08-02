@@ -6,7 +6,7 @@ the native **capture trampoline** and the **Unicorn emulator** — without copyi
 sources or writing C glue by hand.
 
 This plan implements the conclusions of
-[Analysis: multi-language wrappers](../../analysis/multi-language-wrappers.md). Read
+[Analysis: multi-language wrappers](../analysis/multi-language-wrappers.md). Read
 that first for *why* it works and the correctness rules; this document is the
 *how* and *in what order*.
 

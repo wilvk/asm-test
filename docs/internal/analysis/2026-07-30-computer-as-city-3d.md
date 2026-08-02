@@ -27,7 +27,7 @@ Software Cities, treemap memory viewers — see §9.
 > described. The review also surfaced a **real live-capture bug** in the GL
 > upload gate — the 3D worldlines freeze while the terrain grows — filed
 > separately as
-> [2026-07-30-live-3d-trajectory-upload-defect.md](2026-07-30-live-3d-trajectory-upload-defect.md)
+> [2026-07-30-live-3d-trajectory-upload-defect.md](../archive/analysis/2026-07-30-live-3d-trajectory-upload-defect.md)
 > and folded into Phase C below. Line numbers are as of HEAD `49cfeea`;
 > re-verify before building. This is an ideation + implementation proposal, not a
 > committed schedule.
@@ -297,7 +297,7 @@ tubes and convergence arcs do not, because the upload key
 recording grows while the re-upload gates on it
 ([`gl_scene_host.cpp:64`](../../../desktop/src/ui/gl_scene_host.cpp#L64)). The
 worldlines freeze while the landscape grows. Full writeup + one-line fix:
-[2026-07-30-live-3d-trajectory-upload-defect.md](2026-07-30-live-3d-trajectory-upload-defect.md).
+[2026-07-30-live-3d-trajectory-upload-defect.md](../archive/analysis/2026-07-30-live-3d-trajectory-upload-defect.md).
 Phase C of this plan depends on it.
 
 ---

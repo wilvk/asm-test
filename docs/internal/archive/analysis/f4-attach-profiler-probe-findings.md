@@ -12,7 +12,7 @@ delivered) observed across 320 post-attach compacting gen2 GCs. The victim survi
 cleanly. **None of the four kill criteria tripped.**
 
 This retires the risk the F4 section of
-[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md) named as
+[live-attach-dataflow-followup-plan.md](../../archive/plans/live-attach-dataflow-followup-plan.md) named as
 "the genuine open question to spike first". F4's GC-move feed is **not** restricted to launched
 targets, and the ptrace live-attach tier does **not** need the DR tier's startup-env-var wiring.
 
@@ -32,7 +32,7 @@ The DR taint tier's Increment 7 gets its GC-move ranges from an in-process
 `MovedReferences2` profiler wired in with `CORECLR_ENABLE_PROFILING` /`CORECLR_PROFILER` /
 `CORECLR_PROFILER_PATH` at process start (see
 [gc-move-range-extraction-findings.md](gc-move-range-extraction-findings.md), and the working
-startup profiler [examples/gcprofiler_probe/gcprofiler.cpp](../../../examples/gcprofiler_probe/gcprofiler.cpp)).
+startup profiler [examples/gcprofiler_probe/gcprofiler.cpp](../../../../examples/gcprofiler_probe/gcprofiler.cpp)).
 Those variables are **read at startup**. The live-attach tier attaches to processes asmspy did
 not launch, so that wiring is unavailable to it by construction. Hence F4's spike question:
 
@@ -48,22 +48,22 @@ Deliberately **no DynamoRIO**. This is the out-of-band ptrace tier's question, s
 just the .NET SDK + a C++ toolchain + git — no `DR_AVAILABLE` gate, no `--cap-add=SYS_PTRACE`
 (the attach travels the runtime's own diagnostics IPC socket, not ptrace). Artifacts:
 
-- [examples/attachprof_probe/attachprof.cpp](../../../examples/attachprof_probe/attachprof.cpp) —
+- [examples/attachprof_probe/attachprof.cpp](../../../../examples/attachprof_probe/attachprof.cpp) —
   the **attach-mode** profiler. Structurally the startup probe's sibling (same `CINTERFACE`
   C-vtable + generic-stub array-fill trick, same strict QI) with the one difference that
   matters, below.
-- [examples/attachprof_probe/victim/](../../../examples/attachprof_probe/victim/) — a **plain**
+- [examples/attachprof_probe/victim/](../../../../examples/attachprof_probe/victim/) — a **plain**
   long-running `dotnet` process, modelled on `gcmover`: each round allocates a fragmented mix of
   garbage and survivors, then forces a **compacting** gen2 GC that relocates them. It reports
   `ATTACHPROF_VICTIM_START pid=<pid>`, a heartbeat per round, and `ATTACHPROF_VICTIM_END`. Run
   with `env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH` — the
   no-env condition is the whole point, so it is enforced, not assumed.
-- [examples/attachprof_probe/attacher/](../../../examples/attachprof_probe/attacher/) — drives
+- [examples/attachprof_probe/attacher/](../../../../examples/attachprof_probe/attacher/) — drives
   `Microsoft.Diagnostics.NETCore.Client`'s
   `DiagnosticsClient.AttachProfiler(TimeSpan, Guid, string)` against the running victim's pid.
   The package worked first try; the raw diagnostics-IPC `AttachProfiler` command was not needed.
 - `make attachprof-probe` / `make docker-attachprof-probe` +
-  [Dockerfile.attachprof-probe](../../../Dockerfile.attachprof-probe) — build all three, start the
+  [Dockerfile.attachprof-probe](../../../../Dockerfile.attachprof-probe) — build all three, start the
   victim, let it complete ~14 compacting GCs **natively and unprofiled**, attach mid-run, hold
   ~6 s, then assert on the victim's own log.
 
@@ -161,7 +161,7 @@ accidental startup wiring.
   limited to launched targets") is not needed.
 - The remaining F4 work is what the plan already says it is — **pointing a proven feed at a
   landed transform** (`asmtest_gcmove_canonicalize`,
-  [src/dataflow_gcmove.c](../../../src/dataflow_gcmove.c)) — with the attach path now proven as
+  [src/dataflow_gcmove.c](../../../../src/dataflow_gcmove.c)) — with the attach path now proven as
   the delivery mechanism for the live-attach tier.
 - Note this tier still differs from the DR tier in the way the plan describes, and this probe
   does **not** speak to that half: DR is in-process and remaps its shadow *at* the fence; this
@@ -173,7 +173,7 @@ accidental startup wiring.
   **S0-stamping**
   ([f4-gc-fence-freeze-probe-findings.md](f4-gc-fence-freeze-probe-findings.md)),
   and the F4 object-identity join has landed
-  ([dataflow-f4-object-identity.md](../archive/implementations/dataflow-f4-object-identity.md)
+  ([dataflow-f4-object-identity.md](../../archive/implementations/dataflow-f4-object-identity.md)
   T1–T6, commits `b80d1f9`…`9520e8a`).
 - The probe is a **throwaway research spike**, not product, and is not wired into the main CI
   gate — same posture as its sibling probes.

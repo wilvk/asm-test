@@ -4,7 +4,7 @@
 registers driven in *write* / *read-write* mode rather than the *execute* mode
 the repo ships today — answer the data-flow question nothing else in asmspy can:
 **"who touched this field, and with what value"**, at **near-zero perturbation**.
-A self-contained probe ([`examples/watchpoint_spike.c`](../../../examples/watchpoint_spike.c))
+A self-contained probe ([`examples/watchpoint_spike.c`](../../../../examples/watchpoint_spike.c))
 armed a write watchpoint on a chosen 8-byte location in a forked victim,
 `PTRACE_CONT`-ed it, and captured **every** store's value (via `process_vm_readv`)
 and faulting PC (via `PTRACE_GETREGS`) — matching an independent ground-truth
@@ -13,7 +13,7 @@ sequence exactly, while the victim ran at **native speed between hits**
 the plan's "cheapest high-value item", and the spike confirms it: it needs no
 emulator, no single-step, and no code modification, and it is a **one-field DR7
 change** (the R/W + LEN fields) on top of the execution-breakpoint path already
-in [`src/ptrace_backend.c:485-493`](../../../src/ptrace_backend.c#L485).
+in [`src/ptrace_backend.c:485-493`](../../../../src/ptrace_backend.c#L485).
 
 Reproducible: 4/4 runs on this host (Ubuntu 24.04, x86-64 bare metal, gcc 13.3.0,
 `ptrace_scope=1`) — `values MATCH`, `stops=16`, all PCs identical, `R/W=11` also
@@ -68,7 +68,7 @@ confirms the B0 status bit, i.e. slot DR0 fired.
 The value read at the stop is the **post-store** value (the byte(s) already
 written) — read out of the *tracee's* address space with `process_vm_readv`, the
 same debugger-style foreign read the backend uses
-([`ptrace_backend.c:315`](../../../src/ptrace_backend.c#L315)). This is exactly
+([`ptrace_backend.c:315`](../../../../src/ptrace_backend.c#L315)). This is exactly
 "with what value"; the resolved PC is "who touched it".
 
 ## Perturbation — native speed between hits (Phases B + C, real output)
@@ -166,13 +166,13 @@ each hit (best-effort) so a multi-slot arm stays unambiguous.
 
 > **Resolution 2026-07-21: the x86 half landed as specified.**
 > `asmspy --watch <pid> <sym|sym+off|0xADDR> [--rw] [--len=…]` ships in
-> [cli/asmspy.c](../../../cli/asmspy.c) (~:5457 dispatch, ~:5171 usage, ~:1609
+> [cli/asmspy.c](../../../../cli/asmspy.c) (~:5457 dispatch, ~:5171 usage, ~:1609
 > JSON schema; ~:1668 arms every tid). The AArch64 `NT_ARM_HW_WATCH` analog below
 > has **not** landed in `src/` — F3-arm64-watch remains genuinely open, consistent
-> with [implementations/_positions.md](../implementations/_positions.md) #5.
+> with [implementations/_positions.md](../../implementations/_positions.md) #5.
 
 A new near-zero-perturbation asmspy mode, exactly as the plan sketches
-([live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md), F3):
+([live-attach-dataflow-followup-plan.md](../../archive/plans/live-attach-dataflow-followup-plan.md), F3):
 
 ```
 asmspy --watch <pid> <addr | func+off | &symbol> [--rw] [--len 1|2|4|8]
@@ -194,7 +194,7 @@ asmspy --watch <pid> <addr | func+off | &symbol> [--rw] [--len 1|2|4|8]
   "who"). For `--rw`, decode the one instruction ending at RIP to label
   read-vs-write and, if wanted, extract the exact operand — the same
   operand-enumeration asmspy already does for its single-step value path
-  ([`src/dataflow_ptrace.c`](../../../src/dataflow_ptrace.c)). Emit a row
+  ([`src/dataflow_ptrace.c`](../../../../src/dataflow_ptrace.c)). Emit a row
   `{ts, tid, pc→func+off, dir, value}` to the Data-flow window / `--dataflow`
   JSON.
 - **Contrast to keep in the UI:** this is the *targeted* data-flow view — 4
@@ -205,7 +205,7 @@ asmspy --watch <pid> <addr | func+off | &symbol> [--rw] [--len 1|2|4|8]
 ### AArch64 analog (`NT_ARM_HW_WATCH`)
 
 Mirror the landed `NT_ARM_HW_BREAK` execution path
-([`ptrace_backend.c:502-550`](../../../src/ptrace_backend.c#L502)) with the
+([`ptrace_backend.c:502-550`](../../../../src/ptrace_backend.c#L502)) with the
 **watchpoint** regset:
 
 - `PTRACE_GETREGSET`/`SETREGSET` with `NT_ARM_HW_WATCH` and `struct

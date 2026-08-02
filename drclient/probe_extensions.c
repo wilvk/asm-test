@@ -17,7 +17,7 @@
  * never linked into a shipped artifact.
  *
  * LICENSE SPLIT (discovered by this increment — see
- * docs/internal/analysis/dr-extension-load-probe-findings.md):
+ * docs/internal/archive/analysis/dr-extension-load-probe-findings.md):
  *   - drmgr, drreg, drx (which is where the drx_buf trace-buffer API lives —
  *     there is NO separate drx_buf.h; it is folded into drx.h) are DynamoRIO
  *     CORE extensions under ext/, covered by DR's primary BSD license. The

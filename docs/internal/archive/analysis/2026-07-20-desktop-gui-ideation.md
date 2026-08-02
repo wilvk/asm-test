@@ -4,22 +4,22 @@
 repo's tracing and testing capabilities could be visualised and interacted with
 in a desktop GUI — first a broad proposal, then an independent review of that
 proposal against the code, then the corrected design. Derived from the source of
-record — [cli/asmspy.c](../../../cli/asmspy.c),
-[cli/asmspy_engine.c](../../../cli/asmspy_engine.c), the pure view-model headers
-([cli/asmspy_logview.h](../../../cli/asmspy_logview.h),
-[cli/asmspy_graphsort.h](../../../cli/asmspy_graphsort.h),
-[cli/asmspy_treefilter.h](../../../cli/asmspy_treefilter.h),
-[cli/asmspy_dataview.h](../../../cli/asmspy_dataview.h),
-[cli/asmspy_autoregion.h](../../../cli/asmspy_autoregion.h)),
-[include/asmtest_valtrace.h](../../../include/asmtest_valtrace.h),
-[include/asmtest_emu.h](../../../include/asmtest_emu.h),
-[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h),
-[include/asmtest_ibs.h](../../../include/asmtest_ibs.h). Narrative guides:
-[asmspy](../../guides/tracing/asmspy.md), [tracing index](../../guides/tracing/index.md),
-[data-flow tracing](../../guides/tracing/data-flow.md),
-[cross-system benchmarking](../../guides/cross-system-benchmarking.md). Companion
-analyses: [tracing decision matrix](tracing-decision-matrix.md),
-[data-flow capture](data-flow-capture.md), [trace parity matrix](trace-parity-matrix.md).*
+record — [cli/asmspy.c](../../../../cli/asmspy.c),
+[cli/asmspy_engine.c](../../../../cli/asmspy_engine.c), the pure view-model headers
+([cli/asmspy_logview.h](../../../../cli/asmspy_logview.h),
+[cli/asmspy_graphsort.h](../../../../cli/asmspy_graphsort.h),
+[cli/asmspy_treefilter.h](../../../../cli/asmspy_treefilter.h),
+[cli/asmspy_dataview.h](../../../../cli/asmspy_dataview.h),
+[cli/asmspy_autoregion.h](../../../../cli/asmspy_autoregion.h)),
+[include/asmtest_valtrace.h](../../../../include/asmtest_valtrace.h),
+[include/asmtest_emu.h](../../../../include/asmtest_emu.h),
+[include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h),
+[include/asmtest_ibs.h](../../../../include/asmtest_ibs.h). Narrative guides:
+[asmspy](../../../guides/tracing/asmspy.md), [tracing index](../../../guides/tracing/index.md),
+[data-flow tracing](../../../guides/tracing/data-flow.md),
+[cross-system benchmarking](../../../guides/cross-system-benchmarking.md). Companion
+analyses: [tracing decision matrix](../../analysis/tracing-decision-matrix.md),
+[data-flow capture](data-flow-capture.md), [trace parity matrix](../../analysis/trace-parity-matrix.md).*
 
 ## Summary
 
@@ -61,7 +61,7 @@ during review.
 1. **The headless `--json` exporters are batch, not streams.** `cmd_graph`,
    `cmd_tree`, `cmd_procs`, `cmd_sample`, `cmd_watch`, `cmd_dataflow` run the
    engine to completion (n calls / one window / one invocation) and print one
-   JSON document at exit ([cli/asmspy.c](../../../cli/asmspy.c) ~1031 for the
+   JSON document at exit ([cli/asmspy.c](../../../../cli/asmspy.c) ~1031 for the
    graph emitter). `--log` and `--stream` stream, but **text only — no JSON
    mode exists for them**. A GUI polling by re-spawning these commands would
    re-`PTRACE_SEIZE`/detach every refresh — perturbing, and JIT-hostile in
@@ -135,7 +135,7 @@ during review.
 | Process topology map | Build | Fingerprint cards (runtime badge, threads, RSS, seccomp); drill node → call graph, matching the TUI's `TOPO_ACT_DRILL` flow. |
 | Backend completeness view | Build — replaces "backend diff" | Render the features sweep (`trace_insns` vs `insns_truth`, `skip_reason` per tier×backend×arch). The live single-step-vs-PT side-by-side was infeasible as specified. |
 | Test dashboard / capability heatmap | Minimal or skip | Commodity: CI already renders JUnit; the features table is trivial static HTML and must run on the target host anyway. |
-| **ABI x-ray (teaching mode)** | Ideate — high leverage | Animate a call deterministically on the emulator: args marshalling into registers/stack slots (SysV vs Win64 contrast), eightbyte classification, sentinel-seeded callee-saved checks, flag effects. Seeded by the conformance corpus; serves the documented [classroom use case](../../guides/classroom.md). |
+| **ABI x-ray (teaching mode)** | Ideate — high leverage | Animate a call deterministically on the emulator: args marshalling into registers/stack slots (SysV vs Win64 contrast), eightbyte classification, sentinel-seeded callee-saved checks, flag effects. Seeded by the conformance corpus; serves the documented [classroom use case](../../../guides/classroom.md). |
 
 **GUI-exceeds-TUI wins available on day one:** the tree filters
 (`--depth`/`--focus`/`--module`) exist headlessly but the TUI passes `NULL` —

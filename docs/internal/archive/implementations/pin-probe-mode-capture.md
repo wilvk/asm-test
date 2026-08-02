@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
 > (track **PIN-3**) and
-> [capture-args-returns.md](../../analysis/capture-args-returns.md) (the "middle
+> [capture-args-returns.md](../analysis/capture-args-returns.md) (the "middle
 > tier" design note). Written 2026-07-17. If this doc and a source disagree,
 > this doc wins (sources may be stale); if the CODE and this doc disagree,
 > re-verify before implementing. Repo pointers (paths, line numbers, make
@@ -310,7 +310,7 @@ an invalid pointer instead of dereferencing it.
    `value_valid = true`, `wide`/`wide_off` set).
 2. **Validate before reading.** The design note is explicit: *never trust pointer
    validity; validate against the target's mapped ranges and cap the read*
-   ([capture-args-returns.md](../../analysis/capture-args-returns.md):75-77,105-108).
+   ([capture-args-returns.md](../analysis/capture-args-returns.md):75-77,105-108).
    In probe mode the application runs in-process with the tool, so validate with
    `PIN_SafeCopy` / `PIN_SafeCopyEx` (which returns the number of bytes actually
    copied and never faults) rather than a raw `memcpy` — a short/zero return means
@@ -472,7 +472,7 @@ any mismatch → `not ok N` with both values printed. A clean **skip**: no
    pointed-to buffers), the **4 KiB default cap**, that pointers are validated
    against mapped ranges and **never trusted** (`PIN_SafeCopy`), that captured
    buffers may contain secrets and are sensitive artifacts
-   ([capture-args-returns.md](../../analysis/capture-args-returns.md):104-108), that
+   ([capture-args-returns.md](../analysis/capture-args-returns.md):104-108), that
    the lane is **x86-only** and **test/oracle-only** (Pin is proprietary freeware,
    never shipped), and that probe-mode refusals are reported with a reason.
    Keep it warning-clean (`docs` builds with `-W`).

@@ -7,14 +7,14 @@ of the record arrays, struct padding included) to the true single-step value tra
 **block-step cut the in-region stop count 6.06×** (303 → 50 on a loop) — the perturbation
 win F1 exists to capture. The region-granularity purity classifier and the coherence
 canary both work. The one genuinely unproven claim in the whole
-[live-attach data-flow follow-up plan](../archive/plans/live-attach-dataflow-followup-plan.md)
+[live-attach data-flow follow-up plan](../../archive/plans/live-attach-dataflow-followup-plan.md)
 — "the emulator and the real CPU agree on a straight-line block" — held on every step of
 every fixture. The verdict is **conditional** only on the boundaries this spike also
 mapped (undefined-flag bits, OS-interaction, vector/XSTATE, memory coherence), each with a
 concrete follow-on below; none blocks the increment-0 go/no-go.
 
 This is a spike: the deliverables are this doc + a self-contained probe
-([examples/blockstep_value_spike.c](../../../examples/blockstep_value_spike.c)). No shared
+([examples/blockstep_value_spike.c](../../../../examples/blockstep_value_spike.c)). No shared
 production file was modified.
 
 ---
@@ -24,19 +24,19 @@ production file was modified.
 Direct `PTRACE_SINGLESTEP` traps on **every** instruction; that stop density is exactly
 what widens the cross-thread deadlock window on a live runtime. F1's idea: drive the region
 with `PTRACE_SINGLEBLOCK` (one `#DB` per **taken branch** — the library already block-steps
-for control flow, [asmtest_ptrace_trace_attached_blockstep](../../../src/ptrace_backend.c#L1761)),
+for control flow, [asmtest_ptrace_trace_attached_blockstep](../../../../src/ptrace_backend.c#L1761)),
 add a real `GETREGS` snapshot at each boundary, and **replay the straight-line block**
-between boundaries through the Unicorn L0 producer ([src/dataflow_emu.c](../../../src/dataflow_emu.c))
+between boundaries through the Unicorn L0 producer ([src/dataflow_emu.c](../../../../src/dataflow_emu.c))
 seeded with that real register state, to reconstruct the per-instruction values. The
 endpoints are always real observations; replay only fills a bounded pure interior.
 
 **Methodology — isolate the one variable.** The two shipped producers,
-[dataflow_ptrace.c](../../../src/dataflow_ptrace.c) (single-step) and
-[dataflow_emu.c](../../../src/dataflow_emu.c) (Unicorn), do **not** emit byte-identical
+[dataflow_ptrace.c](../../../../src/dataflow_ptrace.c) (single-step) and
+[dataflow_emu.c](../../../../src/dataflow_emu.c) (Unicorn), do **not** emit byte-identical
 records for memory operands *by design*: the ptrace producer inlines a memory record in
 read/write-set order (`open_step`), the emulator appends it via a UC hook in execution
 order (`df_on_mem`). Their **slices** match — that is the shipped oracle cross-check
-([test_dataflow_ptrace.c](../../../examples/test_dataflow_ptrace.c)) — but their **bytes**
+([test_dataflow_ptrace.c](../../../../examples/test_dataflow_ptrace.c)) — but their **bytes**
 do not. So a faithful byte-identical spike must hold the record-construction code
 **constant** across both paths and vary **only the value source**. The probe therefore
 uses **one** capture core (`open_step`/`finalize_step` over a `struct user_regs_struct` + a
@@ -146,7 +146,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    shipped slice-oracle already sidesteps it by keying on locations.
 
 3. **`GETREGS + XSTATE` is *new* capture, not free reuse.** The shipped block-step
-   ([ptrace_backend.c:1829](../../../src/ptrace_backend.c#L1829)) reads only PC + the return
+   ([ptrace_backend.c:1829](../../../../src/ptrace_backend.c#L1829)) reads only PC + the return
    register via `read_pc_ret`. The replay needs the **full** GP file (all 16 GPRs + rip +
    rflags) at each boundary to seed Unicorn; the probe adds that `GETREGS`. Vector fixtures
    will additionally need `GETFPREGS`/`NT_X86_XSTATE` at the boundary and YMM/ZMM seeding
@@ -172,7 +172,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    replay to instructions with fully-defined flags, since a different silicon/emulator pairing
    could diverge where this one did not.
 
-   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../../archive/implementations/dataflow-producer-correctness.md)
    T4): an explicit mnemonic(+count)-keyed table (`dfb_undef_flags`,
    `src/dataflow_blockstep.c`) now masks every architecturally undefined EFLAGS bit out of
    both the coherence canary and the captured EFLAGS write records, on both the oracle and
@@ -191,7 +191,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    (block-step advances the *real* process, so a syscall inside a block has already retired
    by the boundary — never emulate through it).
 
-   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../../archive/implementations/dataflow-producer-correctness.md)
    T7): `region_scan` now accepts an optional caller-vouched list of real instruction extents
    (`asmtest_blockstep_extent_t`, blob-absolute, sorted/non-overlapping/in-range — validated
    before any tracee is spawned) and sweeps each independently; bytes outside every extent
@@ -219,7 +219,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
   build on the replay, are **unblocked**.
 - **Recommended first landing step (F1 increment 1):** wire the replay into the shipped
   block-step producer as a value tier. Concretely: extend
-  [asmtest_ptrace_trace_attached_blockstep](../../../src/ptrace_backend.c#L1761) to take a
+  [asmtest_ptrace_trace_attached_blockstep](../../../../src/ptrace_backend.c#L1761) to take a
   full-`GETREGS` snapshot at each boundary, and add a `dataflow_blockstep.c` producer that,
   per pure region, seeds a persistent Unicorn engine (guest mapped at the tracee's real
   addresses, memory faulted per boundary from `process_vm_readv`) and reconstructs the
@@ -233,10 +233,10 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
   is a bounded extension of what this spike proved; none re-opens the go/no-go.
 
   **LANDED** (noted 2026-07-21;
-  [dataflow-producer-correctness.md](../archive/implementations/dataflow-producer-correctness.md)):
+  [dataflow-producer-correctness.md](../../archive/implementations/dataflow-producer-correctness.md)):
   this recommendation shipped in full. F1 increment 1 landed exactly as specified — the
-  [src/dataflow_blockstep.c](../../../src/dataflow_blockstep.c) replay producer, with its
-  `dataflow-blockstep-test` lane in [mk/dataflow.mk](../../../mk/dataflow.mk); F2's
+  [src/dataflow_blockstep.c](../../../../src/dataflow_blockstep.c) replay producer, with its
+  `dataflow-blockstep-test` lane in [mk/dataflow.mk](../../../../mk/dataflow.mk); F2's
   record-and-inject plus the `rdtsc`/`cpuid` hardware-execution-breakpoint increment landed
   as T5+T6; and the undefined-flag masking landed as T4 (see gotchas 5/6 above).
 - The probe is a **manual diagnostic** — a self-contained host program, not wired into CI
@@ -247,7 +247,7 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
 
 ## Files
 
-- [examples/blockstep_value_spike.c](../../../examples/blockstep_value_spike.c) — the probe
+- [examples/blockstep_value_spike.c](../../../../examples/blockstep_value_spike.c) — the probe
   (purity scan + Path A single-step + Path B block-step/replay + byte-identical comparator +
   coherence canary + self-skip probes). Links `src/dataflow.c` + `src/dataflow_operands.c`
   for the shared L0 sink + Capstone operand enumerator; needs `-lunicorn -lcapstone`.

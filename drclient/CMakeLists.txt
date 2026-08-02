@@ -90,7 +90,7 @@ set_target_properties(asmtest_drclient asmtest_drval_client asmtest_drval_client
 # blocker gating the whole Phase-5 taint re-platform. It is NOT a product artifact
 # and is never built by the normal `make drtrace-client` path (which stays raw
 # core API). See drclient/probe_extensions.c and
-# docs/internal/analysis/dr-extension-load-probe-findings.md.
+# docs/internal/archive/analysis/dr-extension-load-probe-findings.md.
 #
 # Default stack is the BSD-clean set only: drmgr + drreg + drx (the drx_buf
 # trace-buffer API lives in drx.h — there is no separate drx_buf extension).

@@ -4,8 +4,8 @@
 > [2026-07-17-blockstep-reconstruction-defects.md](../../analysis/2026-07-17-blockstep-reconstruction-defects.md),
 > [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) (Part III Phase 2 and the
 > Phase 7 cross-reference correction),
-> [2026-07-02-code-review.md](../../analysis/2026-07-02-code-review.md) (finding #19),
-> [2026-07-03-call-descent-review.md](../../analysis/2026-07-03-call-descent-review.md)
+> [2026-07-02-code-review.md](../analysis/2026-07-02-code-review.md) (finding #19),
+> [2026-07-03-call-descent-review.md](../analysis/2026-07-03-call-descent-review.md)
 > (the "Deferred" list), [asmspy-plan.md](../../plans/asmspy-plan.md) (Theme C), and
 > [zen2-ibs-tracing-plan.md](../plans/zen2-ibs-tracing-plan.md). Written
 > 2026-07-17. If this doc and a source disagree, this doc wins (sources may be
@@ -375,7 +375,7 @@ runs too (per-insn driver) — keep the fixture's machine code per-arch or gate 
 attached-tracing passage of
 [docs/guides/tracing/native-tracing.md](../../../guides/tracing/native-tracing.md)
 (~:462-510). Internal: strike the "documented follow-up" note in the remediation
-row for #19 (`docs/internal/analysis/2026-07-02-code-review.md:55`) with a pointer
+row for #19 (`docs/internal/archive/analysis/2026-07-02-code-review.md:55`) with a pointer
 here.
 
 **Done when.**
@@ -429,7 +429,7 @@ of arm/arm/disarm asserting the second arm was refused (expose the guard via
 the same internal header) that a 3-call-out L3 descent parses maps at most twice.
 
 **Docs.** Internal-only, no user-facing docs — pure internals; in the Deferred list
-at `docs/internal/analysis/2026-07-03-call-descent-review.md:82-95` (five bullets)
+at `docs/internal/archive/analysis/2026-07-03-call-descent-review.md:82-95` (five bullets)
 strike the maps-re-parse, block-boundary-dedup, and concurrent-descent/watchdog
 bullets (the three T5 fixes) with a "fixed, see this doc" note, and — coordinating
 with T6's edit — the harness-nits bullet. **Leave the bare-`call` fall-through

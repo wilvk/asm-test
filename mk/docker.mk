@@ -435,7 +435,7 @@ docker-pintool:
 # and runs it under drrun, asserting the BSD-clean extension stack
 # (drmgr/drreg/drx) loads under DR's private loader with a non-zero instrumented
 # instruction count — the empirical yes/no gating the whole Phase-5 re-platform.
-# See docs/internal/analysis/dr-extension-load-probe-findings.md.
+# See docs/internal/archive/analysis/dr-extension-load-probe-findings.md.
 .PHONY: docker-drext-probe
 docker-drext-probe:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.drext-probe \
@@ -542,7 +542,7 @@ docker-taint-dotnet:
 # profiler (ICorProfilerCallback4::MovedReferences2) runs under `drrun -c <taint client> --
 # dotnet <compacting-GC workload>`, proving a profiler coexists with DynamoRIO on Linux and
 # delivers the {old,new,len} move ranges the shadow remap needs. See
-# docs/internal/analysis/gc-move-range-extraction-findings.md.
+# docs/internal/archive/analysis/gc-move-range-extraction-findings.md.
 .PHONY: docker-gcprofiler-probe
 docker-gcprofiler-probe:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.gcprofiler-probe \
@@ -556,7 +556,7 @@ docker-gcprofiler-probe:
 # already-running dotnet over its diagnostics port (CORECLR_ENABLE_PROFILING is startup-read, so the
 # live-attach tier cannot use the DR tier's env-var wiring) and still receive
 # ICorProfilerCallback4::MovedReferences2 GC-move ranges? Runs `make attachprof-probe`. See
-# docs/internal/analysis/f4-attach-profiler-probe-findings.md.
+# docs/internal/archive/analysis/f4-attach-profiler-probe-findings.md.
 .PHONY: docker-attachprof-probe
 docker-attachprof-probe:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.attachprof-probe \
@@ -572,7 +572,7 @@ docker-attachprof-probe:
 # whether the thread is blocked or spinning. No DynamoRIO (out-of-band ptrace tier), but — UNLIKE
 # docker-attachprof-probe — it DOES need `--cap-add=SYS_PTRACE`, because the stepper ptrace-attaches
 # to a SIBLING process (mirroring docker-taint-attach-probe). Runs `make gcfence-probe`. See
-# docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md.
+# docs/internal/archive/analysis/f4-gc-fence-freeze-probe-findings.md.
 .PHONY: docker-gcfence-probe
 docker-gcfence-probe:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.gcfence-probe \

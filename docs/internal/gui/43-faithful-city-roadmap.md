@@ -83,7 +83,7 @@ and say so in whatever brief picks it up, rather than silently placing it.
   GL upload only — the upstream whole-recording decode re-weave is a separate
   scaling follow-up"*) remains open, and it is a perf question, not a fidelity
   bug. Do not re-open or re-implement the upload-key fix.
-- **`docs/internal/analysis/2026-07-30-live-3d-trajectory-upload-defect.md`** (the
+- **`docs/internal/archive/analysis/2026-07-30-live-3d-trajectory-upload-defect.md`** (the
   standalone writeup the city doc's §8 points at) describes the same
   already-fixed defect. It is a historical record of a real, found-and-fixed bug —
   correctly RESOLVED, not stale — but a reader landing on it cold could mistake it

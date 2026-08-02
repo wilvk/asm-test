@@ -1,6 +1,6 @@
 # Dockerfile.gcprofiler-probe — the GC-move-range extraction go/no-go PROBE
 # (dynamorio-taint-tier-plan.md Increment 7 / Phase-4; findings in
-# docs/internal/analysis/gc-move-range-extraction-findings.md). Answers the one untested risk
+# docs/internal/archive/analysis/gc-move-range-extraction-findings.md). Answers the one untested risk
 # in the recommended mechanism: does an in-process CLR profiler (ICorProfilerCallback4::
 # MovedReferences2, which delivers the compacting-GC {old,new,len} move ranges the shadow
 # remap needs) COEXIST with a .NET process running under DynamoRIO on Linux?

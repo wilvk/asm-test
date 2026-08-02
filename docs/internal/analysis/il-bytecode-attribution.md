@@ -9,8 +9,8 @@ otherwise higher-level language, can a captured native point be tied back to a
 specific **IL offset / bytecode index / source line**, not merely to a method
 name? For the capture machinery it leans on see the siblings
 [jit-runtime-tracing.md](jit-runtime-tracing.md) (the foreign-JIT / hardware-trace
-face), [scoped-inprocess-tracing.md](scoped-inprocess-tracing.md) (the cooperative
-`using`-block face) and [data-flow-capture.md](data-flow-capture.md) (the
+face), [scoped-inprocess-tracing.md](../archive/analysis/scoped-inprocess-tracing.md) (the cooperative
+`using`-block face) and [data-flow-capture.md](../archive/analysis/data-flow-capture.md) (the
 data-value sibling); the managed-runtime address plumbing is planned in
 [scoped-tracing-managed-plan.md](../archive/plans/scoped-tracing-managed-plan.md). Terms
 (`JIT`, `jitdump`, `ReadyToRun`, `CoreCLR`, `BCL`) are in the
@@ -84,7 +84,7 @@ Three facts from the shipped source set the ceiling.
    the line map, T1.)* The one explicit
    IL-level statement in the analysis docs is a **negative** one: *"you need the
    JIT's IL-to-native map (rich debug info / PDB)… without it, data flow stays at
-   the assembly level"* ([data-flow-capture.md](data-flow-capture.md)).
+   the assembly level"* ([data-flow-capture.md](../archive/analysis/data-flow-capture.md)).
 
 ## The deciding split — compiled vs interpreted
 
@@ -150,7 +150,7 @@ implementation:
   `codeimage` temporal recorder already resolves on the native side.
 
 Today the in-proc `EventListener` subscribes only `JITKeyword 0x10`;
-[scoped-inprocess-tracing.md](scoped-inprocess-tracing.md) (§ "runtime-events
+[scoped-inprocess-tracing.md](../archive/analysis/scoped-inprocess-tracing.md) (§ "runtime-events
 route") names `0x20000` as a *plan*, not shipped. `NativeAOT` is the exception (no
 runtime ICorProfiler IL map; only limited AOT DWARF).
 *(Update 2026-07-21: shipped — the in-proc `MethodILToNativeMap` (keyword

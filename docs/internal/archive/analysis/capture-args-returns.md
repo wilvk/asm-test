@@ -6,11 +6,11 @@ returns, and related memory).
 
 > **Update 2026-07-21 — superseded.** The capability this note scopes has since
 > shipped in full: `asmtest_valtrace_t` is no longer a "future" format — it lives
-> in [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h)
+> in [`include/asmtest_valtrace.h`](../../../../include/asmtest_valtrace.h)
 > (~:88-135 — `asmtest_valtrace_t`, `_append`, the wide-value stash, and the
 > L1/L2 API), backed by the whole `src/dataflow_*.c` tier. The current analysis
 > is [data-flow-capture.md](data-flow-capture.md); the user-facing guide is
-> [docs/guides/tracing/data-flow.md](../../guides/tracing/data-flow.md). The
+> [docs/guides/tracing/data-flow.md](../../../guides/tracing/data-flow.md). The
 > text below is preserved as written; dated notes mark the statements that have
 > been overtaken.
 
@@ -28,7 +28,7 @@ capture strategy during analysis, debugging, malware research, or profiling.
 - Produce structured trace artifacts compatible with the project's trace
   formats (future `asmtest_valtrace_t`) and with offline analysis tools.
   *(Update 2026-07-21: no longer future — shipped in
-  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h).)*
+  [`include/asmtest_valtrace.h`](../../../../include/asmtest_valtrace.h).)*
 
 ## Approaches
 
@@ -106,7 +106,7 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
   `asmtest_valtrace_t`) compatible with `asmtest_trace_t` so analysis passes
   (def-use, taint) can be applied uniformly.
   *(Update 2026-07-21: no longer a suggestion — `asmtest_valtrace_t` ships in
-  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h) ~:88-135,
+  [`include/asmtest_valtrace.h`](../../../../include/asmtest_valtrace.h) ~:88-135,
   with append/wide-stash and the L1 def-use / L2 slicing API, and the
   `src/dataflow_*.c` producers feed it.)*
 - Add a `tools/instrument/preload-logger.c` LD_PRELOAD prototype that logs a
@@ -124,7 +124,7 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
 
 ## Prototype plan (MVP)
 
-1. Add `docs/internal/analysis/capture-args-returns.md` (this document).
+1. Add `docs/internal/archive/analysis/capture-args-returns.md` (this document).
 2. Implement `tools/instrument/preload-logger.c` (LD_PRELOAD) that logs
    function entry/exit and small buffers into `build/traces/` as JSON lines.
    *(Update 2026-07-21: shipped — commit `fad1548`.)*
@@ -142,7 +142,7 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
 - Define the `asmtest_valtrace_t` schema and storage semantics (truncate,
   sampling, and JSON vs binary).
   *(Update 2026-07-21: answered — the schema is defined and shipped in
-  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h); see
+  [`include/asmtest_valtrace.h`](../../../../include/asmtest_valtrace.h); see
   [data-flow-capture.md](data-flow-capture.md).)*  
 - Decide safe defaults for max-pointer read sizes and whether to include
   sensitive data redaction in the logger.

@@ -226,7 +226,7 @@ x86-64 first, AArch64 where the primitive exists).
 > (tracking mean block length, as predicted). The purity static-scan classifies 7/7 fixtures (pure loop/mem
 > vs syscall/rdtsc/cpuid/rdrand/int0x80); a coherence-canary injected replay-input divergence is detected
 > at the next real boundary → `truncated`. Probe `examples/blockstep_value_spike.c`, findings
-> `docs/internal/analysis/2026-07-15-blockstep-value-spike.md`. Next: wire the replay into a
+> `docs/internal/archive/analysis/2026-07-15-blockstep-value-spike.md`. Next: wire the replay into a
 > `dataflow_blockstep.c` value tier (full `GETREGS` per boundary, purity-gated, rsp-relative oracle diff,
 > canary-truncated). Gotchas: map a one-page landing pad for the exit `ret`; validate rsp-relative (two
 > forks differ by an absolute-address delta); undefined-flag (xor AF) divergence is a documented
@@ -459,7 +459,7 @@ value) is documented as the remaining limit and detected via the real endpoints.
 > hits). Perturbation is within noise (~2M loop iterations between hits with zero traps) — projected
 > ~2,000,000× fewer stops / ≥4,000× less wall-time than single-stepping the same workload. Caps: 4 slots,
 > 1/2/4/8-byte aligned, self-skips under qemu (zero slots). Probe `examples/watchpoint_spike.c`, findings
-> `docs/internal/analysis/2026-07-15-hw-watchpoint-spike.md`. Recommended landing: `asmspy --watch <pid>
+> `docs/internal/archive/analysis/2026-07-15-hw-watchpoint-spike.md`. Recommended landing: `asmspy --watch <pid>
 > <addr|func+off> [--rw] [--len]` reusing this DR7/DR6 plumbing, **per-thread arming across
 > `/proc/<pid>/task/*`** (mandatory for a live multi-threaded target), a one-insn decode for read/write
 > labelling, and the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog.
@@ -506,9 +506,9 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > vacated slot.
 >
 > **Two prior spikes settled the design** and are recorded in
-> [f4-attach-profiler-probe-findings.md](../../analysis/f4-attach-profiler-probe-findings.md) (the
+> [f4-attach-profiler-probe-findings.md](../analysis/f4-attach-profiler-probe-findings.md) (the
 > feed: a profiler CAN attach to a process we did not launch) and
-> [f4-gc-fence-freeze-probe-findings.md](../../analysis/f4-gc-fence-freeze-probe-findings.md) (the
+> [f4-gc-fence-freeze-probe-findings.md](../analysis/f4-gc-fence-freeze-probe-findings.md) (the
 > stamp: `step` MUST come from the profiler-sampled S0, because the "step counter freezes across
 > the fence" assumption measured FALSE — single-stepping a futex-blocked thread is what un-blocks
 > it).
@@ -593,7 +593,7 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > `at_gc_remap_live` ([dataflow_dr_client_inlined.c:732](../../../../src/dataflow_dr_client_inlined.c#L732))
 > through a POSIX-shm handshake and remapped 60,021 real ranges on a live compacting GC under
 > DynamoRIO, with `make docker-gcprofiler-probe` proving profiler/DR coexistence. Findings:
-> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 >
 > **So F4 is now "point a proven feed at a landed transform."** Both halves exist; only the
 > join is missing. Note the two tiers need genuinely different plumbing from the same
@@ -650,7 +650,7 @@ control, re-validated for the live data path).
 > there) is reproduced as the NEGATIVE CONTROL and then SEVERED by object identity — green over two
 > consecutive runs. The snapshot-space convention (GCBulkNode addresses are POST-relocation, so the
 > dump GC's own ranges belong in the translation set) was **measured, not assumed** — see
-> [f4-objid-snapshot-space-findings.md](../../analysis/f4-objid-snapshot-space-findings.md). Increments
+> [f4-objid-snapshot-space-findings.md](../analysis/f4-objid-snapshot-space-findings.md). Increments
 > 1+2 correctly shipped ADDRESS identity; this is the next increment atop them, not a fix to them.
 
 ---

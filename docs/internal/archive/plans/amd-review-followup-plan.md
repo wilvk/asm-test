@@ -1,7 +1,7 @@
 # asm-test — AMD review follow-ups: close the 2026-07-17 findings
 
 > **Context (2026-07-17).** This plan actions the confirmed findings of the
-> [AMD hardware review](../../analysis/2026-07-17-amd-hardware-review.md) — an
+> [AMD hardware review](../analysis/2026-07-17-amd-hardware-review.md) — an
 > adversarial pass over the AMD tiers in which **four of nine** candidate
 > findings were refuted and are recorded there as do-not-re-raise. Only what
 > survived two independent skeptics, with kernel claims checked against fetched
@@ -68,7 +68,7 @@ Three defects:
 
 1. **`:91-112`** calls the `call_auto` completeness bug *"not yet fixed"*. It was
    fixed in the same minute the doc was written;
-   [the findings doc](../../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+   [the findings doc](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
    marks it `~~OPEN~~ RESOLVED`, verified deterministic across 16 privileged runs.
 2. **`:124-126`** instructs the maintainer to treat `truncated=0` as *"the known
    open finding, not a clean pass."* Post-fix that result should never occur — so
@@ -325,7 +325,7 @@ The author's own top suggestion, twice recorded:
 [amd-hardware-validation.md:10-13](../../amd-hardware-validation.md) (*"a
 self-hosted Zen runner would let the CI `hwtrace-privileged` job light these paths
 up for free"*) and
-[the Zen 5 findings](../../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+[the Zen 5 findings](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
 §"Suggested next step". It closes the class of gap that hid the `call_auto` bug:
 *"every host in CI either lacks AMD LBR (self-skips) or is the unprivileged dev
 box (self-skips at `paranoid=4`)"*.

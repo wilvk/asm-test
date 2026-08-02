@@ -3,18 +3,18 @@
 *Status: analysis / findings. This document records a design investigation, not
 shipped behaviour. It is the sequel question to the control-flow tracing story: the
 shipped tiers record **which instructions ran** (the shared
-[`asmtest_trace_t`](../../../include/asmtest_trace.h) — ordered instruction offsets
+[`asmtest_trace_t`](../../../../include/asmtest_trace.h) — ordered instruction offsets
 + basic blocks), and this note asks what it would take to also record **how data
 moved** through them. For the tiers themselves see the siblings
-[jit-runtime-tracing.md](jit-runtime-tracing.md) (the foreign-JIT / hardware-trace
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) (the foreign-JIT / hardware-trace
 face) and [scoped-inprocess-tracing.md](scoped-inprocess-tracing.md) (the
 cooperative `using`-block face); for where the boundary is drawn today see the
-published [scoped-tracing guide](../../guides/tracing/scoped-tracing.md) ("**not**
+published [scoped-tracing guide](../../../guides/tracing/scoped-tracing.md) ("**not**
 register/memory values per step").*
 
 > **Update 2026-07-21 — landed.** The capability scoped here has since shipped
 > end-to-end: the entire 7-step build order at the bottom landed — L0 sink
-> [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h), operand
+> [`include/asmtest_valtrace.h`](../../../../include/asmtest_valtrace.h), operand
 > enumerator `src/dataflow_operands.c`, L1 `asmtest_defuse_build`, L2
 > `asmtest_slice_forward`/`asmtest_slice_backward`, producers
 > `src/dataflow_emu.c` / `src/dataflow_ptrace.c` /
@@ -22,7 +22,7 @@ register/memory values per step").*
 > (`src/dataflow_gcmove.c`, `src/dataflow_objid.c`), and the PT-replay path
 > (`src/dataflow_pt.c`, commits `1f6b676`/`68a2fe7`). All ten bindings ship F7
 > live-attach data flow; user guide at
-> [docs/guides/tracing/data-flow.md](../../guides/tracing/data-flow.md). The
+> [docs/guides/tracing/data-flow.md](../../../guides/tracing/data-flow.md). The
 > linked phased plan is complete (reconciled 2026-07-16, every phase
 > re-verified). The analysis below is preserved as written, including its
 > 2026-07-12 inline corrections.
@@ -30,17 +30,17 @@ register/memory values per step").*
 ## The boundary today
 
 Every backend — the single-step / out-of-process ptrace stepper
-([`asmtest_ptrace.h`](../../../include/asmtest_ptrace.h)), the hardware tier (Intel
-PT / AMD LBR / CoreSight, [`asmtest_hwtrace.h`](../../../include/asmtest_hwtrace.h)),
-and the DynamoRIO DBI tier ([`asmtest_drtrace.h`](../../../include/asmtest_drtrace.h))
-— fills the same [`asmtest_trace_t`](../../../include/asmtest_trace.h#L44), which
+([`asmtest_ptrace.h`](../../../../include/asmtest_ptrace.h)), the hardware tier (Intel
+PT / AMD LBR / CoreSight, [`asmtest_hwtrace.h`](../../../../include/asmtest_hwtrace.h)),
+and the DynamoRIO DBI tier ([`asmtest_drtrace.h`](../../../../include/asmtest_drtrace.h))
+— fills the same [`asmtest_trace_t`](../../../../include/asmtest_trace.h#L44), which
 holds **only** control flow: `insns[]` (ordered instruction offsets), `blocks[]`
 (distinct basic-block starts), totals, and a `truncated` bit. No field carries a
 register or memory **value**. The ptrace stepper's
-[`read_pc_ret`](../../../src/ptrace_backend.c#L431) reads only PC (→ the trace), the
+[`read_pc_ret`](../../../../src/ptrace_backend.c#L431) reads only PC (→ the trace), the
 return register (→ the scalar return-value out-param), and SP/LR (→ block/descent
 bookkeeping). The only tier that yields register/memory values per step is the
-**emulator** (Unicorn, [`emu_result_t`](../../../include/asmtest_emu.h)) — and it does
+**emulator** (Unicorn, [`emu_result_t`](../../../../include/asmtest_emu.h)) — and it does
 so by *replay*, not by observing a live run.
 
 So "report on data flows" is not a small knob on the existing trace; it is a second
@@ -74,10 +74,10 @@ Register def-use is a straight offline pass; memory def-use is gated on runtime 
   and caller-owned buffers as `asmtest_trace_t`, so a value trace can overflow transparently
   (`truncated`) exactly like a control trace.
   - **Address-space normalization contract (added 2026-07-12).** The existing sink is
-    *not* address-uniform: [`emu.c`](../../../src/emu.c#L113) appends `(address - base)`
+    *not* address-uniform: [`emu.c`](../../../../src/emu.c#L113) appends `(address - base)`
     routine-relative offsets, while the single-step backend stores **absolute** addresses
     in whole-window mode but **offsets** in region mode
-    ([`ss_backend.c`](../../../src/ss_backend.c)). A value trace mixes an effective
+    ([`ss_backend.c`](../../../../src/ss_backend.c)). A value trace mixes an effective
     **memory** address (inherently absolute) with instruction offsets, so `location` must
     carry its space explicitly (tagged: reg-id / absolute-addr / routine-offset) and the
     L1 linker must normalize per capture **mode**. This contract was implicit in the
@@ -90,7 +90,7 @@ Register def-use is a straight offline pass; memory def-use is gated on runtime 
 
 The operand model L0 needs is already within reach: Capstone **detail mode is on**
 (seven `cs_option(CS_OPT_DETAIL, ON)` sites) and operands are already iterated in
-[`disasm.c`](../../../src/disasm.c#L375-L391) (it extracts `X86_OP_IMM` immediates +
+[`disasm.c`](../../../../src/disasm.c#L375-L391) (it extracts `X86_OP_IMM` immediates +
 instruction groups today; the operand loop also has an AArch64 arm). Enumerating the
 `X86_OP_REG` / `X86_OP_MEM` read-set and write-set (base/index/scale/disp) is an
 extension of code that already exists, not new machinery. **Two additions the original
@@ -108,8 +108,8 @@ The ranking here is **not** the same as for control flow. Ordered by practicalit
 
 ### 1. Emulator tier (Unicorn) — least work, but *replay*, not observation
 
-The hooks already exist: [`on_code`](../../../src/emu.c#L105) fires once per
-instruction, and the [memory read/write hooks](../../../src/emu.c#L139) already
+The hooks already exist: [`on_code`](../../../../src/emu.c#L105) fires once per
+instruction, and the [memory read/write hooks](../../../../src/emu.c#L139) already
 receive `(type, address, size, value)` — today used only for watchpoints and then
 discarded.
 
@@ -118,11 +118,11 @@ discarded.
 reads the *source* state); take memory values from the mem hooks firing between code
 hooks; capture destination values at the *next* code hook. Persist into
 `asmtest_valtrace_t`; run L1/L2. **Correction (2026-07-12):** un-discarding the value in
-[`on_mem_access`](../../../src/emu.c#L145) is *necessary but not sufficient* — a plain
+[`on_mem_access`](../../../../src/emu.c#L145) is *necessary but not sufficient* — a plain
 `UC_HOOK_MEM_READ` does **not** populate the `value` argument (reads deliver 0), so
 load-value capture needs `UC_HOOK_MEM_READ_AFTER`; stores use `UC_HOOK_MEM_WRITE`. The
 mem hooks are also only armed today when a watchpoint is set
-([`emu.c`](../../../src/emu.c#L388)), so they must be installed unconditionally for a
+([`emu.c`](../../../../src/emu.c#L388)), so they must be installed unconditionally for a
 value trace.
 
 **Fidelity catch (already documented):** the emulator re-executes *extracted bytes in
@@ -173,10 +173,10 @@ its values are real, and — unlike the DynamoRIO tier below, which also observe
 managed values but *in-band* via recompilation — it is **out-of-band**, so it does not
 fight the runtime's signal / JIT / code-cache machinery. That out-of-band-ness, not
 "only tier that sees live values", is its distinguishing property. Most of the plumbing
-is present: [`read_pc_ret`](../../../src/ptrace_backend.c#L431) already issues
+is present: [`read_pc_ret`](../../../../src/ptrace_backend.c#L431) already issues
 `PTRACE_GETREGS` — which copies the **entire** `struct user_regs_struct` every step, so
 capturing the full GP file adds ~0 syscalls; only the extraction is selective today — and
-[`process_vm_readv`](../../../src/ptrace_backend.c#L315) is already used to read tracee
+[`process_vm_readv`](../../../../src/ptrace_backend.c#L315) is already used to read tracee
 memory.
 
 **Required to add:**
@@ -205,11 +205,11 @@ observed data flow of live managed code available on a host without Intel PT.
 
 DBI is what real taint / data-flow engines are built on (libdft / Triton on Pin;
 DynamoRIO is the equivalent). The tier already
-[instruments registered ranges](../../../include/asmtest_drtrace.h#L17). A DBI client
+[instruments registered ranges](../../../../include/asmtest_drtrace.h#L17). A DBI client
 *can* emit operand values + memory addresses inline at ~10–50× rather than ptrace's
 ~1000× — but that figure describes **greenfield** work, not the shipped tier. **Reality
 check (2026-07-12):** the current client
-([`drtrace_client.c`](../../../src/drtrace_client.c)) records offsets via
+([`drtrace_client.c`](../../../../src/drtrace_client.c)) records offsets via
 `dr_insert_clean_call` per block/instruction and deliberately **excludes `drreg`** (raw
 core API only). Per-instruction operand capture bolted onto that clean-call pattern would
 run far worse than 10–50× until it is rebuilt with inlined instrumentation, buffered
@@ -282,7 +282,7 @@ hatches:
   binary via retired-branch PMU + ptrace, a different mechanism). Highest fidelity at
   lowest capture overhead, most engineering. It is exactly the "hardware gives control
   flow × emulator gives values" composition
-  [jit-runtime-tracing.md](jit-runtime-tracing.md) already gestures at.
+  [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) already gestures at.
 
 ## The .NET-specific hard parts (beyond raw capture)
 
@@ -290,7 +290,7 @@ Raw L0 gets you `rdx ← load @0x7f… depends on the store at +0x2f`. Turning t
 something a .NET developer can use adds real work:
 
 - **JIT'd / moving code — partly solved.** The code-image recorder
-  ([`asmtest_codeimage.h`](../../../include/asmtest_codeimage.h)) +
+  ([`asmtest_codeimage.h`](../../../../include/asmtest_codeimage.h)) +
   `asmtest_hwtrace_render_versioned` already give time-correct bytes and method identity
   (jitdump / `MethodLoadVerbose`). Reuse them to attribute values to the right method
   version.
@@ -308,7 +308,7 @@ something a .NET developer can use adds real work:
   must key off the live coreclr manifest).
 - **Runtime-helper edges.** Values flow through allocation / write-barrier / generic-
   dictionary helpers. Either descend into them (the
-  [call-descent machinery](../../../include/asmtest_ptrace.h#L243) already exists) or
+  [call-descent machinery](../../../../include/asmtest_ptrace.h#L243) already exists) or
   model them as summary data-flow edges.
 - **Asm values → managed variables.** To report `total depends on prices[i]` instead of
   registers, you need the JIT's IL-to-native variable map (rich debug info / PDB).
@@ -326,13 +326,13 @@ cap data-flow capture to a small region and the size problem stays contained.
 Build order, each step naming the existing code it extends:
 
 1. **Shared L0 sink `asmtest_valtrace_t`** — mirror the `asmtest_trace_t` pattern
-   ([`asmtest_trace.h`](../../../include/asmtest_trace.h#L44)) with per-record
+   ([`asmtest_trace.h`](../../../../include/asmtest_trace.h#L44)) with per-record
    `{tagged_location, value, size, is_write}` and `valtrace_append_*` fill points beside
-   [`trace_append_insn`](../../../src/trace.c#L24). **Define the address-space
+   [`trace_append_insn`](../../../../src/trace.c#L24). **Define the address-space
    normalization contract first** (reg-id / absolute / routine-offset; key off capture
    mode — the offset-vs-absolute split above).
 2. **Operand read/write enumerator** on the existing Capstone detail decode — extend the
-   already-iterating operand loop at [`disasm.c`](../../../src/disasm.c#L375) from
+   already-iterating operand loop at [`disasm.c`](../../../../src/disasm.c#L375) from
    IMM-only to the full read/write set (`.access` for direction, `regs_read`/`regs_write`
    + `x86.eflags` for implicit operands, `x86_op_mem` for effective addresses); one
    persistent `csh`.
@@ -340,15 +340,15 @@ Build order, each step naming the existing code it extends:
    events, backed by a hash/interval map (not the O(n) block-dedup scan).
 4. **L2 slicer / taint** over L1 (adopt fast-path techniques if overhead matters).
 5. **Emulator L0 first (CI demo)** — least work; extend
-   [`on_code`](../../../src/emu.c#L108) + un-discard the value in
-   [`on_mem_access`](../../../src/emu.c#L145) (with `UC_HOOK_MEM_READ_AFTER`), armed
+   [`on_code`](../../../../src/emu.c#L108) + un-discard the value in
+   [`on_mem_access`](../../../../src/emu.c#L145) (with `UC_HOOK_MEM_READ_AFTER`), armed
    unconditionally. Replay, not observation — label it so.
 6. **Scoped ptrace L0 (live .NET, out-of-band)** — the GP file is already fetched at
-   [`read_pc_ret`](../../../src/ptrace_backend.c#L431); add the sink, one `NT_X86_XSTATE`
+   [`read_pc_ret`](../../../../src/ptrace_backend.c#L431); add the sink, one `NT_X86_XSTATE`
    read for XMM/YMM, `fs_base`/`gs_base` math, per-operand
-   [`process_vm_readv`](../../../src/ptrace_backend.c#L315); bound by a `using` scope.
+   [`process_vm_readv`](../../../../src/ptrace_backend.c#L315); bound by a `using` scope.
 7. **DynamoRIO L0 (production target, largest lift)** — replace the clean-call recorder
-   ([`drtrace_client.c`](../../../src/drtrace_client.c)) with inlined instrumentation +
+   ([`drtrace_client.c`](../../../../src/drtrace_client.c)) with inlined instrumentation +
    buffered writes + scratch-register management, a `drrun`-from-launch container, and
    managed-execution validation beyond the offset-only dotnet smoke test.
 - **Hardware alone:** no — only via PTWRITE instrumentation, PEBS/IBS *statistical*
@@ -356,7 +356,7 @@ Build order, each step naming the existing code it extends:
 
 None of this is shipped; it is scoped here so the effort and fidelity trade-offs are on
 record. **The build order is now committed as a phased plan:**
-[data-flow-tracing-plan.md](../archive/plans/data-flow-tracing-plan.md) (targets: real live
+[data-flow-tracing-plan.md](../../archive/plans/data-flow-tracing-plan.md) (targets: real live
 out-of-band values via the scoped ptrace tier, and production managed taint via
 DynamoRIO).
 
@@ -387,7 +387,7 @@ external-fact and overhead numbers, with sources:
 - **eBPF / ETW (auxiliaries).** Confirmed: eBPF has no
   per-instruction hook and cannot single-step (uprobe = one `INT3` at an address; the
   verifier forbids per-instruction following — the in-tree
-  [`codeimage.bpf.c`](../../../bpf/codeimage.bpf.c) says so); the eBPF `struct pt_regs`
+  [`codeimage.bpf.c`](../../../../bpf/codeimage.bpf.c) says so); the eBPF `struct pt_regs`
   context is **GP-only** (no XMM/YMM), so eBPF is a *coarse chosen-point* value tap
   (uprobe + `bpf_probe_read_user`), never L0. ETW is Windows-only but **EventPipe** is its
   cross-platform twin, so the .NET GC-move / method-identity metadata (the L1 memory

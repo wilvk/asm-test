@@ -179,7 +179,7 @@ int asmtest_amd_lbr_depth(void) {
  * main replay anchors `ip` at `target` and NEVER decodes [base_ip, target): the retired
  * entry instructions are dropped, so a complete-reported window undercounts the retired set
  * by its leading block (the fidelity gap of
- * docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode + prepend that
+ * docs/internal/archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode + prepend that
  * prologue here.
  *
  * ALL-OR-NOTHING, mirroring the trailing fill: commit ONLY if [base_ip, target) is a clean
@@ -402,7 +402,7 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
      * sampled BEFORE the routine returned, or only the entry `call X->base` edge landed
      * in-region. That is the fidelity gap the sampled small-routine capture hit — a
      * complete-reported window undercounting the retired set by its trailing block (see
-     * docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode that run
+     * docs/internal/archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md). Decode that run
      * from the final in-region `ip` up to and INCLUDING the first region-EXIT instruction
      * (ret, or a region-leaving direct unconditional jmp — the same exit classification as
      * asmtest_amd_all_exits).

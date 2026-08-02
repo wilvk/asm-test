@@ -6,7 +6,7 @@ resuming — the one credible path left after the Increment-6 probe closed the n
 
 This is the **Option-2** follow-on to
 [dynamorio-attach-tier-plan.md](dynamorio-attach-tier-plan.md) Increment 6, whose probe
-([dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md))
+([dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md))
 returned a definitive **NO-GO**: `drrun -attach <dotnet-pid>` *delivers* the client
 (`dr_client_main` runs) but the takeover immediately crashes the process
 (stack-canary trip → SIGSEGV rc 139), and an **Option-1 sweep** proved it is not fixable by
@@ -26,7 +26,7 @@ release helps).
 > called out below. Increment 3 was not reached. **Managed stays launch-under-DR** (taint tier
 > Increment 5, landed) **/ ptrace-attach** (out-of-band, the
 > [live-attach-dataflow plan](live-attach-dataflow-plan.md)) — the accepted outcome, not a failure.
-> Findings: [dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md).
+> Findings: [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md).
 > Lanes: `make docker-suspendprof-probe` (Inc 1 `dr-suspendprof-test` + Inc 2
 > `dr-suspendprof-attach-test`).
 

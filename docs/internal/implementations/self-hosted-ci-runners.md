@@ -6,7 +6,7 @@
 > Phase 1), [macos-clean-test-plan.md](../plans/macos-clean-test-plan.md)
 > (Track E's one open exception), and
 > [amd-hardware-validation.md](../amd-hardware-validation.md) /
-> [2026-07-12-zen5-privileged-lbr-findings.md](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+> [2026-07-12-zen5-privileged-lbr-findings.md](../archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md)
 > (the standing "a self-hosted Zen runner would light these paths up for free"
 > suggestion). Written 2026-07-17. If this doc and a source disagree, this doc
 > wins (sources may be stale); if the CODE and this doc disagree, re-verify
@@ -19,7 +19,7 @@ live IBS sampling, Intel PT AUX capture, ARM CoreSight, the macOS clean-room
 VMs, the Docker-OSX KVM lane — self-skips on GitHub-hosted runners, because the
 hosted pool has none of that hardware. That gap is exactly what hid the
 `trace_call_auto` completeness bug for weeks (see
-[2026-07-12-zen5-privileged-lbr-findings.md](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)):
+[2026-07-12-zen5-privileged-lbr-findings.md](../archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md)):
 the code was fine at decode level and wrong live, and no CI host could ever run
 it live. This doc stands up self-hosted runner lanes — registered, labeled,
 security-hardened, and *allowed to be absent* — so the live paths get
@@ -311,7 +311,7 @@ self-skipped.
 5. Update the stale comment block at
    [ci.yml:808-812](../../../.github/workflows/ci.yml): the hosted job's
    comment still calls the `call_auto` finding "open" (it was fixed in
-   `5d8e0d2` — [2026-07-12-zen5-privileged-lbr-findings.md](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+   `5d8e0d2` — [2026-07-12-zen5-privileged-lbr-findings.md](../archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md)
    marks it `~~OPEN~~ RESOLVED`) and calls the self-hosted runner "future".
    Rewrite it to: the live counterpart now exists in `hw.yml`
    (`hwtrace-privileged-zen`); this hosted copy remains the build/decode
@@ -433,7 +433,7 @@ with the CoreSight variant specified and guarded off until its decoder lands.
    Docker-first rule as a hardware-shaped exception.
 2. Non-vacuity for PT: do **not** grep ad-hoc skip strings — the PT skip text
    has a known cosmetic misreport
-   ([2026-07-12-zen5-privileged-lbr-findings.md §3](../analysis/2026-07-12-zen5-privileged-lbr-findings.md)).
+   ([2026-07-12-zen5-privileged-lbr-findings.md §3](../archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md)).
    The genuine mechanism is the require-mode target
    [intel-pt-whole-window-substrate.md#T5](../archive/implementations/intel-pt-whole-window-substrate.md)
    builds (`hwtrace-pt-live`, `ASMTEST_REQUIRE_PT=1` — skip becomes hard

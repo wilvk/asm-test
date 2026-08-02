@@ -1,11 +1,11 @@
 # Findings: .NET GC-move {old,new,len} range extraction (taint tier, Increment 7)
 
 *Status: findings / research record (2026-07-14). Produced for
-[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) **Increment 7**
+[dynamorio-taint-tier-plan.md](../../archive/plans/dynamorio-taint-tier-plan.md) **Increment 7**
 (GC-move umbra shadow remap), whose full path is hard-blocked on getting .NET's
 compaction object-move ranges out of the runtime to feed the byte-granular tag-shadow
 remap `at_gc_remap` (already landed behind the disabled `ASMTEST_TAINT_GCREMAP` flag,
-[dataflow_dr_client_inlined.c:431](../../../src/dataflow_dr_client_inlined.c#L431)). The
+[dataflow_dr_client_inlined.c:431](../../../../src/dataflow_dr_client_inlined.c#L431)). The
 plan **assumed** this required an out-of-process EventPipe/nettrace parser. A deep-research
 investigation (95 agents, 15 sources, 25 claims adversarially verified, 23 confirmed)
 found a **better in-process native mechanism** — the `ICorProfilerCallback4::MovedReferences2`
@@ -20,13 +20,13 @@ shadow tags must move with it, or a compacting collection silently drops or alia
 The remap primitive is already written — `at_gc_remap(old_base, new_base, len)` does the
 byte-granular `[old, old+len) -> [new, new+len)` tag copy (source-snapshot then
 clear-then-paint, so arbitrary old/new overlap is correct;
-[dataflow_dr_client_inlined.c:426-465](../../../src/dataflow_dr_client_inlined.c#L426)),
+[dataflow_dr_client_inlined.c:426-465](../../../../src/dataflow_dr_client_inlined.c#L426)),
 and a synthetic-triple unit test proves it given a triple. What is **missing** is the live
 feed: the concrete per-move `{old, new, len}` triples out of the running .NET runtime
 (Linux x86-64, .NET 8), delivered at a point where the remap can run coherently against the
 Increment-4 concurrent-writer policy.
 
-The plan's standing assumption ([dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)
+The plan's standing assumption ([dynamorio-taint-tier-plan.md](../../archive/plans/dynamorio-taint-tier-plan.md)
 Increment 7, as-planned text) was that this triple must come from the runtime's
 `GCBulkMovedObjectRanges` ETW/EventPipe event, parsed **out of process** via nettrace. The
 in-proc `EventListener` shipped only *detection* (`GcMoveMap`) because it hands back a
@@ -162,7 +162,7 @@ drop/truncate risk, which then needs the coherence canary to catch).
 
 The single load-bearing gap below (DR-vs-profiler coexistence) was resolved by an empirical
 probe, which **passed**. A minimal in-process CLR profiler
-([examples/gcprofiler_probe/gcprofiler.cpp](../../../examples/gcprofiler_probe/gcprofiler.cpp))
+([examples/gcprofiler_probe/gcprofiler.cpp](../../../../examples/gcprofiler_probe/gcprofiler.cpp))
 implementing `ICorProfilerCallback4::MovedReferences2`, attached via the startup env vars
 (`CORECLR_ENABLE_PROFILING`/`CORECLR_PROFILER`/`CORECLR_PROFILER_PATH`), was run against a
 workload that forces compacting GCs (`gcmover`) BOTH natively and under
@@ -224,17 +224,17 @@ The extraction mechanism plugs into work that is **already landed** — it suppl
 missing input:
 
 - The remap primitive exists: `at_gc_remap`
-  ([dataflow_dr_client_inlined.c:431](../../../src/dataflow_dr_client_inlined.c#L431)),
+  ([dataflow_dr_client_inlined.c:431](../../../../src/dataflow_dr_client_inlined.c#L431)),
   behind the disabled `ASMTEST_TAINT_GCREMAP` flag, already does the byte-granular
   snapshot/clear/paint over an arbitrary `{old,new,len}` and is proven by the
   synthetic-triple unit test. Nothing about the remap changes; the profiler only *calls* it.
   **Update 2026-07-21:** no longer behind the disabled flag — `at_gc_remap` is
   "now in the main taint build (not the disabled `ASMTEST_TAINT_GCREMAP` flag)
   because the LIVE path drives it"
-  ([dataflow_dr_client_inlined.c:492-493](../../../src/dataflow_dr_client_inlined.c#L492)),
+  ([dataflow_dr_client_inlined.c:492-493](../../../../src/dataflow_dr_client_inlined.c#L492)),
   driven by `at_gc_remap_live` at the GC fence (~:737).
 - **The profiler shim reuses the co-loaded-native-`.so` pattern of**
-  [taint_managed_shim.c](../../../examples/taint_managed_shim.c) — a native `.so` mapped into
+  [taint_managed_shim.c](../../../../examples/taint_managed_shim.c) — a native `.so` mapped into
   the launched .NET workload that owns plumbing the managed side cannot express. Where
   `taint_managed_shim.c` exports seed/sink markers and maps the shm results channel, the GC
   profiler shim registers `COR_PRF_MONITOR_GC` and, in its `MovedReferences2` callback,

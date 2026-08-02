@@ -1,7 +1,7 @@
 # asm-test — AMD review follow-ups (round 2): close the 2026-07-20 findings
 
 > **Context (2026-07-20).** This plan actions a fresh review of the AMD tracing
-> surface performed after the [2026-07-17 adversarial review](../analysis/2026-07-17-amd-hardware-review.md)
+> surface performed after the [2026-07-17 adversarial review](../archive/analysis/2026-07-17-amd-hardware-review.md)
 > and its [follow-up plan](../archive/plans/amd-review-followup-plan.md) had largely landed
 > (`amd-ibs-backend-fidelity` + `amd-branchsnap-lbr-docs` series, 2026-07-18..20).
 > The round-1 findings P1–P8 are shipped; this round covers what a re-audit of
@@ -151,7 +151,7 @@ parser ([hwtrace.c:1015](../../../src/hwtrace.c)) — 1 of its 3 sites; the two
 live survey drains still lack it, and that residual is exactly T3's
 short-SAMPLE bullet. It is `orphan: true` (low blast radius) but marked
 superseded nowhere.
-- *Acceptance:* add a "SUPERSEDED — see [2026-07-17 review](../analysis/2026-07-17-amd-hardware-review.md)
+- *Acceptance:* add a "SUPERSEDED — see [2026-07-17 review](../archive/analysis/2026-07-17-amd-hardware-review.md)
   + this plan" banner at the top; fix or strike the "zero IBS code" line. The
   banner must credit F7 as *partially* landed (residual → T3), not claim it
   shipped.

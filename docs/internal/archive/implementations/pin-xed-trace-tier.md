@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
 > (track PIN-2 + the shared constraints) and
-> [2026-07-17-intel-pin-vs-dynamorio.md](../../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+> [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > (genuine-delta #2, "DBI decode of the newest extensions"). Written
 > 2026-07-17. If this doc and a source disagree, this doc wins (sources may be
 > stale); if the CODE and this doc disagree, re-verify before implementing.
@@ -651,7 +651,7 @@ refuted premise.
    4.2, offset parity with the DynamoRIO and single-step backends, APX
    fixture).
 2. In
-   [2026-07-17-intel-pin-vs-dynamorio.md](../../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+   [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
    line 95, replace "VNNI programs still break ([DR #5440][dr5440])" with a
    corrected statement: #5440 was closed as completed 2022-04-25 (PR #5444);
    the pinned DR 11.91.20630 decodes VNNI; APX (#6226) is the live gap.

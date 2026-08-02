@@ -1,7 +1,7 @@
 /*
  * preload-logger.c — an LD_PRELOAD value-trace prototype (MVP Step 2).
  *
- * See docs/internal/analysis/capture-args-returns.md. This is the "LD_PRELOAD /
+ * See docs/internal/archive/analysis/capture-args-returns.md. This is the "LD_PRELOAD /
  * wrapper library" approach: we interpose a small default set of libc I/O
  * functions, call the real symbol, and log the entry arguments, the return
  * value, and (bounded, best-effort) the pointed-to buffer as JSON-lines. It is

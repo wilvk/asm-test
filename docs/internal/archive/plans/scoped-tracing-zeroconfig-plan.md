@@ -64,7 +64,7 @@ This is a **sibling** of the three scoped-tracing slice plans
 [scoped-inprocess-tracing-plan.md](scoped-inprocess-tracing-plan.md), it **adds no new
 capture primitive or decoder** — it **repackages** shipped machinery into a region-free
 surface and composes existing seams. Read
-[Analysis: the scoped `using` model](../../analysis/scoped-inprocess-tracing.md) first for
+[Analysis: the scoped `using` model](../analysis/scoped-inprocess-tracing.md) first for
 *why* it works and the per-binding feasibility matrix; this document is the *how* and
 *in what order*.
 
@@ -1438,5 +1438,5 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 
 Background — the scoped `using` model, the thread/async boundary, the whole-scope-vs-method
 fork, temporal byte-versioning, and the full citation set — is in
-[Analysis: the scoped `using` model](../../analysis/scoped-inprocess-tracing.md#sources) and its
+[Analysis: the scoped `using` model](../analysis/scoped-inprocess-tracing.md#sources) and its
 sibling [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#sources).

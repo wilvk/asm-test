@@ -1,6 +1,6 @@
 # Dockerfile.attachprof-probe — the F4 ATTACH-MODE profiler go/no-go PROBE
 # (docs/internal/plans/live-attach-dataflow-followup-plan.md F4; findings in
-# docs/internal/analysis/f4-attach-profiler-probe-findings.md). Answers the one open question the
+# docs/internal/archive/analysis/f4-attach-profiler-probe-findings.md). Answers the one open question the
 # plan named for the ptrace live-attach tier: CORECLR_ENABLE_PROFILING is read at STARTUP, so the
 # tier — which attaches to processes asmspy did NOT launch — cannot reuse the DR tier's
 # startup-env-var profiler wiring. Can a profiler instead be ATTACHED to an already-running dotnet

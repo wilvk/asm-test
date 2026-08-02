@@ -13,7 +13,7 @@ Narrative guides: [tracing index](../../guides/tracing/index.md),
 [hardware tracing](../../guides/tracing/hardware-tracing.md),
 [scoped tracing](../../guides/tracing/scoped-tracing.md). Companion analysis:
 [trace parity matrix](trace-parity-matrix.md) (what works where today),
-[data-flow capture](data-flow-capture.md). Roadmaps:
+[data-flow capture](../archive/analysis/data-flow-capture.md). Roadmaps:
 [hardware-trace plan](../plans/hardware-trace-plan.md), [AMD LBR plan](../plans/amd-tracing-plan.md),
 [auto-escalating trace](../archive/plans/auto-escalating-trace-plan.md),
 [MSR-direct LBR](../archive/plans/amd-msr-direct-lbr-plan.md).*

@@ -220,7 +220,7 @@ mitigations are requirements, not nice-to-haves.
   genuine return cannot match the wrong frame.
 
 > **Deferred in the first cut (2026-07-03) — known limitations, both on the branch-D
-> catch-all pop.** The [2026-07-03 call-descent review](../../analysis/2026-07-03-call-descent-review.md)
+> catch-all pop.** The [2026-07-03 call-descent review](../analysis/2026-07-03-call-descent-review.md)
 > surfaced that two of the mitigations above are only *partially* realized:
 > - **Signal-frame SP-pop suspension is NOT implemented.** On the live/attached path
 >   (`forward_faults=1`) an async managed-runtime signal (a `SIGSEGV` null-check safepoint,

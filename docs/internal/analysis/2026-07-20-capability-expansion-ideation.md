@@ -6,7 +6,7 @@ directions was produced, then **independently re-verified against the code**,
 adversarially critiqued, and re-ideated from scratch by six fresh lenses before
 synthesis. The corrected finding inverts the initial premise. Review date:
 2026-07-20 — every file:line below is a snapshot as of that date and, like the
-[AMD hardware review](2026-07-17-amd-hardware-review.md), may drift. Derived from
+[AMD hardware review](../archive/analysis/2026-07-17-amd-hardware-review.md), may drift. Derived from
 the source of record —
 [include/asmtest_emu.h](../../../include/asmtest_emu.h),
 [include/asmtest.h](../../../include/asmtest.h),
@@ -22,7 +22,7 @@ the source of record —
 [scripts/bench-golden-check.py](../../../scripts/bench-golden-check.py) and the
 [ct_eq example](../../getting-started/examples.md). Companion docs:
 [post-v1 expansion plan](../plans/post-v1-expansion-plan.md) (Tracks A–F, the
-directions already landed), [desktop-GUI ideation](2026-07-20-desktop-gui-ideation.md)
+directions already landed), [desktop-GUI ideation](../archive/analysis/2026-07-20-desktop-gui-ideation.md)
 (the sibling "renderings vs protocol" inversion).*
 
 ## Summary

@@ -579,7 +579,7 @@ asmtest_single.h: scripts/amalgamate.sh include/asmtest.h src/asmtest.c
 	sh scripts/amalgamate.sh > $@
 
 # Instrumentation prototype (analysis): the LD_PRELOAD value-trace logger from
-# docs/internal/analysis/capture-args-returns.md. Interposes a small default set
+# docs/internal/archive/analysis/capture-args-returns.md. Interposes a small default set
 # of libc I/O calls and writes entry/exit args + bounded buffers as JSON-lines.
 # Linux only (process_vm_readv); on other hosts the target is a friendly no-op.
 #   make preload-logger

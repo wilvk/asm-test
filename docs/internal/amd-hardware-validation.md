@@ -89,7 +89,7 @@ Nothing to run here.
 
 ## RESOLVED (5d8e0d2) — `call_auto` AMD-LBR rung
 
-The [Zen 5 findings §2](analysis/2026-07-12-zen5-privileged-lbr-findings.md)
+The [Zen 5 findings §2](archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md)
 `trace_call_auto` AMD-LBR completeness bug is **FIXED** (commit `5d8e0d2`); the
 findings doc marks it `~~OPEN~~ RESOLVED`, deterministic across 16 privileged
 runs (every one escalates `backend=3 insns=77`).

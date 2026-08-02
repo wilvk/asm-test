@@ -11,7 +11,7 @@
 > Tracks C/D written-per-plan (unvalidated: no tart/KVM host here), the
 > **DynamoRIO plan's stale heading markers** reconciled, and from the review
 > backlog: R5, A6, A7, E7, E5, P4, P2, K1 (pending a CI run), and N4 — see the
-> [2026-07-04 review's status tables](../archive/reviews/2026-07-04-repo-review.md) for
+> [2026-07-04 review's status tables](../../archive/reviews/2026-07-04-repo-review.md) for
 > the authoritative disposition. **Further landed 2026-07-07:** K1 validated on
 > a real Actions run (all 45 actioned review items closed) and BOTH single-step
 > Phase 5 fronts — macOS-Intel and the **Windows x86-64 VEH front-end**
@@ -25,18 +25,18 @@
 > **2026-07-21 update — much of §2 has since unblocked and landed.** Intel PT
 > live AUX capture **and** the Phase-2 PT-attach-to-live-PID both landed and were
 > silicon-validated
-> ([intel-pt-attach-foreign-pid.md](../archive/implementations/intel-pt-attach-foreign-pid.md)
+> ([intel-pt-attach-foreign-pid.md](../../archive/implementations/intel-pt-attach-foreign-pid.md)
 > T1–T5; commits `a35f049`, `2e230f6`, `622cd98`, `7215560`; live validation
-> `c7b4ef7` + [intel-hardware-validation.md](../intel-hardware-validation.md)).
+> `c7b4ef7` + [intel-hardware-validation.md](../../intel-hardware-validation.md)).
 > AArch64 live single-step + hw-breakpoint validation now runs on real arm64 CI
 > runners (`8c3d81f`, `fd5991e`, `604a2b5`). P3-7 IBS shipped
 > (`src/ibs_backend.c`; plan archived at
-> [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md)). Still
+> [zen2-ibs-tracing-plan.md](../../archive/plans/zen2-ibs-tracing-plan.md)). Still
 > accurate and unchanged: CoreSight (board-gated), P3-6 BRS (no Zen 3 box), the
 > macOS DynamoRIO port NO-GO (`47ae918`), and §3's tag gate.
 
-**Scope:** a cross-check of all 11 active plans in [docs/internal/plans/](../plans/) plus the
-still-open items from the [2026-07-04 repo review](../archive/reviews/2026-07-04-repo-review.md)
+**Scope:** a cross-check of all 11 active plans in [docs/internal/plans/](../../plans/) plus the
+still-open items from the [2026-07-04 repo review](../../archive/reviews/2026-07-04-repo-review.md)
 against the actual codebase (`src/`, `include/`, `mk/`, `Makefile`, `tests/`,
 `bindings/`, `.github/`), to determine what remains to be implemented.
 

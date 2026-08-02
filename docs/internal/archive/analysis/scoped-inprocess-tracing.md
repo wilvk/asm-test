@@ -2,16 +2,16 @@
 
 *Status: analysis / findings. This document records a research investigation, not
 shipped behaviour. It is the in-process, **cooperative** sibling of
-[jit-runtime-tracing.md](jit-runtime-tracing.md): that document asks how to attach
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md): that document asks how to attach
 to a **foreign** JIT from outside and reconstruct its generated assembly; this one
 asks the narrower, friendlier question a developer actually types — can I wrap a
 region of my own managed code in a `using` block and get the assembly that ran,
 without perturbing the runtime, and without writing anything beyond the import and
 the block? The shipped surface it leans on is the hardware-trace tier
-([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), `src/hwtrace.c`), the
-time-aware code-image recorder ([include/asmtest_codeimage.h](../../../include/asmtest_codeimage.h),
+([include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h), `src/hwtrace.c`), the
+time-aware code-image recorder ([include/asmtest_codeimage.h](../../../../include/asmtest_codeimage.h),
 `src/codeimage.c`), and the .NET binding
-([bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs)).*
+([bindings/dotnet/hwtrace/HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs)).*
 
 ## Question
 
@@ -48,7 +48,7 @@ they are absent (which is precisely this codebase's posture everywhere else).
    buffer with no code patching, no `SIGTRAP`, no W^X page-fault thrash — so they do
    **not** collide with the runtime's own JIT/GC/signal machinery (the collision that
    makes in-process DBI and single-step hostile to managed runtimes — see
-   [jit-runtime-tracing.md](jit-runtime-tracing.md#why-hardware-trace-is-the-way-around-jits)).
+   [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#why-hardware-trace-is-the-way-around-jits)).
    The universal in-process fallback, **EFLAGS.TF single-step**, is *exact* but the
    opposite of non-intrusive: a `#DB`/`SIGTRAP` per instruction, on the traced thread,
    colliding with the very machinery you are trying not to perturb. So *non-intrusive
@@ -67,11 +67,11 @@ they are absent (which is precisely this codebase's posture everywhere else).
 3. **The temporal-bytes problem still applies — but in-process it is much easier.** PT
    records control flow, **not** instruction bytes; the decoder must be handed the JIT's
    bytes that were live *during the window*. For a **foreign** JIT that is the hard part
-   ([jit-runtime-tracing.md](jit-runtime-tracing.md#the-one-hard-problem--and-it-is-temporal));
+   ([jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#the-one-hard-problem--and-it-is-temporal));
    in-process, the tracing thread can read its **own** JIT memory, and the shipped
    code-image recorder already supports `pid == 0` (self) — snapshot-on-change of your
    own executable pages, no runtime cooperation, no launch flag
-   ([include/asmtest_codeimage.h:76](../../../include/asmtest_codeimage.h#L76)).
+   ([include/asmtest_codeimage.h:76](../../../../include/asmtest_codeimage.h#L76)).
 
 Net: on an Intel bare-metal host with a one-time privilege grant, the developer-visible
 footprint genuinely **is** the import plus the `using` block. Everywhere else the same
@@ -97,7 +97,7 @@ five axes, each one a specific way a tracer *can* intrude on a managed runtime:
    tracer that owns those signals is fighting the runtime for them.
 3. **No thread perturbation.** No stopping, single-stepping, or slowing one thread
    relative to its siblings — the lock-stall / lock-inversion hazard the
-   [L3 descent analysis](jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)
+   [L3 descent analysis](../../analysis/jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)
    documents.
 4. **No memory-protection interference.** No toggling page permissions on the JIT's
    code heap (the W^X fault-thrash DBI needs to keep its cache coherent).
@@ -117,7 +117,7 @@ happens in the CPU as a side effect of executing — the program cannot tell it 
 traced short of probing MSRs. One candid caveat: the `using` block itself is code *in*
 the target, so the cooperative model is by definition not zero-footprint — but its
 intrusion is confined to the scope boundaries (today's `begin` opens the perf event and
-maps its rings each time, [src/hwtrace.c:671-704](../../../src/hwtrace.c#L671-L704); with
+maps its rings each time, [src/hwtrace.c:671-704](../../../../src/hwtrace.c#L671-L704); with
 the fd held open by the arm-time initializer that steady state shrinks to the
 enable/disable `ioctl` pair); the region *body* runs untouched at native speed. That is
 the precise sense in which this document claims the model is non-intrusive.
@@ -130,16 +130,16 @@ model asm-test already ships:
 
 | `using` lifecycle | Native mechanism (already implemented) |
 |---|---|
-| `new AsmTrace()` (ctor) | `asmtest_hwtrace_begin(name)` → `PERF_EVENT_IOC_ENABLE` on a per-thread self event ([src/hwtrace.c:457](../../../src/hwtrace.c#L457), [:704](../../../src/hwtrace.c#L704)) |
+| `new AsmTrace()` (ctor) | `asmtest_hwtrace_begin(name)` → `PERF_EVENT_IOC_ENABLE` on a per-thread self event ([src/hwtrace.c:457](../../../../src/hwtrace.c#L457), [:704](../../../../src/hwtrace.c#L704)) |
 | block body runs | CPU streams PT/ETM/LBR packets to the AUX ring out-of-band; the JIT compiles and runs untouched |
-| `Dispose()` (closing brace) | `asmtest_hwtrace_end(name)` → `PERF_EVENT_IOC_DISABLE` then decode the packets against the code image and render via Capstone ([src/hwtrace.c:462](../../../src/hwtrace.c#L462), [:780](../../../src/hwtrace.c#L780)) |
+| `Dispose()` (closing brace) | `asmtest_hwtrace_end(name)` → `PERF_EVENT_IOC_DISABLE` then decode the packets against the code image and render via Capstone ([src/hwtrace.c:462](../../../../src/hwtrace.c#L462), [:780](../../../../src/hwtrace.c#L780)) |
 
 The perf event is opened **on the calling process itself** — `perf_open(&a, 0, -1, -1, 0)`,
 i.e. `pid == 0` (this thread) / `cpu == -1` (follow it across CPUs)
-([src/hwtrace.c:441](../../../src/hwtrace.c#L441)) — so this is in-process self-tracing, not
+([src/hwtrace.c:441](../../../../src/hwtrace.c#L441)) — so this is in-process self-tracing, not
 a foreign attach. The `try/finally` that keeps `begin`/`end` balanced even on an
 exception is already how the .NET binding's `HwTrace.Region(name, Action)` works
-([bindings/dotnet/hwtrace/HwTrace.cs:602](../../../bindings/dotnet/hwtrace/HwTrace.cs#L602));
+([bindings/dotnet/hwtrace/HwTrace.cs:602](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L602));
 turning that `Action` form into an `IDisposable` scope is a few lines, and the
 `IDisposable` idiom is already pervasive in the bindings (`Regs`, `Emu`, `Trace`,
 `Descent`, `EmuResult`, …).
@@ -165,7 +165,7 @@ is a thin shim:
 - **Auto-select the backend.** `asmtest_hwtrace_auto` / `asmtest_trace_auto` already
   resolve the most-faithful available backend (Intel PT → AMD LBR → single-step →
   CoreSight → emulator) and self-skip when none is usable
-  ([include/asmtest_hwtrace.h:111-120](../../../include/asmtest_hwtrace.h#L111-L120);
+  ([include/asmtest_hwtrace.h:111-120](../../../../include/asmtest_hwtrace.h#L111-L120);
   .NET `HwTrace.Auto` / `AutoTier`).
 - **Supply the bytes with no cooperation.** The self code-image recorder (`pid == 0`)
   snapshots the process's own JIT pages on change; the PT decoder is handed the version
@@ -216,35 +216,35 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    mid-scope is captured too. Two boundaries sharpen this: the **containing** method —
    the one holding the `using` — was compiled before the window opened, so its own JIT
    never appears, only cold *callees'*; and the kernel side is silent (the events set
-   `exclude_kernel`, [src/hwtrace.c:681](../../../src/hwtrace.c#L681)), so a thread in a
+   `exclude_kernel`, [src/hwtrace.c:681](../../../../src/hwtrace.c#L681)), so a thread in a
    syscall goes dark and resumes emitting on return. For ordinary library-leaning code
    the window is dominated by BCL plumbing — a single
    `Console.WriteLine("x is:" + x)` drags in `Int32.ToString`, `string.Concat`,
    console locking/encoding, and the write path: tens of thousands of instructions for
    a few visible statements. That is faithful — it *is* the assembly path that executed —
    but noisy. The warm/`[MethodImpl(NoInlining)]`/tiering-pinned discipline in
-   [examples/dotnet/jit_dotnet/Program.cs](../../../examples/dotnet/jit_dotnet/Program.cs) exists
+   [examples/dotnet/jit_dotnet/Program.cs](../../../../examples/dotnet/jit_dotnet/Program.cs) exists
    precisely to get a *clean* single-method trace instead of the runtime's plumbing.
 3. **The window has a bandwidth budget, not a semantic limit.** PT emits hundreds of
    MB/s per core encoded ([perf-intel-pt][perf-intel-pt]); a scope around seconds of hot
    code overflows the AUX ring or produces gigabytes (drain mode). The `snapshot` option
    maps a circular ring for exactly this (keep the tail, flag `truncated`), but its
    decode-side drain is a named follow-up — `end()` today decodes the linear ring only
-   ([src/hwtrace.c:782-783](../../../src/hwtrace.c#L782-L783)). Long-running
+   ([src/hwtrace.c:782-783](../../../../src/hwtrace.c#L782-L783)). Long-running
    or I/O-blocked code is still *valid* — a thread parked in a syscall emits nothing —
    but a huge dynamic window decodes to a huge trace.
 4. **Scopes do not nest (today).** Capture state is a single process-global slot — "only
    ONE region may be active at a time (a begin while another is active is ignored)"
-   ([include/asmtest_hwtrace.h:144-146](../../../include/asmtest_hwtrace.h#L144-L146)) — so
+   ([include/asmtest_hwtrace.h:144-146](../../../../include/asmtest_hwtrace.h#L144-L146)) — so
    an `AsmTrace` inside an `AsmTrace`, or two threads scoping concurrently, degrades to
    the outer/first one. Lifting this means per-thread capture slots, a known MVP
    boundary.
    **Update 2026-07-21 — half-stale.** The single-step backend now ships a
    per-thread, nesting-safe handle-keyed scope API
-   ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346 —
+   ([include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h) ~:297-346 —
    "nested begin/end pairs on one thread compose … via a per-thread TLS range
    stack"; via
-   [zeroconfig-scoped-tracing-hardening.md](../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
+   [zeroconfig-scoped-tracing-hardening.md](../../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
    The PT and AMD-LBR backends still use the single process-global slot, so
    this qualification continues to hold for them.
 
@@ -253,7 +253,7 @@ sharply. The scope body should be effectively single-threaded, non-blocking, and
 allocation-light, because whole-scope stepping is descent-L3 territory: allocation
 slow paths, contended locks, and blocking syscalls are the documented hazards
 (denylist / budget / watchdog, self-truncating —
-[jit-runtime-tracing.md, L3 section](jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)).
+[jit-runtime-tracing.md, L3 section](../../analysis/jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)).
 "Any valid C#" is exactly what L3 cannot promise; "this one warm method region" is what
 it can.
 
@@ -298,34 +298,34 @@ state-safe — the capture is `sample_period=1` branch-stack sampling, so its co
 kernel PMI per taken branch: timing, not state. The hardware stack itself is fixed at
 **16 entries** (Zen 3 BRS is architecturally 16-deep; Zen 4/5 LbrExtV2 enumerates its
 depth via CPUID leaf `0x80000022` EBX, =16 on shipping parts; `AMD_LBR_DEPTH`,
-[src/hwtrace.c:59](../../../src/hwtrace.c#L59)) and no AMD knob deepens it — but because
+[src/hwtrace.c:59](../../../../src/hwtrace.c#L59)) and no AMD knob deepens it — but because
 *every* taken branch emits a sample carrying the 16 most-recent branches, consecutive
 windows overlap by up to 15 entries, and the shipped decode escalates automatically:
 **Tier A** decodes the richest single in-region window when the routine fit one stack
-([src/hwtrace.c:483](../../../src/hwtrace.c#L483)); when that window overflowed, **Tier B**
+([src/hwtrace.c:483](../../../../src/hwtrace.c#L483)); when that window overflowed, **Tier B**
 (`asmtest_amd_stitch`) merges the time-ordered overlapping windows into one gapless
 sequence and decodes past the 16-entry ceiling
-([src/hwtrace.c:584-614](../../../src/hwtrace.c#L584-L614),
-[src/amd_backend.c:47](../../../src/amd_backend.c#L47)). The ceiling that remains is the
+([src/hwtrace.c:584-614](../../../../src/hwtrace.c#L584-L614),
+[src/amd_backend.c:47](../../../../src/amd_backend.c#L47)). The ceiling that remains is the
 base **data ring**: ~400 bytes per sample ≈ ~160 taken branches at the default 64 KiB,
 linearly extendable via the existing `data_size` option
-([asmtest_hwtrace.h:65](../../../include/asmtest_hwtrace.h#L65)); a stitch gap, a
+([asmtest_hwtrace.h:65](../../../../include/asmtest_hwtrace.h#L65)); a stitch gap, a
 `PERF_RECORD_LOST`/`THROTTLE`, or a near-full ring flags `truncated`
-([src/hwtrace.c:569-582](../../../src/hwtrace.c#L569-L582)), and `CEILING_FREE` remains the
+([src/hwtrace.c:569-582](../../../../src/hwtrace.c#L569-L582)), and `CEILING_FREE` remains the
 re-resolve escape. A mid-capture drain (advance `data_tail` from a consumer thread while
 the region runs) is the buildable step that converts the ceiling from ring capacity to
 sustained consumption — though the PMI-per-branch cost still grows with the region, so
 a long window trends toward stepper-like slowdown: stitching extends the *window*, not
 the bandwidth economics. Zen 3 BRS / Zen 4 LbrExtV2 only; the probe explicitly
 classifies **Zen 2** as the no-hardware case
-([src/hwtrace.c:182](../../../src/hwtrace.c#L182)); Zen 2's IBS is statistical sampling and
+([src/hwtrace.c:182](../../../../src/hwtrace.c#L182)); Zen 2's IBS is statistical sampling and
 cannot reconstruct a complete path.
 
 ### In-process TF single-step — three sub-cases
 
 The backend already drives the same region markers, so the `using` shim needs zero
 backend-specific work; it is "the only exact in-process option where no branch-trace
-facility exists (e.g. AMD Zen 2)" ([src/ss_backend.c:13-14](../../../src/ss_backend.c#L13-L14)).
+facility exists (e.g. AMD Zen 2)" ([src/ss_backend.c:13-14](../../../../src/ss_backend.c#L13-L14)).
 What it is safe *for* depends on what is inside the scope:
 
 - **(a) Controlled native code — works today.** When the scope body is a call into a
@@ -335,13 +335,13 @@ What it is safe *for* depends on what is inside the scope:
   intrusion budget is spent while *your* code runs, so the runtime never contends for it.
 - **(b) Live managed code — possible to run, documented to collide.** The backend swaps
   the **process-wide** SIGTRAP disposition for the window
-  ([src/ss_backend.c:128](../../../src/ss_backend.c#L128), restored at
-  [:212](../../../src/ss_backend.c#L212)) — during the scope, asm-test owns a signal
+  ([src/ss_backend.c:128](../../../../src/ss_backend.c#L128), restored at
+  [:212](../../../../src/ss_backend.c#L212)) — during the scope, asm-test owns a signal
   CoreCLR's PAL also claims. Once the window is armed, the handler re-asserts TF in
-  whatever context it interrupted ([src/ss_backend.c:106](../../../src/ss_backend.c#L106)), so a
+  whatever context it interrupted ([src/ss_backend.c:106](../../../../src/ss_backend.c#L106)), so a
   stray SIGTRAP from *another* runtime thread mid-window would put that thread into
   runaway single-step. The state is explicitly "single region, single thread — the
-  hwtrace MVP contract" ([src/ss_backend.c:56](../../../src/ss_backend.c#L56)); a
+  hwtrace MVP contract" ([src/ss_backend.c:56](../../../../src/ss_backend.c#L56)); a
   multithreaded runtime violates it by construction. Add the ~100–1000× slowdown on a
   thread the GC/JIT coordinate with, and this is precisely the collision the
   out-of-process variant was built to avoid. Verdict: fails axes 2, 3, and 5; do not
@@ -381,7 +381,7 @@ what to step into.** So under a stepper the empty-constructor promise degrades:
 - **"Trace whatever runs in this scope"** means descending into every call — runtime
   helpers, GC barriers, the PLT — which is descent level 3 (`DESCEND_ALL`): default-off,
   denylist/budget/watchdog-guarded, and *expected to self-truncate* on a live runtime
-  ([jit-runtime-tracing.md, L3 section](jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)).
+  ([jit-runtime-tracing.md, L3 section](../../analysis/jit-runtime-tracing.md#when-to-use-l3-call-descent--and-why-it-is-hazardous-on-a-live-runtime)).
   Best-effort by design.
 - **"Trace this one JIT'd method"** is a region + step-over (descent OFF or
   `RECORD_EDGES`/`DESCEND_KNOWN`) — reliable, and shipping today via shape 2 above. It
@@ -401,7 +401,7 @@ In-process instrumentation with region markers exists (`asmtest_drtrace.h`), but
 must be **launched under `drrun`** — failing the deployment axis and "only import +
 using" outright — and in-process DBI's collisions with managed runtimes are the
 documented premise of this whole line of work
-([dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)).
+([dynamorio-native-trace-plan.md](../../archive/plans/dynamorio-native-trace-plan.md#language-runtime-support)).
 Use it for native-code coverage on hosts where it is already the chosen tier; never for
 a scope inside a managed app.
 
@@ -481,18 +481,18 @@ Largely a non-issue once the scope is *region-scoped* rather than *whole-window*
 backends already filter to the region:
 
 - **PT** already drops out-of-region instructions at decode
-  ([src/pt_backend.c:108-116](../../../src/pt_backend.c#L108-L116)) — the JIT/GC/runtime code
+  ([src/pt_backend.c:108-116](../../../../src/pt_backend.c#L108-L116)) — the JIT/GC/runtime code
   that runs *outside* the registered range never reaches the trace. The remaining noise is
   only in the empty-ctor *whole-window* mode; three buildable refinements bound it:
   (a) program the capture-side IP **address filter** so the CPU emits packets only for the
-  region (the pending fix at [src/pt_backend.c:129-134](../../../src/pt_backend.c#L129-L134)) —
+  region (the pending fix at [src/pt_backend.c:129-134](../../../../src/pt_backend.c#L129-L134)) —
   **but** perf userspace address filters resolve only against **file-backed** VMAs
   (inode+offset), so they cannot target the anonymous `exec_alloc`/JIT regions this
   facility traces; for those the effective mechanism is the decode-time range filter
   already shipped, which trims the *decoded* stream but not capture bandwidth (see the
-  [core plan §2](../archive/plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c) for the full constraint);
+  [core plan §2](../../archive/plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c) for the full constraint);
   (b) use the **code-image emission events** (mprotect/mmap `PROT_EXEC`, the eBPF detector
-  in [asmtest_codeimage.h](../../../include/asmtest_codeimage.h)) to timestamp *when* a
+  in [asmtest_codeimage.h](../../../../include/asmtest_codeimage.h)) to timestamp *when* a
   method's bytes appeared, so the "JIT compiling HotPath" slice can be split from the
   "HotPath running" slice; (c) **symbolize and bucket** every IP against `/proc/self/maps`
   + the perf-map (`asmtest_proc_region_by_addr`, `asmtest_proc_perfmap_symbol`) so noise is
@@ -500,7 +500,7 @@ backends already filter to the region:
   (on .NET 8+ the runtime's `MethodLoadVerbose` events label JIT'd methods directly —
   see [Closing the leaks](#closing-the-leaks-on-net-8)).
 - **Single-step** already excludes noise from the *output* — the handler records only
-  in-region RIPs ([src/ss_backend.c:95-103](../../../src/ss_backend.c#L95-L103)) — so an
+  in-region RIPs ([src/ss_backend.c:95-103](../../../../src/ss_backend.c#L95-L103)) — so an
   unwarmed body's JIT/GC steps run **unrecorded**. The residual problem is *cost*, not
   output: it still traps on every one of those instructions at ~1000×. The fix is to reach
   the region warm — pre-warm before arming, or gate arming on region entry the way the
@@ -514,15 +514,15 @@ backends already filter to the region:
   hardware-filtered (Q2(a)), so their bandwidth ceiling is not lifted by the filter.
   Buffer sizing (`aux_size`/`data_size`) and the circular **snapshot** option are already
   first-class in the options
-  ([asmtest_hwtrace.h:62-68](../../../include/asmtest_hwtrace.h#L62-L68)) — though snapshot
+  ([asmtest_hwtrace.h:62-68](../../../../include/asmtest_hwtrace.h#L62-L68)) — though snapshot
   is capture-side only so far: `end()` decodes the linear ring, and the circular-ring
   walk from `aux_tail` is its own named follow-up
-  ([src/hwtrace.c:782-783](../../../src/hwtrace.c#L782-L783)); PSB-period / cycle
+  ([src/hwtrace.c:782-783](../../../../src/hwtrace.c#L782-L783)); PSB-period / cycle
   toggles trade detail for bytes. Overflow already maps onto `truncated`. All standard PT
   knobs — the only gate is PT hardware to validate the filter.
 - **Single-step** has no I/O bandwidth; its budget is the fixed 512 KiB offset buffer
   (`SS_STREAM_CAP`), and overflow is already handled faithfully (`g_overflow → truncated`,
-  [src/ss_backend.c:99-102](../../../src/ss_backend.c#L99-L102), [:201-202](../../../src/ss_backend.c#L201-L202)).
+  [src/ss_backend.c:99-102](../../../../src/ss_backend.c#L99-L102), [:201-202](../../../../src/ss_backend.c#L201-L202)).
   You can enlarge it, or make it a growable buffer sized between windows (never `malloc`
   in the handler — it must stay async-signal-safe). But the true ceiling is **time**: a
   long region at a trap per instruction, which no buffer change fixes. The candid answer
@@ -532,7 +532,7 @@ backends already filter to the region:
 ### Qualification 4 — nesting / concurrency
 
 The single process-global slot is an explicit MVP limitation
-([asmtest_hwtrace.h:144-146](../../../include/asmtest_hwtrace.h#L144-L146)), and the fix is the
+([asmtest_hwtrace.h:144-146](../../../../include/asmtest_hwtrace.h#L144-L146)), and the fix is the
 one the header itself points at — **per-thread state**:
 
 - **PT**: give each scoping thread its own per-thread event + AUX ring (per-thread mode
@@ -549,8 +549,8 @@ one the header itself points at — **per-thread state**:
 per-thread, nesting-safe handle-keyed scope API with exactly the TLS range stack
 sketched above ("nested begin/end pairs on one thread compose … via a per-thread
 TLS range stack",
-[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346; via
-[zeroconfig-scoped-tracing-hardening.md](../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
+[include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h) ~:297-346; via
+[zeroconfig-scoped-tracing-hardening.md](../../archive/implementations/zeroconfig-scoped-tracing-hardening.md)).
 The PT bullet remains forward-look: PT/AMD capture still sits on the
 process-global slot, so Q4 is now only half-open.
 
@@ -575,8 +575,8 @@ picture:
 |---|---|---|---|
 | Intel bare-metal Linux | **Intel PT** | PT | the full model, as designed |
 | AMD Zen 3/4/5 Linux | LBR (Tier-B stitched; data-ring ceiling) | hidden ptrace stepper | no PT on AMD, ever |
-| **AMD Zen 2 Linux** | **none** — no PT, no BRS/LbrExtV2 ([src/hwtrace.c:182](../../../src/hwtrace.c#L182)); IBS is sampling-only | hidden ptrace stepper | the host class the W2 stepper was built for (zen2-singlestep-trace-plan) |
-| **Apple Intel, macOS** | **none** — the CPU has PT silicon, but macOS exposes no `perf_event_open`/PT API and the whole tier is Linux-gated (perf probe returns 0 off Linux, [src/hwtrace.c:226-229](../../../src/hwtrace.c#L226-L229); single-step likewise, [:154-164](../../../src/hwtrace.c#L154-L164)) | none (emulator only — virtual, different question) | the OS, not the CPU, is the blocker |
+| **AMD Zen 2 Linux** | **none** — no PT, no BRS/LbrExtV2 ([src/hwtrace.c:182](../../../../src/hwtrace.c#L182)); IBS is sampling-only | hidden ptrace stepper | the host class the W2 stepper was built for (zen2-singlestep-trace-plan) |
+| **Apple Intel, macOS** | **none** — the CPU has PT silicon, but macOS exposes no `perf_event_open`/PT API and the whole tier is Linux-gated (perf probe returns 0 off Linux, [src/hwtrace.c:226-229](../../../../src/hwtrace.c#L226-L229); single-step likewise, [:154-164](../../../../src/hwtrace.c#L154-L164)) | none (emulator only — virtual, different question) | the OS, not the CPU, is the blocker |
 | Apple Intel, bare-metal Linux | **Intel PT** | PT | pre-T2 Intel Macs boot standard Linux; full model |
 | Linux VM / Docker on the Mac | none — hypervisors don't pass PT through | ptrace stepper or single-step inside the VM | matches the repo's `docker-*` flow |
 | Bare-metal AArch64 with CoreSight | **CoreSight** | ptrace stepper (AArch64 is supported) | board-specific |
@@ -593,7 +593,7 @@ against the lowest common denominator; the next section shows how much dissolves
    "the full body of `HotPath`, every block, guaranteed," you must (a) keep it hot and
    un-inlined so it exists as a standalone body — the examples do this with
    `[MethodImpl(MethodImplOptions.NoInlining)]` and `DOTNET_TieredCompilation=0`
-   ([examples/dotnet/jit_dotnet/Program.cs](../../../examples/dotnet/jit_dotnet/Program.cs)) — which is
+   ([examples/dotnet/jit_dotnet/Program.cs](../../../../examples/dotnet/jit_dotnet/Program.cs)) — which is
    *extra* beyond "just using," and (b) resolve its native address.
 2. **In-process method→address resolution is version-fragile on .NET.** Up to .NET 6,
    `RuntimeHelpers.PrepareMethod(m.MethodHandle)` then `m.MethodHandle.GetFunctionPointer()`
@@ -621,7 +621,7 @@ against the lowest common denominator; the next section shows how much dissolves
    the temporal-bytes rule still applies across recompilation — the self code-image
    recorder needs none of that. (Jitdump remains the *lowest-overhead* byte source when
    you can enable it — at launch, or at arm time on .NET 8+ — per
-   [jit-runtime-tracing.md](jit-runtime-tracing.md#1-cooperative--jitdump-enabled-at-runtime).)
+   [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#1-cooperative--jitdump-enabled-at-runtime).)
 
 Tiered/OSR recompilation can also move a method to a new address mid-run; the code-image
 recorder's versioning is exactly the mechanism for tracking that, but a *stable* trace of
@@ -736,11 +736,11 @@ profiler shim) undo.
 - Self, per-thread PT/AMD/single-step region capture bracketed by `begin`/`end`
   (`asmtest_hwtrace_begin`/`end`, `src/hwtrace.c`).
 - A .NET scope wrapper — `HwTrace.Region(name, Action)` — with balanced markers
-  ([bindings/dotnet/hwtrace/HwTrace.cs:602](../../../bindings/dotnet/hwtrace/HwTrace.cs#L602)).
+  ([bindings/dotnet/hwtrace/HwTrace.cs:602](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L602)).
 - Backend auto-selection + clean self-skip (`asmtest_hwtrace_auto`,
   `asmtest_trace_auto`, `available()`/`skip_reason()`).
 - The self (`pid == 0`) time-aware code-image recorder for the bytes
-  ([include/asmtest_codeimage.h](../../../include/asmtest_codeimage.h), `src/codeimage.c`).
+  ([include/asmtest_codeimage.h](../../../../include/asmtest_codeimage.h), `src/codeimage.c`).
 - In-process region resolution from an address (`asmtest_proc_region_by_addr`) and
   Capstone rendering (`emu_disas`, `src/disasm.c`).
 
@@ -754,11 +754,11 @@ profiler shim) undo.
    [Closing the leaks](#closing-the-leaks-on-net-8)). Today the recorder feeds the
    *out-of-process* stepper (`_versioned`); feeding libipt's image callback for the
    in-process self case is the same forward-look
-   [jit-runtime-tracing.md](jit-runtime-tracing.md) flags as PT Phase 2.
+   [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) flags as PT Phase 2.
 3. The libipt decode-against-self-code-image glue (the remaining forward-look piece; the
    recorder and Capstone rendering already exist). Note the shipped decoder is
    region-scoped: with no image for an IP it stops at the first out-of-region
-   instruction ([src/pt_backend.c:128-136](../../../src/pt_backend.c#L128-L136)), so
+   instruction ([src/pt_backend.c:128-136](../../../../src/pt_backend.c#L128-L136)), so
    whole-window decode must hand libipt the *full* executed image set —
    recorder-tracked JIT pages plus the file-backed DSOs enumerable from
    `/proc/self/maps` — not just the JIT pages.
@@ -773,7 +773,7 @@ profiler shim) undo.
 Everything above is framed in C# (`using`, `[ModuleInitializer]`, `[CallerMemberName]`,
 `AsyncLocal`). But the .NET shim is a thin marshalling layer over **language-agnostic C**
 (`asmtest_hwtrace_{init,register_region,begin,end}`, `available`/`skip_reason`/`auto`/
-`resolve`, the [`pid == 0` self code-image recorder](../../../src/codeimage.c), Capstone
+`resolve`, the [`pid == 0` self code-image recorder](../../../../src/codeimage.c), Capstone
 rendering), so the natural question is whether the model generalises to the other nine
 bindings. **It does — and the fault line is not *which language* but *what is under the
 scope*.** Every binding today traces *separately-materialised native regions* (asm-test-
@@ -798,15 +798,15 @@ per-language analogue:
 | Binding | Feasibility | Scope construct | Arm-on-import | Key residual limit | Effort |
 |---|---|---|---|---|---|
 | **C++** | yes✝ | RAII `RegionScope` (ctor `begin` / dtor `end`) — *house style, ships* | no module-init → lazy Meyers magic-static (strictly better: lazy) | render-on-close unwired; process-global single slot | low |
-| **Rust** | yes✝ | `Drop` RAII; `HwTrace` + [`OnceLock`](../../../bindings/rust/src/hwtrace.rs#L490) lazy-init ship; [`region()`](../../../bindings/rust/src/hwtrace.rs#L937) | no module-init → `OnceLock` lazy-once (already the pattern) | `#[track_caller]` for auto-name; render-on-close; single slot | low |
+| **Rust** | yes✝ | `Drop` RAII; `HwTrace` + [`OnceLock`](../../../../bindings/rust/src/hwtrace.rs#L490) lazy-init ship; [`region()`](../../../../bindings/rust/src/hwtrace.rs#L937) | no module-init → `OnceLock` lazy-once (already the pattern) | `#[track_caller]` for auto-name; render-on-close; single slot | low |
 | **Zig** | yes✝ | `defer scope.deinit()` (explicit, not RAII); `region()` ships | no runtime module-init → `std.once` lazy-arm | `defer` skipped on `panic`; single slot | low |
 | **Python** | **yes** | `with AsmTrace(code):` context manager | **real** `import` hook (recommend lazy-first-scope) | scopes a native region, not Python bytecode; threads/`run_in_executor` escape; single slot | low |
 | **Ruby** | yes✝ | block + `begin/ensure`; `region(name){}` ships | **real** `require` hook (recommend lazy-first-scope) | Ractor (own native thread) / 3.3+ M:N scheduler can move a scope's `ensure` onto another OS thread (fibers never migrate) → disarms TF on the wrong thread; single slot | low |
-| **Lua** | yes✝ | [`region(name, fn)`](../../../bindings/lua/hwtrace.lua#L389) closure + `pcall` — *ships* | **real** `require` hook (defensive `pcall(ffi.load)`) | LuaJIT ffi is 5.1 → **no `<close>`**; but coroutines stay on one OS thread → *safer than Ruby*; single slot | low |
-| **Go** | yes✝ | closure + `defer`; [`Region`/`Begin`](../../../bindings/go/hwtrace.go#L798) ship **with [`LockOSThread`](../../../bindings/go/hwtrace.go#L808)** | **real** `func init()` hook | **must pin the OS thread** (done); `go func()` fan-out inside the scope escapes with no stitch hook; single slot | low |
+| **Lua** | yes✝ | [`region(name, fn)`](../../../../bindings/lua/hwtrace.lua#L389) closure + `pcall` — *ships* | **real** `require` hook (defensive `pcall(ffi.load)`) | LuaJIT ffi is 5.1 → **no `<close>`**; but coroutines stay on one OS thread → *safer than Ruby*; single slot | low |
+| **Go** | yes✝ | closure + `defer`; [`Region`/`Begin`](../../../../bindings/go/hwtrace.go#L798) ship **with [`LockOSThread`](../../../../bindings/go/hwtrace.go#L808)** | **real** `func init()` hook | **must pin the OS thread** (done); `go func()` fan-out inside the scope escapes with no stitch hook; single slot | low |
 | **Node** | yes✝ | `region(name, fn)` ships / `using new AsmTrace()` via `Symbol.dispose` (Node 22+) | **real** top-level-module (`require`) hook | piece-D `AsyncLocalStorage`/`async_hooks` is real work; libuv-pool / Worker off-thread escapes; live JS needs PT/ptrace, not single-step | medium |
-| **Java** | yes✝ | try-with-resources / `AutoCloseable`; FFM downcalls; [`region(String,Runnable)`](../../../bindings/java/HwTrace.java#L779) ships; **[`static{}`](../../../bindings/java/HwTrace.java#L279) arm hook** | **real** static-initializer hook | managed JIT → PT / W2-ptrace; DynamoRIO self-skips (guarded); JVMTI / `ScopedValue` for piece-D; single slot | medium |
-| **.NET** *(reference)* | yes | `using (new AsmTrace())` — `IDisposable` / [`HwTrace.Region`](../../../bindings/dotnet/hwtrace/HwTrace.cs#L602) | `[ModuleInitializer]` = true arm-on-load | piece-D `AsyncLocal` value-changed = the redesign; managed code needs PT/ptrace | medium |
+| **Java** | yes✝ | try-with-resources / `AutoCloseable`; FFM downcalls; [`region(String,Runnable)`](../../../../bindings/java/HwTrace.java#L779) ships; **[`static{}`](../../../../bindings/java/HwTrace.java#L279) arm hook** | **real** static-initializer hook | managed JIT → PT / W2-ptrace; DynamoRIO self-skips (guarded); JVMTI / `ScopedValue` for piece-D; single slot | medium |
+| **.NET** *(reference)* | yes | `using (new AsmTrace())` — `IDisposable` / [`HwTrace.Region`](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L602) | `[ModuleInitializer]` = true arm-on-load | piece-D `AsyncLocal` value-changed = the redesign; managed code needs PT/ptrace | medium |
 
 ✝ *yes-with-caveats.* The tiers: **native / no-GC (C++, Rust, Zig)** — trivial and safe,
 `begin == end` same-thread holds by construction, the only gap being the missing module-init
@@ -829,11 +829,11 @@ and repetitive.
 1. **The lifecycle already exists** — `asmtest_hwtrace_*` + auto-select + self-skip + the
    `exec_alloc` W^X helper + the self code-image recorder. Each binding is a marshalling layer.
 2. **The libipt / branch-trace decode-against-self-code-image glue** — *the same code* the
-   [hardware-trace plan Phase 2](../plans/hardware-trace-plan.md) needs. Building it once
+   [hardware-trace plan Phase 2](../../plans/hardware-trace-plan.md) needs. Building it once
    unblocks the clean managed-code path (PT/LBR) for **every** binding at once — the single
    highest-leverage shared investment.
 3. **Per-thread hwtrace state** — replacing the process-global single slot (the
-   [MVP contract](../../../include/asmtest_hwtrace.h#L144)) with per-thread state (TLS + per-thread
+   [MVP contract](../../../../include/asmtest_hwtrace.h#L144)) with per-thread state (TLS + per-thread
    perf fd + a multi-range decode filter for PT; an async-signal-safe range stack for
    single-step) lifts the no-nesting / no-concurrency / no-multi-binding limit from all ten
    bindings simultaneously. Second-highest leverage.
@@ -857,7 +857,7 @@ process-global slot or install the SIGTRAP sigaction.
   empty or truncated trace, or a stray in-region `SIGTRAP` landing on a thread now running Go
   (a crash). This is not hypothetical — it is the project's **own resolved `go-full-test`
   flaky-crash finding**, whose fix was the missing
-  [`runtime.LockOSThread`](../../../bindings/go/hwtrace.go#L808) precisely because single-step TF
+  [`runtime.LockOSThread`](../../../../bindings/go/hwtrace.go#L808) precisely because single-step TF
   is per-thread. Go converts .NET's "follow the migration" into "forbid the migration for the
   region" — which works for the pinned flow but means `go func()` fan-out inside the scope
   escapes with no stitch hook.
@@ -883,7 +883,7 @@ process-global slot or install the SIGTRAP sigaction.
 
 - **`begin` *does* key on the region name.** The empty-ctor discussion above emphasises that
   `end` closes the active slot regardless of name; but `begin` looks the name up via
-  [`find_region`](../../../src/hwtrace.c#L413) ([`:659`](../../../src/hwtrace.c#L659)) and silently
+  [`find_region`](../../../../src/hwtrace.c#L413) ([`:659`](../../../../src/hwtrace.c#L659)) and silently
   no-ops when it doesn't match a registered region. So a self-registering, auto-named scope
   **must register-then-begin under the same generated name** — a correctness constraint every
   shim (including the .NET one) must honour, understated above.
@@ -905,7 +905,7 @@ shims,"** with .NET as the reference shim rather than the deliverable. A sensibl
 RAII already ship), **Zig** near-free; (B) prove the migration mitigation on **Go**
 (`LockOSThread` already wired); (C) build the shared prerequisites that unblock the most —
 **per-thread hwtrace state** and the **libipt decode-against-self-code-image glue** (the
-hardware half shared with [hardware-trace Phase 2](../plans/hardware-trace-plan.md)) plus the
+hardware half shared with [hardware-trace Phase 2](../../plans/hardware-trace-plan.md)) plus the
 two C-layer fixes — *before*, not during, the managed bindings; (D) the managed hard cases —
 **Node → JVM → .NET** — each on the PT/ptrace path with its own piece-D stitching. Ruby/Lua
 slot into (A)/(B) (Lua is actually safer than Ruby on thread affinity), and Rust joins the
@@ -923,7 +923,7 @@ each step. Data-value capture stays the emulator tier's job (`emu_result_t`, wat
 or would need a PTWRITE/DBI memory-event mode. Basic-block boundaries from a branch
 decoder are not identical to the emulator's, so cross-tier block parity needs the same
 normalization step documented for the other backends. This is the same boundary
-[jit-runtime-tracing.md](jit-runtime-tracing.md#data-provided) records.
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#data-provided) records.
 
 ## Caveats and preconditions (summary)
 
@@ -955,7 +955,7 @@ normalization step documented for the other backends. This is the same boundary
 ## Relationship to asm-test
 
 This is the in-process, cooperative, developer-ergonomics face of the same machinery the
-hardware-trace plan and [jit-runtime-tracing.md](jit-runtime-tracing.md) develop for the
+hardware-trace plan and [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) develop for the
 foreign-attach case. It adds no new decoder or capture primitive — it repackages the
 shipped self-trace region markers, the self code-image recorder, backend auto-selection,
 and Capstone rendering behind a single `IDisposable` whose only visible surface is a
@@ -966,7 +966,7 @@ than bolting a new model on.
 ## Sources
 
 Shared hardware-trace / jitdump / temporal-bytes background and its full citation set:
-[jit-runtime-tracing.md](jit-runtime-tracing.md#sources). Claims specific to the
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#sources). Claims specific to the
 in-process `using` framing:
 
 - Intel PT self-monitoring (`pid == 0`, `cpu == -1`), address-range filtering, and the

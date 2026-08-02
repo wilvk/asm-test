@@ -109,7 +109,7 @@ jobs:
 
       # THE NON-VACUITY STEP, and deliberately not a grep. The Zen lane asserts by
       # grepping its live markers; PT cannot be checked that way — its skip text has
-      # a known cosmetic misreport (analysis/2026-07-12-zen5-privileged-lbr-findings.md
+      # a known cosmetic misreport (archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md
       # §3), so a grep-based gate would be asserting on a string that lies. The truthful
       # mechanism is the require-mode target: ASMTEST_REQUIRE_PT=1 turns the PT tier's
       # availability self-skip into a hard CHECK failure, so a host whose intel_pt PMU

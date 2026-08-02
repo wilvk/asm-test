@@ -869,11 +869,11 @@ the live per-runtime async-hop cases are forward-look, gated on PT hardware.
 
 The managed-tier analysis (JIT-hostility, the whole-scope-vs-method fork, closing
 the leaks on .NET 8+, the concealed ptrace path, and piece-D async-hop stitching):
-[the scoped `using` analysis](../../analysis/scoped-inprocess-tracing.md#closing-the-leaks-on-net-8)
+[the scoped `using` analysis](../analysis/scoped-inprocess-tracing.md#closing-the-leaks-on-net-8)
 and its
-[case-by-case](../../analysis/scoped-inprocess-tracing.md#the-scoped-model-case-by-case)
+[case-by-case](../analysis/scoped-inprocess-tracing.md#the-scoped-model-case-by-case)
 and
-[four-qualifications](../../analysis/scoped-inprocess-tracing.md#qualification-1--the-threadasync-boundary-the-deep-one)
+[four-qualifications](../analysis/scoped-inprocess-tracing.md#qualification-1--the-threadasync-boundary-the-deep-one)
 sections. Foreign-JIT and W2 background:
 [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md),
 [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md),

@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
 > (track PIN-1) and
-> [2026-07-17-intel-pin-vs-dynamorio.md](../../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+> [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > (genuine delta #1). Written 2026-07-17. If this doc and a source disagree,
 > this doc wins (sources may be stale); if the CODE and this doc disagree,
 > re-verify before implementing.

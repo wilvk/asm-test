@@ -2,7 +2,7 @@
 
 > **Sources.** Actioned from
 > [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md) (track
-> **PIN-4**), [data-flow-capture.md](../../analysis/data-flow-capture.md) (the
+> **PIN-4**), [data-flow-capture.md](../analysis/data-flow-capture.md) (the
 > libdft coverage-gap ground truth), and the archived
 > [dynamorio-taint-tier-plan.md](../plans/dynamorio-taint-tier-plan.md)
 > (the tier being oracled). Written 2026-07-17. If this doc and a source
@@ -478,7 +478,7 @@ no new files.
 `libdft-partial-sse-avx` and do **not** turn the lane red.
 
 **Docs.** The gap enumeration is the disclosed-boundary record required by PIN-4's
-exit criteria; cite [data-flow-capture.md](../../analysis/data-flow-capture.md) (which
+exit criteria; cite [data-flow-capture.md](../analysis/data-flow-capture.md) (which
 documents that even libdft punts on SIMD) in the changelog entry.
 
 **Done when.**
@@ -613,7 +613,7 @@ up on the libdft tag API before T3.
   rules, FPU instructions, per-instruction testing; soundness note: "taint
   propagation rules may be wrong", only "basic instructions" supported. **SSE
   nuance:** the "famously skips XMM/SSE" line in this repo's own docs
-  ([data-flow-capture.md](../../analysis/data-flow-capture.md),
+  ([data-flow-capture.md](../analysis/data-flow-capture.md),
   [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md) PIN-4)
   is true of the *original Columbia* libdft, **not** this fork — AngoraFuzzer's
   README claims "basic SSE, AVX" and `src/ins_helper.h` maps

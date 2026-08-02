@@ -388,6 +388,6 @@ budget patch-bay are [07](07-serve-live-host.md); the capture pane is
 wording D7 / [24](24-one-visual-language.md). Host ledgers:
 [amd-hardware-validation.md](../../amd-hardware-validation.md) (which already records
 this 9950X — the 2026-07-20 and 2026-07-22 Zen 5 entries), the Zen 2 empirical
-record in [analysis/](../../analysis/2026-07-12-zen2-ibs-tracing-review.md), and the
+record in [analysis/](../analysis/2026-07-12-zen2-ibs-tracing-review.md), and the
 Zen 5 privileged-LBR findings in
-[analysis/](../../analysis/2026-07-12-zen5-privileged-lbr-findings.md).
+[analysis/](../analysis/2026-07-12-zen5-privileged-lbr-findings.md).

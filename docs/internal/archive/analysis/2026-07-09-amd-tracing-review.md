@@ -2,12 +2,12 @@
 
 > **SUPERSEDED (2026-07-09, same day).** This was the first-pass review; it was
 > re-verified and expanded the same day into
-> [2026-07-09-amd-tracing-review-f1-f47.md](2026-07-09-amd-tracing-review-f1-f47.md)
+> [2026-07-09-amd-tracing-review-f1-f47.md](../../analysis/2026-07-09-amd-tracing-review-f1-f47.md)
 > (the F1–F47 adversarially re-checked edition — the authoritative one; published
 > as the orphan page `docs/amd_tracing_review.md` until its 2026-07-22 move here). Kept for history. **Note two findings here
 > have since gone stale:** §4.4 ("the auto-escalation path doesn't try the MSR-direct path")
 > was closed when the MSR-direct rung landed in `asmtest_trace_call_auto`
-> ([src/trace_auto.c](../../../src/trace_auto.c), `37118ec`, 2026-07-10), and §3.3's
+> ([src/trace_auto.c](../../../../src/trace_auto.c), `37118ec`, 2026-07-10), and §3.3's
 > wrong-path-spec concern is handled at the source in `asmtest_amd_msr_decode_entry`.
 > **Update 2026-07-21:** "two findings" is now an undercount — §1.1 and §2.1 have
 > also since closed in-tree (the shared `ASMTEST_AMD_REDUCED_FILTER` definition and
@@ -28,8 +28,8 @@ That said, there are concrete improvements available. Organized by category: cor
 ### 1.1 `ASMTEST_AMD_REDUCED_FILTER` is duplicated and can diverge
 
 The reduced branch-filter macro is defined identically in both
-[hwtrace.c](../../../src/hwtrace.c) (line 595) and
-[branchsnap.c](../../../src/branchsnap.c) (line 52), with a comment "kept in
+[hwtrace.c](../../../../src/hwtrace.c) (line 595) and
+[branchsnap.c](../../../../src/branchsnap.c) (line 52), with a comment "kept in
 sync." This is a textual-duplication hazard — if one changes and the other
 doesn't, the sampled and snapshot paths silently use different LBR filters.
 
@@ -38,7 +38,7 @@ doesn't, the sampled and snapshot paths silently use different LBR filters.
 
 ### 1.2 Alignment / strict-aliasing violations in perf ring parsing
 
-In [hwtrace.c](../../../src/hwtrace.c) (line 828) the code casts a `uint8_t *`
+In [hwtrace.c](../../../../src/hwtrace.c) (line 828) the code casts a `uint8_t *`
 buffer into `uint64_t *` and `struct perf_branch_entry *`:
 
 ```c
@@ -61,8 +61,8 @@ invariant.
 
 ### 1.3 `amd_lbr_v2_present()` in `msr_lbr.c` duplicates `/proc/cpuinfo` parsing
 
-[msr_lbr.c](../../../src/msr_lbr.c) (line 63) and
-[amd_backend.c](../../../src/amd_backend.c) (line 86) each parse `/proc/cpuinfo`
+[msr_lbr.c](../../../../src/msr_lbr.c) (line 63) and
+[amd_backend.c](../../../../src/amd_backend.c) (line 86) each parse `/proc/cpuinfo`
 for AMD CPU flags independently. Three TUs now read the same file for the same
 purpose.
 
@@ -73,7 +73,7 @@ cached call path.
 
 ### 1.4 Freeze-absent Tier-A exit check scans the full branch array linearly
 
-The freeze gate in [hwtrace.c](../../../src/hwtrace.c) (line 919) loops over
+The freeze gate in [hwtrace.c](../../../../src/hwtrace.c) (line 919) loops over
 `best_nr` entries to detect a region-exit branch. On a freeze-absent Zen 4 part
 this is the *common path* (not a degrade). The loop is fine for 16 entries but
 it's scanning a structure that the richest-window scan at line 842 already
@@ -84,8 +84,8 @@ No immediate code change needed; this is a readability note. A comment
 
 ### 1.5 Missing error check on `ioctl(PERF_EVENT_IOC_ENABLE)` returns
 
-Throughout [hwtrace.c](../../../src/hwtrace.c) and
-[branchsnap.c](../../../src/branchsnap.c), `ioctl(g_fd, PERF_EVENT_IOC_ENABLE,
+Throughout [hwtrace.c](../../../../src/hwtrace.c) and
+[branchsnap.c](../../../../src/branchsnap.c), `ioctl(g_fd, PERF_EVENT_IOC_ENABLE,
 0)` is fire-and-forget. An `ENABLE` failure on an event whose ring was
 successfully mapped would silently produce an empty trace later flagged as
 `truncated` — correct but confusing.
@@ -100,7 +100,7 @@ harmless.
 
 ### 2.1 Forward declarations of `amd_backend.c` symbols in `hwtrace.c`
 
-[hwtrace.c](../../../src/hwtrace.c) (line 90) has a block of forward
+[hwtrace.c](../../../../src/hwtrace.c) (line 90) has a block of forward
 declarations for every `asmtest_amd_*` function. This is fragile — a signature
 change in `amd_backend.c` that isn't mirrored in `hwtrace.c` compiles but
 produces UB at link time (or worse, silently passes on LP64).
@@ -120,7 +120,7 @@ block) instead of redefining. `ss_backend.c` has the same issue.
 
 ### 2.3 The `hwtrace_end_amd()` function is 230+ lines
 
-`hwtrace_end_amd` (line 731 of [hwtrace.c](../../../src/hwtrace.c)) does
+`hwtrace_end_amd` (line 731 of [hwtrace.c](../../../../src/hwtrace.c)) does
 snapshot drain, ring linearization, two-pass record walk, richest-window
 selection, Tier-A→Tier-B escalation, decode dispatch, freeze gate, loss
 detection, fidelity invariant, and cleanup — all in one function. Breaking it into
@@ -130,7 +130,7 @@ behavior.
 
 ### 2.4 `bsnap_on_event` does not validate raw-field bounds
 
-[branchsnap.c](../../../src/branchsnap.c) (line 82) reads
+[branchsnap.c](../../../../src/branchsnap.c) (line 82) reads
 `ev->raw + i * BSNAP_ENTRY_SZ` without checking that
 `nr * BSNAP_ENTRY_SZ` fits within `sz - offsetof(bsnap_event, raw)`. The BPF
 program should produce well-formed events, but a defensive bounds check guards
@@ -142,7 +142,7 @@ against kernel/BPF bugs.
 
 ### 3.1 The data-ring linearization copies the full span unconditionally
 
-At [hwtrace.c](../../../src/hwtrace.c) (line 786) and the survey (line 1050),
+At [hwtrace.c](../../../../src/hwtrace.c) (line 786) and the survey (line 1050),
 the code mallocs + byte-copies the entire ring span for unwrapping. For the 256
 KB default ring and a long-running routine this is a non-trivial allocation at
 `end()` time.
@@ -154,7 +154,7 @@ AMD trace.
 
 ### 3.2 Tier-B stitch output buffer is under-sized
 
-At [hwtrace.c](../../../src/hwtrace.c) (line 891):
+At [hwtrace.c](../../../../src/hwtrace.c) (line 891):
 
 ```c
 size_t out_cap = n_samples + (size_t)amd_depth;
@@ -171,7 +171,7 @@ document why `n_samples + depth` is sufficient for the `period > 1` case.
 
 ### 3.3 MSR-direct path doesn't filter wrong-path specs
 
-[msr_lbr.c](../../../src/msr_lbr.c) (line 175) checks `valid || spec` in the
+[msr_lbr.c](../../../../src/msr_lbr.c) (line 175) checks `valid || spec` in the
 FROM/TO MSR read, which means it includes speculative wrong-path entries in the
 branch array it passes to `asmtest_amd_decode`. The decoder's `amd_replay`
 filters them IF `ASMTEST_HAVE_PERF_BR_SPEC` is set, but the MSR path doesn't go
@@ -192,7 +192,7 @@ inert = phantom edges leak through.
 
 ### 4.1 Default-on deterministic snapshot for single-exit regions (partially done)
 
-`hwtrace_begin_amd` (line 636 of [hwtrace.c](../../../src/hwtrace.c)) already
+`hwtrace_begin_amd` (line 636 of [hwtrace.c](../../../../src/hwtrace.c)) already
 defaults to the deterministic snapshot when
 `asmtest_amd_snapshot_available() && amd_nret == 1`. But it only counts
 `ret`-class instructions and misses routines that exit via a **tail-call** (`jmp`
@@ -205,13 +205,13 @@ fallback-to-sampled safety net.
 ### 4.2 AMD LBR `lbr_period` option is undocumented in user-facing docs
 
 The `lbr_period` and `branch_filter` fields in `asmtest_hwtrace_options_t`
-([asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), line 86) have
+([asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h), line 86) have
 extensive header-doc comments but no mention in the published Sphinx docs. Users
 looking at `native-tracing.md` wouldn't know these levers exist.
 
 ### 4.3 No `asmtest_amd_decode` error propagation from Tier-B
 
-At [hwtrace.c](../../../src/hwtrace.c) (line 901),
+At [hwtrace.c](../../../../src/hwtrace.c) (line 901),
 `asmtest_amd_decode_stitched` returns `ASMTEST_HW_EDECODE` on bad arguments, but
 the return value is discarded:
 
@@ -229,7 +229,7 @@ prevents the Tier-A fallback.
 
 ### 4.4 The auto-escalation path (`trace_auto.c`) doesn't try the MSR-direct or BPF-snapshot paths
 
-The `CASCADE[]` in [trace_auto.c](../../../src/trace_auto.c) (line 60) lists
+The `CASCADE[]` in [trace_auto.c](../../../../src/trace_auto.c) (line 60) lists
 `AMD_LBR` as a single cascade entry. When the sampled AMD path truncates,
 `asmtest_trace_call_auto` escalates to block-step/single-step (line 181) but
 never tries the BPF snapshot or MSR-direct path, which could complete the trace

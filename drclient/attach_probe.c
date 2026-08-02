@@ -13,7 +13,7 @@
  * proof, since it means the victim actually ran instrumented code, not just that DR decoded it)
  * and, on exit/detach, prints `ATTACH_PROBE_TAKEOVER_OK` iff that count is non-zero. The lane
  * separately checks that the victim's heartbeat continued (survival) and that it exited cleanly.
- * Findings: docs/internal/analysis/dr-attach-probe-findings.md.
+ * Findings: docs/internal/archive/analysis/dr-attach-probe-findings.md.
  *
  * drmgr only (no drreg/drx) — the takeover question is orthogonal to the extension stack (that
  * was the Increment-2 EXTENSION-load probe; this is the ATTACH probe).

@@ -4,7 +4,7 @@
 > [post-v1-expansion-plan.md](../../plans/post-v1-expansion-plan.md) (Track D —
 > Wide-vector capture; the "SVE staged" heading and the "Still staged:
 > AArch64 SVE" item) and
-> [2026-07-04-plans-remaining-items.md](../../analysis/2026-07-04-plans-remaining-items.md)
+> [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md)
 > (the "Wide-vector SVE" gate record, line 94). Written 2026-07-17. If this doc
 > and a source disagree, this doc wins (sources may be stale); if the CODE and
 > this doc disagree, re-verify before implementing.
@@ -711,7 +711,7 @@ on real SVE silicon, and Track D's status flips to done.
    Track D: "SVE staged" → done, naming the host and VL validated (the plan
    header instructs tracks to update it as they land); update the CHANGELOG
    entry's sign-off note; update the gate line in
-   [2026-07-04-plans-remaining-items.md](../../analysis/2026-07-04-plans-remaining-items.md).
+   [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md).
 
 **Code.** No source change was needed — the trampoline executed correctly on
 first contact with silicon. CI gains the sign-off step above; the stale

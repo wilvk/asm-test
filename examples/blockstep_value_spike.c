@@ -2,7 +2,7 @@
  * blockstep_value_spike.c — F1 spike (increment 0): block-step + emulator-replay
  * value optimization. Self-contained probe for
  * docs/internal/plans/live-attach-dataflow-followup-plan.md (F1) and its findings
- * doc docs/internal/analysis/2026-07-15-blockstep-value-spike.md.
+ * doc docs/internal/archive/analysis/2026-07-15-blockstep-value-spike.md.
  *
  * THE BET F1 makes: direct PTRACE_SINGLESTEP traps on EVERY instruction, which is
  * exactly the stop density that widens the cross-thread deadlock window on a live

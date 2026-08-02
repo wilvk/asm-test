@@ -3,7 +3,7 @@
 > **Sources.** Actioned from the archived (completed) plan
 > [cross-arch-benchmarking-plan.md](../plans/cross-arch-benchmarking-plan.md)
 > (its "remain follow-ups" note, lines 27–30), the analysis
-> [2026-07-11-cross-arch-benchmarking.md](../../analysis/2026-07-11-cross-arch-benchmarking.md)
+> [2026-07-11-cross-arch-benchmarking.md](../analysis/2026-07-11-cross-arch-benchmarking.md)
 > (§4.3 the weighted cost model, §7.6 the BM_MODEL_COST follow-on), and the
 > follow-ups comment in
 > [.github/workflows/ci.yml](../../../../.github/workflows/ci.yml) lines 74–76.

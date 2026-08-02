@@ -14,7 +14,7 @@ each tier. Narrative docs: [native runtime tracing](../../guides/tracing/native-
 [AMD LBR](../plans/amd-tracing-plan.md),
 [Zen 2 single-step](../archive/plans/zen2-singlestep-trace-plan.md),
 [DynamoRIO native-trace](../archive/plans/dynamorio-native-trace-plan.md). Host-specific,
-live-verified instantiation (Apple Intel / macOS): [Apple Intel host trace coverage](2026-07-08-apple-intel-host-trace-coverage.md).*
+live-verified instantiation (Apple Intel / macOS): [Apple Intel host trace coverage](../archive/analysis/2026-07-08-apple-intel-host-trace-coverage.md).*
 
 ## Summary
 

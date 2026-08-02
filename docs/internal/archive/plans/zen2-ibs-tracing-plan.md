@@ -3,7 +3,7 @@
 The buildable plan for asm-test's **AMD IBS** (Instruction-Based Sampling) tracing lane —
 the one hardware branch-tracing facility that actually exists on **Zen 2**, where every
 branch-stack path self-skips. It turns the empirical finding in
-[2026-07-12-zen2-ibs-tracing-review.md](../../analysis/2026-07-12-zen2-ibs-tracing-review.md)
+[2026-07-12-zen2-ibs-tracing-review.md](../analysis/2026-07-12-zen2-ibs-tracing-review.md)
 into work: IBS-Op delivers **statistical from→to control-flow edges, out of band, against a
 live process, unprivileged**, and can observe a JIT/managed runtime without single-stepping
 it (which can crash it).

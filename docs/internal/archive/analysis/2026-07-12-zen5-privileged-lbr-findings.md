@@ -74,7 +74,7 @@ unprivileged dev box (self-skips at `paranoid=4`). The `docker-hwtrace-privilege
 lane is the first place this rung runs live, and it is **not yet in CI**.
 
 > **Update 2026-07-21: resolved** — the `hwtrace-privileged` CI job now exists
-> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:1342-1369,
+> ([.github/workflows/ci.yml](../../../../.github/workflows/ci.yml) ~:1342-1369,
 > running `make docker-hwtrace-privileged`).
 
 ### Suggested next step
@@ -91,9 +91,9 @@ lane is the first place this rung runs live, and it is **not yet in CI**.
   coverage.
 
   **Update 2026-07-21:** all three shapes now exist — the `hwtrace-privileged` CI
-  job above, the rewritten [amd-hardware-validation.md](../amd-hardware-validation.md)
+  job above, the rewritten [amd-hardware-validation.md](../../amd-hardware-validation.md)
   manual step, and the self-hosted-runner scaffold
-  ([self-hosted-ci-runners.md](../implementations/self-hosted-ci-runners.md);
+  ([self-hosted-ci-runners.md](../../implementations/self-hosted-ci-runners.md);
   `hw.yml` dispatch green, `7506410`).
 
 ## 3. Cosmetic misreports (low priority)

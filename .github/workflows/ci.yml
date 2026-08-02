@@ -763,7 +763,7 @@ jobs:
   # instrumented-instruction count is zero. It stays on the BSD-clean stack only:
   # umbra is LGPL-2.1 (Dr. Memory Framework), so its load-check is opt-in
   # (PROBE_UMBRA=1) and NOT part of this gate. See
-  # docs/internal/analysis/dr-extension-load-probe-findings.md.
+  # docs/internal/archive/analysis/dr-extension-load-probe-findings.md.
   drext-probe:
     name: drext-probe (DR extension private-loader check)
     runs-on: ubuntu-latest
@@ -1474,7 +1474,7 @@ jobs:
   # is a hard failure). Off that runner the residue is validated manually
   # pre-release — see docs/internal/amd-hardware-validation.md. The call_auto
   # non-escalation finding from
-  # docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md was FIXED in
+  # docs/internal/archive/analysis/2026-07-12-zen5-privileged-lbr-findings.md was FIXED in
   # 5d8e0d2 (a non-escalation is now the regression signal that lane guards
   # against, not an open bug).
   hwtrace-privileged:

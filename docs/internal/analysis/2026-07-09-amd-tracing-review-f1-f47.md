@@ -2,7 +2,7 @@
 
 > **SUPERSEDED (recorded 2026-07-23).** This page is the 2026-07-09 snapshot;
 > the surface it reviews has been re-audited twice since — see the
-> [2026-07-17 adversarial review](2026-07-17-amd-hardware-review.md) and the
+> [2026-07-17 adversarial review](../archive/analysis/2026-07-17-amd-hardware-review.md) and the
 > [round-2 follow-up plan](../plans/amd-review-followup-2-plan.md). Its P0/P1
 > items are shipped: F5's `nr` clamp (all three drain sites), F22 mechanism,
 > F24 empty-trace and F27 `struct_size` in full; **F7's short-SAMPLE guard

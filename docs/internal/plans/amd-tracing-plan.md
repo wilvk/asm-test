@@ -419,7 +419,7 @@ primary sources (AMD APM Vol 2 / PPR, the Linux `arch/x86/events/amd/` and
 `arch/x86/kernel/step.c` sources, LWN, and the perf man pages). Companion docs:
 [trace-parity-matrix](../analysis/trace-parity-matrix.md) (what works where today),
 [jit-runtime-tracing](../analysis/jit-runtime-tracing.md) (the foreign-JIT forward-look), and
-[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) (the follow-up
+[2026-07-09-amd-tracing-review](../archive/analysis/2026-07-09-amd-tracing-review.md) (the follow-up
 review pass over the landed Phases 0–5 whose verified findings feed the
 [Newly surfaced](#newly-surfaced-2026-07-09-review) subsection and Part III Phases 8–9).
 Where a claim was adversarially verified against a primary source the verdict is stated
@@ -583,7 +583,7 @@ unconditional check fixed. See
 ### Newly surfaced (2026-07-09 review)
 
 A follow-up pass over the now-landed Phases 0–5 —
-[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) — surfaced one
+[2026-07-09-amd-tracing-review](../archive/analysis/2026-07-09-amd-tracing-review.md) — surfaced one
 composition win (MSR) and a correctness/hygiene cluster. Unlike Phases 6–7, **none of it was
 hardware-blocked**: all of it was buildable and self-validating on the dev Zen 5 (Ryzen 9
 9950X), and landed 2026-07-10 as Part III **Phases 8 (MSR-rung cascade composition) and 9
@@ -918,7 +918,7 @@ shipped LBR backend.
 **Phases 0–5 and 8–9 landed; Phase 7 superseded + landed via
 [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md); Phase 6 remains forward-look
 (hardware-blocked).** The
-[2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) surfaced two
+[2026-07-09-amd-tracing-review](../archive/analysis/2026-07-09-amd-tracing-review.md) surfaced two
 further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and
 landed on this Zen 5 dev box (2026-07-10): **Phase 8** composes the fidelity cascade so a
 truncated sampled window escalates to the shipped MSR-direct exact path *before* the ~1000×

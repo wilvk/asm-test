@@ -2,11 +2,11 @@
 
 **Status (updated 2026-07-21): ALL FIVE items landed — items 2 and 3 on 2026-07-17 (same day,
 separate diff); item 1 on 2026-07-18 (DFP-CALLOUT-1 / T2); item 4 on 2026-07-18 (T5+T6); item 5
-on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../archive/implementations/dataflow-bindings-slice-codeimage.md)
+on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../../archive/implementations/dataflow-bindings-slice-codeimage.md)
 T1–T4 (commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`) — all ten bindings now share
 the def-use/slice surface.** *This header previously read "Items 4 and 5 remain OPEN", which was
 doubly stale (item 4's own section already said LANDED 2026-07-18); that staleness was the
-[2026-07-21 repo review](../archive/reviews/2026-07-21-repo-review.md) §0 discrepancy — this doc was the
+[2026-07-21 repo review](../../archive/reviews/2026-07-21-repo-review.md) §0 discrepancy — this doc was the
 stale side, the implementation brief is authoritative.*
 None was a regression; each was surfaced (not introduced) while landing the batch, and each was
 recorded here rather than fixed inline, because fixing them inside the diff that found them would
@@ -18,7 +18,7 @@ Ordered by how much they can lie to a user.
 
 ## 1. The scoped path's call-out step-over has the fabricated-edge shape F6 just fixed for windows — LANDED 2026-07-18
 
-**Verified, not inferred.** [`src/dataflow_ptrace.c:65`](../../../src/dataflow_ptrace.c#L65) states the
+**Verified, not inferred.** [`src/dataflow_ptrace.c:65`](../../../../src/dataflow_ptrace.c#L65) states the
 design outright: the call-out step-over runs the helper at native speed *"(recording NOTHING over the
 helper)"* and then resumes in-region single-stepping, so a non-leaf routine is traced across its
 helper calls.
@@ -81,7 +81,7 @@ breaking anything), `make dataflow-blockstep-test` 119/119 on the Zen 5 box.
 
 ## 2. `covered(t, 0)` is vacuous — `amd_replay` appends block 0 unconditionally — LANDED 2026-07-17
 
-[`src/amd_backend.c:267`](../../../src/amd_backend.c#L267) does `trace_append_block(trace, 0)`
+[`src/amd_backend.c:267`](../../../../src/amd_backend.c#L267) does `trace_append_block(trace, 0)`
 unconditionally ("Block start at the region entry"). So `covered(t, 0)` is **always true** and can
 never fail.
 
@@ -158,7 +158,7 @@ from `TIER_HEADERS`). Widening to the slice half re-opens exactly the ABI-cliff 
 already bitten Ruby/Java once.
 
 **LANDED 2026-07-18**
-([dataflow-bindings-slice-codeimage.md](../archive/implementations/dataflow-bindings-slice-codeimage.md)
+([dataflow-bindings-slice-codeimage.md](../../archive/implementations/dataflow-bindings-slice-codeimage.md)
 T1–T4; commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`): the seven remaining bindings
 gained the def-use/slice half — all ten bindings now share the surface. See the brief for how the
 by-value FFI-boundary concern above was handled.

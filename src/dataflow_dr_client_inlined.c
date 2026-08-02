@@ -492,7 +492,7 @@ static void on_seed(uint64_t base, uint64_t len, uint64_t color) {
  * post-compaction read sees stale/aliased taint. at_gc_remap does the copy; it is now in the
  * main taint build (not the disabled ASMTEST_TAINT_GCREMAP flag) because the LIVE path drives
  * it from an in-process ICorProfilerCallback4::MovedReferences2 profiler (the go-path proven by
- * the coexistence probe — docs/internal/analysis/gc-move-range-extraction-findings.md): the
+ * the coexistence probe — docs/internal/archive/analysis/gc-move-range-extraction-findings.md): the
  * client publishes at_gc_remap's entry to a small POSIX-shm handshake and the profiler calls it
  * per moved range at the (fully-suspended-EE) GC fence. at_gc_remap is DEAD CODE unless the
  * `gcmove` client option activates the handshake, so the default taint client's hot path +

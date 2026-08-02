@@ -5,7 +5,7 @@ benchmarks and a feature benchmark on any system** — across Linux, macOS, and
 Windows on x86-64 and AArch64 — emit one normalized per-system report, **persist
 each box's results in the git repo**, and diff them into a cross-system matrix
 (both live and over history). It turns the findings of
-[cross-arch benchmarking analysis](../../analysis/2026-07-11-cross-arch-benchmarking.md)
+[cross-arch benchmarking analysis](../analysis/2026-07-11-cross-arch-benchmarking.md)
 into buildable phases.
 
 > Status legend: **planned** unless noted. This plan follows the house rules the
@@ -29,7 +29,7 @@ into buildable phases.
 > shell runner is portable to them, but those lanes need the emu deps installed and
 > auto-commit needs `contents:write`, so they are not shipped untested).
 
-Siblings: the [analysis](../../analysis/2026-07-11-cross-arch-benchmarking.md) it
+Siblings: the [analysis](../analysis/2026-07-11-cross-arch-benchmarking.md) it
 derives from, the user guide [benchmarks](../../../guides/benchmarks.md), and the
 [trace parity matrix](../../analysis/trace-parity-matrix.md) whose capability
 matrices this plan instantiates *live*, per system.
@@ -101,7 +101,7 @@ Linux-only.
 
 ### 2.2 Performance result — `asmtest_bench_result_t`
 
-The metric-shape from the [analysis §5.2](../../analysis/2026-07-11-cross-arch-benchmarking.md),
+The metric-shape from the [analysis §5.2](../analysis/2026-07-11-cross-arch-benchmarking.md),
 one record per (routine, arch, metric):
 
 ```c

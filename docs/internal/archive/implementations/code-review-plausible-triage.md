@@ -1,7 +1,7 @@
 # Triage and fix the 2026-07-02 review's still-present 'plausible' findings — implementation
 
 > **Sources.** Actioned from
-> [2026-07-02-code-review.md](../../analysis/2026-07-02-code-review.md) (the
+> [2026-07-02-code-review.md](../analysis/2026-07-02-code-review.md) (the
 > "Plausible (one verifier upheld, one dissented)" section, lines 837–850).
 > Written 2026-07-17. If this doc and a source disagree, this doc wins (sources
 > may be stale); if the CODE and this doc disagree, re-verify before
@@ -515,7 +515,7 @@ guide no longer claims `--emu` installs only libunicorn."
 future sweep re-discovers these nine findings as unowned.
 
 **Steps.**
-1. In [docs/internal/analysis/2026-07-02-code-review.md](../../analysis/2026-07-02-code-review.md),
+1. In [docs/internal/archive/analysis/2026-07-02-code-review.md](../analysis/2026-07-02-code-review.md),
    directly under the section intro (lines 837–840), insert a short
    "Triage (2026-07-17)" table: one row per finding →
    disposition. Seven rows point at this doc's tasks (T1–T7 by name and the
@@ -592,7 +592,7 @@ citation, so any glibc/POSIX divergence resolves in favor of what
 ## Out of scope
 
 - The 54 confirmed findings of the same review — all previously remediated;
-  see [2026-07-02-code-review.md](../../analysis/2026-07-02-code-review.md).
+  see [2026-07-02-code-review.md](../analysis/2026-07-02-code-review.md).
 - The two refuted findings (clean-room `eval` interpolation, SECURITY.md
   1.0.x) — recorded as refuted in the review doc, no action.
 - The two independently-fixed plausible findings (drtrace_app cascade

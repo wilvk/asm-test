@@ -1,7 +1,7 @@
 # asm-test — Desktop GUI plan
 
 > **Context (2026-07-23).** The committed plan derived from two adversarially-reviewed
-> ideation docs — [desktop-GUI ideation](../analysis/2026-07-20-desktop-gui-ideation.md)
+> ideation docs — [desktop-GUI ideation](../archive/analysis/2026-07-20-desktop-gui-ideation.md)
 > and [capability-expansion ideation](../analysis/2026-07-20-capability-expansion-ideation.md)
 > — after cross-reviewing both against the tree at HEAD (`51b8247`). Every constraint
 > and correction below was re-verified against the code on 2026-07-23; the

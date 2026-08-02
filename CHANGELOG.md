@@ -1312,7 +1312,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   x86-64 gcc-linux).
 
 [libdft64]: https://github.com/AngoraFuzzer/libdft64
-[dfc]: https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/data-flow-capture.md
+[dfc]: https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/data-flow-capture.md
 
 - **Intel SDE future/absent-ISA test lane** (`make docker-sde` / `make sde-test
   SDE_HOME=$(scripts/fetch-sde.sh)`). Assembly that uses an ISA extension the host
@@ -1795,7 +1795,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Intel Pin vs. DynamoRIO analysis + a four-track umbrella plan — what Pin
   makes possible that the shipped DynamoRIO tier cannot.**
-  [2026-07-17-intel-pin-vs-dynamorio.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+  [2026-07-17-intel-pin-vs-dynamorio.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/2026-07-17-intel-pin-vs-dynamorio.md)
   and [intel-pin-capabilities-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/intel-pin-capabilities-plan.md).
   Most "Pin advantages" are **maturity, not impossibility** (DR has
   `drrun -attach`, supports Windows, and the taint ground is already held
@@ -1822,7 +1822,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **AMD hardware review + follow-up plan — an adversarial pass over the AMD
   tiers in which four of nine candidate findings were REFUTED and recorded as
-  such.** [2026-07-17-amd-hardware-review.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-amd-hardware-review.md)
+  such.** [2026-07-17-amd-hardware-review.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/2026-07-17-amd-hardware-review.md)
   and [amd-review-followup-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/amd-review-followup-plan.md).
   Every claim resting on kernel or silicon behaviour was checked against
   **fetched primary source at pinned tags** (v6.10/v6.12/v6.14), not recall —
@@ -3811,7 +3811,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     against the producer's real layout before trusting any `info.*` field.
 
   All three were filed as open follow-ups
-  ([2026-07-17-dataflow-tier-open-followups.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-dataflow-tier-open-followups.md))
+  ([2026-07-17-dataflow-tier-open-followups.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/2026-07-17-dataflow-tier-open-followups.md))
   after the same day's F1/F2/F6/F7 batch landed, deliberately deferred out of that
   diff to avoid scope creep. Verified: `make docker-dataflow-attach` (126+118 checks,
   0 skips, 0 failures) and `make dataflow-blockstep-test` natively on the Zen 5 dev
@@ -4090,7 +4090,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Review-driven defect sweep (2026-07-02).** Resolved the full backlog from the
-  [code-level review](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-02-code-review.md) (54 findings) and the
+  [code-level review](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/analysis/2026-07-02-code-review.md) (54 findings) and the
   still-open [2026-07-01](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/reviews/2026-07-01-repo-review.md) /
   [2026-07-02](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/reviews/2026-07-02-repo-review.md) repo-review items, with a
   per-batch implementation note under [`docs/summaries/`](https://github.com/wilvk/asm-test/tree/main/docs/summaries/). Highlights:

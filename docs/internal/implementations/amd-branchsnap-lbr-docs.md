@@ -2,9 +2,9 @@
 
 > **Sources.** Actioned from
 > [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P2, P4,
-> P5), [2026-07-17-amd-hardware-review.md](../analysis/2026-07-17-amd-hardware-review.md)
+> P5), [2026-07-17-amd-hardware-review.md](../archive/analysis/2026-07-17-amd-hardware-review.md)
 > (§2.1, §2.2, §2.4),
-> [2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
+> [2026-07-17-dataflow-tier-open-followups.md](../archive/analysis/2026-07-17-dataflow-tier-open-followups.md)
 > (item 2), [amd-tracing-plan.md](../plans/amd-tracing-plan.md) (Improvement
 > Phase 6, the tiling residual), and
 > [trace-parity-matrix.md](../analysis/trace-parity-matrix.md). Written
@@ -239,7 +239,7 @@ ENOSYS stub path) pass against real LBR captures on both exits.
    truncated=0` and the mirrored path-B line, then
    `ok - branchsnap multi-exit: default-on snapshot covers BOTH exits …`.
 3. Record the outcome: in
-   [2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
+   [2026-07-17-dataflow-tier-open-followups.md](../archive/analysis/2026-07-17-dataflow-tier-open-followups.md)
    item 2, replace "verified by compilation and the ENOSYS stub path only"
    with a dated live-verified note (host, lane, both exit lines).
 4. If either assertion **fails** live, that is the news the repo's

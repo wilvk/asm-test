@@ -4,24 +4,24 @@
 could Intel Pin be useful, and is there anything it makes possible that
 DynamoRIO does not." It is a sibling of the DBI trade-off notes
 [data-flow-capture.md](data-flow-capture.md) (the taint substrate),
-[jit-runtime-tracing.md](jit-runtime-tracing.md) (why in-process DBI fights
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) (why in-process DBI fights
 managed runtimes), and [capture-args-returns.md](capture-args-returns.md) (arg/
 return capture). The implementation roadmap it feeds is
-[intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md), which
+[intel-pin-capabilities-plan.md](../../archive/plans/intel-pin-capabilities-plan.md), which
 decomposes each surviving item into its own separable plan track.*
 
 ## The question, sharpened
 
 Pin ([Intel's DBI framework][pin]) is DynamoRIO's direct peer, and the DBI slot
 in this repo is **already occupied — deeply** — by the DynamoRIO tier: an
-in-process control-flow tracer ([asmtest_drtrace.h](../../../include/asmtest_drtrace.h),
+in-process control-flow tracer ([asmtest_drtrace.h](../../../../include/asmtest_drtrace.h),
 `libasmtest_drapp` + `libasmtest_drclient`) **and** a full in-band taint/data-flow
 tier (byte-granular tag shadow, seed/sink markers, launch-under-`drrun`,
 self-attach-mid-run, a POSIX-shm out-of-process validator, `MovedReferences2`
 GC-move canonicalization, .NET managed taint —
-[asmtest_taint.h](../../../include/asmtest_taint.h),
-[src/dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c),
-[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)).
+[asmtest_taint.h](../../../../include/asmtest_taint.h),
+[src/dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c),
+[dynamorio-taint-tier-plan.md](../../archive/plans/dynamorio-taint-tier-plan.md)).
 
 So "add Pin" is only interesting if it clears a bar DynamoRIO **cannot** —
 otherwise it duplicates a shipped tier and inherits the bindings-parity tax for
@@ -33,8 +33,8 @@ Three commonly-cited Pin strengths are **not** exclusive to it here:
 
 | Claimed Pin edge | Why it is not a DR *impossibility* |
 |---|---|
-| Attach to a running PID | DR has `drrun -attach` / `dr_inject` (Linux ptrace takeover). Unwired in this repo (the tier uses the cooperative `dr_app_*` model), but a DR capability, not a Pin-only one. See [dr-attach-probe-findings.md](dr-attach-probe-findings.md). **Update 2026-07-21:** "unwired" needs qualifying — DR external attach IS wired for the taint/dataflow tier since 2026-07-14 ([Dockerfile.taint-attach](../../../Dockerfile.taint-attach), the `docker-dataflow-attach` lane; [implementations/_positions.md](../implementations/_positions.md) #7 is binding); only the drtrace control-flow tier remains `dr_app_*`-cooperative. |
-| Windows in-band DBI | DR supports Windows. The repo's DR tier is Linux-x86-64 by the repo's own scoping, not DR's limit ([macos-drtrace-plan.md](../plans/macos-drtrace-plan.md) tracks the port surface). |
+| Attach to a running PID | DR has `drrun -attach` / `dr_inject` (Linux ptrace takeover). Unwired in this repo (the tier uses the cooperative `dr_app_*` model), but a DR capability, not a Pin-only one. See [dr-attach-probe-findings.md](dr-attach-probe-findings.md). **Update 2026-07-21:** "unwired" needs qualifying — DR external attach IS wired for the taint/dataflow tier since 2026-07-14 ([Dockerfile.taint-attach](../../../../Dockerfile.taint-attach), the `docker-dataflow-attach` lane; [implementations/_positions.md](../../implementations/_positions.md) #7 is binding); only the drtrace control-flow tier remains `dr_app_*`-cooperative. |
+| Windows in-band DBI | DR supports Windows. The repo's DR tier is Linux-x86-64 by the repo's own scoping, not DR's limit ([macos-drtrace-plan.md](../../plans/macos-drtrace-plan.md) tracks the port surface). |
 | Whole-process taint (libdft/Triton) | The taint **ground is already held** in-tree on DR. Pin's value here is as an *independent oracle* (below), not a new capability. |
 
 The differential-oracle idea is worth keeping even though it is not an
@@ -64,13 +64,13 @@ execute it. (DR's `drcpusim` only *detects* too-new instructions; it does not
 emulate them.) The gap is documented on both of the repo's other flanks:
 
 - **The emulator tier cannot cover it.**
-  [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
+  [live-attach-dataflow-followup-plan.md](../../archive/plans/live-attach-dataflow-followup-plan.md)
   (F1 increment 2) measured that Unicorn — even 2.1.3, built from source — vendors
   QEMU 5.0.1, which predates AVX TCG (QEMU 7.2): `vaddps ymm` returns
   `UC_ERR_INSN_INVALID`, and worse, **VEX-128 is silently mis-executed as legacy
   SSE returning `UC_ERR_OK`**. The doc's words: "a capability that does not exist
   in any release." AMX/APX are further still.
-- **The native tiers cannot cover it.** [CLAUDE.md](../../../CLAUDE.md) names "a
+- **The native tiers cannot cover it.** [CLAUDE.md](../../../../CLAUDE.md) names "a
   specific CPU generation" as a legitimate **hardware self-skip gate** — a routine
   targeting an extension no dev box has is untestable by construction today.
 
@@ -140,8 +140,8 @@ Kept explicit so no future reader mistakes Pin for a strict superset:
   binaries, not open source), where DR is BSD and the engines are BSD/GPL. This
   is workable **only** as a fetched-and-pinned, **never-shipped** test-lane
   dependency — exactly how DR is handled today
-  ([Dockerfile.drtrace](../../../Dockerfile.drtrace): `ARG DR_VERSION` + tarball +
-  SHA-256 gate, license text vendored under [licenses/](../../../licenses/), kept
+  ([Dockerfile.drtrace](../../../../Dockerfile.drtrace): `ARG DR_VERSION` + tarball +
+  SHA-256 gate, license text vendored under [licenses/](../../../../licenses/), kept
   out of `libasmtest` and the `libasmtest_emu` superset). Never bundleable into a
   distributed library.
 
@@ -168,7 +168,7 @@ the only one that extends the core promise to code no host can run.
 > roadmap plan cited above — the SDE future-ISA lane (#1), probe-mode capture
 > validated live on Zen 5 (#3, `fd00e46`), and the libdft64 differential taint
 > oracle (#4, `d504081`); #2's XED-decoded trace tier has its own brief,
-> [pin-xed-trace-tier.md](../archive/implementations/pin-xed-trace-tier.md).
+> [pin-xed-trace-tier.md](../../archive/implementations/pin-xed-trace-tier.md).
 
 ## Sources
 

@@ -4,7 +4,7 @@
 > [2026-07-04 repo review](../reviews/2026-07-04-repo-review.md)
 > (item **P3**, "Add a native RISC-V host tier" — status row line 165,
 > strategic write-up lines 483–489) and
-> [2026-07-04-plans-remaining-items.md](../../analysis/2026-07-04-plans-remaining-items.md)
+> [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md)
 > (the 07-07 update names P3 as one of the two still-open review expansions).
 > Written 2026-07-17. If this doc and a source disagree, this doc wins (sources
 > may be stale); if the CODE and this doc disagree, re-verify before
@@ -648,7 +648,7 @@ T4 + T5 ──→ T6 (CI leg) ──→ T7 (docs)
 - **Real gates that stay**: the tracing tiers (single-step/ptrace, DynamoRIO,
   hardware trace) are NOT ported by this work (see Out of scope); qemu-user
   additionally cannot emulate a ptrace tracer/tracee pair (recorded in
-  [2026-07-04-plans-remaining-items.md](../../analysis/2026-07-04-plans-remaining-items.md)
+  [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md)
   §2), so a future rv64 tracing port would need real hardware or system-mode
   emulation — record that then, not now.
 - **Fidelity gates in-tier**: no flag macros on rv64 (compile error beats

@@ -3,12 +3,12 @@
 Analysis date: 2026-07-11
 
 > **Since landed (note added 2026-07-21).** The plan this analysis fed (§7,
-> [cross-arch-benchmarking-plan.md](../archive/plans/cross-arch-benchmarking-plan.md))
+> [cross-arch-benchmarking-plan.md](../../archive/plans/cross-arch-benchmarking-plan.md))
 > is implemented and archived: `make emu-bench` / `bench-report` / `bench-record`
-> exist ([mk/bench.mk](../../../mk/bench.mk)), per-box result records are
+> exist ([mk/bench.mk](../../../../mk/bench.mk)), per-box result records are
 > committed under `benchmarks/`, and §3's "three CI legs" are now **five** —
 > benchmarks also run on `windows-latest`
-> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:287) and the
+> ([.github/workflows/ci.yml](../../../../.github/workflows/ci.yml) ~:287) and the
 > `macos-15-intel` nightly (~:229), added in `c811ccb`. The body below is the
 > original design analysis, preserved as written.
 
@@ -39,9 +39,9 @@ existing trace counters into an architecture-agnostic efficiency benchmark.
 
 ### 1.1 Native benchmark tier (`BENCH`) — real cycles, host arch only
 
-Defined in [src/asmtest.c](../../../src/asmtest.c) (`BENCH_*`, `run_benchmarks`,
+Defined in [src/asmtest.c](../../../../src/asmtest.c) (`BENCH_*`, `run_benchmarks`,
 `bench_calibrate`, `bench_measure`) and documented in
-[docs/guides/benchmarks.md](../../guides/benchmarks.md):
+[docs/guides/benchmarks.md](../../../guides/benchmarks.md):
 
 - `BENCH(suite, name) { ... }` registers in a separate list from `TEST`; runs
   only under `--bench`.
@@ -51,7 +51,7 @@ Defined in [src/asmtest.c](../../../src/asmtest.c) (`BENCH_*`, `run_benchmarks`,
   call**.
 - The counter is the inline `asmtest_cycle_counter()` — `rdtsc` on x86-64,
   `cntvct_el0` on AArch64 — so the unit is `cyc` on x86-64 and `ticks` on
-  AArch64 (`ASMTEST_BENCH_UNIT`, [src/asmtest.c](../../../src/asmtest.c) ~L1827).
+  AArch64 (`ASMTEST_BENCH_UNIT`, [src/asmtest.c](../../../../src/asmtest.c) ~L1827).
 - `--bench-format=json` already emits a machine-readable object
   (`unit`, `rounds`, and per-case `min/median/mean/stddev/cv/reps`) — the exact
   shape a cross-host comparison needs.
@@ -65,11 +65,11 @@ within one host* (routine A vs routine B on the same machine) compare cleanly.
 
 ### 1.2 Emulator tier — instruction/block counting, any host, four ISAs
 
-[include/asmtest_emu.h](../../../include/asmtest_emu.h) +
-[src/emu.c](../../../src/emu.c) run **x86-64, AArch64, RISC-V (RV64), and ARM32**
+[include/asmtest_emu.h](../../../../include/asmtest_emu.h) +
+[src/emu.c](../../../../src/emu.c) run **x86-64, AArch64, RISC-V (RV64), and ARM32**
 guests regardless of host arch, each via `emu_<arch>_call_traced`. The trace
 sink is the engine-neutral `asmtest_trace_t`
-([include/asmtest_trace.h](../../../include/asmtest_trace.h)):
+([include/asmtest_trace.h](../../../../include/asmtest_trace.h)):
 
 ```c
 uint64_t insns_total;  /* instructions executed (counts past insns_cap)  */
@@ -80,7 +80,7 @@ size_t   blocks_len;   /* distinct basic blocks entered                  */
 Two properties make this the natural cross-architecture benchmark substrate:
 
 - **It's already free.** The `UC_HOOK_CODE` hook (`on_code`,
-  [src/emu.c](../../../src/emu.c) L107) calls `trace_append_insn` on *every*
+  [src/emu.c](../../../../src/emu.c) L107) calls `trace_append_insn` on *every*
   executed instruction, and `trace_append_insn` "always bumps `insns_total`"
   even when the ordered `insns[]` buffer is `NULL` (`insns_cap == 0`). So a
   caller who wants only the count passes a zeroed trace with no buffers and reads
@@ -92,12 +92,12 @@ Two properties make this the natural cross-architecture benchmark substrate:
   vs ARM32 does this algorithm retire for the same input?*
 
 Cross-ISA code today is supplied either as raw byte arrays (e.g. `A64_ADD3`,
-`RV_ADD3` in [examples/test_emu.c](../../../examples/test_emu.c) L796/L925) or
+`RV_ADD3` in [examples/test_emu.c](../../../../examples/test_emu.c) L796/L925) or
 assembled from text via the Keystone in-line assembler
-(`asmtest_emu_call_asm6`, [DESIGN.md](../../../DESIGN.md) Phase 8). Capstone is
+(`asmtest_emu_call_asm6`, [DESIGN.md](../../../../DESIGN.md) Phase 8). Capstone is
 already linked for disassembly and can classify instructions
 (`asmtest_disas`, `asmtest_disas_is_branch`, `asmtest_disas_is_call`,
-[include/asmtest_trace.h](../../../include/asmtest_trace.h)).
+[include/asmtest_trace.h](../../../../include/asmtest_trace.h)).
 
 ---
 
@@ -126,7 +126,7 @@ hardware?" using the measurement that already exists.
 
 **What's already there:** `make bench` runs today on three CI legs —
 `ubuntu-latest` (x86-64), `ubuntu-24.04-arm` (aarch64), and `macos-latest`
-(aarch64) — see [.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
+(aarch64) — see [.github/workflows/ci.yml](../../../../.github/workflows/ci.yml)
 L66. But it runs as an *informational* step: the numbers scroll past in the log
 and are discarded.
 
@@ -137,7 +137,7 @@ and are discarded.
    and upload it as a CI artifact. Pin `--bench-reps` so runs are reproducible
    and comparable over time on the *same* leg.
 2. **A comparison reporter.** A small script (Python/shell in
-   [scripts/](../../../scripts/)) that ingests the per-leg JSON and emits a
+   [scripts/](../../../../scripts/)) that ingests the per-leg JSON and emits a
    table keyed by `suite.name`, columns per `<arch,unit>`. Because units differ,
    it must render `cyc` and `ticks` in **separate columns** and never subtract
    across them — it can show per-host ratios (this routine vs a baseline routine
@@ -239,7 +239,7 @@ real friction. Options, cheapest first:
 
 The two tiers above describe *how to measure*. But the project already has a
 strong idiom for shipping a cross-cutting capability — the **trace-parity
-discipline** ([trace-parity-matrix.md](trace-parity-matrix.md)): one result
+discipline** ([trace-parity-matrix.md](../../analysis/trace-parity-matrix.md)): one result
 shape every backend fills, capability *matrices* across
 {OS × arch × uarch × language × packaging}, `available()`/`skip_reason()`
 self-skip, a `truncated` completeness bit, an auto-resolution cascade
@@ -251,7 +251,7 @@ that most of the substrate already exists.
 ### 5.1 The bridge: the instruction-count metric already has trace parity
 
 The single most useful realization: **`insns_total` is not emulator-specific.**
-It lives in `asmtest_trace_t` ([include/asmtest_trace.h](../../../include/asmtest_trace.h)),
+It lives in `asmtest_trace_t` ([include/asmtest_trace.h](../../../../include/asmtest_trace.h)),
 and *every* trace backend fills that same struct — the Unicorn emulator, but
 also native DynamoRIO, Intel PT, AMD LBR, single-step, and the out-of-process
 ptrace stepper (this is the entire premise of the trace-parity matrix: one
@@ -348,10 +348,10 @@ one silently standing in for the other. This is the benchmarking image of the
 ### 5.5 Binding parity
 
 Tracing exposes an identical surface across all ten wrappers
-([trace-parity-matrix.md](trace-parity-matrix.md) Matrix 5); benchmarking should
+([trace-parity-matrix.md](../../analysis/trace-parity-matrix.md) Matrix 5); benchmarking should
 too. Because the emulated-count path is pure `asmtest_trace_t` + the existing
 opaque-handle FFI (`asmtest_emu_trace_insns_total` is already a binding
-accessor, [include/asmtest_trace.h](../../../include/asmtest_trace.h) L99), a
+accessor, [include/asmtest_trace.h](../../../../include/asmtest_trace.h) L99), a
 binding can report an instruction-count benchmark today with **no new FFI** — it
 already has the accessor. A cross-ISA "instructions per call, per arch" table is
 therefore reachable from Python/Rust/Go/… the moment the reporter exists. Real
@@ -407,7 +407,7 @@ architectures at all — which is what makes it the higher-leverage addition.
 > bench-report`) spanning Linux/macOS/Windows, a live feature-benchmark probe,
 > per-box result persistence in git (gated golden counts + real-cycle history),
 > an aggregator, CI wiring, and a required documentation phase — in
-> [cross-arch-benchmarking-plan.md](../archive/plans/cross-arch-benchmarking-plan.md).
+> [cross-arch-benchmarking-plan.md](../../archive/plans/cross-arch-benchmarking-plan.md).
 
 1. **The result shape first (§5.2).** Land `asmtest_bench_result_t` and one
    reporter (text + JSON, mirroring `--bench-format=json`) that renders it. This
@@ -433,11 +433,11 @@ architectures at all — which is what makes it the higher-leverage addition.
    with `NATIVE_ONLY`-style separation so time never silently becomes count.
 6. **Tier B cost model (follow-on).** Add the Capstone-weighted per-class cost
    number (`BM_MODEL_COST`) to the reporter; document it explicitly as a model.
-7. **Docs.** Extend [docs/guides/benchmarks.md](../../guides/benchmarks.md) with
+7. **Docs.** Extend [docs/guides/benchmarks.md](../../../guides/benchmarks.md) with
    a "Comparing architectures" section that draws the cyc-vs-ticks line clearly
    and points cross-ISA questions at the emulated/count tier, and add a
    benchmark row-set to the parity discussion in
-   [trace-parity-matrix.md](trace-parity-matrix.md) once the metric lands.
+   [trace-parity-matrix.md](../../analysis/trace-parity-matrix.md) once the metric lands.
 
 ## 8. Sharp edges / caveats
 

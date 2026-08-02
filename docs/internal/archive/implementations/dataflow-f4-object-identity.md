@@ -3,8 +3,8 @@
 > **Sources.** Actioned from
 > [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md) (F4,
 > "Full object identity via `GCBulkType`/`Node`/`Edge` is a further step"),
-> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md) and
-> [f4-attach-profiler-probe-findings.md](../../analysis/f4-attach-profiler-probe-findings.md).
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md) and
+> [f4-attach-profiler-probe-findings.md](../analysis/f4-attach-profiler-probe-findings.md).
 > Written 2026-07-17. If this doc and a source disagree, this doc wins (sources may be stale);
 > if the CODE and this doc disagree, re-verify before implementing.
 
@@ -342,7 +342,7 @@ ranges belong in the trace-to-snapshot translation set.
 
 Why this is genuinely open: the PerfView reader treats node addresses as stable inside the
 blocking induced GC and never consults the moved-range events; but
-[gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md)
+[gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md)
 measured that `MovedReferences2` fires **before** physical relocation. Whether the profiler
 walk that feeds GCBulkNode runs before or after the dump GC's compaction decides the
 convention, and no source in the research states it outright. House rule: measure, don't
@@ -360,7 +360,7 @@ assume.
    - node.addr matches the address **before** it → nodes are pre-move → the dump GC's own
      ranges must be **excluded** (T5 filters the last post-capture `gc_seq` out).
 3. Record the measured answer in a new findings note
-   `docs/internal/analysis/f4-objid-snapshot-space-findings.md`, following the sibling
+   `docs/internal/archive/analysis/f4-objid-snapshot-space-findings.md`, following the sibling
    probe-findings format (verdict line, evidence lines, reproduce command), and hard-code the
    convention in the tracer with a comment citing the note.
 4. Keep the check alive forever: T5's known-object assertion (the sentinel object's owner

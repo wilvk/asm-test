@@ -767,7 +767,7 @@ T6 → T7. Critical path to the full §Z4 escalation: the PT substrate → T10 �
   "loops don't quick-jit" prose is stale for env-var behavior; source is
   authoritative). Tier-up and OSR each raise a fresh `MethodLoadVerbose` with a
   new `MethodStartAddress`
-  ([scoped-inprocess-tracing.md](../../analysis/scoped-inprocess-tracing.md):
+  ([scoped-inprocess-tracing.md](../analysis/scoped-inprocess-tracing.md):
   "TieredCompilation=0 is no longer needed to be right — only to be quiet",
   :665) — the listener already tolerates moves; knobs only control how many
   occur inside the window.

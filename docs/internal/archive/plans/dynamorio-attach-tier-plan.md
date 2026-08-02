@@ -7,7 +7,7 @@ make it **attach to a process that is already running**, instrument a scoped reg
 band, drain the results out of process, and **detach**, leaving the target running native.
 
 This is the *third* DR integration model, and the one the taint tier deliberately did not
-use ([data-flow-capture.md:211-241](../../analysis/data-flow-capture.md#L211)):
+use ([data-flow-capture.md:211-241](../analysis/data-flow-capture.md#L211)):
 
 | Model | Mechanism | Who owns it | Cost | Status |
 |---|---|---|---|---|
@@ -19,13 +19,13 @@ use ([data-flow-capture.md:211-241](../../analysis/data-flow-capture.md#L211)):
 for native already-running targets* — it keeps the DBI overhead band and, once detached,
 costs the target nothing — while a clean **managed** attach "really wants safepoint
 coordination … parking managed threads at GC-safe points before takeover"
-([data-flow-capture.md:227-240](../../analysis/data-flow-capture.md#L227)). So the taint
+([data-flow-capture.md:227-240](../analysis/data-flow-capture.md#L227)). So the taint
 plan's [rejection of external attach](dynamorio-taint-tier-plan.md) was scoped to **managed
 processes**; for a **native** process it is the *right* tool — the only in-band model that
 can data-flow a program you did not start and then let go of it. The pragmatic split the
 analysis lands on is the frame for this whole plan: **launch-under-DR (or ptrace) for
 managed; DR-attach for native; ptrace-attach + emulator replay when the value cost must
-stay off the live thread** ([data-flow-capture.md:240](../../analysis/data-flow-capture.md#L240)).
+stay off the live thread** ([data-flow-capture.md:240](../analysis/data-flow-capture.md#L240)).
 
 **What is already built and reused unchanged** (this is why the tier is mostly net-new
 *wiring*, not net-new capture). The in-band client is attach-agnostic: it instruments
@@ -202,7 +202,7 @@ lifecycle + the "native-then-armed-then-native" harness).
 > [attach_probe_victim.c](../../../../examples/attach_probe_victim.c),
 > [attach_probe.c](../../../../drclient/attach_probe.c) (opt-in `-DASMTEST_BUILD_ATTACH_PROBE`),
 > `make dr-taint-attach-probe` / `make docker-taint-attach-probe`. **Load-bearing gotchas** (full
-> record: [dr-attach-probe-findings.md](../../analysis/dr-attach-probe-findings.md)): (1) `-attach <pid>`
+> record: [dr-attach-probe-findings.md](../analysis/dr-attach-probe-findings.md)): (1) `-attach <pid>`
 > must PRECEDE `-c <client>` — drrun parses everything after `-c` as client options, so the
 > mis-ordered `-c <client> -attach <pid>` fails with a misleading `ERROR: no app specified` (reads as
 > "unsupported"; it is not — `drrun -h` lists `-attach`); (2) `--cap-add=SYS_PTRACE` is required AND
@@ -224,7 +224,7 @@ experimental external attach actually does on the pinned DR 11.91.
   with the probe client), asserting: DR takes the victim over, the client's bb event sees a
   **non-zero** instrumented instruction count, the victim **keeps running** (heartbeat
   continues), and detach returns it to native.
-- Record findings in `docs/internal/analysis/dr-attach-probe-findings.md` (glibc / DR
+- Record findings in `docs/internal/archive/analysis/dr-attach-probe-findings.md` (glibc / DR
   version / ptrace-seize behaviour / any `-late` vs `-early` interaction), exactly as the
   extension-load probe did — this is the yes/no that gates Increments 3-5.
 
@@ -389,7 +389,7 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 > native external attach is unaffected (GO, Increments 2-5). The research tail (diagnostics-IPC
 > safepoint park, `DR_SIGNAL_DELIVER` pass-through, `-late` posture) was deliberately NOT chased —
 > a bounded spike, not the XL effort. Findings + the exact failure mode:
-> [dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md). Docker:
+> [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md). Docker:
 > `make docker-taint-managed-attach-probe` (DR + .NET SDK, `--cap-add=SYS_PTRACE`); THROWAWAY
 > diagnostic, not in the main CI gate.
 >

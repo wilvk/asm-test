@@ -1,11 +1,11 @@
 # Data-flow producer and block-step replay correctness, plus F2 record-and-inject for impure instructions — implementation
 
 > **Sources.** Actioned from
-> [2026-07-17-dataflow-tier-open-followups.md](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
+> [2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
 > (item 1, item 4),
 > [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
 > (F1's pin follow-on, F2's increment-2 carryover, F6's known-limits list), and
-> [2026-07-15-blockstep-value-spike.md](../../analysis/2026-07-15-blockstep-value-spike.md)
+> [2026-07-15-blockstep-value-spike.md](../analysis/2026-07-15-blockstep-value-spike.md)
 > (gotchas 5 and 6). Written 2026-07-17. If this doc and a source disagree, this
 > doc wins (sources may be stale); if the CODE and this doc disagree, re-verify
 > before implementing. All file/line pointers below were re-verified against the
@@ -216,7 +216,7 @@ plan's M3 mutant), so precision is load-bearing.
 
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Fixed`. Append a "LANDED" note to
 item 1 of
-[2026-07-17-dataflow-tier-open-followups.md](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
+[2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
 in the same style as its items 2/3.
 
 **Done when.**
@@ -368,7 +368,7 @@ and generation.
   truncation (proves the mask, not luck, is what tolerates AF).
 
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Fixed`. Annotate gotcha 5 of
-[2026-07-15-blockstep-value-spike.md](../../analysis/2026-07-15-blockstep-value-spike.md)
+[2026-07-15-blockstep-value-spike.md](../analysis/2026-07-15-blockstep-value-spike.md)
 as landed.
 
 **Done when.**
@@ -511,7 +511,7 @@ rdtsc/rdtscp/rdrand/rdseed/cpuid via hardware exec-breakpoint
 record-and-inject; per-block gating"). Annotate the F2 carryover paragraph in
 [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
 and item 4 of the
-[followups analysis](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
+[followups analysis](../analysis/2026-07-17-dataflow-tier-open-followups.md)
 as landed.
 
 **Done when.**
@@ -571,7 +571,7 @@ reuse the existing `island` fixture (:316):
 - EINVAL checks for unsorted/overlapping/out-of-range extents.
 
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Added`. Annotate gotcha 6 of the
-[spike doc](../../analysis/2026-07-15-blockstep-value-spike.md) and the HIGH-1
+[spike doc](../analysis/2026-07-15-blockstep-value-spike.md) and the HIGH-1
 row's island note in the
 [follow-up plan](../plans/live-attach-dataflow-followup-plan.md) as addressed.
 

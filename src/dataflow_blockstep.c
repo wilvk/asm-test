@@ -4,7 +4,7 @@
  * the single-step (dataflow_ptrace.c) and emulator (dataflow_emu.c) producers fill, so
  * the shared L1 def-use + L2 slicer (dataflow.c) work UNCHANGED on its captures.
  * See docs/internal/plans/live-attach-dataflow-followup-plan.md (F1) and the increment-0
- * spike findings docs/internal/analysis/2026-07-15-blockstep-value-spike.md.
+ * spike findings docs/internal/archive/analysis/2026-07-15-blockstep-value-spike.md.
  *
  * THE PERTURBATION WIN. Direct PTRACE_SINGLESTEP traps on EVERY instruction — exactly the
  * stop density that widens the cross-thread deadlock window on a live runtime. This tier

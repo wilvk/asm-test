@@ -9,7 +9,7 @@ surface reduced to the **package import plus the scope**.
 
 This plan implements the conclusions of
 [Analysis: non-intrusive in-process managed-runtime tracing — the scoped `using`
-model](../../analysis/scoped-inprocess-tracing.md). Read that first for *why* it
+model](../analysis/scoped-inprocess-tracing.md). Read that first for *why* it
 works, the five-axis definition of "non-intrusive," the genuine host
 preconditions, and the per-binding feasibility matrix; this document is the *how*
 and *in what order*.
@@ -183,7 +183,7 @@ interleaves them so the cheap de-risking fixes land first:
 2. **Bindings slice (analysis phases A + B)** — prove the shim shape on the
    **zero-hazard** tier first (**Python + C++**, then **Zig** near-free), then the
    **migration mitigation on Go** (`LockOSThread` already wired,
-   [go full-test flaky-crash finding](../../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-candidly)).
+   [go full-test flaky-crash finding](../analysis/scoped-inprocess-tracing.md#the-hard-cases-called-candidly)).
    Ruby/Lua/Rust slot in alongside. .NET is written here as the *reference* shim.
 3. **Core §1–§2 (analysis phase C)** — per-thread hwtrace state and the libipt
    decode-against-self-code-image glue land **before, not during, the managed
@@ -317,6 +317,6 @@ local specifics.
 All background — hardware-trace / jitdump / temporal-bytes, the five-axis
 non-intrusion definition, the per-binding feasibility matrix, and the full
 citation set — is in
-[Analysis: the scoped `using` model](../../analysis/scoped-inprocess-tracing.md#sources)
+[Analysis: the scoped `using` model](../analysis/scoped-inprocess-tracing.md#sources)
 and its sibling
 [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md#sources).

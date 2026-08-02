@@ -8,7 +8,7 @@ trace** (L0), a **def-use graph** (L1), and **taint / slicing** (L2), with the a
 layers shared across every tier exactly as `asmtest_trace_t` is shared today.
 
 This operationalizes the design investigation in
-[analysis/data-flow-capture.md](../../analysis/data-flow-capture.md) (and its 2026-07-12
+[archive/analysis/data-flow-capture.md](../analysis/data-flow-capture.md) (and its 2026-07-12
 adversarial cross-reference), which is the source of truth for the fidelity/overhead
 trade-offs; this document is the build order. The two committed end-goals are **(a) real
 live values on an attached, running process** (out-of-band ptrace tier) and **(b)
@@ -40,7 +40,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > through a POSIX-shm handshake into `at_gc_remap_live`
 > ([dataflow_dr_client_inlined.c:737](../../../../src/dataflow_dr_client_inlined.c#L737)),
 > remapping 60,021 real ranges on a live compacting GC. See
-> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 > **That feed is now pointed at the landed transform on a live attach.** The ptrace-tier
 > canonicalizer `asmtest_gcmove_canonicalize`
 > ([dataflow_gcmove.c:74](../../../../src/dataflow_gcmove.c#L74)) — for which this legend previously
@@ -248,7 +248,7 @@ cost is documented per-region, not per-run.
 > It is not hypothetical: taint Increment 7 ships it, and it drives `at_gc_remap_live`
 > ([dataflow_dr_client_inlined.c:737](../../../../src/dataflow_dr_client_inlined.c#L737)) under
 > DynamoRIO across 60,021 real move ranges. Findings:
-> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 >
 > The residue is therefore narrow and named. The DR tier's shadow remap is **done**; the
 > *ptrace* tier's pure transform `asmtest_gcmove_canonicalize`
@@ -318,7 +318,7 @@ extension-load probe [drclient/probe_extensions.c](../../../../drclient/probe_ex
 private loader on glibc 2.39 (blocker does not reproduce → **option (c) version-pin**), and the
 license resolved to a **split** — `drmgr`/`drreg`/`drx` are BSD, but **`umbra` is LGPL-2.1** (Dr.
 Memory Framework), so the byte-granular shadow must hand-roll a BSD map or explicitly accept LGPL
-([dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md)). Increment
+([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). Increment
 3 (CORE) then re-platformed the value client onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation
 ([dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)), oracle-validated
 identically to the clean-call client (`make dr-valtrace-inlined-test`). What this paragraph used
