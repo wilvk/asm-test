@@ -23,6 +23,7 @@
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
+#include "space/mispred.h" // T5 (56): MispredLayer, SceneFrame::mispred
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, SceneFrame::opcode_cells
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -53,6 +54,9 @@ struct SceneFrame {
     // — a whole-recording fact like kind_by_cell, so the host uploads it on
     // the SAME gate as set_zoning/set_stat_terrain, never on a scrub.
     const std::vector<space::CellOpcode> *opcode_cells = nullptr;
+    // T5 (56-fidelity-and-module-layers): the misprediction survey layer —
+    // a whole-recording survey aggregate like opcode_cells above, same gate.
+    const space::MispredLayer *mispred = nullptr;
     uint64_t key = 0;     // recording identity
     uint64_t gen = 0;     // recording growth generation
     uint64_t slice_t = 0; // the t `slice` was cut at

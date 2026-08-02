@@ -93,6 +93,10 @@ class GlSceneHost : public SceneHost {
             scene_.set_opcode_terrain(
                 f.opcode_cells ? *f.opcode_cells : kNoOpcodeCells, f.terr->w,
                 f.terr->h);
+            // T5 (56): the misprediction layer is a whole-recording survey
+            // aggregate too — same upload gate.
+            static const space::MispredLayer kNoMispred;
+            scene_.set_mispred_layer(f.mispred ? *f.mispred : kNoMispred);
             up_key_ = f.key;
             up_gen_ = f.gen;
             up_t_ = f.slice_t + 1; // force the terrain upload below

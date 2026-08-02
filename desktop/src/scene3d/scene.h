@@ -23,6 +23,7 @@
 #include "scene3d/pick.h" // T3 (47): PickBands, pick_bands()'s return type
 #include "space/canopy.h" // T3 (56): ModuleCanopy, set_module_canopies
 #include "space/converge.h"
+#include "space/mispred.h" // T5 (56): MispredLayer, set_mispred_layer
 #include "space/opcode_terrain.h" // T4 (56): CellOpcode, set_opcode_terrain
 #include "space/projection.h"
 #include "space/terrain.h"
@@ -72,6 +73,11 @@ struct SceneLayers {
     // than adding a surface, so a session does not silently start in this
     // lens instead of the density/kind view it has always opened to.
     bool opcode = false;
+    // T5 (56-fidelity-and-module-layers): the misprediction survey layer
+    // (bias arcs + site columns) — an ADDITIONAL statistical overlay, like
+    // `statistical`/`ghost_fog` above, so default ON matches this struct's
+    // compositing-layer convention.
+    bool mispred = true;
 };
 
 // T1 (55-scene-render-quality): the EDL defaults, named so the HUD's
@@ -168,6 +174,10 @@ class Scene {
     // ONCE per weave, never on a scrub.
     void set_opcode_terrain(const std::vector<space::CellOpcode> &cells,
                             uint32_t w, uint32_t h);
+    // T5 (56-fidelity-and-module-layers): upload the misprediction survey
+    // layer's arcs + site columns — a whole-recording survey aggregate
+    // (like the stat terrain), so call ONCE per weave, never on a scrub.
+    void set_mispred_layer(const space::MispredLayer &layer);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
                           const space::Projection &proj);
@@ -291,6 +301,26 @@ class Scene {
     std::vector<CanopyDraw> canopy_draws_;
     void free_canopies();
 
+    // T5 (56): the misprediction survey layer's arcs (tessellated bezier
+    // polylines, one draw per arc — the same "a handful" scale canopies
+    // assume) and site columns (two lines per site: an outer sheath, an
+    // inner core). Reuses prog_traj_ (kTrajVert/kTrajFrag): no new shader.
+    struct MispredArcDraw {
+        unsigned vao = 0, vbo = 0;
+        int count = 0; // vertex count for GL_LINE_STRIP
+        float color[4] = {0.3f, 0.5f, 0.9f, 0.85f};
+        float line_width = 2.0f;
+    };
+    struct MispredColumnDraw {
+        unsigned vao_sheath = 0, vbo_sheath = 0;
+        unsigned vao_core = 0, vbo_core = 0;
+        float sheath_color[4] = {0.6f, 0.6f, 0.65f, 0.35f};
+        float core_color[4] = {0.3f, 0.5f, 0.9f, 0.9f};
+    };
+    std::vector<MispredArcDraw> mispred_arcs_;
+    std::vector<MispredColumnDraw> mispred_columns_;
+    void free_mispred();
+
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;
     unsigned tex_height_ = 0, tex_flags_ = 0;
@@ -409,6 +439,7 @@ class Scene {
     void draw_stat_terrain(const float mvp[16]);
     void draw_sky();
     void draw_canopies(const float mvp[16]); // T3 (56)
+    void draw_mispred(const float mvp[16]);  // T5 (56)
     // T6 (44)/T2 (49): locate a vertex on an exact (non-statistical)
     // trajectory by either axis — the first trajectory (lowest tid, matching
     // by_tid's ascending iteration in trajectory.cpp) that yields a match.

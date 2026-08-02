@@ -631,6 +631,18 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             ImGui::TextUnformatted(sw.label.c_str());
         }
     }
+    // T5 (56): the misprediction layer's own chrome — the STATISTICAL label
+    // rides on its shared toggle wording (T1 step 3); this states the two
+    // idioms plus the off-plane count, which must never be silently dropped.
+    if (s.layers.mispred) {
+        ImGui::TextColored(
+            kDim, "%s",
+            "branch (statistical): bias arcs + site columns, cool->amber = "
+            "misprediction rate");
+        if (s.mispred_off_plane > 0)
+            ImGui::TextColored(kWarn, "%u branch endpoint(s) off-plane",
+                               s.mispred_off_plane);
+    }
     // T5 (47): the pickable-overlay-line swatches (convergence arcs, access
     // spurs) — same row shape as the terrain swatches just above, a distinct
     // list because they encode LINES, not per-cell terrain colour.

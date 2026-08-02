@@ -48,6 +48,9 @@ const std::vector<LayerDesc> &scene_layers_all() {
          "where does survey residency suggest content lives, absent an exact "
          "measurement?",
          G::Survey, LayerGrade::Statistical, &SceneLayers::ghost_fog},
+        {"branch (statistical)", "branch (statistical)",
+         "where does the branch predictor struggle?", G::Survey,
+         LayerGrade::Statistical, &SceneLayers::mispred},
     };
     return kAll;
 }

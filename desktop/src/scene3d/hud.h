@@ -229,6 +229,12 @@ struct HudState {
     // a keyboard-only analyst can orbit the scene from either the HUD or the
     // viewport — the accessibility substitute for ImGui's absent screen-reader tree.
     bool kbd_focus = false;
+
+    // T5 (56-fidelity-and-module-layers): synced by the caller every frame
+    // from space::MispredLayer::off_plane — an edge endpoint the projection
+    // could not place is COUNTED, never silently dropped (T5 step 3's own
+    // bar). Shown only while SceneLayers::mispred is on.
+    uint32_t mispred_off_plane = 0;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

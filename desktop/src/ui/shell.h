@@ -169,6 +169,9 @@ struct SceneView {
     // SAME `have_window`/`window_base`/`window_len` fidelity fields rather
     // than building two HotEdgeViews that could disagree.
     HotEdgeSceneView hotedges_scene;
+    // 56 T5: the misprediction survey layer's plane-space geometry, built
+    // from hotedges_scene alongside it (same weave-time cadence).
+    space::MispredLayer mispred;
 };
 
 struct ShellState {

@@ -1304,6 +1304,7 @@ $(BUILD)/desktop_test_obs_topo: $(BUILD)/desktop/test/t/test_obs_topo.o \
 $(BUILD)/desktop_test_obs_hotedges: \
     $(BUILD)/desktop/test/t/test_obs_hotedges.o \
     $(BUILD)/desktop/test/vw/hotedges.o $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/sp/projection.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 

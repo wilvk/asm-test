@@ -553,6 +553,129 @@ void Scene::set_module_canopies(const std::vector<space::ModuleCanopy> &canopies
     }
 }
 
+void Scene::free_mispred() {
+    for (MispredArcDraw &d : mispred_arcs_) {
+        if (d.vbo)
+            glDeleteBuffers(1, &d.vbo);
+        if (d.vao)
+            glDeleteVertexArrays(1, &d.vao);
+    }
+    mispred_arcs_.clear();
+    for (MispredColumnDraw &d : mispred_columns_) {
+        if (d.vbo_sheath)
+            glDeleteBuffers(1, &d.vbo_sheath);
+        if (d.vao_sheath)
+            glDeleteVertexArrays(1, &d.vao_sheath);
+        if (d.vbo_core)
+            glDeleteBuffers(1, &d.vbo_core);
+        if (d.vao_core)
+            glDeleteVertexArrays(1, &d.vao_core);
+    }
+    mispred_columns_.clear();
+}
+
+namespace {
+// cool (low mispred/count) -> amber (high) — the SAME ramp idiom
+// misprediction rate uses everywhere else this catalog reads it.
+void mispred_ramp(double ratio, float *r, float *g, float *b) {
+    ratio = std::min(1.0, std::max(0.0, ratio));
+    const float cool[3] = {0.3f, 0.55f, 0.95f};
+    const float amber[3] = {1.0f, 0.65f, 0.15f};
+    *r = static_cast<float>(cool[0] + (amber[0] - cool[0]) * ratio);
+    *g = static_cast<float>(cool[1] + (amber[1] - cool[1]) * ratio);
+    *b = static_cast<float>(cool[2] + (amber[2] - cool[2]) * ratio);
+}
+} // namespace
+
+// T5 (56-fidelity-and-module-layers): a whole-recording survey aggregate —
+// upload once per weave, like the stat terrain. One draw per arc/site (the
+// same "a handful" scale canopies assume; hot edges are already a RANKED,
+// bounded set upstream, obs_hotedges_top's own convention).
+void Scene::set_mispred_layer(const space::MispredLayer &layer) {
+    free_mispred();
+    mispred_arcs_.reserve(layer.arcs.size());
+    for (const space::MispredArc &a : layer.arcs) {
+        const float ya = 0.0f, yb = 0.0f; // arcs ride the plane itself, not
+                                          // the trajectory time axis
+        const float dx = a.ub - a.ua, dz = a.vb - a.va;
+        const float chord = std::sqrt(dx * dx + dz * dz);
+        const double logCount = std::log10(static_cast<double>(a.count) + 1.0);
+        const float lift =
+            0.05f + 0.5f * static_cast<float>(logCount) * (0.3f + chord);
+        const float cx = 0.5f * (a.ua + a.ub);
+        const float cy = std::max(ya, yb) + lift;
+        const float cz = 0.5f * (a.va + a.vb);
+        const int kSteps = 16;
+        std::vector<float> pts;
+        pts.reserve(static_cast<size_t>(kSteps + 1) * 3);
+        for (int k = 0; k <= kSteps; k++) {
+            const float s = static_cast<float>(k) / kSteps;
+            const float o = 1.0f - s;
+            pts.push_back(o * o * a.ua + 2 * o * s * cx + s * s * a.ub);
+            pts.push_back(o * o * ya + 2 * o * s * cy + s * s * yb);
+            pts.push_back(o * o * a.va + 2 * o * s * cz + s * s * a.vb);
+        }
+        MispredArcDraw d;
+        d.count = kSteps + 1;
+        const double ratio =
+            a.count > 0 ? static_cast<double>(a.mispred) / a.count : 0.0;
+        mispred_ramp(ratio, &d.color[0], &d.color[1], &d.color[2]);
+        // is_return: never dashed here (a scoped simplification — kTrajFrag
+        // has no dash mode; see this brief's own status note) but a hair
+        // dimmer, so it is at least visually distinguishable.
+        d.color[3] = a.is_return ? 0.55f : 0.85f;
+        d.line_width =
+            std::min(4.0f, std::max(1.0f, 1.0f + static_cast<float>(logCount)));
+        glGenVertexArrays(1, &d.vao);
+        glGenBuffers(1, &d.vbo);
+        glBindVertexArray(d.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, d.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                    static_cast<GLsizeiptr>(pts.size() * sizeof(float)),
+                    pts.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+        mispred_arcs_.push_back(d);
+    }
+
+    mispred_columns_.reserve(layer.sites.size());
+    for (const space::MispredSite &s : layer.sites) {
+        const float sheath_h =
+            static_cast<float>(std::log1p(static_cast<double>(s.count)));
+        const float core_h =
+            static_cast<float>(std::log1p(static_cast<double>(s.mispred)));
+        MispredColumnDraw d;
+        d.sheath_color[3] = 0.30f;
+        const double ratio =
+            s.count > 0 ? static_cast<double>(s.mispred) / s.count : 0.0;
+        mispred_ramp(ratio, &d.core_color[0], &d.core_color[1],
+                    &d.core_color[2]);
+        // mispred == 0: a genuinely cool, ZERO-HEIGHT core inside a full
+        // sheath — a real measured low, deliberately distinct from a layer
+        // that is absent (T5's own fidelity note).
+        const float sheath[6] = {s.u, 0.0f, s.v, s.u, sheath_h, s.v};
+        const float core[6] = {s.u, 0.0f, s.v, s.u, core_h, s.v};
+        glGenVertexArrays(1, &d.vao_sheath);
+        glGenBuffers(1, &d.vbo_sheath);
+        glBindVertexArray(d.vao_sheath);
+        glBindBuffer(GL_ARRAY_BUFFER, d.vbo_sheath);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(sheath), sheath, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+        glGenVertexArrays(1, &d.vao_core);
+        glGenBuffers(1, &d.vbo_core);
+        glBindVertexArray(d.vao_core);
+        glBindBuffer(GL_ARRAY_BUFFER, d.vbo_core);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(core), core, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(kAttrPos);
+        glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glBindVertexArray(0);
+        mispred_columns_.push_back(d);
+    }
+}
+
 void Scene::free_traj() {
     for (Line &l : traj_lines_) {
         if (l.vbo)
@@ -980,6 +1103,48 @@ void Scene::draw_canopies(const float mvp[16]) {
     glDisable(GL_BLEND);
 }
 
+// T5 (56-fidelity-and-module-layers): the misprediction survey layer — bias
+// arcs (tessellated bezier polylines) + site columns (sheath + core),
+// reusing prog_traj_ (kTrajVert/kTrajFrag) exactly as-is: uStipple=0 (never
+// stippled — a stipple is THIS FAMILY's stated statistical mark on the
+// trajectories, and this layer already carries its own STATISTICAL label in
+// the HUD, not a second stipple technique), uHasHead=0, uHasTimeCut=0 (this
+// layer is not on the trace-time axis at all).
+void Scene::draw_mispred(const float mvp[16]) {
+    if (!prog_traj_ || (mispred_arcs_.empty() && mispred_columns_.empty()))
+        return;
+    glUseProgram(prog_traj_);
+    glUniformMatrix4fv(glGetUniformLocation(prog_traj_, "uMVP"), 1, GL_FALSE,
+                       mvp);
+    const GLint uColor = glGetUniformLocation(prog_traj_, "uColor");
+    const GLint uStipple = glGetUniformLocation(prog_traj_, "uStipple");
+    const GLint uHasHead = glGetUniformLocation(prog_traj_, "uHasHead");
+    const GLint uHasTimeCut = glGetUniformLocation(prog_traj_, "uHasTimeCut");
+    glUniform1i(uStipple, 0);
+    glUniform1i(uHasHead, 0);
+    glUniform1i(uHasTimeCut, 0);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (const MispredArcDraw &d : mispred_arcs_) {
+        glUniform4fv(uColor, 1, d.color);
+        glLineWidth(d.line_width);
+        glBindVertexArray(d.vao);
+        glDrawArrays(GL_LINE_STRIP, 0, d.count);
+    }
+    for (const MispredColumnDraw &d : mispred_columns_) {
+        glLineWidth(3.0f);
+        glUniform4fv(uColor, 1, d.sheath_color);
+        glBindVertexArray(d.vao_sheath);
+        glDrawArrays(GL_LINES, 0, 2);
+        glLineWidth(1.5f);
+        glUniform4fv(uColor, 1, d.core_color);
+        glBindVertexArray(d.vao_core);
+        glDrawArrays(GL_LINES, 0, 2);
+    }
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+}
+
 bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
                         int *out_line) const {
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
@@ -1088,6 +1253,11 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     // module overview riding over the per-cell surfaces it summarises.
     if (layers.canopy)
         draw_canopies(mvp);
+
+    // T5 (56): the misprediction survey layer — statistical, never merged
+    // into the exact terrain/trajectories below.
+    if (layers.mispred)
+        draw_mispred(mvp);
 
     // T6: locate the followed citizen's head, once, before the trajectory
     // draw loop below (both the per-line tail uniform and the head glyph use
@@ -1375,6 +1545,7 @@ void Scene::shutdown() {
     free_traj();
     free_conv();
     free_canopies();
+    free_mispred();
     if (vbo_cell_)
         glDeleteBuffers(1, &vbo_cell_);
     if (ibo_grid_)

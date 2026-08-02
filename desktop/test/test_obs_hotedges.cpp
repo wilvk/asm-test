@@ -155,5 +155,94 @@ int main() {
     vt::eq("scene: empty survey states zero samples (the reason)",
            empty.samples, uint64_t{0});
 
+    // === 56 T5: build_mispred_layer — the misprediction survey layer's ======
+    // ============================== plane-space geometry ====================
+    {
+        using space::MispredArc;
+        using space::MispredLayer;
+        using space::Region;
+        std::vector<Region> regs;
+        Region r1;
+        r1.base = 0x1000;
+        r1.len = 0x1000;
+        r1.kind = Region::Code;
+        r1.label = "r1";
+        regs.push_back(r1);
+        Region r2;
+        r2.base = 0x5000;
+        r2.len = 0x1000;
+        r2.kind = Region::Code;
+        r2.label = "r2";
+        regs.push_back(r2);
+        space::Projection proj = space::build_projection(regs);
+
+        HotEdgeSceneView mv;
+        // forward, within r1: 0x1010 -> 0x1020
+        mv.edges.push_back({0x1010, 0x1020, 100, 10, 0});
+        // BACKWARD, within r1: 0x1020 -> 0x1010 (a latch/loop-back shape)
+        mv.edges.push_back({0x1020, 0x1010, 50, 5, 0});
+        // from=0x1010 again (aggregates into the SAME site as edge 1), to
+        // is off any region entirely.
+        mv.edges.push_back({0x1010, 0xdeadbeef00ULL, 20, 0, 1});
+        // from is off any region entirely; to=0x1010.
+        mv.edges.push_back({0xdeadbeef00ULL, 0x1010, 5, 1, 0});
+
+        MispredLayer layer = build_mispred_layer(mv, proj);
+        vt::eq("mispred: 2 arcs (both endpoints placed)", layer.arcs.size(),
+               size_t{2});
+        vt::eq("mispred: 2 off-plane endpoints (edge 3's to, edge 4's from)",
+               layer.off_plane, uint32_t{2});
+
+        const MispredArc *forward = nullptr, *backward = nullptr;
+        for (const MispredArc &a : layer.arcs) {
+            if (a.count == 100)
+                forward = &a;
+            else if (a.count == 50)
+                backward = &a;
+        }
+        vt::check("mispred: forward arc found", forward != nullptr, "");
+        vt::check("mispred: backward arc found", backward != nullptr, "");
+        if (forward)
+            vt::check("mispred: forward (to > from) is NOT a derived latch",
+                      !forward->derived_latch, "");
+        if (backward)
+            vt::check(
+                "mispred: backward, same region IS a derived latch (rendering "
+                "observation, not a recorded fact)",
+                backward->derived_latch, "");
+
+        // Sites: from=0x1010 aggregates edges 1 (count 100) and 3 (count 20,
+        // is_return=1) into ONE site (same cell, same literal address) =
+        // count 120, mispred 10, is_return true. from=0x1020 is its own
+        // site: count 50, mispred 5, is_return false. Edge 4's from is
+        // off-plane and contributes no site.
+        vt::eq("mispred: 2 sites (0x1010 and 0x1020)", layer.sites.size(),
+               size_t{2});
+        uint64_t site1010_count = 0, site1020_count = 0;
+        bool site1010_return = false;
+        for (const auto &s : layer.sites) {
+            if (s.count == 120) {
+                site1010_count = s.count;
+                site1010_return = s.is_return;
+            } else if (s.count == 50) {
+                site1020_count = s.count;
+            }
+        }
+        vt::eq("mispred: 0x1010 site aggregates count (100+20)",
+               site1010_count, uint64_t{120});
+        vt::check("mispred: 0x1010 site is_return (edge 3 was a return)",
+                  site1010_return, "");
+        vt::eq("mispred: 0x1020 site count (edge 2 alone)", site1020_count,
+               uint64_t{50});
+
+        // An empty survey yields an empty layer, never fabricated geometry.
+        MispredLayer none = build_mispred_layer(HotEdgeSceneView{}, proj);
+        vt::check("mispred: empty survey yields no arcs/sites",
+                  none.arcs.empty() && none.sites.empty(),
+                  "an edgeless survey must not synthesise geometry");
+        vt::eq("mispred: empty survey has zero off-plane", none.off_plane,
+               uint32_t{0});
+    }
+
     return vt::report("test_obs_hotedges");
 }

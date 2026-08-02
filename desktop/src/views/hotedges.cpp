@@ -3,10 +3,22 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
 
 namespace asmdesk {
 
 namespace {
+// The region owning `addr`, or nullptr — mirrors pick.cpp's own
+// region_containing() (each pure TU in this family keeps its own copy of
+// this three-line scan rather than sharing one across the GL-free boundary,
+// the established D4 convention here).
+const space::Region *region_containing(const space::Projection &proj,
+                                       uint64_t addr) {
+    for (const space::Region &r : proj.regions)
+        if (addr >= r.base && addr < r.base + r.len)
+            return &r;
+    return nullptr;
+}
 std::string hex(uint64_t v) {
     char b[32];
     std::snprintf(b, sizeof b, "0x%llx", static_cast<unsigned long long>(v));
@@ -45,6 +57,70 @@ void apply_coverage_window(space::Terrain &slice,
             // as a mound, per this function's own contract.
         }
     }
+}
+
+space::MispredLayer build_mispred_layer(const HotEdgeSceneView &hv,
+                                        const space::Projection &proj) {
+    space::MispredLayer out;
+    if (hv.edges.empty())
+        return out;
+    const uint32_t n = proj.order > 0 ? (uint32_t{1} << proj.order) : 0;
+
+    // Site columns: aggregated per from_addr's CELL, so several nearby call
+    // sites do not draw overlapping columns (T5 step 1's own bar).
+    std::map<uint32_t, space::MispredSite> by_cell;
+
+    for (const HotEdgeForScene &e : hv.edges) {
+        float ua = 0, va = 0, ub = 0, vb = 0;
+        const bool from_ok = proj.project(e.from_addr, &ua, &va);
+        const bool to_ok = proj.project(e.to_addr, &ub, &vb);
+        if (!from_ok)
+            out.off_plane++;
+        if (!to_ok)
+            out.off_plane++;
+
+        if (from_ok) {
+            uint32_t x = static_cast<uint32_t>(ua * n), y = static_cast<uint32_t>(va * n);
+            if (n > 0) {
+                if (x >= n)
+                    x = n - 1;
+                if (y >= n)
+                    y = n - 1;
+                space::MispredSite &site = by_cell[y * n + x];
+                site.u = ua;
+                site.v = va;
+                site.count += e.count;
+                site.mispred += e.mispred;
+                site.is_return = site.is_return || (e.is_return != 0);
+            }
+        }
+
+        if (!from_ok || !to_ok)
+            continue; // an unplaced endpoint draws no arc (counted above)
+
+        space::MispredArc arc;
+        arc.ua = ua;
+        arc.va = va;
+        arc.ub = ub;
+        arc.vb = vb;
+        arc.count = e.count;
+        arc.mispred = e.mispred;
+        arc.is_return = e.is_return != 0;
+        // A rendering-only observation (never a recorded fact): a backward
+        // edge WITHIN one region reads as a latch/loop-back shape. Both
+        // addresses must resolve to a real region for this to mean
+        // anything; otherwise it stays false (never guessed).
+        const space::Region *fr = region_containing(proj, e.from_addr);
+        const space::Region *tr = region_containing(proj, e.to_addr);
+        arc.derived_latch =
+            (e.to_addr < e.from_addr) && fr != nullptr && fr == tr;
+        out.arcs.push_back(arc);
+    }
+
+    out.sites.reserve(by_cell.size());
+    for (auto &kv : by_cell)
+        out.sites.push_back(kv.second);
+    return out;
 }
 
 HotEdgeView obs_hotedges_build(const Recording &r, const ObsLifecycle *lc) {

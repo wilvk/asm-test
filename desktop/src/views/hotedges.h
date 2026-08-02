@@ -32,6 +32,8 @@
 #include <vector>
 
 #include "doc/recording.h"
+#include "space/mispred.h" // 56 T5: MispredLayer, build_mispred_layer's return
+#include "space/projection.h" // 56 T5: Projection, build_mispred_layer
 #include "space/terrain.h" // 56 T2: apply_coverage_window's Terrain/TerrainModel
 #include "views/observer.h"
 
@@ -154,6 +156,15 @@ HotEdgeSceneView obs_hotedges_for_scene(const HotEdgeView &v);
 // already renders as a mound.
 void apply_coverage_window(space::Terrain &slice, const space::TerrainModel &model,
                            const HotEdgeSceneView &hv);
+
+// 56 T5 (fidelity-and-module-layers): builds the misprediction survey
+// layer's plane-space geometry (space::MispredLayer, space/mispred.h — a
+// separate header so scene3d/ can depend on the TYPE without depending on
+// this views/ function's HotEdgeSceneView input) from `hv`'s edges (already
+// the DECIDED statistical source, 54 T7) and `proj`. An empty `hv.edges`
+// yields an empty layer, never fabricated geometry.
+space::MispredLayer build_mispred_layer(const HotEdgeSceneView &hv,
+                                        const space::Projection &proj);
 
 std::string obs_hotedges_dump(const HotEdgeView &v);
 

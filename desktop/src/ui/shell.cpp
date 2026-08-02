@@ -954,6 +954,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 56 T2/T5: the survey aggregate does not change with the playhead,
         // so it is woven once here, like terr/traj/conv above.
         sv.hotedges_scene = obs_hotedges_for_scene(obs_hotedges_build(r));
+        // 56 T5: the misprediction layer's plane-space geometry, from the
+        // SAME survey aggregate just woven.
+        sv.mispred = build_mispred_layer(sv.hotedges_scene, sv.terr.proj);
         // 56 T4: the opcode classification is a whole-recording fact (which
         // offsets exist and what they are), never gated on the playhead.
         sv.opcode_cells = space::build_opcode_terrain(
@@ -1010,6 +1013,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.has_highlight = sv.highlight.ok;
     sv.hud.highlight_ambiguous = sv.highlight.ambiguous;
     sv.hud.highlight_reason = sv.highlight.reason;
+    // 56 T5: the misprediction layer's off-plane endpoint count — never
+    // silently dropped.
+    sv.hud.mispred_off_plane = sv.mispred.off_plane;
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     // 48 T4: "reset view" frames the landmark; "default view" is the literal
     // Camera{} preset 25/34 documented — two buttons, two meanings, neither
@@ -1225,6 +1231,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.slice = &sv.slice;
     f.canopies = &sv.canopies;         // 56 T3
     f.opcode_cells = &sv.opcode_cells; // 56 T4
+    f.mispred = &sv.mispred;           // 56 T5
     f.key = std::hash<std::string>{}(a.id);
     // Fold the recording's growth into the frame so the GL host re-uploads the
     // worldlines/arcs as a LIVE capture grows — the identity (`key`) is invariant
