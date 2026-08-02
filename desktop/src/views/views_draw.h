@@ -17,12 +17,18 @@
 #include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/canvas.h"
 #include "views/diff_view.h"
+#include "views/scene2d.h"
 #include "views/scrubber.h"
 #include "views/slice_view.h"
 #include "views/timeline.h"
 #include "walkthrough.h"
 
 namespace asmdesk {
+
+// T3 (52-flat-terrain-surface.md): forward-declared rather than pulling in
+// doc/streams.h — draw_scene2d only ever forwards the pointer into
+// scene3d::resolve_pick, exactly as pick.h itself forward-declares it.
+struct DataflowStream;
 
 // --- the ONE graded fidelity-chrome vocabulary (23-graded-truth-layer.md T1) --
 // F5's fix: fidelity chrome is now ONE banner form + ONE inline chip + ONE glyph
@@ -104,6 +110,21 @@ uint64_t draw_scrubber(StepIndex &idx, uint64_t playhead,
 void draw_abixray(const StepIndex &sysv, const StepIndex &win64, wt_model &walk,
                   uint64_t &playhead);
 void draw_slice_view(const dt_slice_view &v);
+
+// The GL-free 2D terrain surface (52-flat-terrain-surface.md T2/T3/T4): draws
+// `plan` with ImDrawList alone — no GL, so it renders under the null test
+// backend, in the render-only viewer, and on a driver whose 3D shader will
+// not build. Hover/click route through `terr`/`traj`/`conv`/`rec`/
+// `follow_step`/`df` into the SAME scene3d::resolve_pick / resolve_pick_hint
+// the 3D pane's GL path calls (T3), so a flat pick and a 3D pick of the same
+// cell can never disagree; `df` may be null. `go` is the shell's dt_nav_go
+// seam, exactly like draw_diff_view's.
+void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
+                  const space::TrajectorySet &traj,
+                  const space::ConvergenceSet &conv, const std::string &rec,
+                  uint64_t playhead_t, uint64_t follow_step,
+                  const DataflowStream *df,
+                  const std::function<void(const dt_link &)> &go);
 // The two-recording summary (04-replay-views.md T7). Every navigable row's "go"
 // button routes its deep link through `go` (the shell's dt_nav_go seam, exactly
 // as the Observer deck does) — NOT the clipboard: a nav button that only copied

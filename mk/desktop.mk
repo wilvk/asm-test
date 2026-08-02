@@ -284,6 +284,13 @@ $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(B
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
+# scene2d_draw.cpp (52-flat-terrain-surface.md) #includes scene3d/hud.h for
+# height_scale_note()/overlay_encoding_swatches() — which pulls in
+# scene3d/camera.h -> linmath.h, same as ui/%.o and s3/%.o already need (the
+# generic vw/%.o pattern rule carries no linmath prereq, so this one object
+# needs it added explicitly, in every tree that builds it).
+$(BUILD)/desktop/app/vw/scene2d_draw.o $(BUILD)/desktop/render/vw/scene2d_draw.o \
+$(BUILD)/desktop/test/vw/scene2d_draw.o $(BUILD)/desktop/uitest/vw/scene2d_draw.o: | $(LINMATH_HOME)/linmath.h
 # timeline_draw.cpp now #includes implot.h (the overview density strip, 21 T3), in
 # every tree that draws it.
 $(BUILD)/desktop/app/vw/timeline_draw.o $(BUILD)/desktop/render/vw/timeline_draw.o \
@@ -510,9 +517,9 @@ $(BUILD)/desktop/test/ui/learn_door.o: \
 # tests, so "the builder carries all the logic" is enforced by the link line
 # rather than by discipline — a builder that reached for ImGui would fail to
 # link in its own test.
-DESKTOP_VIEW_PURE := canvas timeline slice_view diff_view
+DESKTOP_VIEW_PURE := canvas timeline slice_view diff_view scene2d
 DESKTOP_VIEW_DRAW := canvas_draw timeline_draw slice_view_draw diff_view_draw \
-                     completeness
+                     completeness scene2d_draw
 
 # The live Observer views (08-observer-views.md). Same split, same rule: every
 # one of these builds from the Recording document model with no ImGui, no I/O
@@ -1110,6 +1117,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
+                 $(BUILD)/desktop_test_scene2d \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
@@ -1379,6 +1387,25 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The flat terrain surface (52-flat-terrain-surface.md T1/T2/T3): the pure
+# builder (vw/scene2d.o) links space/terrain.o + space/trajectory.o +
+# space/projection.o (its own Projection::project/unproject + region_style
+# calls) plus scene3d/pick.o + goto.o (T3's resolve_pick/resolve_pick_hint
+# parity proof — a flat pick and a hand-built 3D-style pick of the same cell
+# must resolve to the same dt_link) and space/converge.o + locate.o (pick.o's
+# own transitive deps, mirroring desktop_test_drillin's link line exactly) —
+# still no ImGui, no GL, no engine (D4).
+$(BUILD)/desktop_test_scene2d: $(BUILD)/desktop/test/t/test_scene2d.o \
+    $(BUILD)/desktop/test/vw/scene2d.o \
+    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/s3/goto.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/sp/locate.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The trajectory builder (10-spacetime-3d-overview.md T3) links space/trajectory.o

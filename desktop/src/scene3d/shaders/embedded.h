@@ -40,6 +40,14 @@ void main(){
 // a shader-side duplicate by the SAME convention TORN/STAT/CHURN already use
 // (they duplicate TerrainFlag's C++ bit values). Order matches Region::Kind
 // (space/types.h): Code, Stack, Heap, Data, Mmap, Unknown.
+//
+// 52 T1 (flat-terrain-surface.md): views/scene2d.h's cell_paint() is the
+// GL-free C++ mirror of this WHOLE fragment shader's branch chain — kind hue
+// (region_style(), same as kindHue above) -> height mix -> churn -> stat ->
+// unknown -> torn, in this exact order. The GLSL string above cannot include
+// a header, so this comment is the keep-in-sync mechanism: a branch added or
+// reordered here must be added or reordered in cell_paint() too, or the flat
+// surface and this 3D terrain will disagree about a cell's fidelity state.
 inline const char *kTerrainFrag = R"GLSL(#version 130
 in float vHeight;
 in vec2 vUV;
