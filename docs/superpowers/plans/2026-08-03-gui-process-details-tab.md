@@ -206,8 +206,12 @@ typedef struct {
     unsigned long long base, size;
     int exec;
     unsigned long syms; /* STT_FUNC symbols resolved from this module    */
-    int has_symtab;     /* 1 = .symtab present; 0 = .dynsym only         */
-    char build_id[41];  /* lowercase hex, "" if absent                   */
+    /* NOTE: symtab-vs-dynsym provenance and the build-id are deliberately
+     * ABSENT. Neither is reachable from here (has_symtab is only knowable
+     * inside load_module_syms; build_id needs a .note.gnu.build-id reader),
+     * and a field that is permanently false/"" but rendered in the pane is
+     * the same "confidently wrong" failure this whole snapshot refuses.
+     * `syms` already answers the question they were there for. */
 } asmspy_pi_module_t;
 
 typedef struct {
@@ -1173,7 +1177,7 @@ git push origin main
  "code":{"syms_total":61530,"jit_methods":1402,"jit_source":"perf-map",
    "anon_exec_bytes":12582912},
  "modules":[{"name":"libnode.so","path":"/usr/lib/libnode.so","base":"0x7f0000",
-   "size":0,"exec":true,"syms":50123,"has_symtab":false,"build_id":""}],
+   "size":2117632,"exec":true,"syms":50123}],
  "modules_truncated":false,
  "trace":{"attachable":1,"why":"same uid, nothing else traces it","remedy":"",
    "modes":[{"mode":"log","ok":true,"why":""},
@@ -1363,10 +1367,9 @@ static void info_emit_json(const asmspy_procinfo_t *pi, const char *record) {
         asmtrace_escape(e1, sizeof e1, m->name);
         asmtrace_escape(e2, sizeof e2, m->path);
         APP("%s{\"name\":\"%s\",\"path\":\"%s\",\"base\":\"0x%llx\","
-            "\"size\":%llu,\"exec\":%s,\"syms\":%lu,\"has_symtab\":%s,"
-            "\"build_id\":\"%s\"}",
+            "\"size\":%llu,\"exec\":%s,\"syms\":%lu}",
             i ? "," : "", e1, e2, m->base, m->size, m->exec ? "true" : "false",
-            m->syms, m->has_symtab ? "true" : "false", m->build_id);
+            m->syms);
     }
     APP("],\"modules_truncated\":%s,",
         pi->modules_truncated ? "true" : "false");
@@ -1804,8 +1807,9 @@ struct PiModule {
     uint64_t base = 0, size = 0;
     bool exec = false;
     uint64_t syms = 0;
-    bool has_symtab = false;
-    std::string build_id;
+    // No has_symtab / build_id: the producer does not emit them (see the
+    // asmspy_pi_module_t note). A field the wire never carries must not exist
+    // here either, or the pane renders a default as if it were measured.
 };
 
 struct PiChild {
