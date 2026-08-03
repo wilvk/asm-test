@@ -894,7 +894,20 @@ endef
 .PHONY: desktop desktop-render desktop-test desktop-ui-test desktop-fmt desktop-fmt-check \
         docker-desktop desktop-setup desktop-setup-render \
         desktop-install desktop-uninstall desktop-icon-regen \
-        addon-fetch-test desktop-addon-compile-check
+        addon-fetch-test desktop-addon-compile-check \
+        gui-shot-recordings gui-shots
+
+# --- documentation screenshots (docs/guides/desktop-gui-scenes.md) -----------
+# The four recordings the 3D-scene screenshots render from. Kept SEPARATE from
+# gui-shots so re-rendering the images does not re-attach to a live process:
+# capture single-steps a real target and takes minutes, rendering takes seconds.
+#
+# FOUR recordings is structural, not a convenience — `call` events and `df_*`
+# events come from different engines, and no golden in the corpus carries `call`
+# at all, so the module-ribbon scene cannot be fed from a fixture.
+gui-shot-recordings: $(BUILD)/asmspy $(BUILD)/scenes_victim
+	sh scripts/capture-shot-recordings.sh
+	python3 scripts/verify-shot-recordings.py
 
 # --- addon supply chain (12-addon-supply-chain.md) ---------------------------
 # addon-fetch-test: prove scripts/fetch-addon.sh fetches + verifies a pinned
