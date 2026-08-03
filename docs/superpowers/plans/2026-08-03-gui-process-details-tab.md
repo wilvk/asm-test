@@ -2562,13 +2562,214 @@ void draw_details_pane(InspectState &s) {
             ImGui::TextWrapped("%s", p.parse_error.c_str());
         return;
     }
-    // header, then the sections of the design's layout ...
+    // --- header ---------------------------------------------------------
+    ImGui::Text("pid %ld  %s", p.pid, p.comm.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("[%s]  %c",
+                        p.runtime.empty() ? "?" : p.runtime.c_str(), p.state);
+    if (!p.argv.empty()) {
+        std::string cmd;
+        for (size_t i = 0; i < p.argv.size(); ++i)
+            cmd += (i ? " " : "") + p.argv[i];
+        if (p.argv_truncated)
+            cmd += " …";
+        ImGui::TextWrapped("%s", cmd.c_str());
+    }
+
+    // A gather that ran out of budget carries only PART of what it names, and
+    // the sections it cut still hold their zero defaults. Rendering those as
+    // measured is the one thing this whole snapshot refuses to do, so the
+    // partial state is stated once, up front, before any number below it.
+    if (p.budget_exceeded)
+        ImGui::TextColored(dt_warn_col(),
+                           "partial: the 250ms gather budget ran out — module "
+                           "sizes, exec bits and per-module symbol counts may "
+                           "be absent rather than zero");
+
+    // --- Can I trace this? (open) ---------------------------------------
+    if (ImGui::CollapsingHeader("Can I trace this?",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char *word = p.attachable == 1   ? "YES"
+                           : p.attachable == 0 ? "NO"
+                                               : "MAYBE";
+        ImGui::TextColored(dt_verdict_col(p.attachable), "attach   %s", word);
+        ImGui::SameLine();
+        ImGui::TextUnformatted(p.attach_why.c_str());
+        if (!p.attach_remedy.empty())
+            ImGui::TextDisabled("-> %s", p.attach_remedy.c_str());
+
+        if (ImGui::BeginTable("modes", 3,
+                              ImGuiTableFlags_Borders |
+                                  ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("mode");
+            ImGui::TableSetupColumn("runs?");
+            ImGui::TableSetupColumn("why not");
+            ImGui::TableHeadersRow();
+            for (const PiMode &m : p.modes) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(m.mode.c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextColored(m.ok ? dt_ok_col() : dt_no_col(), "%s",
+                                   m.ok ? "yes" : "no");
+                ImGui::TableNextColumn();
+                // A refusal without its reason is the failure this pane exists
+                // to prevent — the producer guarantees why is non-empty when
+                // ok is false, so an empty one here is a wire bug worth seeing.
+                ImGui::TextUnformatted(m.ok ? "" : m.why.c_str());
+            }
+            ImGui::EndTable();
+        }
+        ImGui::TextWrapped("%s", procinfo_names_verdict(p).c_str());
+    }
+
+    // --- What is it doing now? (open) ------------------------------------
+    if (ImGui::CollapsingHeader("What is it doing now",
+                                ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("%d threads", p.n_threads);
+        if (ImGui::BeginTable("threads", 4,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollY)) {
+            ImGui::TableSetupColumn("tid", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("comm");
+            ImGui::TableSetupColumn("state",
+                                    ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("in");
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            for (const PiThread &t : p.threads) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%ld", t.tid);
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(t.comm.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%c", t.state);
+                ImGui::TableNextColumn();
+                // Preference order matters: a resolved syscall name is the
+                // most specific true thing we have, then the kernel wchan,
+                // then the REASON we could not read the syscall. The last is
+                // dimmed because it describes our permission, not the target.
+                if (t.have_syscall && !t.name.empty()) {
+                    ImGui::TextUnformatted(t.name.c_str());
+                    if (!t.pc_sym.empty()) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(%s)", t.pc_sym.c_str());
+                    }
+                } else if (!t.wchan.empty()) {
+                    ImGui::TextUnformatted(t.wchan.c_str());
+                } else {
+                    ImGui::TextDisabled("%s", t.why.c_str());
+                }
+            }
+            ImGui::EndTable();
+        }
+        if (p.threads_truncated)
+            ImGui::TextDisabled("… (showing %zu of %d)", p.threads.size(),
+                                p.n_threads);
+    }
+
+    // --- Resources (open) -------------------------------------------------
+    if (ImGui::CollapsingHeader("Resources", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const ProcRates &r = procinfo_current_rates(s.details);
+        // have == false means NOT YET MEASURABLE (one snapshot), which is a
+        // different claim from a measured zero. An em dash says so; "0%" would
+        // assert a measurement that was never taken.
+        if (r.have) {
+            dt_cell_magnitude_bar(dt_magnitude_frac(r.cpu_pct, 100.0),
+                                  dt_dim_u32());
+            ImGui::Text("cpu  %.1f%%", r.cpu_pct);
+        } else {
+            ImGui::TextDisabled("cpu  — (needs a second sample)");
+        }
+        ImGui::Text("rss  %llu KB", (unsigned long long)p.rss_kb);
+        if (p.io_readable && r.have)
+            ImGui::Text("io   %.0f B/s read · %.0f B/s write", r.read_bps,
+                        r.write_bps);
+        else if (!p.io_readable)
+            ImGui::TextDisabled("io   — (/proc/<pid>/io needs matching creds)");
+        else
+            ImGui::TextDisabled("io   — (needs a second sample)");
+        if (p.fds_readable)
+            ImGui::Text("fds  %d", p.fds);
+        else
+            ImGui::TextDisabled("fds  — (unreadable)");
+    }
+
+    // --- collapsed detail sections ---------------------------------------
+    if (ImGui::CollapsingHeader("Identity")) {
+        ImGui::Text("uid   %s (%ld)", p.user.c_str(), p.uid);
+        ImGui::Text("ppid  %ld", p.ppid);
+        ImGui::Text("exe   %s%s", p.exe.empty() ? "(unreadable)" : p.exe.c_str(),
+                    p.exe_deleted ? "  (deleted)" : "");
+        ImGui::Text("cwd   %s", p.cwd.c_str());
+        ImGui::Text("up    %.0fs", p.elapsed_s);
+    }
+    if (ImGui::CollapsingHeader("Code surface")) {
+        ImGui::Text("%llu symbols · %zu modules",
+                    (unsigned long long)p.syms_total, p.modules.size());
+        if (p.jit_methods)
+            ImGui::Text("%llu JIT methods via %s",
+                        (unsigned long long)p.jit_methods,
+                        p.jit_source.c_str());
+        ImGui::Text("%llu KB anonymous executable",
+                    (unsigned long long)(p.anon_exec_bytes / 1024));
+        if (ImGui::BeginTable("mods", 3,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollY)) {
+            ImGui::TableSetupColumn("module");
+            ImGui::TableSetupColumn("symbols",
+                                    ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableHeadersRow();
+            for (const PiModule &m : p.modules) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(m.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", (unsigned long long)m.syms);
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu KB", (unsigned long long)(m.size / 1024));
+            }
+            ImGui::EndTable();
+        }
+        if (p.modules_truncated)
+            ImGui::TextDisabled("… (showing the %zu highest-symbol modules)",
+                                p.modules.size());
+    }
+    if (ImGui::CollapsingHeader("Containment")) {
+        ImGui::TextUnformatted(p.ns_differs
+                                   ? "in a DIFFERENT namespace than this app — "
+                                     "the pid does not mean what the local "
+                                     "table implies"
+                                   : "same namespaces as this app");
+        ImGui::Text("cgroup   %s", p.cgroup.c_str());
+        ImGui::Text("seccomp  %s", p.seccomp < 0 ? "unknown"
+                                   : p.seccomp == 0 ? "off"
+                                   : p.seccomp == 1 ? "strict"
+                                                    : "filtered");
+    }
+    if (ImGui::CollapsingHeader("Children")) {
+        for (const PiChild &c : p.children)
+            ImGui::Text("%ld  %s", c.pid, c.comm.c_str());
+        if (p.children.empty())
+            ImGui::TextDisabled("none");
+        if (p.children_truncated)
+            ImGui::TextDisabled("… (capped at %zu)", p.children.size());
+    }
 }
 
 } // namespace asmdesk
 ```
 
-Fill the sections per the spec's layout: header (`pid`, `comm`, runtime badge, state, argv, status line); `Can I trace this?` (verdict + why/remedy, the mode grid from `p.modes`, `procinfo_names_verdict(p)`); `What is it doing now` (the thread table — tid, comm, state, and `wchan` or `syscall_name`, falling back to the thread's `why`); `Resources` (rates from `procinfo_current_rates`, each magnitude via `dt_cell_magnitude_bar(dt_magnitude_frac(v, max), dt_dim_u32())`, and an em dash where `have == false` — never `0%`); then collapsed `Identity`, `Code surface`, `Containment`, `Children`. Every `*_truncated` flag renders a stated "… (capped at N of M)" line.
+The colour helpers (`dt_warn_col`, `dt_verdict_col`, `dt_ok_col`, `dt_no_col`) are the one thing above that may not exist under those names — check [`ui/theme.h`](../../../desktop/src/ui/theme.h) and [`ui/palette.h`](../../../desktop/src/ui/palette.h) for the tree's existing verdict/warning colours (the Processes table already colours an `Attach` verdict via `verdict_colour` in `inspect_door.cpp` — reuse that rather than inventing a second palette). `dt_cell_magnitude_bar` / `dt_magnitude_frac` / `dt_dim_u32` are confirmed present in `ui/theme.h`.
+
+Three rules the body above encodes, none of them cosmetic:
+
+- **`budget_exceeded` is stated BEFORE any number it affects.** A gather that ran out of budget leaves the sections it cut holding zero defaults; rendering those as measured is the exact failure this snapshot refuses. The banner names which fields are affected rather than saying "partial" and leaving the reader to guess.
+- **`have == false` renders an em dash, never `0%`.** "Not yet measurable" (one snapshot) and "measured zero" are different claims. The same rule governs the two `io` branches, which distinguish *unreadable* from *not yet sampled* — they are different absences with different remedies.
+- **The thread `in` column prefers syscall name → wchan → the reason we could not read it**, with the reason dimmed because it describes our permission rather than the target's behaviour.
 
 - [ ] **Step 7: Wire the build**
 
