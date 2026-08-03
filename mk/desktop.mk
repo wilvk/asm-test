@@ -958,6 +958,15 @@ gui-shot-recordings: $(BUILD)/asmspy $(BUILD)/scenes_victim
 	sh scripts/capture-shot-recordings.sh
 	python3 scripts/verify-shot-recordings.py
 
+# Render the documented screenshots and PROVE they are real, distinct images.
+# The checks are the point: a dead GL context writes correctly-sized black
+# rectangles, and a scene kind or layer set that never applied writes a dozen
+# copies of one picture — both look fine until someone opens the docs.
+gui-shots: $(BUILD)/asmtest-desktop
+	@mkdir -p $(BUILD)/shots
+	./$(BUILD)/asmtest-desktop --shot desktop/shots.json --out $(BUILD)/shots
+	python3 scripts/verify-shots.py desktop/shots.json $(BUILD)/shots
+
 # --- addon supply chain (12-addon-supply-chain.md) ---------------------------
 # addon-fetch-test: prove scripts/fetch-addon.sh fetches + verifies a pinned
 # artifact and REFUSES an unpinned one, using the already-pinned linmath header

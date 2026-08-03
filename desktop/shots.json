@@ -1,6 +1,6 @@
 [
   {
-    "name": "01-summary",
+    "name": "01-workspace",
     "open": [
       "build/shots/rec/df-a.asmtrace"
     ],
@@ -12,31 +12,7 @@
     "warmup": 30
   },
   {
-    "name": "02-timeline",
-    "open": [
-      "build/shots/rec/df-a.asmtrace"
-    ],
-    "view": "timeline",
-    "size": [
-      1600,
-      1000
-    ],
-    "warmup": 30
-  },
-  {
-    "name": "03-scrubber",
-    "open": [
-      "build/shots/rec/df-a.asmtrace"
-    ],
-    "view": "scrubber",
-    "size": [
-      1600,
-      1000
-    ],
-    "warmup": 30
-  },
-  {
-    "name": "04-canvas",
+    "name": "02-canvas",
     "open": [
       "build/shots/rec/df-a.asmtrace"
     ],
@@ -48,19 +24,7 @@
     "warmup": 30
   },
   {
-    "name": "05-loom",
-    "open": [
-      "build/shots/rec/df-a.asmtrace"
-    ],
-    "view": "loom",
-    "size": [
-      1600,
-      1000
-    ],
-    "warmup": 30
-  },
-  {
-    "name": "09-scene-hud",
+    "name": "03-scene-hud",
     "open": [
       "build/shots/rec/df-a.asmtrace"
     ],
