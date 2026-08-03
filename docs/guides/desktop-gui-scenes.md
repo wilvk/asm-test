@@ -170,10 +170,17 @@ Two recordings, one shared prefix, then a fork.
 > NOT a proof of instruction correspondence past the fork: after the streams
 > part, A's step n and B's step n need not be the same instruction
 
-Needs **two** recordings whose `code_sha` matches — the same code, run on
-different data. The two sides here differ only in the `--seed` passed to the
-sample program. A mismatch is refused with a card rather than drawn, because a
-divergence between two different routines would not mean anything.
+Needs **two** recordings of the same code run on different data. The two sides
+here differ only in the `--seed` passed to the sample program, which fixes a
+runtime variable that selects a branch inside `blend_tile`. Both runs execute
+the same binary and share an identical prefix; the branch is where they part.
+
+Making that selection at *compile* time would break the scene rather than
+sharpen it: the two sides would then be different code, and the pair would be
+refused rather than drawn.
+
+This scene is also the one that needs the most from a recording — three streams
+at once, which is why the capture asks for `insns` (see below).
 
 A rib's thickness is how many registers disagree at that step. A **hollow** rib
 means at least one side had no computed delta there, so agreement was never
@@ -233,6 +240,16 @@ photographs whatever else was on screen.
 deck. The lane prism does not need it: the dataflow producer reads XMM operands
 directly.
 
+`insns` is what makes the divergence pair comparable at all. That scene needs
+three streams in one recording — `codeimage` so the 3D pane exists, `trace` or
+`coverage` to **align** the two sides, and `statediff` for the ribs — and until
+`insns` existed no single session produced all three. Only the dataflow engine
+emits `statediff` (it is a delta of the per-step register ring) and only the
+region engine emitted `trace`, so the scene refused the pair with *"both
+recordings need a trace or coverage stream to be aligned"*. `insns` has the
+dataflow session also state the instruction order it already single-stepped
+through. It is off by default, so existing recordings are unchanged.
+
 ### 4. The sample program
 
 `cli/scenes_victim.c` exists so these scenes have something honest to draw. Its
@@ -243,8 +260,9 @@ shape is the requirement — each part is there to satisfy one scene's data gate
 | `blend_tile()` — SSE work on a 16-byte tile, entered constantly | the lane prism's wide register writes, and the invocation stack's repeated entries |
 | three worker threads descending through `walk_heap` / `sort_batch` / `mix_math` into libc and libm | the ribbon's thread lanes, call depths and module colours |
 | a strided walk over a few hundred KB of heap | the plane's observed data spans |
-| `--seed N` | the divergence fork |
+| `--seed N`, which fixes a runtime variable selecting a branch in `blend_tile` | the divergence fork — a shared prefix, then two parting streams |
 
-The seed changes **input data only, never code**. That is deliberate: the
-divergence scene requires both sides to share a `code_sha`, so a variant that
-changed a compiled constant would produce a refusal card instead of a fork.
+The seed changes **runtime data only, never the compiled code**. That is
+deliberate: the divergence scene compares two recordings of the same routine, so
+a variant that selected its path with a `#define` would make the two sides
+different code and get the pair refused instead of drawn.

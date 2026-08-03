@@ -66,15 +66,33 @@ static volatile long g_sink;
 static long *g_heap;
 static int g_tile[4] __attribute__((aligned(16)));
 
+/* Which path blend_tile takes, fixed once from --seed. THIS IS THE DIVERGENCE
+ * SCENE'S SUBJECT: two runs of the SAME binary share a prefix and then part.
+ *
+ * It must be a runtime value, never a compile-time one. The divergence scene
+ * compares two recordings of the same routine; if the seed selected the path at
+ * compile time the two sides would be different code and the scene would refuse
+ * the pair rather than draw a fork. `volatile` keeps the branch in the
+ * instruction stream instead of letting -O2 fold it away. */
+static volatile int g_variant;
+
 /* The SSE hot routine: the LanePrism scene's whole input, and the region an
  * --trace capture pages by invocation. -O2 locally so the captured window is
  * tight enough to read; see the file comment. */
 __attribute__((noinline, optimize("O2"))) long blend_tile(long x) {
     __m128i a = _mm_loadu_si128((const __m128i *)g_tile);
     __m128i b = _mm_set1_epi32((int)(x & 0x7fffffff));
-    __m128i c = _mm_add_epi32(a, b); /* paddd  — 4-byte lanes, nameable */
-    c = _mm_shuffle_epi32(c, 0x1B);  /* pshufd — reverses the lane order */
-    c = _mm_unpacklo_epi32(c, a);    /* punpckldq — interleaves two writes */
+    __m128i c;
+    /* The shared prefix ends here. Both runs executed everything above
+     * identically; from this branch on they part, which is exactly what the
+     * divergence worldline draws. Both arms are 4-byte-lane ops, so the lane
+     * prism reads the same width either way. */
+    if (g_variant)
+        c = _mm_sub_epi32(a, b); /* psubd — 4-byte lanes, nameable */
+    else
+        c = _mm_add_epi32(a, b);    /* paddd — 4-byte lanes, nameable */
+    c = _mm_shuffle_epi32(c, 0x1B); /* pshufd — reverses the lane order */
+    c = _mm_unpacklo_epi32(c, a);   /* punpckldq — interleaves two writes */
     _mm_storeu_si128((__m128i *)g_tile, c);
     return (long)_mm_cvtsi128_si32(c);
 }
@@ -165,6 +183,11 @@ int main(int argc, char **argv) {
         nthreads = 1;
     if (nthreads > 8)
         nthreads = 8;
+
+    /* Fixed once, at runtime, from the seed: the two runs are the same binary
+     * taking different paths — which is what keeps the divergence pair
+     * comparable while still giving it a fork to find. */
+    g_variant = (int)(seed & 1);
 
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 
