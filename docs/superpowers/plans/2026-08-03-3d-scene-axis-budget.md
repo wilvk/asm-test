@@ -1331,6 +1331,7 @@ git commit -m "desktop(test): pin the two motif channels to their existing layer
 #include "scene3d/camera.h"
 #include "scene3d/scene.h"
 #include "space/converge.h"
+#include "space/opcode_terrain.h" // build_opcode_terrain, opcode_guest_from_arch
 #include "space/projection.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -1437,6 +1438,17 @@ inline Image render_plane_scene(Scene &scene, const ColorFbo &cf,
     scene.set_terrain(terr.full());
     scene.set_trajectories(traj, terr.proj);
     scene.set_convergences(space::ConvergenceSet{}, terr.proj);
+    // THE OPCODE CHANNEL'S DATA. `SceneLayers::opcode` only selects a tint —
+    // the byte map it samples is the R8UI tex_opclass_ that set_opcode_terrain
+    // uploads ([scene.h:309](../../../desktop/src/scene3d/scene.h#L309)), and
+    // WITHOUT this call `opcode = true` re-tints nothing. An earlier draft of
+    // this harness omitted it, which would have made 7b's "the motif channel
+    // changes the picture" check fail for a reason having nothing to do with
+    // the encoding. Slice-invariant, so once per weave is right.
+    scene.set_opcode_terrain(
+        space::build_opcode_terrain(
+            terr, rec, space::opcode_guest_from_arch(rec.arch)),
+        terr.w, terr.h);
     return capture_image(scene, cam, cf, layers);
 }
 
@@ -1484,23 +1496,37 @@ The gate that decides whether the encoding actually builds intuition. A principl
 **Files:**
 - Create: `desktop/test/image_distinct.h` — the comparator
 - Create: `desktop/test/test_motif_distinctness.cpp`
-- Modify: `mk/desktop.mk` — four additions, listed in Step 4; a test that is not in a `*_TESTS` list never runs in CI
-- Create: three recordings under `tests/golden-asmtrace/` (where `make asmtrace-golden` writes and where `test_scene_fbo` loads its scenes from — **not** `desktop/test/fixtures/`, which holds the hand-committed inputs). A *hand-authored* scene goes in `tests/golden-asmtrace/scenes/` instead, beside the existing `mem-rich-synthetic.asmtrace` — see Step 0.
+- Modify: `mk/desktop.mk` — four additions, listed in Step 3; a test that is not in a `*_TESTS` list never runs in CI
+- Modify: `tools/asmtrace_record.c` — three new `ROUTINES[]` entries (Step 0's decision), which `make asmtrace-golden` then writes into `tests/golden-asmtrace/` (where `test_scene_fbo` already loads its scenes from — **not** `desktop/test/fixtures/`, which holds the hand-committed inputs)
+- **Not created:** any hand-authored `.asmtrace` under `tests/golden-asmtrace/scenes/`. Step 0 rules it out for this gate.
 
 **Interfaces:**
 - Consumes: Task 7a's whole harness, and everything above it.
 - Produces: `bool images_distinct(const Image &a, const Image &b, float min_fraction = 0.02f);`
 
-- [ ] **Step 0: Decide the fixture-honesty question before writing anything**
+- [x] **Step 0: The fixture-honesty question — RESOLVED, do not re-open**
 
-`test_scene_fbo.cpp:20-23` records that the rich-`mem` golden scene is **hand-authored** "because `mem` has no producer". So a memory-access fixture may have to be synthetic — and a hand-authored fixture can be tuned until it passes, which would make this gate self-confirming and worthless.
+The earlier draft left this open and mis-stated the constraint. Both halves are settled below; copy the decision verbatim into the test file's header comment.
 
-Resolve it explicitly, and write the decision into the test file's header comment:
+**What the earlier draft got wrong.** It claimed the `simd` and `syscalls` cases could both come from `make asmtrace-golden` and that "**only** the memcpy case is at risk". The tree says otherwise, in both directions:
 
-- **Preferred:** generate all three from real runs via `make asmtrace-golden` ([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) so the distinctness claim is about real programs. The `simd` and `syscalls` cases need no `mem` stream — opcode class comes from disasm and crossings from the `syscall` kind — so **only** the memcpy case is at risk.
-- **If a hand-authored fixture is unavoidable:** say so in the header, and assert distinctness only on channels the fixture did not hand-set. Never assert on a quantity the fixture author chose.
+- **`tools/asmtrace_record.c` emits no `syscall` events at all** — zero occurrences in 2511 lines. It is a Unicorn emulator over hand-assembled byte arrays (`ROUTINES[]`, `SCENE_HOT_LOOP[]`); `syscall` rows come from [cli/asmspy.c:997](../../../cli/asmspy.c#L997), the live ptrace tracer. The *preferred* path could never have produced the syscalls fixture.
+- **The memcpy case does not need a `mem` stream.** Terrain height is driven by the trace canvas (`m.height_source = "trace"`, [terrain.cpp:287](../../../desktop/src/space/terrain.cpp#L287)); `mem` is a separate rung gated on `mem_present`. This gate renders the terrain and the `opcode` tint, neither of which reads `mem`. So `test_scene_fbo.cpp:20-23`'s "`mem` has no producer" does not reach this task at all — and its hand-authored rich-`mem` scene is a *warning*, not a template: that file records the scene as **INERT**, rendering "pixel-identically to its coarse twin".
 
-Do not proceed to Step 1 until this is settled — it decides whether the gate means anything.
+**The resolution: generate the image fixtures, freeze a real capture for crossings, and scope the image gate to what the frame can honestly carry.**
+
+| | Decision | Why |
+|---|---|---|
+| the three image fixtures | **generated** — three new `ROUTINES[]` entries through `make asmtrace-golden` | real Capstone-recorded disasm drives `OpClass`, and [asmtrace-golden-check](../../../mk/cli.mk#L534) then holds them byte-stable under a CI gate. The bytes are author-chosen, so this buys honest *classification*, not an honest *program* — say so in the header rather than overclaiming |
+| the crossings fixture | **a frozen live `asmspy` capture**, committed under `desktop/test/fixtures/` | the only producer of real `syscall` rows. Recorded ONCE and committed: `desktop/test/fixtures/` has no regeneration or byte-check gate (it appears in `mk/desktop.mk` only as a `-DASMTEST_FIXTURE_DIR` define), so "an `asmspy` run is not byte-reproducible" bears on regenerating it, never on using it. This is the precedent `test_scene_fbo` already set by reusing `obs-survey-ibs.asmtrace` |
+| the crossings assertion | **not an image check** — Task 7c pins it in the pure `test_crossing.cpp` | see Task 7c |
+| the image gate's layers | **`opcode` only** | `crossings` geometry cannot be uploaded here: `build_crossing_layer` lives in `views/`, and its data is unrelated to the axis budget this plan is gating |
+
+**Never capture live at test time.** A distinctness gate over a nondeterministic input **cannot fail** — run-to-run variation supplies the very difference the gate looks for, so it would pass even if the encoding conveyed nothing about what ran. That is strictly worse than the self-confirming hand-authored fixture this step exists to avoid: self-confirming is a gate someone tuned until it passed; self-satisfying is a gate that cannot not pass. (ASLR specifically would *not* be the culprit — `build_projection` compacts regions, so `project()` depends on region lengths and sort order, never on bases. What varies is step counts and syscall ordering, which is exactly the signal under test.)
+
+**Where a tolerance belongs, and where it does not.** `images_distinct`'s 2 % threshold and `image_ink_fraction`'s slack of 12 exist to absorb **llvmpipe** variation over a **deterministic** input. Stacking input nondeterminism on top does not extend that budget, it consumes it. And a "range" on the picture itself needs a reference range that one capture cannot yield — you would widen bounds until it passed, which is this step's own problem relocated to the threshold. See Step 6's standing prohibition on lowering `min_fraction`.
+
+**A shape check replaces the byte gate for the frozen fixture.** Task 7c asserts the capture still carries ≥1 `codeimage`, a non-empty `trace` and ≥2 `syscall` rows — a has-it-rotted precondition, not an approximation of any result.
 
 - [ ] **Step 1: Write the comparator**
 
@@ -1542,12 +1568,25 @@ inline bool images_distinct(const Image &a, const Image &b,
 
 **The GL half must not self-skip in this binary** — `Dockerfile.desktop` pins software Mesa + EGL so it really renders, and a test that can only self-skip is not a test (CLAUDE.md). Fail loudly if no context is obtainable. Unlike `test_scene_fbo` there is no pure half to fall back on: the picture *is* the subject.
 
-Note the render call must enable **both** motif channels, since `opcode` defaults OFF by the convention Task 6 pinned:
+Note the render call must enable the `opcode` channel explicitly, since it defaults OFF by the convention Task 6 pinned — and must **not** enable `crossings`, which has no geometry uploaded here (Step 0; Task 7c pins it instead):
 
 ```cpp
 // test_motif_distinctness.cpp — the acceptance gate for the axis budget.
-// <RECORD THE STEP 0 DECISION HERE: exactly what produced each recording,
-//  and if any is hand-authored, which channels this test may NOT assert on.>
+//
+// STEP 0 DECISION (do not re-open; the plan's Task 7b Step 0 has the argument):
+//   All three recordings are GENERATED by `make asmtrace-golden` from
+//   tools/asmtrace_record.c's ROUTINES[] — a scalar integer loop, a SIMD
+//   routine and a store-heavy routine — so the OpClass each cell reports comes
+//   from the recording's own Capstone-recorded disasm, not from a fixture
+//   author. The byte arrays are still author-chosen: this buys honest
+//   CLASSIFICATION, not an honest program, and the claim below is scoped to
+//   that. asmtrace-golden-check (mk/cli.mk:534) holds all three byte-stable.
+//   Nothing here is hand-authored, so there is no channel this test must
+//   refrain from asserting on.
+//
+//   The crossings channel is NOT gated here: its geometry comes from
+//   views/build_crossing_layer, which this binary does not link, and its
+//   fixture is a frozen live asmspy capture. Task 7c pins it, in a pure test.
 #include <cstdio>
 #include <string>
 
@@ -1585,9 +1624,13 @@ static Recording load_scene(const char *name) {
 }
 
 int main() {
-    static const char *kScenes[3] = {"motif-memcpy.asmtrace",
+    // Three GENERATED recordings (Step 0). Named for the work they do, not for
+    // a stream they carry: `motif-stores` is store-heavy CODE, which is what
+    // the opcode channel reads — it needs no `mem` stream, and the earlier
+    // draft's "motif-memcpy" name invited exactly that confusion.
+    static const char *kScenes[3] = {"motif-scalar-loop.asmtrace",
                                      "motif-simd.asmtrace",
-                                     "motif-syscalls.asmtrace"};
+                                     "motif-stores.asmtrace"};
 
     // A missing recording is a FAILURE, never a skip — the same rule
     // test_scene_fbo.cpp:90 already states for its golden scenes.
@@ -1615,12 +1658,12 @@ int main() {
                  "incomplete FBO on this driver");
         const Camera cam; // the default three-quarter view, as shipped
 
-        // Motifs ON means BOTH channels: `crossings` is on by default, but
-        // `opcode` defaults OFF (it re-lifts the terrain), so the gate must
-        // set it explicitly or it would be testing one channel and claiming two.
+        // `opcode` defaults OFF (it re-lifts the terrain), so the gate sets it
+        // explicitly. `crossings` is deliberately LEFT AT ITS DEFAULT and never
+        // asserted on: render_plane_scene uploads no crossing geometry, so
+        // toggling it here would test nothing while claiming a second channel.
         SceneLayers on;
         on.opcode = true;
-        on.crossings = true;
         const auto kAtlas = space::Projection::Layout::Atlas;
 
         if (failures == 0) {
@@ -1644,24 +1687,23 @@ int main() {
                           "two programs with different behaviour rendered "
                           "alike — the encoding conveys nothing about what ran");
 
-            // "Optional" has to mean the scene stands without the layers. Two
+            // "Optional" has to mean the scene stands without the layer. Two
             // claims, and BOTH matter: the frame is still drawn, and it is
-            // still a DIFFERENT frame, which is what makes the channels a
+            // still a DIFFERENT frame, which is what makes the channel a
             // channel rather than decoration.
-            SceneLayers off;
-            off.opcode = false;
-            off.crossings = false;
+            SceneLayers off; // opcode already defaults false
             const Recording rec = load_scene(kScenes[0]);
             const Image bare =
                 render_plane_scene(scene, cf, cam, rec, off, kAtlas);
-            check("the scene still renders with both motif channels off",
+            check("the scene still renders with the opcode channel off",
                   !image_blank(bare),
-                  "turning the optional layers off emptied the viewport, at "
+                  "turning the optional layer off emptied the viewport, at "
                   "ink fraction " + std::to_string(image_ink_fraction(bare)));
-            check("the motif channels actually change the picture",
+            check("the opcode channel actually changes the picture",
                   images_distinct(shots[0], bare),
-                  "switching both channels on changed nothing — they are "
-                  "drawing no information");
+                  "switching the channel on changed nothing — it is drawing "
+                  "no information (check set_opcode_terrain ran: without it "
+                  "the tint samples an empty byte map)");
         }
     }
 
@@ -1705,7 +1747,21 @@ Expected: FAIL — recordings absent.
 
 - [ ] **Step 5: Generate the three recordings**
 
-Per the Step 0 decision. Commit them under `tests/golden-asmtrace/` (a hand-authored one goes in `tests/golden-asmtrace/scenes/` instead, beside `mem-rich-synthetic.asmtrace`, and the path in `kScenes` changes to match), each small enough to keep the test under a second, and record in the test's header comment exactly what produced each one so a later reader can regenerate them. If they go through `make asmtrace-golden`, note that `asmtrace-golden-check` ([mk/cli.mk:534](../../../mk/cli.mk#L534)) will then hold them byte-stable — which is a benefit, not an obstacle.
+Add three `ROUTINES[]` entries to [tools/asmtrace_record.c:219](../../../tools/asmtrace_record.c#L219), following the byte-literal pattern the file already uses for `SCENE_HOT_LOOP` (`:311`) — a listing in the comment beside the bytes, as that file requires. They must differ in the quantity the gate reads, which is **dominant `OpClass` per cell**, so pick instruction mixes that classify apart under [space/mnemonic.h](../../../desktop/src/space/mnemonic.h):
+
+| recording | mix | dominant class |
+|---|---|---|
+| `motif-scalar-loop` | `add`/`cmp`/`jne` over a counter | `IntArith` / `CompareBranch` |
+| `motif-simd` | packed XMM ops | `VectorSIMD` |
+| `motif-stores` | a `mov`-to-memory run | `Move` |
+
+Keep each small enough to hold the test under a second. Then:
+
+```
+make docker-cli && make asmtrace-golden
+```
+
+`asmtrace-golden` is gated on x86_64 + libunicorn (`ASMTRACE_GOLDEN_OK`, [mk/cli.mk:521](../../../mk/cli.mk#L521)), so regenerate from the `docker-cli` image — the target's own echo warns that host Capstone 4.x renders different disasm text, and this gate reads that text. Commit the three `.asmtrace` files under `tests/golden-asmtrace/`. `asmtrace-golden-check` ([mk/cli.mk:534](../../../mk/cli.mk#L534)) then holds them byte-stable in CI, which is the point; if a later disasm or link-set change churns them, regenerate from the container rather than editing them.
 
 - [ ] **Step 6: Run tests to verify they pass — in the container, not on the host**
 
@@ -1717,8 +1773,117 @@ Expected: PASS. The host may have no EGL device, in which case the GL lane is no
 - [ ] **Step 7: Commit**
 
 ```bash
-git add desktop/test/test_motif_distinctness.cpp desktop/test/image_distinct.h tests/golden-asmtrace mk/desktop.mk
-git commit -m "desktop(test): gate the motif encoding on pairwise distinctness"
+git add desktop/test/test_motif_distinctness.cpp desktop/test/image_distinct.h tools/asmtrace_record.c tests/golden-asmtrace mk/desktop.mk
+git commit -m "desktop(test): gate the opcode motif encoding on pairwise distinctness"
+```
+
+---
+
+### Task 7c: The crossings channel, pinned against a real capture
+
+Step 0's second half. The spec's I/O motif channel is the existing `crossings` layer (Task 6), and every assertion on it today runs off **hand-written NDJSON string literals** in `test_crossing.cpp` (`mk_rec(ndjson)` at `:30`, headers at `:42-45`). Those are fine for the anchoring edge cases they were written for — a syscall before the first instruction, a `seq_present == false` self-gate — but nothing in the tree has ever built a crossing layer from syscalls a real kernel actually serviced. This task closes that, and it is where Step 0's frozen `asmspy` capture lands.
+
+**Deliberately not a GL test.** [views/crossing.h](../../../desktop/src/views/crossing.h) is engine-free by design — its own header says the geometry POD lives in `space/` "so scene3d/ can consume it without ever depending on views/". So the honest place to pin this channel is the pure test that already owns the contract, not a rendered frame that would drag `views/` into the GL closure to assert a colour.
+
+**Files:**
+- Create: `desktop/test/fixtures/motif-crossings.asmtrace` — one frozen `asmspy` capture (see Step 1)
+- Modify: `desktop/test/test_crossing.cpp` — a real-capture block
+- Modify: `mk/desktop.mk` — `test_crossing.o` needs the `ASMTEST_FIXTURE_DIR` define it does not currently have
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks — `build_crossing_layer` and `SyscallClass` both already ship.
+- Produces: no signature change. A regression gate over real data.
+
+- [ ] **Step 1: Record and freeze the capture**
+
+Run `asmspy` over a small binary that makes a handful of distinguishable syscalls (a `write` and an `openat`/`close` pair give two different `SyscallClass` values, which is what makes the class channel checkable rather than a single-colour smear). It must carry a `codeimage` and a non-empty `trace` as well as the `syscall` rows — `desktop/test/fixtures/obs-syscalls.asmtrace` is `{session×2, syscall×4, end}` with neither, which is why it cannot be reused here.
+
+Commit the result under `desktop/test/fixtures/`. It is **frozen, never regenerated**: that directory has no byte-check gate (it appears in `mk/desktop.mk` only as a `-DASMTEST_FIXTURE_DIR` define), so a live capture's non-reproducibility never comes up. Record in the test's comment the exact command and binary that produced it.
+
+- [ ] **Step 2: Write the test**
+
+Add to `desktop/test/test_crossing.cpp`, reusing its helpers. Two blocks — the shape precondition, then the contract:
+
+```cpp
+// 3D-axis-budget T7c: the crossing channel over a REAL capture. Every other
+// block in this file feeds build_crossing_layer hand-written NDJSON; this one
+// feeds it syscalls a kernel actually serviced, which is the only way the
+// class channel is tested against something no test author chose.
+//
+// PROVENANCE: <the exact asmspy command and target binary>. Frozen — this
+// directory is never regenerated, so the recording is deterministic at test
+// time even though the capture that produced it was not.
+{
+    std::string err;
+    auto rec = load_recording_file(
+        std::string(ASMTEST_FIXTURE_DIR) + "/motif-crossings.asmtrace", err);
+    check("the real-capture fixture loads", rec != nullptr, err);
+    if (rec != nullptr) {
+        // The shape check that stands in for the byte-stability gate the
+        // GENERATED corpus gets. This is a has-it-rotted precondition, not an
+        // approximation of any result — if it trips, the fixture is wrong, and
+        // every assertion below would otherwise fail for a misleading reason.
+        check("the capture still carries a codeimage",
+              rec->by_kind.count("codeimage") != 0,
+              "no codeimage: there is no plane to anchor a spur onto");
+        check("the capture still carries a trace",
+              rec->by_kind.count("trace") != 0 &&
+                  !rec->by_kind.at("trace").empty(),
+              "no trace worldline: build_crossing_layer self-gates and the "
+              "assertions below would pass vacuously");
+        check("the capture still carries at least two syscalls",
+              rec->by_kind.count("syscall") != 0 &&
+                  rec->by_kind.at("syscall").size() >= 2,
+              "fewer than two syscall rows: the class channel cannot be shown "
+              "to distinguish anything");
+
+        const Projection p = build_projection(regions_from_codeimage(*rec));
+        const SyscallView sv = obs_syscalls_build(*rec);
+        const CrossingLayer layer = build_crossing_layer(sv, *rec, p);
+
+        // The channel carries information: spurs exist, and they are placed by
+        // ADDRESS onto the plane rather than defaulted to a corner.
+        check("a real capture produces crossing spurs", !layer.spurs.empty(),
+              "no spur from a capture carrying " +
+                  std::to_string(rec->by_kind.at("syscall").size()) +
+                  " syscalls and a trace");
+        // D7: an unclassified syscall abstains as Other. That is CORRECT and
+        // must not be asserted away — what would be wrong is EVERY spur landing
+        // on Other, which would mean the class channel conveys nothing.
+        bool any_classified = false;
+        for (const CrossingSpur &s : layer.spurs)
+            if (s.cls != SyscallClass::Other)
+                any_classified = true;
+        check("the class channel distinguishes at least one real syscall",
+              any_classified,
+              "every spur classified as Other — the channel is a single "
+              "colour and names nothing about what the program did");
+    }
+}
+```
+
+- [ ] **Step 3: Register the fixture define**
+
+`test_crossing.o` has no `ASMTEST_FIXTURE_DIR` today. Add it beside the others at [mk/desktop.mk:513-516](../../../mk/desktop.mk#L513):
+
+```make
+$(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+```
+
+The link rule ([mk/desktop.mk:1397](../../../mk/desktop.mk#L1397)) and the `DESKTOP_TESTS` entry (`:1277`) already exist. Confirm the recording loader's object is in that link line; if it is not, add it rather than dropping the fixture.
+
+- [ ] **Step 4: Run**
+
+Run: `make build/desktop_test_crossing && ./build/desktop_test_crossing`
+Expected: PASS, including every pre-existing NDJSON block — run the whole file.
+
+**If "the class channel distinguishes at least one real syscall" fails, do not relax it.** Either the capture caught only syscalls the classifier ([`class_of`, views/crossing.cpp:45](../../../desktop/src/views/crossing.cpp#L45)) has no word for — recapture with a `write` and an `openat` — or it abstains where it should not, which is a real D7 finding to report.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add desktop/test/fixtures/motif-crossings.asmtrace desktop/test/test_crossing.cpp mk/desktop.mk
+git commit -m "desktop(test): pin the crossing class channel against a real capture"
 ```
 
 ---
@@ -1771,7 +1936,9 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 ## Self-review
 
-**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, 8. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only) and Tasks 7a/7b (the harness and the gate). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
+**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, 8. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only), Tasks 7a/7b (the harness and the opcode-channel image gate) and Task 7c (the crossings channel, in a pure test). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
+
+**Why the motif gate is split across 7b and 7c.** The two channels are not testable by the same instrument, and pretending otherwise was the earlier draft's mistake. `opcode` is a terrain tint, so it is only visible in a rendered frame and its data comes from `space/` — 7b. `crossings` is geometry built by `views/build_crossing_layer`, which a GL test would have to link `views/` to produce, and whose real fixture can only come from a live tracer — 7c, in the pure test that already owns the contract. Gating both from one frame would have meant either dragging `views/` into the GL closure or, as written, asserting on a layer with no data uploaded.
 
 **Type consistency.** `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
 
@@ -1799,7 +1966,8 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | `Camera::radius` assertions use a tolerance | **false** — `test_camera.cpp:111` and `:208` compare with `==`. Task 4's radius rule is exact by construction, not calibrated |
 | `traj_scale_` is the worldline's own Y scale | **false** — five subsystems place geometry on it (causal spurs, lifetime pillars, access arcs, sediment strata, the line shader). Task 5 is blocked on a spec decision because of it |
 | `Scene` knows which `SceneKind` it is drawing | **false, and it does not need to** — `Scene` IS the Plane renderer; `gl_scene_host.cpp:74` routes every other kind to `standalone_` first. `flat_time` is a plain member default with no setter |
-| Fixtures belong in `desktop/test/fixtures/` | **partly** — `make asmtrace-golden` writes to `tests/golden-asmtrace/`, which is where `test_scene_fbo` loads scenes from; a *hand-authored* scene goes one level down in `.../scenes/`. Task 7b corrected |
+| Fixtures belong in `desktop/test/fixtures/` | **it depends on the producer, and that is now the deciding fact** — `make asmtrace-golden` writes to `tests/golden-asmtrace/` and `asmtrace-golden-check` holds those byte-stable, so 7b's three generated scenes go there; `desktop/test/fixtures/` has NO regeneration or byte gate, which is exactly why 7c's frozen live capture belongs there. Neither directory takes a hand-authored scene in this plan |
+| `tools/asmtrace_record.c` can produce a syscall-bearing recording | **false** — zero `syscall` occurrences in 2511 lines; it is a Unicorn emulator over hand-assembled byte arrays. `syscall` rows come from `cli/asmspy.c`, the live tracer. This is what forced the 7b/7c split |
 | `make docker-desktop-test TEST=<x>` runs one test | **false** — no such target, no `TEST=` parameter. See Global Constraints |
 | `test_scene_traj.cpp` exists | **false** — Task 1 creates *and registers* it |
 | `test_projection` / `test_camera` / `test_locate` / `test_stepplace` / `test_layers` / `test_focus` exist | **true** — Tasks 2, 3, 4, 6 extend existing files |
@@ -1818,6 +1986,7 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | "The budgets sum to `n*n` and the strips tile, so the grid is covered by construction" **does not follow** — tiling is a property of the geometry. BHvW squarify also sorts by descending area, which would break both base-ordering and `rects`' index-parallelism with `regions` | Replaced by an order-preserving binary split whose children tile their parent exactly at every level, with the `need_l`/`need_r` clamps that keep a cell per region |
 | A linear scan of `rects` in `unproject` would be **O(cells × regions)**: [terrain.cpp:119](../../../desktop/src/space/terrain.cpp#L119) calls it once per cell over the whole plane ("one O(cells) sweep"), 16.7 M times at order 12 | `AtlasNode` — the split tree, descended in O(log regions) |
 | Task 7 called four helpers it never defined, `render_plane_scene` most of all (a whole Recording→Terrain→Scene→FBO→readback path) | Split into 7a/7b; every helper is now written out |
+| `render_plane_scene` uploaded no motif data, so 7b would have set `opcode = true` against an empty `tex_opclass_` byte map and `crossings = true` with no spurs uploaded at all — both channels asserted with nothing behind them, failing for a reason unrelated to the encoding | 7a now calls `set_opcode_terrain(build_opcode_terrain(...))`; the crossings channel moved out of the frame entirely, into Task 7c |
 | `image_floor_fraction(bare) >= 0.5` was unsound twice: viewport coverage is a camera-framing artefact, and the atlas does not raise the decodable-cell count anyway | Dropped, with the reasoning recorded in 7a's Interfaces block and the honesty note under "the one decision" |
 
 **Fifth pass — mapping the deletion surface rather than the addition surface.** Asking "what stops being referenced?" rather than "what gets written?" found three more, one of which stops Task 5 outright.
@@ -1844,7 +2013,7 @@ The decisive fact is geometric, not aesthetic: the lifetime pillars and the sedi
 
 **Remaining known risks, not resolvable on paper.**
 
-1. Task 7b's memcpy recording may have to be hand-authored, because `mem` has no producer (`test_scene_fbo.cpp:20-23`). A hand-tuned input would make the acceptance gate self-confirming. Step 0 forces that decision *before* any code is written; the `simd` and `syscalls` cases are unaffected.
+1. ~~Task 7b's memcpy recording may have to be hand-authored~~ — **resolved, see Task 7b Step 0.** The premise was wrong twice: the opcode channel never reads `mem`, so nothing about that gate is at risk from `mem` having no producer; and the *syscalls* case, which the draft called safe, was the one the generated corpus could never produce — `asmtrace_record.c` emits no `syscall` events at all. Nothing is hand-authored now: the three image fixtures are generated, and the crossings fixture is a frozen real capture. What remains is a bounded, stated limit rather than a risk: the generated routines are author-chosen byte arrays, so 7b's claim is about honest *classification* of real disasm, not about real programs, and the test header says so.
 2. Task 5's flat worldline is coplanar with the terrain floor. The lift constant is an eyeball judgement that only the container render can settle — a path that vanishes under a tall cell is the failure mode, and it will not show up in any pure test.
 3. Task 2's cell budgets can give a region fewer cells than it has bytes (quantised away, `bytes_per_cell > 1`) **or more** (`bytes_per_cell == 1`, the rect's tail decoding to nothing). Both are honest and both are tested; the plan asserts only the region-level round trip, which is what the atlas can promise. If a caller is later found to depend on byte-exactness under `Atlas`, that is a design finding, not a rounding bug to paper over.
 4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 8 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
