@@ -29,6 +29,21 @@ namespace asmdesk::space {
 // region with the greatest base <= addr; no region is dropped or merged.
 Projection build_projection(std::vector<Region> regions);
 
+// 61 T2: recompute the layout for p.layout. For Atlas this fills p.rects with
+// an order-preserving binary-split treemap whose cell budgets are proportional
+// to Region::len (any other weighting would be a fabricated emphasis — D7) and
+// which tiles the n = 1<<order grid exactly, plus p.nodes, the split tree
+// unproject() descends. Clears both for Hilbert. Idempotent.
+//
+// Falls BACK to Hilbert, silently in code but visibly in p.layout, in two
+// cases: the plane has fewer cells than there are regions, and the split
+// admits no realisable tiling. Both are impossible for a real map — `order` is
+// sized from the domain's byte count, so a plane crowded by regions needs a
+// synthetic domain — and the second has never been observed at all. A caller
+// that cares reads p.layout back; NEVER assume Atlas stayed Atlas just because
+// you set it.
+void rebuild_layout(Projection &p);
+
 // The rel->abs anchor (36 T1). Answers one question: "what absolute span is a
 // routine-relative `df_step.off` (or a rel `trace` offset) relative to, in this
 // recording?" — or refuses with the reason. It derives the answer from a fact the
@@ -109,7 +124,15 @@ RegionStyle region_style(Region::Kind kind);
 
 // 51 T2 (scene-focus-and-scale.md): the plane cells one region occupies —
 // row-major indices `y * n + x` over the n = 2^order plane, ascending, no
-// duplicates. THE one rule for "which cells are this region's": it walks the
+// duplicates. THE one rule for "which cells are this region's".
+//
+// 61 T2: BOTH layouts are live here, and they answer slightly different
+// questions. Under `Atlas` the set is the region's RECTANGLE — every cell the
+// region OWNS, which is a SUPERSET of the cells its addresses can reach, since
+// a rect granted more cells than the region has bytes has a rounding tail that
+// is owned but does not decode. Ownership is what zoning and labelling want,
+// and it keeps this function's containment and disjointness contracts true
+// under both layouts. Under `Hilbert`, as before: it walks the
 // region's own compacted-domain range `[domain_off[i], domain_off[i+1])`
 // through the SAME Hilbert index -> cell mapping project() itself uses, so it
 // contains every cell project() can place an address of this region into, by

@@ -5,6 +5,7 @@
 // terrain plane with zero engine dependencies (D4) — the same argument
 // test_slice.cpp makes for client-side slicing.
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +68,24 @@ static const Ref kStack = {0x00007fff00000000ull, 0x10000,
                            Region::Stack};          // 64K
 static const Ref kRefs[3] = {kStack, kCode, kHeap}; // unsorted
 
+// 61 T2: an ATLAS-layout projection over the given regions. Mirrors main()'s
+// existing build, then switches layout — build_projection() itself stays
+// layout-neutral.
+static Projection atlas_of(const std::vector<Ref> &refs) {
+    std::vector<Region> in;
+    for (const Ref &r : refs) {
+        Region reg;
+        reg.base = r.base;
+        reg.len = r.len;
+        reg.kind = r.kind;
+        in.push_back(reg);
+    }
+    Projection p = build_projection(std::move(in));
+    p.layout = Projection::Layout::Atlas;
+    rebuild_layout(p);
+    return p;
+}
+
 // The (x,y) cell a projected (u,v) lands in, for locality/neighbour arithmetic.
 static void cell(const Projection &p, float u, float v, int64_t *x,
                  int64_t *y) {
@@ -106,18 +125,31 @@ int main() {
           "got order " + std::to_string(p.order));
 
     // --- round trip: project then unproject is exact for 10k addresses -------
+    // 61 T2: this loop asserts the BYTE-EXACT round trip, which is a
+    // Hilbert-layout promise and not an atlas one (an atlas cell covers
+    // bytes_per_cell bytes and unproject returns the first of them). Pinned to
+    // Hilbert EXPLICITLY rather than relying on the struct default, because
+    // 61 T10 changes that default to Atlas. It happens to survive the flip
+    // unpinned — this fixture's plane exceeds its domain, so every region gets
+    // bytes_per_cell == 1 — but that is an accident of three fixture lengths,
+    // not a property, and a later fixture edit would turn it into a mystery
+    // failure in an unrelated-looking test. The atlas's own contract, the
+    // REGION-level round trip, is asserted in the atlas blocks below.
+    Projection h = p;
+    h.layout = Projection::Layout::Hilbert;
+    rebuild_layout(h);
     std::mt19937_64 rng(0xA5A5A5A5u);
     for (int i = 0; i < 10000; i++) {
         const Ref &r = kRefs[rng() % 3];
         uint64_t addr = r.base + (rng() % r.len);
         float u, v;
-        if (!p.project(addr, &u, &v)) {
+        if (!h.project(addr, &u, &v)) {
             fail("round trip", "project failed for a mapped address");
             continue;
         }
         uint64_t back = 0;
         const Region *reg = nullptr;
-        if (!p.unproject(u, v, &back, &reg)) {
+        if (!h.unproject(u, v, &back, &reg)) {
             fail("round trip", "unproject failed for a projected cell");
             continue;
         }
@@ -486,6 +518,195 @@ int main() {
                   note.find("1 dataflow-off skipped") != std::string::npos,
                   "note did not count the skipped off value: " + note);
         }
+    }
+
+    // --- 61 T2: the atlas layout -------------------------------------------
+    // Every cell claimed, decodable, locally contiguous.
+    {
+        // 4096 : 61440 == 1 : 15, so the code rect gets 1/16 of the cell budget.
+        static const Ref kSmall = {0x0000000000400000ull, 4096, Region::Code};
+        static const Ref kBig = {0x0000000001000000ull, 61440, Region::Mmap};
+        const Projection ap = atlas_of({kSmall, kBig});
+        const uint32_t n = 1u << ap.order;
+
+        // The whole point: no power-of-4 padding, so no empty three-quarters. In
+        // cells, not area — the grid is what Terrain and every (u,v)-keyed layer
+        // are indexed by, so cells are the unit the claim has to be true in.
+        uint64_t claimed = 0;
+        for (const AtlasRect &r : ap.rects)
+            claimed += uint64_t(r.x1 - r.x0) * uint64_t(r.y1 - r.y0);
+        check("the atlas claims every cell of the grid",
+              claimed == uint64_t(n) * uint64_t(n),
+              "claimed " + std::to_string(claimed) + " of " +
+                  std::to_string(uint64_t(n) * uint64_t(n)) + " cells");
+
+        // Disjoint as well as covering: a cell owned twice would make unproject
+        // ambiguous and quietly hand a caller the wrong region.
+        std::vector<uint8_t> seen(size_t(n) * n, 0);
+        bool overlap = false;
+        for (const AtlasRect &r : ap.rects)
+            for (uint32_t y = r.y0; y < r.y1; y++)
+                for (uint32_t x = r.x0; x < r.x1; x++)
+                    if (seen[size_t(y) * n + x]++)
+                        overlap = true;
+        check("no two atlas rects share a cell", !overlap,
+              "a cell was claimed by more than one region");
+
+        // regions come out sorted by base, so index 0 is the code region.
+        const AtlasRect &code = ap.rects[0];
+        const double code_frac = double(code.x1 - code.x0) *
+                                 double(code.y1 - code.y0) / (double(n) * n);
+        check("rect area is proportional to Region::len",
+              std::fabs(code_frac - 1.0 / 16.0) < 0.02,
+              "code rect covered " + std::to_string(code_frac) +
+                  ", wanted 0.0625");
+
+        // The REGION round trip is the atlas's contract — cell quantisation
+        // means the exact byte need not survive, but the region must, because
+        // that is what makes the floor decodable.
+        for (const Region &rg : ap.regions) {
+            float u = 0, v = 0;
+            check("a region base projects under the atlas",
+                  ap.project(rg.base, &u, &v),
+                  "project refused a base inside the domain");
+            uint64_t back = 0;
+            const Region *got = nullptr;
+            check("a projected cell unprojects", ap.unproject(u, v, &back, &got),
+                  "unproject refused a cell the atlas had just placed");
+            check("the round trip lands in the same region",
+                  got != nullptr && got->base == rg.base,
+                  "a region base round-tripped into a different region");
+        }
+
+        // region_cells() walks the layout's own mapping, so it needs an atlas
+        // branch. Under the atlas it returns the region's RECT — every cell the
+        // region OWNS, a superset of the cells its addresses reach (the rect's
+        // rounding tail is owned but does not decode). Ownership is what zoning
+        // and labelling want, and it keeps test_focus's containment and
+        // disjointness contracts true under both layouts.
+        for (size_t i = 0; i < ap.regions.size(); i++) {
+            const std::vector<uint32_t> cells = region_cells(ap, i);
+            const AtlasRect &r = ap.rects[i];
+            check("region_cells matches the region's rect under the atlas",
+                  cells.size() == size_t(r.x1 - r.x0) * size_t(r.y1 - r.y0),
+                  "region " + std::to_string(i) + " reported " +
+                      std::to_string(cells.size()) + " cells for a " +
+                      std::to_string(r.x1 - r.x0) + "x" +
+                      std::to_string(r.y1 - r.y0) + " rect");
+        }
+    }
+    {
+        // Serpentine order within a region: neighbouring CELLS stay neighbours
+        // ACROSS THE ROW BREAK. That break is the whole content of the claim —
+        // plain row-major already keeps neighbours adjacent WITHIN a row.
+        static const Ref kOne = {0x0000000000400000ull, 65536, Region::Code};
+        const Projection ap = atlas_of({kOne});
+        const uint32_t n = 1u << ap.order;
+        const float cellw = 1.0f / static_cast<float>(n);
+        // 65536 bytes over a 256x256 plane is exactly one byte per cell, so a
+        // byte offset IS a cell ordinal here. STATED, not assumed: every other
+        // fixture quantises, and the next block is the one that pins that.
+        check("the serpentine fixture is 1 byte per cell",
+              uint64_t(n) * n == 65536ull && ap.rects.size() == 1,
+              "the fixture no longer maps one byte to one cell; the offsets "
+              "below would stop being cell ordinals");
+        const uint32_t w = ap.rects[0].x1 - ap.rects[0].x0;
+        auto cells_apart = [&](uint64_t off_a, uint64_t off_b) {
+            float ua = 0, va = 0, ub = 0, vb = 0;
+            if (!ap.project(0x400000ull + off_a, &ua, &va) ||
+                !ap.project(0x400000ull + off_b, &ub, &vb))
+                return 1e9f;
+            return std::hypot(ub - ua, vb - va) / cellw;
+        };
+        check("consecutive cells within a row are adjacent",
+              cells_apart(0, 1) < 1.5f,
+              "cells 0 and 1 landed " + std::to_string(cells_apart(0, 1)) +
+                  " cells apart");
+        // The discriminating case: under row-major these are w-1 cells apart.
+        check("the row break stays adjacent — the serpentine reverses odd rows",
+              cells_apart(w - 1, w) < 1.5f,
+              "the last cell of row 0 and the first of row 1 landed " +
+                  std::to_string(cells_apart(w - 1, w)) +
+                  " cells apart; row-major would give " + std::to_string(w - 1));
+    }
+    {
+        // The per-region byte->cell quantisation. A domain larger than the
+        // order-12 ceiling (4^12 == 16777216 cells) forces bytes_per_cell > 1.
+        static const Ref kBigOne = {0x0000000010000000ull, 64ull << 20,
+                                    Region::Code};
+        const Projection ap = atlas_of({kBigOne});
+        check("a domain past the cell ceiling pins order at 12", ap.order == 12,
+              "got order " + std::to_string(ap.order));
+        // 64 MiB over 4^12 cells is 4 bytes per cell.
+        float u0 = 0, v0 = 0, u3 = 0, v3 = 0, u4 = 0, v4 = 0;
+        const uint64_t b = 0x10000000ull;
+        check("offset 0 projects", ap.project(b, &u0, &v0), "refused");
+        check("offset 3 projects", ap.project(b + 3, &u3, &v3), "refused");
+        check("offset 4 projects", ap.project(b + 4, &u4, &v4), "refused");
+        check("bytes inside one cell share that cell", u0 == u3 && v0 == v3,
+              "offsets 0 and 3 should quantise to the same cell at 4 bytes/cell");
+        check("the next cell's worth of bytes moves on", u0 != u4 || v0 != v4,
+              "offset 4 should have crossed into the next cell");
+        // And the region contract still holds where the byte-exact one cannot.
+        // Every element spelled uint64_t: (64ull << 20) - 1 is unsigned long
+        // long, uint64_t is unsigned long here, and a mixed initializer_list
+        // cannot deduce.
+        for (uint64_t off : {uint64_t(0), uint64_t(3), uint64_t(4),
+                             uint64_t((64ull << 20) - 1)}) {
+            float u = 0, v = 0;
+            if (!ap.project(b + off, &u, &v)) {
+                fail("quantised project", "refused an in-domain offset");
+                continue;
+            }
+            uint64_t back = 0;
+            const Region *got = nullptr;
+            check("a quantised cell still decodes to its own region",
+                  ap.unproject(u, v, &back, &got) && got != nullptr &&
+                      got->base == b,
+                  "offset " + std::to_string(off) + " left its region");
+        }
+    }
+    {
+        // A SATURATED plane: as many regions as the smallest plane has cells.
+        // Unreachable from a real /proc/maps (every mapping is at least a page,
+        // so `order` outruns the region count long before this), but a synthetic
+        // Projection is exactly what this directory builds, so the guard is
+        // tested rather than assumed.
+        std::vector<Ref> many;
+        for (uint64_t i = 0; i < 4000; i++)
+            many.push_back({0x1000ull + i * 0x10000ull, 1, Region::Code});
+        const Projection sat = atlas_of(many);
+        check("a saturated plane still produces an atlas", sat.rects.size() == 4000,
+              "rebuild_layout fell back, or built a partial rects vector");
+        bool degenerate = false;
+        for (const AtlasRect &r : sat.rects)
+            if (r.x1 <= r.x0 || r.y1 <= r.y0)
+                degenerate = true;
+        check("no rect is empty or inverted at saturation", !degenerate,
+              "a zero-area rect divides by zero in atlas_cell, and an inverted "
+              "one wraps r.x1 - r.x0 to a huge unsigned width");
+        // And the layout is still a layout: every region places, and lands home.
+        for (const Region &rg : sat.regions) {
+            float u = 0, v = 0;
+            uint64_t back = 0;
+            const Region *got = nullptr;
+            check("a saturated-plane region round-trips",
+                  sat.project(rg.base, &u, &v) &&
+                      sat.unproject(u, v, &back, &got) && got != nullptr &&
+                      got->base == rg.base,
+                  "a region of a saturated plane lost its own cell");
+        }
+    }
+    {
+        // `order` keeps its meaning and its VALUE under the atlas: it is the
+        // plane's cell quantisation, which is what every 1<<order call site
+        // already reads it as. Only the address->cell mapping changed.
+        const Projection a = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
+        check("the layout does not change order", a.order == p.order,
+              "atlas reported order " + std::to_string(a.order) +
+                  ", hilbert reported " + std::to_string(p.order));
+        check("Terrain's plane side is therefore unchanged",
+              (1u << a.order) == (1u << p.order), "the cell grid resized");
     }
 
     if (failures) {

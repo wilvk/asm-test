@@ -23,6 +23,30 @@ struct Region {
     uint64_t version = 0; // codeimage version (JIT churn); 0 for static
 };
 
+// 61 T2: one region's rectangle on the cell grid, half-open in CELL
+// coordinates over the n = 1<<order plane, in the SAME index order as
+// Projection::regions so a caller joins them by index with no second key. Cell
+// coordinates rather than floats because the tiling guarantee is about cells:
+// the rects tile the grid exactly — every cell belongs to exactly one rect,
+// none overlap — and that is checkable in integers with no epsilon.
+struct AtlasRect {
+    uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+};
+
+// 61 T2: the binary space partition `rects` was cut from, so a cell resolves to
+// its region in O(log regions) instead of a scan. This is NOT premature:
+// unproject() runs ONCE PER CELL over the WHOLE plane in build_terrain (one
+// O(cells) sweep), which at order 12 is 16.7 M calls, so a linear walk of
+// `rects` would make terrain construction O(cells x regions).
+struct AtlasNode {
+    uint32_t cut = 0; // the cell boundary this split fell on
+    uint8_t axis = 0; // 0 = cut in x (vertical), 1 = cut in y (horizontal)
+    // Child references. A NON-NEGATIVE value indexes `nodes`; a NEGATIVE one
+    // is a leaf holding the region index, encoded as -(index + 1) — so a leaf
+    // costs no node and the tree has exactly regions.size()-1 entries.
+    int32_t lo = 0, hi = 0;
+};
+
 // The projection: address space -> unit plane [0,1]^2 via a Hilbert curve over a
 // compacted address domain (regions are packed to kill the sparse gaps that make
 // a raw address axis useless — see T1). Build one with build_projection()
@@ -45,6 +69,22 @@ struct Projection {
     // carried no observed-touch addresses (nothing to explain). The HUD surfaces
     // it exactly like TerrainModel::mem_note.
     std::string data_span_note;
+
+    // 61 T2: which address->cell mapping this projection uses. Hilbert is the
+    // historical space-filling walk: it spends BOTH plane axes on address and
+    // leaves its unused cells as one connected padding blob at the tail of the
+    // curve, owned by no region. Atlas gives each region a RECTANGLE of the
+    // SAME n = 1<<order grid, area proportional to Region::len, serpentine
+    // within — so every cell belongs to a named region and a region is a
+    // labellable rectangle rather than a blobby snake. Neither layout decodes
+    // more than `total` cells (there are only `total` bytes); what changes is
+    // whether the slack has an owner. `order` means the same thing under both.
+    enum class Layout { Hilbert, Atlas };
+    Layout layout = Layout::Hilbert;
+    // The per-region rectangles, index-parallel to `regions`, and the split
+    // tree they were cut from. Both empty under Hilbert.
+    std::vector<AtlasRect> rects;
+    std::vector<AtlasNode> nodes;
 
     // maps an absolute address to a plane cell (u,v) in [0,1]^2; false if the
     // address is mapped by no region.
