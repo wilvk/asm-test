@@ -82,6 +82,8 @@ The byte-exact row is the one to watch: [test_projection.cpp:110-120](../../../d
 
 Lands first and independently of the re-encoding, so the live defect is fixed regardless of when the substrate work completes.
 
+**And it is not merely interim.** The spec calls this an "interim guard" and says Component 2 "deletes the unbounded-Y defect at the root", which reads as though Task 5 makes this commit redundant. It does not: `traj_scale_` also places the observed-lifetime pillars, the sediment strata, the access arcs and the causal spur feet (see Task 5's blocker banner for the line references), and a `mem` step past `nsteps` blows *their* geometry out of the envelope by exactly the same arithmetic. This clamp keeps bounding all four after the worldline flattens.
+
 **Files:**
 - Create: `desktop/src/scene3d/trajscale.h` — the scale rule, **header-only**
 - Modify: `desktop/src/scene3d/scene.cpp:798-802` — call it
@@ -868,10 +870,16 @@ git commit -m "desktop(test): pin the shared address funnel as layout-agnostic"
 - Test: `desktop/test/test_camera.cpp`
 
 **Interfaces:**
-- Consumes: nothing from earlier tasks — takes four plain floats so `camera.h` stays linmath-only.
-- Produces: `void Camera::fit(float u0, float v0, float u1, float v1, float pad);` with `reset()`/`top_down()` routed through it.
+- Consumes: nothing from earlier tasks — takes plain floats so `camera.h` stays linmath-only.
+- Produces: `float Camera::fit_radius(float u0, float v0, float u1, float v1, float whole) const;` and `void Camera::fit(float u0, float v0, float u1, float v1, float whole);`, plus `kWholePlaneRadius` / `kWholePlaneRadiusTopDown`. `reset()` routes through `fit`; `top_down()` routes through `fit_radius` **only**.
 
-**`fit` must reproduce the historical framing exactly.** [test_camera.cpp:109-113](../../../desktop/test/test_camera.cpp#L109) asserts `reset()` restores `radius` to the default-constructed value, and the same check recurs at `:208` and `:283`; the golden images depend on it too. So the pad factors are **calibrated** so that `fit` over the whole unit square returns exactly today's `2.2` (reset) and `1.9` (top_down). With a 100 %-packed atlas the occupied bounds *are* the unit square, which is the spec's own point: the fit becomes a regression guard rather than a workaround, and it only starts moving the camera if the floor ever stops being fully packed.
+**`fit` must reproduce the historical framing EXACTLY — and "exactly" here means bit-identical.** [test_camera.cpp:111](../../../desktop/test/test_camera.cpp#L111) is `c.radius == d.radius`, an exact float comparison against a default-constructed `Camera`, and the same check recurs at `:208`. The golden images depend on it too.
+
+An earlier draft answered this with two *calibrated pad factors*: `radius = extent / tan(0.5 * fovy) * pad`, with `pad` chosen so the whole-plane fit lands on 2.2 and 1.9. **That cannot work.** `1.0f / tanf(0.4f) * 0.9301f` evaluates to ≈ 2.19988, and `2.19988f == 2.2f` is *false* — the check at `:111` would fail, and no pad value makes a two-rounding float product reliably bit-identical across libm versions and architectures. The draft's own Step 4 note ("a failure at `:111` means the calibration is off") pointed the implementer at an unwinnable tuning loop.
+
+**So derive the radius linearly from the known whole-plane framing instead of from `fovy`.** The radius needed to frame an axis-aligned extent is proportional to that extent at a fixed fov, so scaling the *shipped* whole-plane radius by the extent is both the correct geometry and exact by construction: extent `1.0f` returns `2.2f` bit-for-bit, because it is a multiply by one. This drops two magic constants, a `tan` call, and the dependence on `fovy` and on libm.
+
+With a fully-tiled atlas the occupied bounds *are* the unit square, so the fit is a **regression guard**: it only starts moving the camera if the floor ever stops being fully claimed.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -882,26 +890,42 @@ Add to the existing `desktop/test/test_camera.cpp`, reusing its `check` helper:
 // unconditionally, so a floor occupying a fraction of it sat small in a
 // mostly-empty viewport with no way to say so.
 {
-    // The calibration that keeps every existing reset()/top_down() assertion
-    // and every golden image true: fitting the WHOLE plane must reproduce the
-    // historical radius exactly, not merely closely.
+    // BIT-IDENTICAL, not merely close: test_camera.cpp:111 compares radius
+    // with ==, and every golden image was rendered at these exact framings.
+    // A tolerance here would let a drifting fit through and churn the goldens.
     Camera c;
-    c.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kFitPadDefault);
-    check("fitting the whole plane reproduces the default framing",
-          std::fabs(c.radius - Camera{}.radius) < 1e-3f,
+    c.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadius);
+    check("fitting the whole plane reproduces the default framing exactly",
+          c.radius == Camera{}.radius,
           "fit gave radius " + std::to_string(c.radius) + ", the default is " +
               std::to_string(Camera{}.radius));
     Camera t;
-    t.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kFitPadTopDown);
-    check("fitting the whole plane top-down reproduces its framing",
-          std::fabs(t.radius - 1.9f) < 1e-3f,
+    t.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadiusTopDown);
+    check("fitting the whole plane top-down reproduces its framing exactly",
+          t.radius == 1.9f,
           "fit gave radius " + std::to_string(t.radius) + ", wanted 1.9");
 }
 {
+    // top_down() must NOT recentre. It is the "3D to find, 2D to read"
+    // collapse: you look straight down at WHERE YOU ARE. Snapping the target
+    // back to the plane centre would lose the mental map the user just built —
+    // the same reason frame() refuses to reorient (camera.h's own comment).
+    Camera c;
+    c.pan(0.3f, -0.2f);
+    const float tx = c.target[0], tz = c.target[2];
+    c.top_down();
+    check("top_down keeps the target it was given",
+          c.target[0] == tx && c.target[2] == tz,
+          "top_down moved the target to (" + std::to_string(c.target[0]) + "," +
+              std::to_string(c.target[2]) + "), losing the user's place");
+    check("top_down still reframes the whole plane", c.radius == 1.9f,
+          "radius " + std::to_string(c.radius));
+}
+{
     Camera whole;
-    whole.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kFitPadDefault);
+    whole.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadius);
     Camera quarter;
-    quarter.fit(0.0f, 0.0f, 0.5f, 0.5f, Camera::kFitPadDefault);
+    quarter.fit(0.0f, 0.0f, 0.5f, 0.5f, Camera::kWholePlaneRadius);
     check("fitting a smaller region dollies closer", quarter.radius < whole.radius,
           "quarter radius " + std::to_string(quarter.radius) +
               " was not closer than whole " + std::to_string(whole.radius));
@@ -918,7 +942,7 @@ Add to the existing `desktop/test/test_camera.cpp`, reusing its `check` helper:
     // A degenerate region must not produce a camera inside the near plane —
     // the same clamp-don't-break discipline dolly() already uses.
     Camera c;
-    c.fit(0.0f, 0.0f, 0.001f, 0.001f, Camera::kFitPadDefault);
+    c.fit(0.0f, 0.0f, 0.001f, 0.001f, Camera::kWholePlaneRadius);
     check("fit respects the dolly clamps",
           c.radius >= Camera::kMinRadius && c.radius <= Camera::kMaxRadius,
           "radius " + std::to_string(c.radius) + " escaped [" +
@@ -937,36 +961,43 @@ Expected: FAIL — no member `fit`.
 - [ ] **Step 3: Implement `fit`**
 
 ```cpp
-// The pad factors, calibrated so fit() over the WHOLE unit plane reproduces
-// this struct's historical framing exactly: 1/tan(fovy/2) == 2.36522 at the
-// fixed fovy 0.8, so 2.2 == 2.36522 * 0.9301 and 1.9 == 2.36522 * 0.8033.
-// Calibrated rather than chosen, because reset()/top_down() are pinned by
-// test_camera.cpp and by every golden image — a fit that framed the packed
-// atlas "about right" would churn both for no gain. With a 100%-packed floor
-// the fit is therefore a REGRESSION GUARD: it only moves the camera if the
-// floor ever stops being fully claimed.
-static constexpr float kFitPadDefault = 0.9301f;
-static constexpr float kFitPadTopDown = 0.8033f;
+// The radii that frame the WHOLE unit plane — this struct's shipped defaults,
+// stated once rather than re-derived. Every other framing is these scaled by
+// the extent being framed, which is the correct geometry at a fixed fov AND
+// exact by construction: an extent of 1 is a multiply by one, so fit() over
+// the whole plane reproduces reset()/top_down() BIT-IDENTICALLY. That matters
+// because test_camera.cpp:111 compares with == and every golden was rendered
+// here. (Deriving these from fovy via 1/tan(fovy/2) and a calibrated pad does
+// NOT round back to 2.2f — an earlier draft tried, and it cannot be made to.)
+static constexpr float kWholePlaneRadius = 2.2f;
+static constexpr float kWholePlaneRadiusTopDown = 1.9f;
 
-// Frame an axis-aligned region of the floor: centre the target on it and pull
-// the radius back far enough that its larger extent fits the vertical fov.
-// Clamped through the SAME kMinRadius/kMaxRadius dolly uses, so a degenerate
-// region cannot produce a camera inside the near plane.
-void fit(float u0, float v0, float u1, float v1, float pad) {
-    target[0] = clampf(0.5f * (u0 + u1), 0.0f, 1.0f);
-    target[1] = 0.0f;
-    target[2] = clampf(0.5f * (v0 + v1), 0.0f, 1.0f);
+// The radius that frames an axis-aligned region of the floor. Clamped through
+// the SAME kMinRadius/kMaxRadius dolly uses, so a degenerate region cannot
+// produce a camera inside the near plane. const, and separate from fit(),
+// because top_down() wants the radius WITHOUT the recentring.
+float fit_radius(float u0, float v0, float u1, float v1, float whole) const {
     const float extent = std::fmax(std::fabs(u1 - u0), std::fabs(v1 - v0));
-    radius = clampf(extent / std::tan(0.5f * fovy) * pad, kMinRadius, kMaxRadius);
+    return clampf(extent * whole, kMinRadius, kMaxRadius);
+}
+
+// Frame a region: centre the target on it and pull the radius back to hold it.
+void fit(float u0, float v0, float u1, float v1, float whole) {
+    target[0] = clampf(0.5f * (u0 + u1), 0.0f, 1.0f);
+    target[1] = 0.0f; // the plane's height is not a camera axis (see pan())
+    target[2] = clampf(0.5f * (v0 + v1), 0.0f, 1.0f);
+    radius = fit_radius(u0, v0, u1, v1, whole);
 }
 ```
 
-`reset()` becomes: `*this = Camera{}; fit(0,0,1,1, kFitPadDefault);` — which by calibration leaves every field bit-identical to today. `top_down()` keeps `yaw = 0`, `pitch = kPitchLimit` and calls `fit(0,0,1,1, kFitPadTopDown)`.
+`reset()` becomes `*this = Camera{}; fit(0.0f, 0.0f, 1.0f, 1.0f, kWholePlaneRadius);` — every field bit-identical to today, including the target, which `reset` legitimately restores.
+
+`top_down()` keeps `yaw = 0`, `pitch = kPitchLimit` and takes **only the radius**: `radius = fit_radius(0.0f, 0.0f, 1.0f, 1.0f, kWholePlaneRadiusTopDown);`. It must **not** call `fit`. Today's `top_down()` leaves `target` alone, and [shell.cpp:1464](../../../desktop/src/ui/shell.cpp#L1464) invokes it on a camera the user may have panned; recentring would silently teleport them to the plane centre on a keypress whose whole purpose is "show me this, flat". No existing test catches that — the file's top-down block uses a default camera, where the two are indistinguishable — so Step 1 adds one.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `make build/desktop_test_camera && ./build/desktop_test_camera`
-Expected: PASS — the new checks **and** the pre-existing reset/top_down ones. A failure at `:111` means the calibration is off, not that the old check is stale.
+Expected: PASS — the new checks **and** the pre-existing reset/top_down ones. `:111` compares with `==`; if it fails, the radius is being *computed* rather than scaled from `kWholePlaneRadius`. Do not relax that check to a tolerance and do not try to tune a pad factor — see the Interfaces block for why that road has no end.
 
 - [ ] **Step 5: Commit**
 
@@ -979,18 +1010,39 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 
 ### Task 5: Time leaves the spatial budget
 
+> ## ⛔ BLOCKED — take this back to the spec before implementing
+>
+> **`traj_scale_` is not the worldline's private Y scale. It is the shared trace-time Y axis of five subsystems**, and the earlier drafts' consumer table listed three uniforms while missing four *geometry producers* that place their vertices on it:
+>
+> | Consumer of `t * traj_scale_` | Where |
+> |---|---|
+> | causal spurs — anchor and resume heights | [causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280) |
+> | observed-lifetime pillars (58 T4) | [data_layers_gl.cpp:201-204](../../../desktop/src/scene3d/data_layers_gl.cpp#L201) |
+> | access arcs | [data_layers_gl.cpp:246-247](../../../desktop/src/scene3d/data_layers_gl.cpp#L246) |
+> | sediment strata columns | [data_layers_gl.cpp:294-299](../../../desktop/src/scene3d/data_layers_gl.cpp#L294) |
+> | the line shader's own `pos.y already IS t*scale` | [shaders/embedded.h:255-257](../../../desktop/src/scene3d/shaders/embedded.h#L255) |
+>
+> And the coupling is *documented*: [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) states that **"a spur hangs on a worldline vertex at world Y = t * traj_scale()"**. Flatten the worldline alone and every spur foot detaches from the path it points at.
+>
+> **The spec contradicts itself on this.** Component 2 says *"Y carries access density, and nothing else"* — which taken literally strips the Y axis from four shipped layers (`lifetime`, `data_ribbon`/sediment, the access arcs, the causal spurs). But the Non-goals say *"Re-deriving the depiction catalog. The 14 layers and 12 scenes stand."* Both cannot hold. This is a spec decision, not an implementation detail, and it is the one thing in this plan that cannot be settled by reading the tree.
+>
+> **The assumption this task is written under, pending that decision:** flatten **the worldline only**, re-anchor the spur feet to the flattened path, and leave the other four layers on `traj_scale_`. That keeps Task 1's clamp permanently load-bearing (it bounds the pillars and strata too, not just the path) and keeps `draw_trajectory_ruler` meaningful — it now labels the axis those four layers use, though its caption must stop naming the *trajectory*. Tasks 1–4 and 6–8 do not depend on this and should not wait for it.
+
 **Files:**
 - Modify: `desktop/src/scene3d/trajscale.h` — add `traj_vertex_y` and `comet_window` (Task 1 created this header)
 - Modify: `desktop/src/scene3d/scene.h`, `desktop/src/scene3d/scene.cpp` (`set_trajectories`, `render`) — call them
-- Modify: `desktop/src/ui/shell.cpp:1829` — drop the `draw_trajectory_ruler` call for the Plane scene (the call site is in **shell.cpp**, not hud.cpp; `draw_trajectory_ruler` itself stays in hud.cpp for the scenes that still spatialise time)
+- Modify: `desktop/src/scene3d/causal.cpp:280-282` — re-anchor the spur feet onto the flattened path
+- Modify: `desktop/src/scene3d/hud.cpp:383` + `desktop/src/scene3d/hud.h:170-180` — re-caption the ruler: it measures the axis the lifetime/sediment/arc/spur layers ride, **not** the trajectory, which has left it. The call site at [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829) **stays** (it is the function's only caller, already gated to `SceneKind::Plane`); deleting it would strand four layers on an unlabelled axis
 - Test: `desktop/test/test_scene_traj.cpp` (created and registered by Task 1 — no `mk/desktop.mk` change needed here)
 
 **Interfaces:**
-- Consumes: `scene_traj_scale` (Task 1) — retained for the non-Plane scenes that still spatialise time.
+- Consumes: `scene_traj_scale` (Task 1) — **still live, and permanently so**: four layers above ride the scale it computes, and its `max(nsteps, max_t + 1)` guard bounds their geometry as well as the path's. An earlier readiness review claimed this function lost its last consumer once the worldline flattened; that was wrong, and the four call sites above are why.
 - Produces, in `scene3d/trajscale.h` (header-only, so the test needs no GL):
   - `float traj_vertex_y(uint64_t t, float scale, bool flat)`
   - `std::pair<uint64_t, uint64_t> comet_window(uint64_t follow_step, uint32_t tail)`
-- Produces, on `Scene`: `uint32_t comet_tail = 256;` (trail length in **steps**) and `bool flat_time` (default `true` for the Plane scene). The arithmetic lives in the header; `Scene` only holds the settings and calls it.
+- Produces, on `Scene`: `uint32_t comet_tail = 256;` (trail length in **steps**, the spec's HUD control) and `bool flat_time = true;`.
+
+**On `flat_time` needing no setter.** An earlier draft wrote "default `true` for the Plane scene", which reads as though some caller must select it per kind — `Scene` has no `SceneKind` member, so there would be nowhere to hang that. It does not need one: `Scene` **is** the Plane scene's renderer, exclusively. [gl_scene_host.cpp:74](../../../desktop/src/ui/gl_scene_host.cpp#L74) routes every other kind to `standalone_` before `Scene` is touched, and the four standalone kinds carry their own vertical quantities (execution step, invocation ordinal, call depth, byte magnitude). So a plain member default is the whole of it, and `flat_time = false` exists only to keep the pre-flattening path testable — **not** for "the other scenes", which never call `set_trajectories` at all.
 
 **The comet already exists — this task does not build one.** `SceneLayers::vehicle` is documented as "the followed-citizen head + comet tail" ([scene.h:59](../../../desktop/src/scene3d/scene.h#L59)), registered as *"where is the followed thread right now?"* ([layers.cpp:44](../../../desktop/src/scene3d/layers.cpp#L44)), and `render()` already locates the head via `find_head()` and feeds the shader `uHeadY` ([scene.cpp:1436](../../../desktop/src/scene3d/scene.cpp#L1436), `:1466-1502`). What this task does is **remove trace time from Y** and repair the three consumers that read time *through* Y once it is gone:
 
@@ -999,6 +1051,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 | `head_y = follow_step * traj_scale_` (`:1470`) | the vehicle head's Y | the head is found by **step**, not height — `find_head` already returns a position; the uniform becomes the window from `comet_window` |
 | `tail_half = 3.0f * traj_scale_` (`:1471`) | a ±Y band ≈ 3 steps | collapses to zero when Y is flat — replaced by `comet_tail` **in steps**, which is what it was always approximating |
 | `time_cut_y = slice_step * traj_scale_` (`:1475`) | the terrain-playhead dimming cut, a *different clock* | becomes a step comparison, not a height one. **The two clocks stay distinct** — this is the spec's explicit non-goal; do not fuse `slice_step` and `follow_step` |
+| `ay/by = anchor_t/resume_t * traj_scale_` ([causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280)) | the spur's foot, on the worldline it hangs from | the foot must follow the path down. `scene.h:365` promises the two coincide; keeping the spur on `traj_scale_` while the path flattens *breaks* that promise rather than preserving it |
 
 **Z-fighting is a real consequence, not a detail.** A flat worldline at `y = 0` is coplanar with the terrain floor and will z-fight or vanish under any cell with nonzero height. Lift the path by a small constant above the terrain's own surface at that cell (or draw it with a depth offset) — and say which in a comment, because "the path disappeared into the ground" is the failure this note exists to prevent.
 
@@ -1018,10 +1071,13 @@ Append to `desktop/test/test_scene_traj.cpp`, inside `main()`:
         check("flat time flattens the worldline", y == 0.0f,
               "step " + std::to_string(t) + " sat at y=" + std::to_string(y));
     }
-    // With flat time OFF the old spatial behaviour is unchanged — the other
-    // scenes still spatialise time and must not regress.
+    // With flat time OFF the pre-flattening behaviour is bit-identical. NOT
+    // because "the other scenes still spatialise time" — they never call this
+    // at all (gl_scene_host.cpp:74 routes them to standalone_) — but because
+    // the same scale still places the lifetime pillars, sediment strata,
+    // access arcs and spur feet, and this is the arithmetic they share.
     check("spatial time still lifts by trace step",
-          traj_vertex_y(999, scale, false) > 0.0f,
+          traj_vertex_y(999, scale, false) == 999.0f * scale,
           "the spatial-time path lost its height");
 }
 // The trail is a window ENDING at the followed step. Nothing outside it is
@@ -1052,7 +1108,12 @@ Add to `scene3d/trajscale.h` (which gains `#include <utility>` for `std::pair`):
 // A worldline vertex's world Y. With `flat`, trace time is NOT a spatial axis
 // — the path lies on the floor and is read through the playhead — so this is
 // 0 and the caller lifts the whole path clear of the terrain by a constant.
-// The other scenes still spatialise time and keep the lift.
+//
+// The !flat branch is NOT "for the other scenes": no other scene reaches this
+// code (gl_scene_host.cpp:74 routes every non-Plane kind to standalone_). It
+// is the pre-flattening path, kept testable, and it is the SAME arithmetic the
+// lifetime pillars, sediment strata, access arcs and causal spur feet still
+// use — so the spur foot calls THIS, and stays welded to the path it hangs on.
 inline float traj_vertex_y(uint64_t t, float scale, bool flat) {
     return flat ? 0.0f : static_cast<float>(t) * scale;
 }
@@ -1076,7 +1137,13 @@ Expected: FAIL — `traj_vertex_y` not declared.
 
 - [ ] **Step 3: Implement flat time**
 
-In `set_trajectories`, emit `traj_vertex_y(pt.t, scale, flat_time)` for every vertex Y (the PC strip, the pick points `pts_pos`, and `pt_pos`) plus the constant terrain lift. In `render()`, replace the three Y-derived quantities per the table above and pass the `comet_window` bounds as a step-space uniform, fading by distance from `hi`. Drop the `draw_trajectory_ruler` call at [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829) for the Plane scene only — a ruler labelling an axis that no longer carries time is worse than no ruler.
+In `set_trajectories`, emit `traj_vertex_y(pt.t, scale, flat_time)` for every vertex Y (the PC strip, the pick points `pts_pos`, and `pt_pos`) plus the constant terrain lift. In `render()`, replace the Y-derived quantities per the table above and pass the `comet_window` bounds as a step-space uniform, fading by distance from `hi`.
+
+The **line shader** reads the same axis and must move with it: [shaders/embedded.h:255-257](../../../desktop/src/scene3d/shaders/embedded.h#L255) documents that `pos.y already IS t*scale` and compares it against `uHeadY`. With flat Y that comparison degenerates to `0 <= 0` for every vertex, so the head/tail fade would light the whole path at once. Carry the step per vertex (or the window in step space) instead — this is a shader change, not only a CPU one, and an earlier draft's consumer table did not mention it.
+
+In `causal.cpp:280-282`, take the spur foot from the same `traj_vertex_y` the path uses, so `scene.h:365`'s promise still holds by construction rather than by coincidence.
+
+**Do not delete the `draw_trajectory_ruler` call** at [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829). An earlier draft did, on the reasoning that the function "stays in hud.cpp for the scenes that still spatialise time" — it does not; that call is its **only** caller and it is already gated to `SceneKind::Plane`, so deleting it would leave the function dead *and* strand the four layers that still ride the axis with no scale on screen. Re-caption it instead ([hud.h:170-177](../../../desktop/src/scene3d/hud.h#L170) and the caption in `hud.cpp`): it measures trace time for the lifetime pillars, sediment strata, access arcs and spur feet — no longer for the trajectory, which has left the axis. If the spec decision in the blocker banner goes the other way and those four layers flatten too, *then* the ruler and its call site are deleted together, and so is `scene_traj_scale`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1087,7 +1154,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.h desktop/src/scene3d/scene.cpp desktop/src/ui/shell.cpp desktop/test/test_scene_traj.cpp
+git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.h desktop/src/scene3d/scene.cpp desktop/src/scene3d/causal.cpp desktop/src/scene3d/hud.cpp desktop/src/scene3d/hud.h desktop/src/scene3d/shaders/embedded.h desktop/test/test_scene_traj.cpp
 git commit -m "scene3d: trace time animates rather than occupying the Y axis"
 ```
 
@@ -1689,7 +1756,11 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | `SceneLayers` defaults are all-true | **false** — additive layers ON, terrain re-lifts OFF, documented per field. Task 6 pins the real rule |
 | The PC comet is new work | **false** — `SceneLayers::vehicle` is "the followed-citizen head + comet tail", with `find_head` and `uHeadY` already wired. Task 5 is now about removing time from Y and repairing the three Y-derived consumers |
 | Task 7 needs only an image comparator | **false** — five of its six assumed helpers do not exist. Now split into 7a (the harness, with every helper written out) and 7b (the gate) |
-| `draw_trajectory_ruler`'s call site is in `hud.cpp` | **false** — it is `shell.cpp:1829`; the function itself stays in hud.cpp for the scenes that still spatialise time |
+| `draw_trajectory_ruler`'s call site is in `hud.cpp` | **false** — it is `shell.cpp:1829`, and that is its *only* caller, already gated to `SceneKind::Plane`. No other scene calls it, because no other scene uses `Scene` at all. Task 5 re-captions rather than deletes |
+| `reset()`/`top_down()` can share one `fit()` | **false** — `reset()` restores the default target, `top_down()` must PRESERVE a panned one. Task 4 splits `fit_radius` out for exactly this |
+| `Camera::radius` assertions use a tolerance | **false** — `test_camera.cpp:111` and `:208` compare with `==`. Task 4's radius rule is exact by construction, not calibrated |
+| `traj_scale_` is the worldline's own Y scale | **false** — five subsystems place geometry on it (causal spurs, lifetime pillars, access arcs, sediment strata, the line shader). Task 5 is blocked on a spec decision because of it |
+| `Scene` knows which `SceneKind` it is drawing | **false, and it does not need to** — `Scene` IS the Plane renderer; `gl_scene_host.cpp:74` routes every other kind to `standalone_` first. `flat_time` is a plain member default with no setter |
 | Fixtures belong in `desktop/test/fixtures/` | **partly** — `make asmtrace-golden` writes to `tests/golden-asmtrace/`, which is where `test_scene_fbo` loads scenes from; a *hand-authored* scene goes one level down in `.../scenes/`. Task 7b corrected |
 | `make docker-desktop-test TEST=<x>` runs one test | **false** — no such target, no `TEST=` parameter. See Global Constraints |
 | `test_scene_traj.cpp` exists | **false** — Task 1 creates *and registers* it |
@@ -1711,9 +1782,23 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | Task 7 called four helpers it never defined, `render_plane_scene` most of all (a whole Recording→Terrain→Scene→FBO→readback path) | Split into 7a/7b; every helper is now written out |
 | `image_floor_fraction(bare) >= 0.5` was unsound twice: viewport coverage is a camera-framing artefact, and the atlas does not raise the decodable-cell count anyway | Dropped, with the reasoning recorded in 7a's Interfaces block and the honesty note under "the one decision" |
 
+**Fifth pass — mapping the deletion surface rather than the addition surface.** Asking "what stops being referenced?" rather than "what gets written?" found three more, one of which stops Task 5 outright.
+
+| Defect | Fix in this revision |
+|---|---|
+| **Task 4's calibrated pad factors cannot satisfy the test they were calibrated against.** [test_camera.cpp:111](../../../desktop/test/test_camera.cpp#L111) is `c.radius == d.radius` — *exact* float equality — and `1.0f / tanf(0.4f) * 0.9301f` is ≈ 2.19988, not `2.2f`. No pad value fixes a two-rounding product reliably across libm versions. The draft's "a failure at `:111` means the calibration is off" sent the implementer into an unwinnable loop | Radius is now `extent * kWholePlaneRadius` — linear, exact at extent 1 by construction, and free of `fovy`, `tan` and both magic constants |
+| **`top_down()` would silently start recentring the target.** Today it leaves `target` alone and [shell.cpp:1464](../../../desktop/src/ui/shell.cpp#L1464) calls it on a possibly-panned camera; routing it through `fit()` would teleport the user to the plane centre. No existing test catches it — the file's top-down block uses a default camera | `top_down()` takes `fit_radius` only, never `fit`; a new test pans first and pins the target |
+| **`traj_scale_` is a five-consumer shared axis, not the worldline's private scale.** Causal spurs, lifetime pillars, access arcs, sediment strata and the line shader all place geometry at `t * traj_scale_`, and [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) documents that a spur *hangs on a worldline vertex at that Y*. Flattening the path alone detaches every spur foot. The spec contradicts itself here — "Y carries access density, and nothing else" versus "the 14 layers stand" | Task 5 now opens with a ⛔ blocker banner naming all five call sites and the contradiction, states the assumption it is written under, and adds the spur re-anchor, the shader change and the ruler re-caption to its file list |
+
+**Two claims from the fourth-pass readiness review were themselves wrong, and are corrected here rather than left standing:**
+
+- *"`scene_traj_scale` has no surviving consumer once Task 5 lands."* False — four layers ride the scale it computes. Task 1 is load-bearing permanently, not interim, and Task 1 and Task 5 both now say so.
+- *"`draw_trajectory_ruler` becomes dead code, so delete the call."* Half right: it is the function's only caller and it is Plane-gated, but the axis it labels stays alive for those same four layers. Deleting it would strand them on an unlabelled axis. It is re-captioned, not removed.
+
 **Remaining known risks, not resolvable on paper.**
 
 1. Task 7b's memcpy recording may have to be hand-authored, because `mem` has no producer (`test_scene_fbo.cpp:20-23`). A hand-tuned input would make the acceptance gate self-confirming. Step 0 forces that decision *before* any code is written; the `simd` and `syscalls` cases are unaffected.
 2. Task 5's flat worldline is coplanar with the terrain floor. The lift constant is an eyeball judgement that only the container render can settle — a path that vanishes under a tall cell is the failure mode, and it will not show up in any pure test.
 3. Task 2's cell budgets can give a region fewer cells than it has bytes (quantised away, `bytes_per_cell > 1`) **or more** (`bytes_per_cell == 1`, the rect's tail decoding to nothing). Both are honest and both are tested; the plan asserts only the region-level round trip, which is what the atlas can promise. If a caller is later found to depend on byte-exactness under `Atlas`, that is a design finding, not a rounding bug to paper over.
-4. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 8 Step 4 is where it would show up.
+4. **Task 5 is blocked on a spec decision** — whether the four other trace-time-on-Y layers flatten with the worldline or keep the axis. See its ⛔ banner. This is the only item here that is not a judgement call an implementer can make, and it does not gate any other task.
+5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 8 Step 4 is where it would show up.
