@@ -241,6 +241,15 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# scenes_victim backs the documented 3D-scene screenshots
+# (docs/guides/desktop-gui-scenes.md) and its SHAPE is the requirement: SSE lane
+# writes for the LanePrism scene, a constantly-entered routine for the Invocation
+# scene, threads across libc/libm for the ModuleRibbon, a strided heap walk for
+# the terrain's data spans, and a --seed that changes DATA ONLY so two runs share
+# a code_sha and can diverge. Needs -lpthread and -lm for the module spine.
+$(BUILD)/scenes_victim: $(BUILD)/scenes_victim.o
+	$(CC) $(CFLAGS) $^ -lpthread -lm -o $@
+
 # quiet_hot_victim backs the 39 T4 continuous-through-a-quiet-window smoke: hotfn
 # goes HOT (dense entries), then QUIET (~1.5s never entered), then hot again, so a
 # --continuous capture pinned to it must SURVIVE the quiet stretch and capture the
@@ -634,7 +643,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
-           $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim \
+           $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(BUILD)/scenes_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
