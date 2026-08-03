@@ -788,6 +788,80 @@ int main() {
               "a 1-cell rectangle was given a text label");
     }
 
+    // --- 61 T9: the reflow notice ------------------------------------------
+    // "a growing capture that reflows silently is the failure mode to avoid."
+    {
+        // Rebuilding the SAME region set is not a reflow. build_projection is a
+        // pure function of the regions, so a weave that changes nothing
+        // produces an identical layout — the spec's "recompute only when that
+        // set changes" falls out of that, and this pins it rather than
+        // assuming it.
+        const Projection ra = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
+        const Projection rb = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
+        const LayoutFingerprint fa = layout_fingerprint(ra);
+        const LayoutFingerprint fb = layout_fingerprint(rb);
+        check("an unchanged region set digests identically", fa.digest == fb.digest,
+              "two builds of one region set disagreed");
+        check("recomputing an unchanged layout is not a reflow",
+              layout_reflow_note(fa, fb).empty(),
+              "warned about a floor that did not move: \"" +
+                  layout_reflow_note(fa, fb) + "\"");
+    }
+    {
+        // A region APPEARS — the live-capture case the spec is about.
+        static const Ref kOne = {0x0000000000400000ull, 4096, Region::Code};
+        static const Ref kTwo = {0x0000000000900000ull, 4096, Region::Heap};
+        const std::string note =
+            layout_reflow_note(layout_fingerprint(atlas_of({kOne})),
+                               layout_fingerprint(atlas_of({kOne, kTwo})));
+        check("a new region reflows the floor, and says so", !note.empty(),
+              "a growing capture re-laid its floor silently — the exact "
+              "failure the spec's risk table names");
+        check("the note names what changed",
+              note.find("1 region became 2") != std::string::npos, note);
+    }
+    {
+        // Same region COUNT, one of them GREW. Under Hilbert this shifts every
+        // later region's domain offset, so the floor re-scrambles just as
+        // surely as a treemap re-tiles — the notice is not an atlas feature.
+        std::vector<Region> rsmall, rgrown;
+        Region g0;
+        g0.base = 0x400000ull;
+        g0.len = 4096;
+        g0.kind = Region::Code;
+        Region g1 = g0;
+        g1.base = 0x900000ull;
+        g1.len = 4096;
+        rsmall = {g0, g1};
+        g1.len = 8192;
+        rgrown = {g0, g1};
+        const std::string note = layout_reflow_note(
+            layout_fingerprint(build_projection(std::move(rsmall))),
+            layout_fingerprint(build_projection(std::move(rgrown))));
+        check("a region that GREW reflows the floor under Hilbert too",
+              !note.empty(),
+              "compaction shifted every later region and the HUD said nothing");
+        check("the same-count wording says what actually changed",
+              note.find("extents changed") != std::string::npos, note);
+    }
+    {
+        // Silence by RULE, not by threshold.
+        const Projection rp = atlas_of({kRefs[0]});
+        check("the first layout is not a reflow",
+              layout_reflow_note(LayoutFingerprint{}, layout_fingerprint(rp))
+                  .empty(),
+              "warned about a floor the reader had never seen");
+        const Projection rempty = build_projection({});
+        check("a recording with no regions has no fingerprint",
+              !layout_fingerprint(rempty).valid,
+              "an empty plane is not a layout to compare against");
+        check("appearing from nothing is not a reflow",
+              layout_reflow_note(layout_fingerprint(rempty),
+                                 layout_fingerprint(rp))
+                  .empty(),
+              "a floor drawn for the first time is not a floor that moved");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d projection check(s) failed\n", failures);
         return 1;

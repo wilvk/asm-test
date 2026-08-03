@@ -66,6 +66,11 @@ namespace asmdesk {
 // the null test backend, where this state and the HUD are the whole pane.
 struct SceneView {
     bool built = false;      // the models below are woven for this recording
+    // 61 T9: the layout digest of the LAST weave, so a growing capture can tell
+    // the reader its floor was re-laid out. Survives the live-growth SceneView
+    // reset on the same terms as the camera — it is the only thing that
+    // remembers the layout the reader was actually looking at.
+    space::LayoutFingerprint layout_fp;
     bool has_regions = false; // codeimage/maps placed at least one region
     space::TerrainModel terr;
     space::TrajectorySet traj;

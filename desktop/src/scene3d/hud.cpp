@@ -573,6 +573,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // 54 T1: the observed-data-span derivation, surfaced the same way.
     if (!terr.proj.data_span_note.empty())
         ImGui::TextColored(kDim, "%s", terr.proj.data_span_note.c_str());
+    // 61 T9: the reflow notice, surfaced the same way — computed by the shell
+    // and stashed on the model, never derived in the HUD.
+    if (!terr.proj.layout_note.empty())
+        ImGui::TextColored(kDim, "%s", terr.proj.layout_note.c_str());
     // 36 T4: the placement notes as dim asides beside mem_note (anchor_error is a
     // refusal, so it rides in the refuse colour). No HudState field is needed —
     // these derive from terr/traj each frame.

@@ -122,6 +122,34 @@ struct RegionStyle {
 };
 RegionStyle region_style(Region::Kind kind);
 
+// 61 T9: a digest of everything that decides WHERE an address lands on the
+// plane: `order`, the compacted domain boundaries, the layout, and (under
+// Atlas) the rectangles. Two projections with equal digests place every address
+// identically, so comparing digests across a weave answers "did the floor move"
+// without keeping the old projection alive.
+//
+// `valid` is false for a projection with no regions — there is no floor to have
+// moved — and a comparison involving an invalid fingerprint is never a reflow.
+struct LayoutFingerprint {
+    bool valid = false;
+    size_t regions = 0;
+    uint64_t digest = 0;
+};
+LayoutFingerprint layout_fingerprint(const Projection &proj);
+
+// 61 T9: the HUD note for a weave that moved the floor, or "" when it did not.
+// NOT atlas-specific: adding a region shifts every later region's domain
+// offset, so a Hilbert floor re-scrambles too, and a growing capture deserves
+// the same notice under either layout.
+//
+// It reports THAT the floor moved, never how much. Quantifying the disruption
+// would need the previous rects kept alive and a distance metric over two
+// tilings, and no threshold on that metric could be justified from anything
+// measured here — so the note is a fact, and whether a reflow was disruptive
+// stays the reader's judgement.
+std::string layout_reflow_note(const LayoutFingerprint &prev,
+                               const LayoutFingerprint &now);
+
 // 61 T8: one region's in-place label on the atlas floor. `u`/`v` are the
 // rect's GEOMETRIC centre (not a cell centre — the anchor names a rectangle,
 // not a cell), `cells` is its area for a caller's own LOD, `region` indexes

@@ -1863,6 +1863,29 @@ int main() {
         shell_sync_live_tab(ls);
         check("25t6/camera preserved", ls.scenes[i].cam.yaw == 2.5f,
               "a live 3D re-weave must keep the camera, not reset the orbit");
+        // 61 T9: the layout fingerprint must survive the SAME reset, for the
+        // same reason and by the same mechanism. If it does not, every batch
+        // compares against an invalid fingerprint, the reflow notice can never
+        // fire, and the failure is SILENT — no pure test can see it, because
+        // the rule itself stays correct.
+        //
+        // Asserted AFTER shell_sync_live_tab but BEFORE the lazy 3D weave (that
+        // is gated on !sv.built inside the pane draw, which this test never
+        // reaches), so the sentinel is still the value that was PRESERVED
+        // rather than a freshly computed digest. That ordering is what makes
+        // this check specific to the preserve-list.
+        ls.scenes[i].layout_fp.valid = true;
+        ls.scenes[i].layout_fp.digest = 0xD00Dull;
+        ls.scenes[i].layout_fp.regions = 7;
+        sess.feed_line(
+            R"({"k":"df_step","step":1,"off":0,"disasm":"nop","ops":[]})");
+        shell_sync_live_tab(ls);
+        check("25t6/layout fingerprint preserved",
+              ls.scenes[i].layout_fp.valid &&
+                  ls.scenes[i].layout_fp.digest == 0xD00Dull &&
+                  ls.scenes[i].layout_fp.regions == 7,
+              "a live re-weave dropped the previous layout digest, so the "
+              "reflow notice can never fire");
     }
 
     // --- fix 6: the syscall-filter undo is recording-SCOPED ------------------

@@ -70,6 +70,13 @@ struct Projection {
     // it exactly like TerrainModel::mem_note.
     std::string data_span_note;
 
+    // 61 T9: set on a weave whose layout MOVED relative to the previous one —
+    // a growing live capture gaining a region, mostly. Empty on a first weave
+    // and on any weave that re-laid the floor identically, so a NON-empty note
+    // always means the reader's mental map just changed under them. The HUD
+    // surfaces it exactly like data_span_note above.
+    std::string layout_note;
+
     // 61 T2: which address->cell mapping this projection uses. Hilbert is the
     // historical space-filling walk: it spends BOTH plane axes on address and
     // leaves its unused cells as one connected padding blob at the tail of the

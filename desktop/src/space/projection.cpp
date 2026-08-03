@@ -648,6 +648,55 @@ RegionStyle region_style(Region::Kind kind) {
     return {0.55f, 0.55f, 0.60f, "unknown"}; // -Wreturn-type: unreachable
 }
 
+namespace {
+// 61 T9: FNV-1a, byte-wise over each value so the digest is byte-order
+// independent and an inserted region cannot collide with a resized one by luck
+// of layout.
+void fp_mix(uint64_t &h, uint64_t v) {
+    for (int i = 0; i < 8; i++) {
+        h ^= (v >> (i * 8)) & 0xffull;
+        h *= 1099511628211ull;
+    }
+}
+std::string fp_regions(size_t n) {
+    return std::to_string(n) + (n == 1 ? " region" : " regions");
+}
+} // namespace
+
+LayoutFingerprint layout_fingerprint(const Projection &proj) {
+    LayoutFingerprint fp;
+    if (proj.regions.empty())
+        return fp; // no floor to have moved
+    fp.valid = true;
+    fp.regions = proj.regions.size();
+    uint64_t h = 14695981039346656037ull;
+    fp_mix(h, proj.order);
+    fp_mix(h, static_cast<uint64_t>(proj.layout));
+    for (uint64_t d : proj.domain_off)
+        fp_mix(h, d); // Hilbert's whole mapping, given order
+    for (const AtlasRect &r : proj.rects) {
+        fp_mix(h, r.x0);
+        fp_mix(h, r.y0);
+        fp_mix(h, r.x1);
+        fp_mix(h, r.y1);
+    }
+    fp.digest = h;
+    return fp;
+}
+
+std::string layout_reflow_note(const LayoutFingerprint &prev,
+                               const LayoutFingerprint &now) {
+    if (!prev.valid || !now.valid)
+        return std::string(); // a first floor is not a floor that moved
+    if (prev.digest == now.digest)
+        return std::string(); // recomputed, but identical: not a reflow
+    if (prev.regions != now.regions)
+        return "floor re-laid out: " + fp_regions(prev.regions) + " became " +
+               std::to_string(now.regions);
+    return "floor re-laid out: " + fp_regions(now.regions) +
+           ", extents changed";
+}
+
 // 61 T8: see projection.h for the rule, the Hilbert refusal and why the
 // legibility threshold is not a fidelity claim. Pure — no GL, no ImGui, no
 // camera — so the placement rule is checkable in the null harness beside

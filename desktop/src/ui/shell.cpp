@@ -279,10 +279,17 @@ void shell_sync_live_tab(ShellState &s) {
         scene3d::Camera cam = s.scenes[i].cam;
         scene3d::HudState hud = s.scenes[i].hud;
         dt_primer_state primer = s.scenes[i].primer;
+        // 61 T9: and the layout digest. THIS LINE IS THE WHOLE NOTICE'S HINGE —
+        // drop it and the fingerprint resets with everything else, prev.valid is
+        // false on every batch, and the reflow notice can never fire. A silent
+        // failure no pure test can catch, because the RULE stays correct; the
+        // wiring test in test_shell.cpp is what guards it.
+        space::LayoutFingerprint layout_fp = s.scenes[i].layout_fp;
         s.scenes[i] = SceneView{};
         s.scenes[i].cam = cam;
         s.scenes[i].hud = hud;
         s.scenes[i].primer = primer;
+        s.scenes[i].layout_fp = layout_fp;
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
@@ -1186,6 +1193,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         regs.insert(regs.end(), obs.begin(), obs.end());
         space::Projection proj = space::build_projection(std::move(regs));
         proj.data_span_note = std::move(span_note);
+        // 61 T9: did this weave move the floor the reader was already looking
+        // at? Computed HERE, while `proj` is still in scope and before
+        // build_terrain moves it. The first half of the spec's mitigation —
+        // "recompute only when the region set changes" — needs no code:
+        // rebuild_layout runs inside build_projection, which this !sv.built
+        // gate calls once per weave.
+        const space::LayoutFingerprint layout_fp = space::layout_fingerprint(proj);
+        proj.layout_note = space::layout_reflow_note(sv.layout_fp, layout_fp);
+        sv.layout_fp = layout_fp;
         sv.terr = space::build_terrain(std::move(proj), r);
         // 36 T2: the terrain's Projection anchors a rel PC path onto the plane
         // (build_terrain moved it into sv.terr.proj above; the terrain is built
