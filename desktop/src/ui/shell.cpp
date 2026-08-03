@@ -1845,6 +1845,16 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
             sv.terr.nsteps, s.scene_host->traj_scale());
 
+    // 61 T8: the atlas's in-place region labels, beside the ruler and under the
+    // same Plane gate. No LAYOUT gate is needed and none is wanted — atlas_labels
+    // returns empty under Hilbert, which is exactly why that refusal lives in the
+    // pure function rather than being re-stated at every call site.
+    if (sv.kind == scene3d::SceneKind::Plane)
+        scene3d::draw_atlas_labels(
+            ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+            ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+            sv.terr.proj);
+
     // T4 (50-two-way-brushing): a located selection off-screen is DISCLOSED —
     // a small edge-anchored label naming the direction — rather than moved to
     // (the follow toggle this brief marks optional-off-by-default would do

@@ -648,6 +648,40 @@ RegionStyle region_style(Region::Kind kind) {
     return {0.55f, 0.55f, 0.60f, "unknown"}; // -Wreturn-type: unreachable
 }
 
+// 61 T8: see projection.h for the rule, the Hilbert refusal and why the
+// legibility threshold is not a fidelity claim. Pure — no GL, no ImGui, no
+// camera — so the placement rule is checkable in the null harness beside
+// region_cells rather than only through a rendered frame.
+std::vector<AtlasLabel> atlas_labels(const Projection &proj,
+                                     uint32_t min_cells) {
+    std::vector<AtlasLabel> out;
+    // rects is empty under Hilbert AND after a rebuild_layout fallback; the
+    // size equality also covers a half-built projection a caller assembled by
+    // hand, which this directory's own tests do build.
+    if (proj.layout != Projection::Layout::Atlas ||
+        proj.rects.size() != proj.regions.size())
+        return out;
+    const uint32_t n = uint32_t(1) << proj.order;
+    out.reserve(proj.rects.size());
+    for (size_t i = 0; i < proj.rects.size(); i++) {
+        const AtlasRect &r = proj.rects[i];
+        const uint64_t cells =
+            uint64_t(r.x1 - r.x0) * uint64_t(r.y1 - r.y0);
+        if (cells < min_cells)
+            continue; // too small to read — see the header's note
+        AtlasLabel l;
+        l.u = 0.5f * static_cast<float>(r.x0 + r.x1) / static_cast<float>(n);
+        l.v = 0.5f * static_cast<float>(r.y0 + r.y1) / static_cast<float>(n);
+        l.cells =
+            static_cast<uint32_t>(cells > UINT32_MAX ? UINT32_MAX : cells);
+        l.region = i;
+        const Region &reg = proj.regions[i];
+        l.text = reg.label.empty() ? region_style(reg.kind).name : reg.label;
+        out.push_back(std::move(l));
+    }
+    return out;
+}
+
 // 51 T2: see projection.h for the rule and its exactness argument. Kept in
 // THIS TU because d2xy/domain_shift live here — re-deriving either one beside
 // a caller would be a second copy of load-bearing math, which is exactly what

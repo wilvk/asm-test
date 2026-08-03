@@ -122,6 +122,36 @@ struct RegionStyle {
 };
 RegionStyle region_style(Region::Kind kind);
 
+// 61 T8: one region's in-place label on the atlas floor. `u`/`v` are the
+// rect's GEOMETRIC centre (not a cell centre — the anchor names a rectangle,
+// not a cell), `cells` is its area for a caller's own LOD, `region` indexes
+// Projection::regions, and `text` is Region::label or, when that is empty, the
+// kind name — the SAME fallback the HUD's side-panel legend already applies
+// (scene3d/hud.cpp), never a second naming convention.
+struct AtlasLabel {
+    float u = 0, v = 0;
+    uint32_t cells = 0;
+    size_t region = 0;
+    std::string text;
+};
+
+// 61 T8: the labels for an ATLAS projection's rectangles — Component 1's
+// stated payoff ("region-major, 100 % packed, LABELLED IN PLACE ... this, not
+// locality, is the real win"). Empty under Hilbert, and that refusal is the
+// honest answer rather than a missing feature: a Hilbert region is a connected
+// snake through the plane with no rectangle and so no anchor, and inventing one
+// would be fabricated structure (D7). It is also what lets a caller invoke this
+// unconditionally, with no layout test at the call site.
+//
+// PARTIAL BY DESIGN. A rect smaller than `min_cells` is skipped, because below
+// roughly 8x8 the labels overlap into a pile that reads worse than the empty
+// floor did. That is a LEGIBILITY threshold, not a fidelity one — every region,
+// labelled or not, is still listed in the HUD's region legend, which is what
+// keeps a partially-labelled floor from implying the unlabelled rects are
+// unnamed. Callers must not present these as the complete set.
+std::vector<AtlasLabel> atlas_labels(const Projection &proj,
+                                     uint32_t min_cells = 64);
+
 // 51 T2 (scene-focus-and-scale.md): the plane cells one region occupies —
 // row-major indices `y * n + x` over the n = 2^order plane, ascending, no
 // duplicates. THE one rule for "which cells are this region's".

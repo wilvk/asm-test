@@ -184,6 +184,19 @@ void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
                            ImVec2 origin, ImVec2 size, uint64_t nsteps,
                            float traj_scale);
 
+// 61 T8: draw the atlas's region labels into the 3D VIEWPORT (not the HUD
+// window), each at its rectangle's centre ON the ground plane, projected
+// through `cam` into `origin`/`size`'s screen rect — the SAME world->clip
+// transform draw_trajectory_ruler above uses. A no-op for a Hilbert projection,
+// because space::atlas_labels refuses one (see projection.h), which is why the
+// caller needs no layout gate.
+//
+// PARTIAL BY DESIGN: rects below the legibility threshold carry no label, and
+// the HUD's region legend remains the complete list. Do not present what this
+// draws as every region.
+void draw_atlas_labels(ImDrawList *draw_list, const Camera &cam, ImVec2 origin,
+                       ImVec2 size, const space::Projection &proj);
+
 struct HudState {
     uint64_t t = 0;      // playhead: the inclusive terrain slice [0, t]
     uint64_t nsteps = 0; // the recording's step extent (the slider's max)

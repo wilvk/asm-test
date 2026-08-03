@@ -709,6 +709,85 @@ int main() {
               (1u << a.order) == (1u << p.order), "the cell grid resized");
     }
 
+    // --- 61 T8: Component 1's deliverable — the floor names its rectangles --
+    {
+        // T2's first fixture, so the rects are the ones already pinned above:
+        // code owns (0,0)-(16,256) = 4096 cells, mmap owns (16,0)-(256,256).
+        static const Ref kSmall = {0x0000000000400000ull, 4096, Region::Code};
+        static const Ref kBig = {0x0000000001000000ull, 61440, Region::Mmap};
+        const Projection lp = atlas_of({kSmall, kBig});
+        const std::vector<AtlasLabel> labels = atlas_labels(lp);
+        check("every rect big enough to read gets a label", labels.size() == 2,
+              "got " + std::to_string(labels.size()) + " labels for 2 regions");
+
+        const uint32_t ln = 1u << lp.order;
+        for (const AtlasLabel &l : labels) {
+            // The anchor is the rect's GEOMETRIC centre, so the label sits ON
+            // the thing it names rather than beside it.
+            const AtlasRect &r = lp.rects[l.region];
+            const uint32_t cx = uint32_t(l.u * ln), cy = uint32_t(l.v * ln);
+            check("the label anchor lies inside the rect it names",
+                  cx >= r.x0 && cx < r.x1 && cy >= r.y0 && cy < r.y1,
+                  "anchor (" + std::to_string(l.u) + "," + std::to_string(l.v) +
+                      ") fell outside region " + std::to_string(l.region) +
+                      "'s rect");
+            // And it points at that region under the layout's own inverse — the
+            // label is not merely NEAR the rect, it decodes TO it.
+            uint64_t back = 0;
+            const Region *got = nullptr;
+            check("the anchor unprojects to the region it names",
+                  lp.unproject(l.u, l.v, &back, &got) && got != nullptr &&
+                      got->base == lp.regions[l.region].base,
+                  "a label anchored on a cell belonging to a different region");
+            check("a label always says something", !l.text.empty(),
+                  "an unnamed rectangle is an unlabelled floor");
+        }
+        // The fallback: these fixture Regions carry no `label`, so each must
+        // fall back to its KIND name rather than to an empty string — reusing
+        // the rule the HUD's side-panel legend already applies, never a second
+        // naming convention. Guarded on the size, because indexing a short
+        // vector to report a failure turns a clean FAIL into a crash that says
+        // nothing.
+        if (labels.size() == 2)
+            check("an unlabelled region falls back to its kind name",
+                  labels[0].text ==
+                          std::string(region_style(Region::Code).name) &&
+                      labels[1].text ==
+                          std::string(region_style(Region::Mmap).name),
+                  "got \"" + labels[0].text + "\" and \"" + labels[1].text +
+                      "\"");
+    }
+    {
+        // Hilbert has nowhere to put a label and must say so by REFUSING, not
+        // by anchoring on a snake's centroid — that would be the fabricated
+        // structure D7 forbids. It is also what makes the function safe to call
+        // unconditionally from the shell.
+        std::vector<Region> hin;
+        Region hreg;
+        hreg.base = 0x400000ull;
+        hreg.len = 4096;
+        hreg.kind = Region::Code;
+        hin.push_back(hreg);
+        const Projection hp = build_projection(std::move(hin));
+        check("the Hilbert layout labels nothing", atlas_labels(hp).empty(),
+              "a space-filling curve was given a label anchor it cannot "
+              "support");
+    }
+    {
+        // The legibility threshold, on the saturated plane T2 already builds:
+        // 4000 regions on a 4096-cell grid, so the LARGEST rect is 2 cells.
+        // Every one is dropped — 4000 strings over 4096 cells is not a labelled
+        // floor. The side-panel legend still lists all 4000, which is the
+        // disclosure that keeps a partial floor honest.
+        std::vector<Ref> smany;
+        for (uint64_t i = 0; i < 4000; i++)
+            smany.push_back({0x1000ull + i * 0x10000ull, 1, Region::Code});
+        const Projection sat2 = atlas_of(smany);
+        check("rects too small to read are dropped, not piled up",
+              atlas_labels(sat2).empty(),
+              "a 1-cell rectangle was given a text label");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d projection check(s) failed\n", failures);
         return 1;
