@@ -133,6 +133,62 @@ int main() {
               !(layers.*(c->flag)), "persistence-by-id round-trip failed");
     }
 
+    // --- 61 T6: the axis budget's two MOTIF CHANNELS -----------------------
+    // The spec's Component 3 asks for two semantic channels: per-cell opcode
+    // class, and a crossing mark coloured by syscall family. Both ALREADY
+    // ship, as `opcode` and `crossings`. Adding a third toggle would have
+    // re-tinted cells the opcode layer already tints and re-marked crossings
+    // the crossings layer already marks, so this task adds no bool, no
+    // registry row and no classifier — it pins what is there, by id, so a
+    // later brief cannot quietly introduce the duplicate.
+    //
+    // The defaults are pinned to this registry's REAL convention — a layer
+    // that adds geometry or a surface defaults ON, a layer that re-lifts the
+    // reading of the terrain already on screen defaults OFF — and NOT to the
+    // "all true" rule the spec asserts, which this registry has never
+    // followed (confidence, opcode, data_relief, working_set, lifetime,
+    // data_ribbon and sediment are all default-off, each with that reason
+    // stated at its own field).
+    {
+        const LayerDesc *op = nullptr, *cr = nullptr;
+        for (const LayerDesc &d : all) {
+            if (std::string(d.id) == "opcode")
+                op = &d;
+            if (std::string(d.id) == "crossings")
+                cr = &d;
+        }
+        check("the opcode-class channel has exactly one row", op != nullptr,
+              "the spec's opcode motif channel is the existing `opcode` layer");
+        check("the crossing-family channel has exactly one row", cr != nullptr,
+              "the spec's I/O motif channel is the existing `crossings` layer");
+        if (op != nullptr && cr != nullptr) {
+            SceneLayers l;
+            check("opcode defaults off — it re-lifts the terrain already on "
+                  "screen",
+                  !(l.*(op->flag)),
+                  "a re-lift layer must not open a session in place of the "
+                  "density view");
+            check("crossings defaults on — it adds geometry rather than "
+                  "re-lifting",
+                  l.*(cr->flag), "an additive layer defaults on by convention");
+            // Optional has to mean toggleable, in both directions.
+            l.*(op->flag) = true;
+            l.*(cr->flag) = false;
+            check("both motif channels toggle", l.*(op->flag) && !(l.*(cr->flag)),
+                  "a toggle did not take");
+        }
+        // D7 abstention, VERIFIED BY READING rather than re-asserted here —
+        // an assertion that restates a switch tests the copy, not the rule.
+        // Both channels abstain visibly and neither borrows a neighbouring
+        // family's hue:
+        //   crossing_hue(SyscallClass::Other) falls out of its switch to a
+        //   flat 0.62 grey, with its own comment calling it "visible grey,
+        //   not a washed-out version of a hue" (scene3d/causal.cpp);
+        //   OpClass::Unknown carries the label "unknown: not classifiable
+        //   (abstain)" and the same abstain grey, which hud.cpp's relief
+        //   legend explicitly cites as the shared abstain colour.
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d test_layers check(s) failed\n", failures);
         return 1;
