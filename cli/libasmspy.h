@@ -167,16 +167,16 @@ const char *asmspy_mode_name(asmspy_mode_t m);
 typedef struct {
     long tid;
     char comm[20];
-    char state; /* R S D Z T t X from /proc/<tid>/stat                 */
-    char wchan[48];                 /* kernel symbol it sleeps in; "" if none */
+    char state;     /* R S D Z T t X from /proc/<tid>/stat                 */
+    char wchan[48]; /* kernel symbol it sleeps in; "" if none */
     unsigned long long cpu_jiffies; /* utime+stime of THIS task            */
     /* /proc/<tid>/syscall: needs ptrace permission, performs no attach.  */
-    int have_syscall;    /* 0 -> `syscall_why` says why, and is non-empty */
-    long syscall_nr;     /* -1 = running in user mode                     */
+    int have_syscall; /* 0 -> `syscall_why` says why, and is non-empty */
+    long syscall_nr;  /* -1 = running in user mode                     */
     char syscall_name[32];
     unsigned long long syscall_args[6];
     unsigned long long pc, sp;
-    char pc_sym[96];     /* pc resolved via the symtab; "" if unresolved  */
+    char pc_sym[96]; /* pc resolved via the symtab; "" if unresolved  */
     char syscall_why[80];
 } asmspy_pi_thread_t;
 

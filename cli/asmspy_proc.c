@@ -1551,10 +1551,11 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
     out->ns_user = pi_ns_id(pid, "user");
     {
         pid_t me = getpid();
-        out->ns_differs = (out->ns_pid && out->ns_pid != pi_ns_id(me, "pid")) ||
-                          (out->ns_net && out->ns_net != pi_ns_id(me, "net")) ||
-                          (out->ns_mnt && out->ns_mnt != pi_ns_id(me, "mnt")) ||
-                          (out->ns_user && out->ns_user != pi_ns_id(me, "user"));
+        out->ns_differs =
+            (out->ns_pid && out->ns_pid != pi_ns_id(me, "pid")) ||
+            (out->ns_net && out->ns_net != pi_ns_id(me, "net")) ||
+            (out->ns_mnt && out->ns_mnt != pi_ns_id(me, "mnt")) ||
+            (out->ns_user && out->ns_user != pi_ns_id(me, "user"));
     }
     snprintf(p, sizeof p, "/proc/%d/cgroup", (int)pid);
     read_first_line(p, line, sizeof line);
@@ -1607,16 +1608,26 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
 
 const char *asmspy_mode_name(asmspy_mode_t m) {
     switch (m) {
-    case ASMSPY_MODE_LOG:      return "log";
-    case ASMSPY_MODE_STREAM:   return "stream";
-    case ASMSPY_MODE_TRACE:    return "trace";
-    case ASMSPY_MODE_DATAFLOW: return "dataflow";
-    case ASMSPY_MODE_TREE:     return "tree";
-    case ASMSPY_MODE_GRAPH:    return "graph";
-    case ASMSPY_MODE_PROCS:    return "procs";
-    case ASMSPY_MODE_SAMPLE:   return "sample";
-    case ASMSPY_MODE_WATCH:    return "watch";
-    default:                   return "?";
+    case ASMSPY_MODE_LOG:
+        return "log";
+    case ASMSPY_MODE_STREAM:
+        return "stream";
+    case ASMSPY_MODE_TRACE:
+        return "trace";
+    case ASMSPY_MODE_DATAFLOW:
+        return "dataflow";
+    case ASMSPY_MODE_TREE:
+        return "tree";
+    case ASMSPY_MODE_GRAPH:
+        return "graph";
+    case ASMSPY_MODE_PROCS:
+        return "procs";
+    case ASMSPY_MODE_SAMPLE:
+        return "sample";
+    case ASMSPY_MODE_WATCH:
+        return "watch";
+    default:
+        return "?";
     }
 }
 
