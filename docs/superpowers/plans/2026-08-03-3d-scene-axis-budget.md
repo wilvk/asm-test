@@ -1,6 +1,6 @@
 # 3D scene axis budget — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Re-encode the desktop 3D overview so its three spatial axes carry three decodable quantities — a 100 %-packed region atlas on the floor, access density on Y, and time moved out of the spatial budget into playhead animation.
 
@@ -9,6 +9,33 @@
 **Tech Stack:** C++17, `desktop/src/space/` (pure, engine-free — no GL, no ImGui), `desktop/src/scene3d/` (GL), `desktop/src/ui/` (ImGui), the null test harness under `desktop/test/`.
 
 **Spec:** [2026-08-03-3d-scene-axis-budget-design.md](../specs/2026-08-03-3d-scene-axis-budget-design.md)
+
+**Status — ✅ 12/12 COMPLETE (2026-08-04), `26d4a4b`..`465651df`.** Brief:
+[docs/internal/gui/61-scene-axis-budget.md](../../internal/gui/61-scene-axis-budget.md).
+T7c needed a producer change first — no single `asmspy` serve engine emits
+`codeimage` + `trace` + `syscall`, and a two-engine session wrote a header per
+engine — delivered by
+[2026-08-03-serve-session-recording.md](2026-08-03-serve-session-recording.md).
+
+**Three things this plan got wrong, corrected in the tree rather than here, so
+a reader trusting the snippets below is warned:**
+
+1. **Task 8's Hilbert-refusal snippet was unpinned** and would hard-fail at
+   Task 10's flip (it is fixed above, but the same hazard is worth re-reading
+   before writing any new block in `test_projection.cpp`).
+2. **`atlas_labels`' threshold could not work as specified.** `min_cells = 64`
+   is an absolute cell count, but a rect's cell count scales with `order`; at
+   order 12 it filtered nothing and put 12 labels 6 px apart. It shipped as a
+   FRACTION OF THE PLANE'S SIDE applied to the rect's SHORTER side — area is the
+   wrong measure, since a 5×205 rect has 1025 cells and nowhere to put a word.
+3. **Task 5's flat worldline needed a DRAPED lift, not a constant one**, and
+   flattening collapses coincident pick points (the followed vertex must win its
+   own pixel). Both are consequences the plan did not anticipate; both are in
+   the brief.
+
+**Open risk 5 is CONFIRMED, not cleared:** measured worst aspect ratio is 13:1
+on a realistic `/proc/maps` and 4096:1 under randomised skew, with 1177 rects
+thinner than two cells across 400 sets. Tiling is exact in every case.
 
 ## Global Constraints
 
@@ -96,7 +123,7 @@ Lands first and independently of the re-encoding, so the live defect is fixed re
 
 **Why a new header rather than a member of `scene.cpp`:** `scene.o` links GL, so a test touching it needs a GL context for a piece of pure arithmetic. [camera.h](../../../desktop/src/scene3d/camera.h) and `linequad.h` are already header-only for exactly this reason — `test_camera.cpp`'s own comment calls them "header-only citizens" whose binary "links NOTHING but the header". This test joins them: it stays in the null harness and links only its own object.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```cpp
 // test_scene_traj.cpp — the worldline's vertical scale rule. Null harness, no
@@ -163,7 +190,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Register the new test binary in `mk/desktop.mk`**
+- [x] **Step 2: Register the new test binary in `mk/desktop.mk`**
 
 The file is new, so without this it never builds and never runs in CI. It links only its own object, exactly like `test_camera`:
 
@@ -174,12 +201,12 @@ $(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o
 
 and add `$(BUILD)/desktop_test_scene_traj \` to the `DESKTOP_TESTS` list at [mk/desktop.mk:1199](../../../mk/desktop.mk#L1199). It does **not** include `linmath.h`, so it needs no entry in the order-only prereq group.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: FAIL — `scene_traj_scale` not declared.
 
-- [ ] **Step 4: Write the header and apply sediment's guard**
+- [x] **Step 4: Write the header and apply sediment's guard**
 
 Create `desktop/src/scene3d/trajscale.h`:
 
@@ -229,12 +256,12 @@ const float scale = scene_traj_scale(nsteps, max_t, time_scale);
 
 `traj_scale_ = scale` on the next line is unchanged: `render()` derives `uHeadY`, the vehicle's `tail_half` and `time_cut_y` from it ([scene.cpp:1470-1475](../../../desktop/src/scene3d/scene.cpp#L1470)), and all three stay correct — they simply now sit inside the envelope too.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: PASS.
 
-- [ ] **Step 6: Run the whole suite before committing — this task can churn goldens**
+- [x] **Step 6: Run the whole suite before committing — this task can churn goldens**
 
 Run: `make desktop-test`
 
@@ -247,7 +274,7 @@ the scale is the same `0.6f / nsteps` it was), which is why no churn is
 image golden moves here, that is the defect being fixed becoming visible, not a
 regression: regenerate it in the same commit and say so in the message.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.cpp desktop/test/test_scene_traj.cpp mk/desktop.mk
@@ -450,7 +477,7 @@ uint64_t atlas_ordinal(const AtlasRect &r, uint32_t x, uint32_t y) {
 }
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to the existing `desktop/test/test_projection.cpp`, reusing its `check`/`fail` helpers and its `Ref` struct. Add a local builder beside the existing setup:
 
@@ -686,12 +713,12 @@ Then, inside `main()`:
 
 `std::hypot` needs `<cmath>` — add it to the file's includes if it is not already there.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: FAIL — `Projection::Layout` not declared.
 
-- [ ] **Step 3: Implement the atlas mapping**
+- [x] **Step 3: Implement the atlas mapping**
 
 In `space/types.h`, add to `struct Projection` (with `AtlasRect`/`AtlasNode` above it, per the Interfaces block):
 
@@ -864,12 +891,12 @@ if (proj.layout == Projection::Layout::Atlas) {
 
 `region_cells`'s doc comment in `projection.h` currently argues from the Hilbert index run — extend it to state both mappings rather than replacing the Hilbert half, since both remain live. Say explicitly that the atlas set is the region's **rect**: every cell the region *owns*, which is a superset of the cells its addresses *reach* (the rect's rounding tail is owned but does not decode). That superset is what the layer wants — zoning and labelling are about ownership — and it keeps [test_focus.cpp](../../../desktop/test/test_focus.cpp)'s containment and disjointness contracts true under both layouts.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: PASS, including every pre-existing Hilbert check — run the whole file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add desktop/src/space/types.h desktop/src/space/projection.h desktop/src/space/projection.cpp desktop/test/test_projection.cpp
@@ -889,7 +916,7 @@ git commit -m "space: add the region-atlas projection layout, tiling the cell gr
 
 **Why this is smaller than it looks.** An earlier draft claimed these helpers "re-derive Hilbert arithmetic" and had to be rewritten. They do not: [locate.cpp:19](../../../desktop/src/space/locate.cpp#L19) and [stepplace.cpp:38](../../../desktop/src/space/stepplace.cpp#L38) already call `proj.project()`, and what they open-code — deliberately, with comments saying so — is only `cell = y*n + x` with `n = 1 << order`, which Task 2 leaves valid by keeping the grid. So the funnel is *already* layout-agnostic and this task's job is to **pin that**, so a later change cannot quietly reintroduce a layout assumption. `region_cells()` was the one genuine exception and Task 2 fixed it.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Add to `desktop/test/test_stepplace.cpp`, reusing its helpers. `place_address` is the right probe — it takes `(Projection, addr)` and needs no `Recording`. **Add `#include <cmath>`** to that file first: it includes `<cstdio>`, `<sstream>` and `<string>` but no `<cmath>`, and the block below uses `std::fabs`.
 
@@ -964,16 +991,16 @@ for (const space::Projection &pj : {std::cref(hil), std::cref(atl)}) {
 
 All four contracts hold under the atlas by construction — a rect is non-empty, its cells are distinct, `project` places inside the region's own rect, and the rects tile without overlap — so this should pass on the first run. If it does not, the bug is in Task 2's `region_cells` branch, not here.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `make build/desktop_test_stepplace && ./build/desktop_test_stepplace && make build/desktop_test_focus && ./build/desktop_test_focus`
 Expected: FAIL — `Projection::Layout` not declared if Task 2 has not landed; otherwise **these may pass immediately**, and that is the correct outcome for a regression gate over already-correct code. Do not manufacture a failure to satisfy the red-green ritual. If `test_focus` fails under `Atlas`, that is a real Task 2 bug in `region_cells` — fix it there.
 
-- [ ] **Step 3: Run tests to verify they pass**
+- [x] **Step 3: Run tests to verify they pass**
 
 Run the two binaries above in full, not just the new cases.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add desktop/test/test_stepplace.cpp desktop/test/test_focus.cpp
@@ -1002,7 +1029,7 @@ An earlier draft answered this with two *calibrated pad factors*: `radius = exte
 
 With a fully-tiled atlas the occupied bounds *are* the unit square, so the fit is a **regression guard**: it only starts moving the camera if the floor ever stops being fully claimed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the existing `desktop/test/test_camera.cpp`, reusing its `check` helper:
 
@@ -1074,12 +1101,12 @@ Add to the existing `desktop/test/test_camera.cpp`, reusing its `check` helper:
 
 The file's existing `reset restores yaw/pitch/radius` check at `:111` is the real gate on the calibration and must be left untouched.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `make build/desktop_test_camera && ./build/desktop_test_camera`
 Expected: FAIL — no member `fit`.
 
-- [ ] **Step 3: Implement `fit`**
+- [x] **Step 3: Implement `fit`**
 
 ```cpp
 // The radii that frame the WHOLE unit plane — this struct's shipped defaults,
@@ -1119,12 +1146,12 @@ void fit(float u0, float v0, float u1, float v1, float whole) {
 
 `top_down()` keeps `yaw = 0`, `pitch = kPitchLimit` and takes **only the radius**: `radius = fit_radius(0.0f, 0.0f, 1.0f, 1.0f, kWholePlaneRadiusTopDown);`. It must **not** call `fit`. Today's `top_down()` leaves `target` alone, and [shell.cpp:1464](../../../desktop/src/ui/shell.cpp#L1464) invokes it on a camera the user may have panned; recentring would silently teleport them to the plane centre on a keypress whose whole purpose is "show me this, flat". No existing test catches that — the file's top-down block uses a default camera, where the two are indistinguishable — so Step 1 adds one.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `make build/desktop_test_camera && ./build/desktop_test_camera`
 Expected: PASS — the new checks **and** the pre-existing reset/top_down ones. `:111` compares with `==`; if it fails, the radius is being *computed* rather than scaled from `kWholePlaneRadius`. Do not relax that check to a tolerance and do not try to tune a pad factor — see the Interfaces block for why that road has no end.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add desktop/src/scene3d/camera.h desktop/test/test_camera.cpp
@@ -1196,7 +1223,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 
 **Z-fighting is a real consequence, not a detail.** A flat worldline at `y = 0` is coplanar with the terrain floor and will z-fight or vanish under any cell with nonzero height. Lift the path by a small constant above the terrain's own surface at that cell (or draw it with a depth offset) — and say which in a comment, because "the path disappeared into the ground" is the failure this note exists to prevent.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Both rules go in `scene3d/trajscale.h` (Task 1's header) as pure functions, so `test_scene_traj.cpp` keeps linking nothing but its own object — no GL, no `Scene`.
 
@@ -1276,12 +1303,12 @@ inline std::pair<uint64_t, uint64_t> comet_window(uint64_t follow_step,
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: FAIL — `traj_vertex_y` not declared.
 
-- [ ] **Step 3: Implement flat time**
+- [x] **Step 3: Implement flat time**
 
 In `set_trajectories`, emit `traj_vertex_y(pt.t, scale, flat_time)` for every vertex Y (the PC strip, the pick points `pts_pos`, and `pt_pos`) plus the constant terrain lift. In `render()`, replace the Y-derived quantities per the table above and pass the `comet_window` bounds as a step-space uniform, fading by distance from `hi`.
 
@@ -1308,13 +1335,13 @@ if (sv.kind == scene3d::SceneKind::Plane &&
 
 Leaving the call unconditional would label an axis the default scene no longer uses — a ruler for nothing, which is worse than no ruler, and exactly the fabricated correspondence the `SceneKind::Plane` gate beside it already guards against. Deleting it would strand the three layers on an unlabelled axis the moment a reader switches one on. Re-caption it too ([hud.h:170-177](../../../desktop/src/scene3d/hud.h#L170) and the caption in `hud.cpp`): it measures trace time for the pillars, strata and arcs — **not** for the trajectory, which has left the axis.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Then the whole suite, because `pick.cpp` replays vertex order against these positions: `make desktop-test`.
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.h desktop/src/scene3d/scene.cpp desktop/src/scene3d/causal.cpp desktop/src/scene3d/hud.cpp desktop/src/scene3d/hud.h desktop/src/scene3d/shaders/embedded.h desktop/test/test_scene_traj.cpp
@@ -1343,7 +1370,7 @@ Adding a `motifs` bool would have been a **third** toggle re-tinting cells the `
 
 **And the "all-true convention" the spec cites does not exist.** `SceneLayers`' actual documented rule ([scene.h:60-144](../../../desktop/src/scene3d/scene.h#L60)) is: a layer that draws an **additional surface or geometry** defaults ON (`canopy`, `mispred`, `crossings`, `taint`, `blame`, `ridge`, `halos`); a layer that **re-lifts the reading of the terrain already on screen** defaults OFF (`confidence`, `opcode`, `data_relief`, `working_set`, `lifetime`, `data_ribbon`, `sediment`). `opcode` is OFF for that stated reason and should stay OFF; `crossings` is ON for that stated reason and should stay ON. The spec's Component 3 paragraph on defaults is wrong on the premise and should be read as superseded by this task.
 
-- [ ] **Step 1: Add the assertions that pin what the spec actually requires**
+- [x] **Step 1: Add the assertions that pin what the spec actually requires**
 
 Add to the existing `desktop/test/test_layers.cpp`, reusing its `check` helper:
 
@@ -1382,16 +1409,16 @@ Add to the existing `desktop/test/test_layers.cpp`, reusing its `check` helper:
 }
 ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
 Run: `make build/desktop_test_layers && ./build/desktop_test_layers`
 Expected: PASS immediately — this is a regression gate over correct code. If either default is *not* what this asserts, stop: that is a finding about the tree, not a test to adjust.
 
-- [ ] **Step 3: Verify the D7 abstention already holds**
+- [x] **Step 3: Verify the D7 abstention already holds**
 
 `crossing_hue(SyscallClass::Other)` ([causal.cpp:161](../../../desktop/src/scene3d/causal.cpp#L161)) and the opcode tint's `OpClass::Unknown` path must be visibly neutral, never a neighbouring family's hue. Read both; if either already abstains, record that in the test comment rather than adding an assertion that restates the switch. If either does **not** abstain, that is a genuine D7 defect — fix it here, with a test.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add desktop/test/test_layers.cpp
@@ -1425,7 +1452,7 @@ git commit -m "desktop(test): pin the two motif channels to their existing layer
 
 **`image_floor_fraction` is deliberately NOT produced.** The earlier draft asserted `image_floor_fraction(bare) >= 0.5f` — "the atlas should claim all of it". That is unsound twice over: what fraction of the *viewport* the floor covers is a camera-framing artefact (at the default `radius` 2.2 the plane does not fill the frame, so the threshold measures the camera, not the layout), and per the honesty note in "the one decision", the atlas does not increase the number of cells that carry data anyway. The packing claim is a cell-space property and Task 2 proves it in integers with no epsilon. What the screen can honestly gate is *non-blankness* and *pairwise distinctness*, which is what 7b does.
 
-- [ ] **Step 1: Write `desktop/test/gl_offscreen.h`**
+- [x] **Step 1: Write `desktop/test/gl_offscreen.h`**
 
 ```cpp
 // gl_offscreen.h — a surfaceless EGL context, an RGBA8 FBO, and one call that
@@ -1598,14 +1625,14 @@ inline Image render_plane_scene(scene3d::Scene &scene, const ColorFbo &cf,
 #endif // ASMDESK_TEST_GL_OFFSCREEN_H
 ```
 
-- [ ] **Step 2: Re-point `test_scene_fbo.cpp` at the header and confirm it still passes**
+- [x] **Step 2: Re-point `test_scene_fbo.cpp` at the header and confirm it still passes**
 
 Delete its local `egl_up`, `ColorFbo` and `capture`, include `gl_offscreen.h`, and adapt the call sites (`capture()` returned a bare `std::vector<unsigned char>`; `capture_image()` returns an `Image` whose `.px` is that same buffer, so `pixels_differ(a.px, b.px)` and `lum(&a.px[i*4])` are the mechanical edits).
 
 Run: `make docker-desktop`
 Expected: PASS, with `test_scene_fbo` reporting exactly what it reported before. **Do this before writing anything new** — refactoring a working GL path is where this task can silently break an existing gate, and 7b is much harder to debug on top of a broken harness.
 
-- [ ] **Step 3: Factor the object closure in `mk/desktop.mk`**
+- [x] **Step 3: Factor the object closure in `mk/desktop.mk`**
 
 The link rule at [mk/desktop.mk:1800-1821](../../../mk/desktop.mk#L1800) lists twenty-odd objects. Lift them into a variable so 7b's binary cannot drift from it — **plus one object that list does not currently carry.**
 
@@ -1625,7 +1652,7 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add desktop/test/gl_offscreen.h desktop/test/test_scene_fbo.cpp mk/desktop.mk
@@ -1673,7 +1700,7 @@ The earlier draft left this open and mis-stated the constraint. Both halves are 
 
 **A shape check replaces the byte gate for the frozen fixture.** Task 7c asserts the capture still carries ≥1 `codeimage`, a non-empty `trace` and ≥2 `syscall` rows — a has-it-rotted precondition, not an approximation of any result.
 
-- [ ] **Step 1: Write the comparator**
+- [x] **Step 1: Write the comparator**
 
 ```cpp
 // image_distinct.h — pairwise frame distinctness. Deliberately crude: this
@@ -1709,7 +1736,7 @@ inline bool images_distinct(const Image &a, const Image &b,
 #endif // ASMDESK_TEST_IMAGE_DISTINCT_H
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 **The GL half must not self-skip in this binary** — `Dockerfile.desktop` pins software Mesa + EGL so it really renders, and a test that can only self-skip is not a test (CLAUDE.md). Fail loudly if no context is obtainable. Unlike `test_scene_fbo` there is no pure half to fall back on: the picture *is* the subject.
 
@@ -1864,7 +1891,7 @@ int main() {
 
 **Note what is deliberately absent.** There is no "the floor is ≥ 50 % covered" assertion. An earlier draft had one; see Task 7a's Interfaces block for why it was unsound in both of its halves. The packing claim is proved in cells, in Task 2, with no epsilon and no camera in the way.
 
-- [ ] **Step 3: Register the binary in `mk/desktop.mk` — four additions, not one**
+- [x] **Step 3: Register the binary in `mk/desktop.mk` — four additions, not one**
 
 An earlier draft named only the `DESKTOP_GL_TESTS` entry. The object also needs the golden-directory define (target-specific, exactly like [mk/desktop.mk:505-507](../../../mk/desktop.mk#L505)) or the `#error` above fires, and it includes `linmath.h` transitively through `camera.h`, so it needs the order-only prereq too.
 
@@ -1886,12 +1913,12 @@ DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo \
                     $(BUILD)/desktop_test_motif_distinctness
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+- [x] **Step 4: Run tests to verify they fail**
 
 Run: `make build/desktop_test_motif_distinctness && ./build/desktop_test_motif_distinctness`
 Expected: FAIL — recordings absent.
 
-- [ ] **Step 5: Generate the three recordings**
+- [x] **Step 5: Generate the three recordings**
 
 **Not `ROUTINES[]` — that table cannot carry bytes.** An earlier draft said "add three `ROUTINES[]` entries … following the byte-literal pattern the file already uses for `SCENE_HOT_LOOP`", and those two halves are mutually exclusive. `ROUTINES[]` is `rec_routine_t` = `{name, args[3], nargs, steps_cap}` ([:219](../../../tools/asmtrace_record.c#L219)) — **no bytes field** — and `record_one` resolves each entry through `asmtest_corpus_routine(r->name)` ([:1416](../../../tools/asmtrace_record.c#L1416)), a lookup of a **compiled symbol's address** in the linked corpus objects (`$(ASMTRACE_ROUTINE_OBJS)` = `fp.o simd.o structs.o fault.o corpus_routines.o`, [mk/cli.mk:505](../../../mk/cli.mk#L505)). A new entry would therefore need new corpus assembly, not a byte array; and `record_one` names its output after the routine, so it could not produce a `motif-*.asmtrace` either. Following the draft literally, `make asmtrace-golden` fails with `asmtrace_record: no corpus routine 'motif-scalar-loop'`.
 
@@ -1949,14 +1976,14 @@ make docker-cli && make asmtrace-golden
 
 `asmtrace-golden` is gated on x86_64 + libunicorn (`ASMTRACE_GOLDEN_OK`, [mk/cli.mk:521](../../../mk/cli.mk#L521)), so regenerate from the `docker-cli` image — the target's own echo warns that host Capstone 4.x renders different disasm text, and this gate reads that text. Commit the three `.asmtrace` files under `tests/golden-asmtrace/`. `asmtrace-golden-check` ([mk/cli.mk:534](../../../mk/cli.mk#L534)) then holds them byte-stable in CI, which is the point; if a later disasm or link-set change churns them, regenerate from the container rather than editing them.
 
-- [ ] **Step 6: Run tests to verify they pass — in the container, not on the host**
+- [x] **Step 6: Run tests to verify they pass — in the container, not on the host**
 
 Run: `make docker-desktop`
 Expected: PASS. The host may have no EGL device, in which case the GL lane is not even built (`DESKTOP_GL_MISSING`, [mk/desktop.mk:2311](../../../mk/desktop.mk#L2311)) and a host-only run would report a false green. `Dockerfile.desktop` pins software Mesa + EGL precisely so this lane really renders — so **this gate must be judged from the container run**.
 
 **If the distinctness case fails, stop and report.** That is the design being refuted, not a test to loosen. Do not lower `min_fraction` to make it pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add desktop/test/test_motif_distinctness.cpp desktop/test/image_distinct.h tools/asmtrace_record.c tests/golden-asmtrace mk/desktop.mk
@@ -1980,13 +2007,13 @@ Step 0's second half. The spec's I/O motif channel is the existing `crossings` l
 - Consumes: nothing from earlier tasks — `build_crossing_layer` and `SyscallClass` both already ship.
 - Produces: no signature change. A regression gate over real data.
 
-- [ ] **Step 1: Record and freeze the capture**
+- [x] **Step 1: Record and freeze the capture**
 
 Run `asmspy` over a small binary that makes a handful of distinguishable syscalls (a `write` and an `openat`/`close` pair give two different `SyscallClass` values, which is what makes the class channel checkable rather than a single-colour smear). It must carry a `codeimage` and a non-empty `trace` as well as the `syscall` rows — `desktop/test/fixtures/obs-syscalls.asmtrace` is `{session×2, syscall×4, end}` with neither, which is why it cannot be reused here.
 
 Commit the result under `desktop/test/fixtures/`. It is **frozen, never regenerated**: that directory has no byte-check gate (it appears in `mk/desktop.mk` only as a `-DASMTEST_FIXTURE_DIR` define), so a live capture's non-reproducibility never comes up. Record in the test's comment the exact command and binary that produced it.
 
-- [ ] **Step 2: Write the test**
+- [x] **Step 2: Write the test**
 
 Add to `desktop/test/test_crossing.cpp`, reusing its helpers. Two blocks — the shape precondition, then the contract:
 
@@ -2051,7 +2078,7 @@ Add to `desktop/test/test_crossing.cpp`, reusing its helpers. Two blocks — the
 }
 ```
 
-- [ ] **Step 3: Register the fixture define**
+- [x] **Step 3: Register the fixture define**
 
 `test_crossing.o` has no `ASMTEST_FIXTURE_DIR` today. Add it beside the others at [mk/desktop.mk:513-516](../../../mk/desktop.mk#L513):
 
@@ -2061,14 +2088,14 @@ $(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_
 
 The link rule ([mk/desktop.mk:1397](../../../mk/desktop.mk#L1397)) and the `DESKTOP_TESTS` entry (`:1277`) already exist, and the loader is already linked: that rule ends in `$(DESKTOP_TEST_DOC)`, which is `doc/recording.o` and four siblings ([mk/desktop.mk:721](../../../mk/desktop.mk#L721)). So the define is the only makefile change this task needs. The test file also gains `#include <optional>` for the declaration above.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `make build/desktop_test_crossing && ./build/desktop_test_crossing`
 Expected: PASS, including every pre-existing NDJSON block — run the whole file.
 
 **If "the class channel distinguishes at least one real syscall" fails, do not relax it.** Either the capture caught only syscalls the classifier ([`class_of`, views/crossing.cpp:45](../../../desktop/src/views/crossing.cpp#L45)) has no word for — recapture with a `write` and an `openat` — or it abstains where it should not, which is a real D7 finding to report.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add desktop/test/fixtures/motif-crossings.asmtrace desktop/test/test_crossing.cpp mk/desktop.mk
@@ -2105,7 +2132,7 @@ What exists today is a **side-panel legend** — [hud.cpp:1176-1187](../../../de
 2. **Skip rects too small to carry text.** Below the threshold the labels overlap into an unreadable pile, which is strictly worse than the legend that is already on screen. `min_cells = 64` (an 8×8 rect) is the default, and it is a *legibility* threshold, not a fidelity one — say so, because a reader who sees three of nine regions labelled must not conclude the other six are unnamed. The side-panel legend remains complete, which is the disclosure.
 3. **Empty `Region::label` falls back to the kind name**, `region_style(kind).name` — reusing [hud.cpp:1185](../../../desktop/src/scene3d/hud.cpp#L1185)'s existing `r.label.empty() ? st.name : r.label` rule rather than inventing a second naming convention.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `desktop/test/test_projection.cpp`, after Task 2's atlas blocks, reusing `atlas_of()`:
 
@@ -2194,12 +2221,12 @@ Add to `desktop/test/test_projection.cpp`, after Task 2's atlas blocks, reusing 
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: FAIL — `atlas_labels` not declared.
 
-- [ ] **Step 3: Implement the placement rule**
+- [x] **Step 3: Implement the placement rule**
 
 In `projection.h`, above `region_cells`'s declaration:
 
@@ -2265,12 +2292,12 @@ std::vector<AtlasLabel> atlas_labels(const Projection &proj,
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: PASS. On the first fixture the two anchors are `(0.031250, 0.500000)` and `(0.531250, 0.500000)`; on `kRefs` all three regions label and all three anchors unproject home. On the saturated plane the largest rect is **2 cells**, so the list is empty.
 
-- [ ] **Step 5: Draw them**
+- [x] **Step 5: Draw them**
 
 In `hud.h`, declare beside `draw_trajectory_ruler` ([:178](../../../desktop/src/scene3d/hud.h#L178)):
 
@@ -2287,7 +2314,7 @@ void draw_atlas_labels(ImDrawList *draw_list, const Camera &cam, ImVec2 origin,
 
 In `hud.cpp`, beside `draw_trajectory_ruler` ([:383](../../../desktop/src/scene3d/hud.cpp#L383)), reusing its transform verbatim — one `cam.mvp` + `mat4x4_mul_vec4`, the behind-the-camera `clip[3] <= 0.0f` skip, and the same NDC→screen mapping. The world point is `{l.u, 0.0f, l.v}` (the ground plane) rather than the ruler's `{0, t*scale, 0}`. Colour each label with `region_style(kind)`'s swatch so the floor label and the legend row agree by construction, and centre the text on the anchor with `ImGui::CalcTextSize(...).x * 0.5f`.
 
-- [ ] **Step 6: Call it**
+- [x] **Step 6: Call it**
 
 In `shell.cpp`, immediately after the `draw_trajectory_ruler` call at [:1828](../../../desktop/src/ui/shell.cpp#L1828), under the same `SceneKind::Plane` gate:
 
@@ -2301,12 +2328,12 @@ if (sv.kind == scene3d::SceneKind::Plane)
 
 No layout gate is needed here — `atlas_labels` returns empty under Hilbert, which is exactly why the refusal lives in the pure function rather than at the call site.
 
-- [ ] **Step 7: Run the suite**
+- [x] **Step 7: Run the suite**
 
 Run: `make desktop-test`, then `make docker-desktop`.
 Expected: PASS. Nothing renders differently yet — `Projection::layout` still defaults to `Hilbert` until Task 10 — so any golden movement here is a real defect, not churn. That ordering is deliberate: it lets this task's drawing land while the picture is still frozen, so Task 10's regeneration has exactly one cause.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add desktop/src/space/projection.h desktop/src/space/projection.cpp desktop/src/scene3d/hud.h desktop/src/scene3d/hud.cpp desktop/src/ui/shell.cpp desktop/test/test_projection.cpp
@@ -2343,7 +2370,7 @@ The spec's risk table asks for two things — *"layout is keyed on the region se
 
 **What the note must not do.** It reports that the floor was re-laid out; it does not claim *how much* moved, and it must never fire on a first weave. A reader who has no mental map yet cannot have it reset, so `prev.valid == false` returns no note — and a recording with no regions has no floor at all. Both are silence by rule, not by threshold.
 
-- [ ] **Step 1: Write the failing test for the rule**
+- [x] **Step 1: Write the failing test for the rule**
 
 Add to `desktop/test/test_projection.cpp`, after Task 8's label blocks:
 
@@ -2434,12 +2461,12 @@ Add to `desktop/test/test_projection.cpp`, after Task 8's label blocks:
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: FAIL — `layout_fingerprint` not declared.
 
-- [ ] **Step 3: Implement the rule**
+- [x] **Step 3: Implement the rule**
 
 In `types.h`, beside `data_span_note` on `struct Projection`:
 
@@ -2531,12 +2558,12 @@ std::string layout_reflow_note(const LayoutFingerprint &prev,
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: PASS.
 
-- [ ] **Step 5: Wire it through the shell**
+- [x] **Step 5: Wire it through the shell**
 
 Add to `SceneView` ([shell.h:67](../../../desktop/src/ui/shell.h#L67)), beside the other per-view state:
 
@@ -2581,7 +2608,7 @@ if (!terr.proj.layout_note.empty())
     ImGui::TextColored(kDim, "%s", terr.proj.layout_note.c_str());
 ```
 
-- [ ] **Step 6: Write the wiring test**
+- [x] **Step 6: Write the wiring test**
 
 The rule is tested; what is not is that the fingerprint *survives the reset*. Model it on the camera-preservation check that already guards this exact block ([test_shell.cpp:1858-1865](../../../desktop/test/test_shell.cpp#L1858)) — set a sentinel, grow the capture, re-sync, assert it survived:
 
@@ -2606,14 +2633,14 @@ check("25t6/layout fingerprint preserved",
 
 Note this asserts on the state *after* `shell_sync_live_tab` but *before* the lazy 3D weave runs (the weave is gated on `!sv.built` inside the pane draw, which this test does not reach), so the sentinel is still the value that was preserved rather than a freshly-computed digest. That ordering is what makes the check specific to the preserve-list.
 
-- [ ] **Step 7: Run both**
+- [x] **Step 7: Run both**
 
 Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Then: `make build/desktop_test_shell && ./build/desktop_test_shell`
 
 Expected: PASS. **`test_shell` has pre-existing failures unrelated to this plan** (the attach / no-host cases), so read the named checks rather than the exit code, and confirm `25t6/layout fingerprint preserved` and `25t6/camera preserved` both pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add desktop/src/space/types.h desktop/src/space/projection.h desktop/src/space/projection.cpp desktop/src/ui/shell.h desktop/src/ui/shell.cpp desktop/src/scene3d/hud.cpp desktop/test/test_projection.cpp desktop/test/test_shell.cpp
@@ -2632,7 +2659,7 @@ git commit -m "space: tell the reader when a growing capture re-lays the floor"
 - Consumes: all prior tasks.
 - Produces: the user-visible change.
 
-- [ ] **Step 1: Audit for layout-specific assumptions BEFORE flipping anything**
+- [x] **Step 1: Audit for layout-specific assumptions BEFORE flipping anything**
 
 Task 2 settled the two structural questions — `order` keeps its meaning and its value, and the byte-exact round trip is scoped to Hilbert — so this audit is now about *residual* assumptions rather than about the coordinate system. One is already known:
 
@@ -2651,16 +2678,16 @@ Run: `grep -rn "power of four\|power-of-four\|4\^\|1:1 domain\|hilbert\|Hilbert"
 
 Triage each hit into one of: (a) a comment needing an update, (b) a test whose *setup* relies on the mapping — rewrite it against the contract, or (c) a genuine behavioural dependency, which is a design finding and must be reported, not patched over. **These are not golden churn.** A failure here is a real bug.
 
-- [ ] **Step 2: Flip the default and run the whole suite**
+- [x] **Step 2: Flip the default and run the whole suite**
 
 Run: `make docker-desktop`
 Expected: golden-image failures across the suite — that is the point of this step. Read every one; any *geometry* or *assertion* failure is a real bug, only *image* churn is expected. The camera is **not** a source of churn here: Task 4's calibration keeps `reset()`/`top_down()` bit-identical.
 
-- [ ] **Step 3: Regenerate the doc screenshots — ONCE, from the merged tree**
+- [x] **Step 3: Regenerate the doc screenshots — ONCE, from the merged tree**
 
 Run the `--serve` screenshot flow (headless `--record` never emits `codeimage`, and `codeimage` gates every 3D scene). Regenerate **after** the last recorder edit, never per-agent; two agents regenerating one golden must regenerate from the merged tree rather than picking a side.
 
-- [ ] **Step 4: Verify the screenshots are pairwise distinct — and that the labels actually landed**
+- [x] **Step 4: Verify the screenshots are pairwise distinct — and that the labels actually landed**
 
 Gate on distinctness, not just non-blankness — the same rule Task 7b encodes.
 
@@ -2672,11 +2699,11 @@ Then look at the floor, because this is the first render where Task 8's labels a
 
 Record what you saw in the brief either way — "looked at, nothing to fix" is a result, and these risks are marked unresolvable on paper precisely so this step is where they close.
 
-- [ ] **Step 5: Write the brief**
+- [x] **Step 5: Write the brief**
 
 Add `docs/internal/gui/61-scene-axis-budget.md` following `_conventions.md`, cross-referencing [53](../../internal/gui/53-3d-catalog-build-roadmap.md) to record that the depiction catalog now composes onto the atlas substrate. State plainly that `order` survived as the cell quantisation and that the byte-exact round trip is a Hilbert-only promise — those are the two facts a later reader is most likely to get wrong. Record the third alongside them: the in-place labels are **partial by design** (a legibility threshold, with the HUD's region legend as the complete list), so a later reader does not take an unlabelled rectangle for an unnamed region.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add desktop/src/space/types.h docs/_static/gui docs/internal/gui/61-scene-axis-budget.md

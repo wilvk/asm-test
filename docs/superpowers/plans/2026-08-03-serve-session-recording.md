@@ -1,6 +1,6 @@
 # Serve-session recording — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make a *live capture that spans more than one engine* saveable as ONE `.asmtrace` file, so a recording carrying a code plane, a worldline and real kernel crossings can exist at all — which is what Task 7c of [the 3D axis budget plan](2026-08-03-3d-scene-axis-budget.md) is blocked on.
 
@@ -59,7 +59,7 @@ A **two-engine session** does produce every kind — `trace` then `log` in one `
 
 **The shape, and why it is a `shared` writer rather than a second file sink.** `rec_t` already owns the "one body string, two channels, agree by construction" property (its own comment at `cli/asmspy.c:57`). Opening a *second* `rec_t` for the session would re-derive that and give the file its own header per engine — the bug being fixed. Instead the session owns ONE `asmtrace_writer_t`, and each engine's `rec_t` points at it; `rec_emit` tees to it alongside the existing channels.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `cli/test_serve_record.c`:
 
@@ -161,7 +161,7 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 2: Add the target program and register the test**
+- [x] **Step 2: Add the target program and register the test**
 
 Create `examples/serve_record_target.c` — `work` is called in a loop so a region-mode trace has entries to sample whether it launched or attached, and its syscalls span three `SyscallClass` families so the SAME binary serves Task 2's crossings fixture:
 
@@ -216,12 +216,12 @@ Add `$(BUILD)/test_serve_record $(BUILD)/serve_record_target $(BUILD)/asmspy` to
 	$(BUILD)/test_serve_record
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `make docker-cli`
 Expected: FAIL — `the session wrote a recording at all: --serve --record produced no file`. `--record=` is not parsed in serve mode today.
 
-- [ ] **Step 4: Give `rec_t` a shared session writer**
+- [x] **Step 4: Give `rec_t` a shared session writer**
 
 In `cli/asmspy.c`, add to `rec_t` (beside `file`/`out`, `:68`):
 
@@ -264,7 +264,7 @@ Leave `rec_close` (`:215`) otherwise untouched, and say why in a comment there:
  * write an `end` footer per engine and claim the recording ended each time. */
 ```
 
-- [ ] **Step 5: Parse the flag and open the session writer once**
+- [x] **Step 5: Parse the flag and open the session writer once**
 
 In `main`'s argv routing (`:8292`), replace the two `--serve` branches with one that also accepts `--record=`:
 
@@ -329,12 +329,12 @@ Then at the per-engine `rec_open` (`:4280`), point the engine's `rec_t` at it im
 
 **The control lines must not reach the file.** `cmd`/`session`/`err` go through `serve_emitf`, which writes the client stream rather than the engine's `rec_t`. Read `serve_emitf` before trusting that; the test's zero-`cmd`/zero-`session` assertion is what catches a `serve_emitf` that also tees.
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `make docker-cli`
 Expected: PASS, including `test_serve_record: all checks passed`, and `asmtrace-golden-check: 33 recordings byte-identical to the corpus` **unchanged** — this task adds nothing to `asmtrace_record.c`, so no golden may move. If one does, that is a real finding, not churn to accept.
 
-- [ ] **Step 7: Update `usage()`**
+- [x] **Step 7: Update `usage()`**
 
 The `--record=<f>` paragraph says it applies to "every headless mode". Extend it in the same voice:
 
@@ -345,7 +345,7 @@ engine it runs — as ONE recording, so a capture that changes engine is
 still a single loadable file.
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add cli/asmspy.c cli/test_serve_record.c examples/serve_record_target.c mk/cli.mk
@@ -366,7 +366,7 @@ git commit -m "asmspy: record a whole serve session as one recording"
 - Consumes: Task 1's `--serve --record=<path>`.
 - Produces: no signature change. A regression gate over real data.
 
-- [ ] **Step 1: Record the fixture**
+- [x] **Step 1: Record the fixture**
 
 Copy `examples/serve_record_target.c` to `desktop/test/fixtures/syscall_target.c` so the fixture and its source sit together. Its syscalls span three `SyscallClass` families — `openat`/`write`/`close` are File, `getpid` is Process, `clock_nanosleep` is Time — which is what makes the class channel checkable rather than a single-colour smear. Verified against `class_of` (`desktop/src/views/crossing.cpp:45`): all five names are in its vocabulary.
 
@@ -401,7 +401,7 @@ Expected from the measured run: 1 header, 1 `codeimage`, ~1080 `trace`, ~120 `sy
 
 **Frozen, never regenerated.** `desktop/test/fixtures/` has no byte-check gate, which is exactly why a non-byte-reproducible live capture belongs there — the precedent `test_scene_fbo` set by reusing `obs-survey-ibs.asmtrace`.
 
-- [ ] **Step 2: Add the test block**
+- [x] **Step 2: Add the test block**
 
 Add to `desktop/test/test_crossing.cpp` the block written out verbatim in the axis-budget plan's Task 7c Step 2 — the shape precondition (codeimage / non-empty trace / at least two syscalls), then `build_crossing_layer` over the capture, then the two contract checks: spurs exist, and not every spur classifies as `Other`.
 
@@ -411,7 +411,7 @@ Three mechanical points, already recorded in that plan, that must not be re-deri
 - Add the `ASMTEST_FIXTURE_DIR` `#error` guard at the top of the file, matching every other fixture-reading test.
 - Record the provenance in the test's own comment: the exact command from Step 1, and the fact that two engines were needed because no single one emits all three kinds.
 
-- [ ] **Step 3: Register the fixture define**
+- [x] **Step 3: Register the fixture define**
 
 `test_crossing.o` has no `ASMTEST_FIXTURE_DIR` today. Add it in `mk/desktop.mk` beside the others (`:513-516`):
 
@@ -422,19 +422,19 @@ $(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_
 
 The link rule (`:1397`) and the `DESKTOP_TESTS` entry already exist, and the loader is already linked (that rule ends in `$(DESKTOP_TEST_DOC)`), so the define is the only makefile change.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `make build/desktop_test_crossing && ./build/desktop_test_crossing`
 Expected: PASS, including every pre-existing NDJSON block — run the whole file.
 
 **If "the class channel distinguishes at least one real syscall" fails, do not relax it.** Either the capture caught only syscalls `class_of` has no word for — re-record with the target above, which makes `openat`/`write`/`getpid` — or it abstains where it should not, which is a real D7 finding to report.
 
-- [ ] **Step 5: Run the container lane**
+- [x] **Step 5: Run the container lane**
 
 Run: `make docker-desktop`
 Expected: PASS. Judge from the container: `test_scene_fbo`'s "T3 GL contour bands" check fails on a host with a real GPU but passes under the container's llvmpipe.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add desktop/test/fixtures/motif-crossings.asmtrace \
