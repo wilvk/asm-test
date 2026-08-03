@@ -1842,6 +1842,17 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(DESKTOP_GL_TEST_OBJS)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
 
+# 61 T7b: the motif-distinctness acceptance gate. Four additions, not one — the
+# object needs the golden-directory define (or its #error fires) and it reaches
+# linmath.h transitively through camera.h, so it needs that order-only prereq
+# too. The DESKTOP_GL_TESTS entry is below, with the FBO smoke.
+$(BUILD)/desktop/test/t/test_motif_distinctness.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop/test/t/test_motif_distinctness.o: | $(LINMATH_HOME)/linmath.h
+$(BUILD)/desktop_test_motif_distinctness: \
+    $(BUILD)/desktop/test/t/test_motif_distinctness.o $(DESKTOP_GL_TEST_OBJS)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
+
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
     $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -2330,7 +2341,8 @@ DESKTOP_GL_SAY     = :
 # renders and reads back real pixels under software Mesa there (CLAUDE.md — a test
 # that can only ever self-skip is not a test). On a bare host without the headers
 # it is not built and the reason is printed; the pure camera test still runs.
-DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo
+DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo \
+                    $(BUILD)/desktop_test_motif_distinctness
 ifeq ($(strip $(DESKTOP_GL_MISSING)),)
 desktop-test: $(DESKTOP_GL_TESTS)
 DESKTOP_ALL_TESTS += $(DESKTOP_GL_TESTS)

@@ -1,0 +1,14 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"motif-simd","sha256":"b7356d1d038d494b0b47cb1011b7d2374d45937958185ad6ae0fa92aecad73d2","len":35}}
+{"k":"note","text":"3D-overview golden scene: motif_simd(3) under the deterministic emulator L0 producer, written as `codeimage` + ABSOLUTE-basis `trace`. The producer maps the routine window at 0x100000, so each `off` is the address the guest executed; the loop body's repeats are the terrain's heat."}
+{"k":"codeimage","base":1048576,"len":35,"version":0,"when":0,"bytes":"660fefc0660fefc9660ffec1660ffec1660ffac1660fdbc1660febc1660f6fd031c0c3"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"pxor xmm0, xmm0"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048580,"disasm":"pxor xmm1, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048584,"disasm":"paddd xmm0, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"paddd xmm0, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048592,"disasm":"psubd xmm0, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048596,"disasm":"pand xmm0, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048600,"disasm":"por xmm0, xmm1"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048604,"disasm":"movdqa xmm2, xmm0"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048608,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048610,"disasm":"ret"}
+{"k":"end","events":12,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":10}

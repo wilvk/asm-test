@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"abixray-make_pair-win64","sha256":"83b6350849907e42c5b4b2c6a3475a97c2f280b74e3e4158610134274f65e26c","len":64}}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"abixray-make_pair-win64","sha256":"0a96f50c0247280aa9be5caab2a738ece10bd683d29faa3156efbcba11096aa2","len":64}}
 {"k":"note","text":"make_pair(7, 11) under Microsoft x64 (Win64)"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"mov rdx, rsi"}
