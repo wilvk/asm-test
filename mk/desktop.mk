@@ -1159,6 +1159,7 @@ desktop-setup-render:
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_png_write \
+                 $(BUILD)/desktop_test_shot_manifest \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
@@ -1788,6 +1789,12 @@ $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
 # the cheapest tests in the lane.
 $(BUILD)/desktop_test_png_write: $(BUILD)/desktop/test/t/test_png_write.o \
     $(BUILD)/desktop/test/ui/png_write.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The screenshot manifest + the scene-kind exhaustiveness gate. Pure model, so
+# it needs only the layer registry beside it — no GL, no shell, no doc.
+$(BUILD)/desktop_test_shot_manifest: $(BUILD)/desktop/test/t/test_shot_manifest.o \
+    $(BUILD)/desktop/test/ui/shot.o $(BUILD)/desktop/test/s3/layers.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The dock layout manager (13-foundation-moves.md T2): layout.o + imgui core,
