@@ -25,17 +25,29 @@
  * truncates, not just that the flag defaults to false).
  *
  * Links asmspy_proc.o directly, like test_symtab. No ptrace ENGINE, no
- * ncurses — this file makes exactly one raw ptrace(2) call of its own, to
- * verify the negative assertion's premise; asmspy_procinfo itself is never
- * expected to attach, which is the entire point of the feature.
+ * ncurses — this file makes exactly two raw ptrace(2) calls of its own.
+ * The first verifies the never-attach premise against a NON-descendant (our
+ * own parent, refused under this host's Yama scope). The second (Task 3, the
+ * per-mode capability verdict) constructs a controlled, portable "already
+ * traced" FACT about a DESCENDANT instead: a child we fork and
+ * PTRACE_ATTACH ourselves, which Yama ptrace_scope<=1 always permits for a
+ * descendant regardless of whether the first premise holds. Without it, the
+ * verdict's "a refused mode states why" coverage would depend on an
+ * incidental host fact (this dev box actually has AMD IBS silicon, so the
+ * one gate that does NOT need attach refusal — --sample without IBS — gives
+ * no coverage here either, hence that check is separately host-conditioned
+ * below). asmspy_procinfo itself is never expected to attach, which is the
+ * entire point of the feature.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -532,6 +544,261 @@ int main(void) {
                   pi->threads_v[i].have_syscall ||
                       pi->threads_v[i].syscall_why[0],
                   "have_syscall == 0 with an empty syscall_why");
+    }
+
+    /* --- code surface + modules -------------------------------------- */
+    check("self reread 2", asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+    check("symbols found", pi->syms_total > 0, "no symbols in our own image");
+    check("modules found", pi->n_modules > 0, "no modules");
+    check("modules within cap", pi->n_modules <= ASMSPY_PI_MODULES_CAP,
+          "cap exceeded");
+    check("module 0 named", pi->modules[0].name[0] != '\0', "unnamed module");
+    check("modules ranked by symbol count",
+          pi->n_modules < 2 || pi->modules[0].syms >= pi->modules[1].syms,
+          "modules are not symbol-count-descending");
+    check("no JIT here", pi->jit_methods == 0, "a static C test has no JIT");
+
+    /* Per-module symbol counts must be genuinely PER MODULE: a counter that
+     * stamps the same value into every module (all-equal) or never
+     * increments at all (all-zero) would still satisfy the
+     * ranked-descending check above (N >= N throughout, or 0 >= 0
+     * throughout) — this is the exact shape of bug the brief warns a
+     * per-module scan must not hide. Our own image reliably links at least
+     * libc (many exported symbols) alongside a module or two with far fewer
+     * (the executable itself, the dynamic linker), so real distinctness is
+     * expected here, not just plausible. `size` is checked too: it is the
+     * one field this task must POPULATE that the brief's own snippet never
+     * exercises. */
+    {
+        int any_nonzero = 0, all_same = 1;
+        unsigned long first = pi->modules[0].syms;
+        unsigned long long any_size = 0;
+        for (int i = 0; i < pi->n_modules; i++) {
+            if (pi->modules[i].syms > 0)
+                any_nonzero = 1;
+            if (pi->modules[i].syms != first)
+                all_same = 0;
+            any_size += pi->modules[i].size;
+        }
+        check("per-module symbol counts are not all zero", any_nonzero,
+              "every module reported zero symbols");
+        check("per-module symbol counts are not all identical",
+              pi->n_modules < 2 || !all_same,
+              "every module reported the identical symbol count (looks like "
+              "a broken per-module counter)");
+        check("module sizes are populated", any_size > 0,
+              "every module reported a zero mapped size");
+    }
+
+    /* --- pc_sym: a thread's pc resolves to a real function name ---------
+     * pc_sym is gated on have_syscall (pc itself is only known from
+     * /proc/<tid>/syscall, which reports NOTHING but the literal string
+     * "running" outside a syscall — see pi_read_code_and_modules), so the
+     * one thread we can reliably put INSIDE a syscall (blocked in read() on
+     * an empty pipe, as above) is also the one whose pc_sym resolution is
+     * actually checkable. A fresh worker is spawned here rather than reused
+     * from the earlier block, which has already been joined and its pipe
+     * closed. */
+    {
+        int pfd[2];
+        if (pipe(pfd) != 0) {
+            check("pipe() for the pc_sym worker", 0, strerror(errno));
+        } else {
+            pthread_t block_t;
+            int have_block =
+                (pthread_create(&block_t, NULL, block_worker, &pfd[0]) == 0);
+            check("pc_sym worker started", have_block, "pthread_create failed");
+
+            struct timespec settle = {0, 20L * 1000 * 1000}; /* 20 ms */
+            nanosleep(&settle, NULL);
+
+            check("self reread (for pc_sym)",
+                  asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+
+            int saw_resolved_pc = 0;
+            for (int i = 0; i < pi->n_threads_v; i++)
+                if (pi->threads_v[i].have_syscall &&
+                    !strcmp(pi->threads_v[i].syscall_name, "read") &&
+                    pi->threads_v[i].pc_sym[0] != '\0')
+                    saw_resolved_pc = 1;
+            check("a thread blocked in a real syscall resolves pc_sym",
+                  saw_resolved_pc,
+                  "expected a have_syscall==1 \"read\" row with a non-empty "
+                  "pc_sym");
+
+            char one = 'x';
+            ssize_t wn = write(pfd[1], &one, 1); /* unblock the read() */
+            (void)wn;
+            if (have_block)
+                pthread_join(block_t, NULL);
+            close(pfd[0]);
+            close(pfd[1]);
+        }
+    }
+
+    /* --- module cap + truncation, ACTUALLY exercised ---------------------
+     * Mirrors the children/threads cap blocks above: force real truncation
+     * instead of merely checking the flag defaults to false. scan_modules
+     * (and so pi_read_code_and_modules) counts any DISTINCT absolute path
+     * mapped at file offset 0 — it does not require the file to be a valid
+     * ELF, only that the kernel shows it as an ordinary file-backed mapping
+     * — so a pile of throwaway regular files, mmap'd PROT_READ at offset 0
+     * under distinct paths, count as real, distinct "modules" without
+     * needing 64+ real shared libraries to be installed on whatever host
+     * runs this test. */
+    {
+        char dir[] = "/tmp/asmspy_pi_modcap_XXXXXX";
+        char *tmpdir = mkdtemp(dir);
+        check("modcap: scratch dir created", tmpdir != NULL, strerror(errno));
+        if (tmpdir) {
+            enum { NDUMMY = ASMSPY_PI_MODULES_CAP + 8 };
+            int fds[NDUMMY];
+            void *maps[NDUMMY];
+            int nmapped = 0;
+            for (int i = 0; i < NDUMMY; i++) {
+                char path[128];
+                snprintf(path, sizeof path, "%s/m%d.bin", tmpdir, i);
+                int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
+                if (fd < 0)
+                    continue;
+                if (ftruncate(fd, 4096) != 0) {
+                    close(fd);
+                    unlink(path);
+                    continue;
+                }
+                void *m = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+                if (m == MAP_FAILED) {
+                    close(fd);
+                    unlink(path);
+                    continue;
+                }
+                fds[nmapped] = fd;
+                maps[nmapped] = m;
+                nmapped++;
+            }
+            check("modcap: mapped enough dummy files",
+                  nmapped > ASMSPY_PI_MODULES_CAP,
+                  "too few successful dummy mmaps to exercise the module "
+                  "cap");
+
+            check("self reread (with dummy modules)",
+                  asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+            check("module cap truncated", pi->modules_truncated != 0,
+                  "mapped more than the cap but modules_truncated is false");
+            check("module list sits exactly at the cap",
+                  pi->n_modules == ASMSPY_PI_MODULES_CAP,
+                  "n_modules should equal ASMSPY_PI_MODULES_CAP once "
+                  "truncated");
+
+            for (int i = 0; i < nmapped; i++) {
+                char path[128];
+                snprintf(path, sizeof path, "%s/m%d.bin", tmpdir, i);
+                munmap(maps[i], 4096);
+                close(fds[i]);
+                unlink(path);
+            }
+            rmdir(tmpdir);
+        }
+    }
+
+    /* --- the capability verdict -------------------------------------- */
+    /* Our own pid: an engine cannot trace its own tracer thread, but the
+     * verdict is about the TARGET's facts, and we are a native 64-bit
+     * process nothing else traces — so the portable modes are available. */
+    check("attachable known",
+          pi->attachable == 1 || pi->attachable == 0 || pi->attachable == -1,
+          "verdict out of range");
+    check("why never empty", pi->attach_why[0] != '\0', "empty why");
+    for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
+        check("refused mode states why",
+              pi->mode_ok[m] || pi->mode_why[m][0] != '\0',
+              "a refused mode with an empty reason");
+    check("mode names", strcmp(asmspy_mode_name(ASMSPY_MODE_LOG), "log") == 0,
+          "mode name mismatch");
+    check("dataflow ok on a native 64-bit target",
+          pi->fp.elf_class != 64 || pi->mode_ok[ASMSPY_MODE_DATAFLOW],
+          "dataflow refused on a 64-bit native target");
+
+    /* --- a refused mode ACTUALLY carries its reason ----------------------
+     * On THIS test process every mode is normally OK (native, same-uid,
+     * nothing else traces it), so the generic "refused mode states why"
+     * loop just above never actually inspects a non-empty mode_why — it
+     * short-circuits on mode_ok[m] every time, exactly the tautology shape
+     * the brief warns a first draft is likely to have. Force a REAL
+     * refusal instead of trusting an incidental host fact: fork a child and
+     * PTRACE_ATTACH it ourselves (this file's SECOND and last raw ptrace(2)
+     * call — see the file-header comment). Yama ptrace_scope<=1 always
+     * permits attaching to one's own DESCENDANT, so this does not depend on
+     * the non-descendant premise the first ptrace call tests, and is
+     * expected to succeed on any host this project's other tests run on. */
+    {
+        pid_t vchild = fork();
+        if (vchild == 0) {
+            pause();
+            _exit(0);
+        } else if (vchild < 0) {
+            check("fork for the verdict-forcing child", 0, strerror(errno));
+        } else {
+            errno = 0;
+            long att = ptrace(PTRACE_ATTACH, vchild, NULL, NULL);
+            if (att != 0) {
+                fprintf(stderr,
+                        "SKIP verdict-forcing: PTRACE_ATTACH to our own "
+                        "child failed with '%s' — the forced-refusal check "
+                        "is skipped rather than trusted on a host this "
+                        "locked down.\n",
+                        strerror(errno));
+            } else {
+                int status;
+                waitpid(vchild, &status, 0); /* reap the attach-stop */
+
+                check("victim reread", asmspy_procinfo(vchild, pi) == 0,
+                      "nonzero");
+                check("already-traced target reports attachable == 0",
+                      pi->attachable == 0,
+                      "expected attachable==0 for an already-traced target");
+                check("already-traced target's why names the tracer",
+                      strstr(pi->attach_why, "already traced") != NULL,
+                      pi->attach_why);
+
+                int any_ok = 0, any_missing_reason = 0;
+                for (int m = 0; m < ASMSPY_MODE__COUNT; m++) {
+                    if (pi->mode_ok[m])
+                        any_ok = 1;
+                    if (!pi->mode_ok[m] && !pi->mode_why[m][0])
+                        any_missing_reason = 1;
+                }
+                check("every mode is refused on an already-traced target",
+                      !any_ok, "expected every mode refused (attachable==0)");
+                check("every refused mode states why", !any_missing_reason,
+                      "a refused mode on the forced-victim target has an "
+                      "empty reason");
+
+                ptrace(PTRACE_DETACH, vchild, NULL, NULL);
+            }
+            kill(vchild, SIGKILL);
+            waitpid(vchild, NULL, 0);
+        }
+    }
+
+    /* The SAMPLE mode's OWN gate (AMD IBS silicon — a HOST fact, checked
+     * independently of the attach verdict): assert its shape only when we
+     * can predict which side of the gate this host is on, by checking the
+     * exact same condition pi_verdict itself checks, rather than assuming
+     * one way or the other. */
+    {
+        check("self reread (for SAMPLE gate)",
+              asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+        int have_ibs = (access("/sys/devices/ibs_op", F_OK) == 0);
+        if (!have_ibs)
+            check("SAMPLE mode refused without IBS states why",
+                  !pi->mode_ok[ASMSPY_MODE_SAMPLE] &&
+                      pi->mode_why[ASMSPY_MODE_SAMPLE][0] != '\0',
+                  "SAMPLE should be refused (no ibs_op PMU) with a reason");
+        else
+            fprintf(stderr,
+                    "SKIP: host has an ibs_op PMU — SAMPLE mode's no-IBS "
+                    "refusal path isn't exercised by this check.\n");
     }
 
     free(pi);

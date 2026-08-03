@@ -1556,6 +1556,206 @@ static void pi_read_threads(pid_t pid, asmspy_procinfo_t *out) {
     }
 }
 
+/* Rank modules by symbol count DESCENDING: the ones a trace will actually
+ * resolve names against are the ones worth the 64 rows. */
+static int pi_mod_cmp(const void *a, const void *b) {
+    const asmspy_pi_module_t *x = a, *y = b;
+    if (x->syms != y->syms)
+        return x->syms < y->syms ? 1 : -1;
+    return strcmp(x->name, y->name);
+}
+
+static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
+    asmspy_symtab_t syms;
+    if (asmspy_symtab_load(pid, &syms) == 0) {
+        out->syms_total = (unsigned long)syms.n;
+
+        /* per-module counts, and each thread's pc resolved to a name */
+        module_t *mods = NULL;
+        char exe_path[PATH_MAX];
+        int nm = scan_modules(pid, &mods, exe_path, sizeof exe_path);
+        for (int i = 0; i < nm; i++) {
+            const char *b = strrchr(mods[i].path, '/');
+            b = b ? b + 1 : mods[i].path;
+            if (out->n_modules >= ASMSPY_PI_MODULES_CAP) {
+                out->modules_truncated = 1;
+                break;
+            }
+            asmspy_pi_module_t *m = &out->modules[out->n_modules++];
+            snprintf(m->name, sizeof m->name, "%.63s", b);
+            snprintf(m->path, sizeof m->path, "%.255s", mods[i].path);
+            m->base = mods[i].load_start;
+            m->exec = 1;
+        }
+        free(mods);
+
+        /* Per-module counts in ONE pass over the symbols, not a scan per
+         * module. The nested form is 64 modules x 60k symbols on a real
+         * target — ~4M string compares against a 250 ms whole-gather budget
+         * whose justification is a measured 20 ms. The symbols are sorted by
+         * address and so cluster by module, which makes the last-hit memo
+         * hit almost always; the linear fallback is bounded by the 64-module
+         * cap, never by the symbol count. */
+        int last = -1;
+        for (size_t k = 0; k < syms.n; k++) {
+            const char *mn = syms.v[k].module;
+            if (!mn)
+                continue;
+            if (last >= 0 && !strcmp(out->modules[last].name, mn)) {
+                out->modules[last].syms++;
+                continue;
+            }
+            for (int i = 0; i < out->n_modules; i++)
+                if (!strcmp(out->modules[i].name, mn)) {
+                    out->modules[i].syms++;
+                    last = i;
+                    break;
+                }
+        }
+        qsort(out->modules, (size_t)out->n_modules, sizeof out->modules[0],
+              pi_mod_cmp);
+
+        for (int i = 0; i < out->n_threads_v; i++) {
+            const asmspy_sym_t *s =
+                out->threads_v[i].have_syscall
+                    ? asmspy_symtab_at(&syms, out->threads_v[i].pc)
+                    : NULL;
+            if (s)
+                snprintf(out->threads_v[i].pc_sym,
+                         sizeof out->threads_v[i].pc_sym, "%.60s+0x%llx",
+                         s->name,
+                         (unsigned long long)(out->threads_v[i].pc - s->addr));
+        }
+        asmspy_symtab_free(&syms);
+    }
+
+    /* JIT methods — the code an ELF symtab can never see. */
+    {
+        asmspy_jitmap_t j;
+        asmspy_jitmap_init(&j, pid);
+        int n = asmspy_jitmap_refresh(&j);
+        if (n > 0) {
+            out->jit_methods = (unsigned long)n;
+            snprintf(out->jit_source, sizeof out->jit_source, "%s",
+                     j.dump_path[0] ? "jitdump" : "perf-map");
+        }
+        asmspy_jitmap_free(&j);
+    }
+
+    /* anon-exec bytes (executable mappings with no backing file — the JIT
+     * surface an ELF symtab can't see) AND each module's total mapped
+     * extent (`size`, which the loop above never sets: scan_modules only
+     * ever records the load bias of a module's offset-0 mapping, never an
+     * end). ONE /proc/<pid>/maps pass serves both, rather than adding a
+     * second full parse just for `size`. */
+    {
+        char p[64], line[512];
+        snprintf(p, sizeof p, "/proc/%d/maps", (int)pid);
+        FILE *f = fopen(p, "r");
+        if (f) {
+            while (fgets(line, sizeof line, f)) {
+                unsigned long long a = 0, b = 0;
+                char perms[8] = "", rest[256] = "";
+                if (sscanf(line, "%llx-%llx %7s %*s %*s %*s %255[^\n]", &a, &b,
+                           perms, rest) < 3)
+                    continue;
+                if (perms[2] == 'x' && rest[0] != '/')
+                    out->anon_exec_bytes += b - a;
+                if (rest[0] == '/') {
+                    /* match scan_modules' own " (deleted)" stripping so this
+                     * line's path compares equal to the module it belongs to */
+                    char *del = strstr(rest, " (deleted)");
+                    if (del)
+                        *del = '\0';
+                    for (int i = 0; i < out->n_modules; i++)
+                        if (!strcmp(out->modules[i].path, rest)) {
+                            out->modules[i].size += b - a;
+                            break;
+                        }
+                }
+            }
+            fclose(f);
+        }
+    }
+}
+
+/* The attach verdict + which engines could run on this target. The facts
+ * are not independent, and the DOMINATING one must be reported, or an
+ * operator raises a Yama scope when the real problem is an i386 tracee. */
+static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
+    long our_uid = (long)getuid();
+    int yama = -1;
+    char line[64];
+    /* read_first_line() returns void and always zeroes `line` on entry
+     * (see the file-wide precedent this function already follows above) —
+     * branch on line[0], never on a return value. */
+    read_first_line("/proc/sys/kernel/yama/ptrace_scope", line, sizeof line);
+    if (line[0])
+        yama = atoi(line);
+
+    if (out->fp.tracer_pid) {
+        out->attachable = 0;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "already traced by pid %d", (int)out->fp.tracer_pid);
+        snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                 "stop that tracer first — the kernel allows one per target");
+    } else if (out->euid != our_uid && geteuid() != 0) {
+        out->attachable = 0;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "owned by %s, not you", out->euser);
+        snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                 "run asmspy as that user, or with CAP_SYS_PTRACE");
+    } else if (yama >= 3) {
+        out->attachable = 0;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "yama ptrace_scope=3 — attach is disabled kernel-wide");
+        snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                 "scope 3 cannot be lowered without a reboot");
+    } else if (yama >= 1 && geteuid() != 0) {
+        out->attachable = -1;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "yama ptrace_scope=%d — only a descendant, or a target that "
+                 "called PR_SET_PTRACER",
+                 yama);
+        snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                 "sudo sysctl kernel.yama.ptrace_scope=0, or launch the "
+                 "target from asmspy");
+    } else {
+        out->attachable = 1;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "same uid, nothing else traces it");
+    }
+
+    /* Every mode starts at the attach verdict, then adds its OWN gate. */
+    for (int m = 0; m < ASMSPY_MODE__COUNT; m++) {
+        out->mode_ok[m] = (out->attachable != 0);
+        if (!out->mode_ok[m])
+            snprintf(out->mode_why[m], sizeof out->mode_why[m], "%.90s",
+                     out->attach_why);
+    }
+    /* An i386 tracee reports its syscall numbers against a DIFFERENT table,
+     * so the single-step engines refuse rather than name every call wrong. */
+    if (out->fp.elf_class == 32) {
+        const asmspy_mode_t x86_only[] = {ASMSPY_MODE_DATAFLOW,
+                                          ASMSPY_MODE_STREAM, ASMSPY_MODE_TRACE,
+                                          ASMSPY_MODE_LOG, ASMSPY_MODE_WATCH};
+        for (size_t i = 0; i < sizeof x86_only / sizeof x86_only[0]; i++) {
+            out->mode_ok[x86_only[i]] = 0;
+            snprintf(out->mode_why[x86_only[i]], sizeof out->mode_why[0],
+                     "32-bit tracee — the engines are x86-64 only, and would "
+                     "name every syscall wrong");
+        }
+    }
+    /* --sample is IBS silicon, a fact about the HOST, not the target. */
+    if (out->mode_ok[ASMSPY_MODE_SAMPLE] &&
+        access("/sys/devices/ibs_op", F_OK) != 0) {
+        out->mode_ok[ASMSPY_MODE_SAMPLE] = 0;
+        snprintf(out->mode_why[ASMSPY_MODE_SAMPLE], sizeof out->mode_why[0],
+                 "needs an AMD IBS host — no ibs_op PMU here");
+    }
+    (void)pid;
+}
+
 int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
     char p[80], line[512];
     FILE *f;
@@ -1765,6 +1965,14 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
 
     pi_read_threads(pid, out);
     asmspy_fingerprint(pid, &out->fp);
+    /* Both read out->fp (tracer_pid / elf_class), so they must run AFTER
+     * asmspy_fingerprint fills it in — not right after pi_read_threads as
+     * the plan's literal placement reads, which would see fp still zeroed
+     * by the memset above and so misjudge "already traced" (tracer_pid==0
+     * would look like "no tracer") and the i386 refusal gate (elf_class==0
+     * would look like "not 32-bit") on every real target. */
+    pi_read_code_and_modules(pid, out);
+    pi_verdict(pid, out);
     if (pi_over_budget(out))
         out->budget_exceeded = 1;
     return 0;

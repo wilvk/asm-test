@@ -180,14 +180,24 @@ typedef struct {
     char syscall_why[80];
 } asmspy_pi_thread_t;
 
+/* No has_symtab / build_id here (Task 3): has_symtab is only knowable INSIDE
+ * load_module_syms() (via scan_elf_syms's SHT_SYMTAB return), which this
+ * gatherer's per-module loop has no path back to, and build_id needs a
+ * .note.gnu.build-id reader that does not exist yet — neither fits this
+ * task's budget. A field that would sit at its zero/"" default for every
+ * module, forever, and get rendered in a GUI pane as if it were measured, is
+ * exactly the "confidently wrong" failure this codebase refuses, so both
+ * were removed rather than shipped unpopulated. `syms` already answers the
+ * question that matters ("will a trace resolve names here"); reintroducing
+ * either field is additive whenever the plumbing exists. */
 typedef struct {
     char name[64]; /* basename                                          */
     char path[256];
-    unsigned long long base, size;
+    unsigned long long base, size; /* size: the module's total mapped extent,
+                                     * summed across every /proc/<pid>/maps
+                                     * segment backed by this file           */
     int exec;
     unsigned long syms; /* STT_FUNC symbols resolved from this module    */
-    int has_symtab;     /* 1 = .symtab present; 0 = .dynsym only         */
-    char build_id[41];  /* lowercase hex, "" if absent                   */
 } asmspy_pi_module_t;
 
 typedef struct {
