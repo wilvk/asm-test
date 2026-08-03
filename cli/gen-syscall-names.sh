@@ -1,27 +1,17 @@
 #!/bin/sh
-# gen-syscall-names.sh — emit the syscall NAME table asmspy decodes against,
-# taken from the COMPILING HOST's own <sys/syscall.h>.
+# gen-syscall-names.sh — emit the syscall NAME list the asmspy syscall view
+# decodes against, taken from the COMPILING HOST's own <sys/syscall.h>.
 #
-# Emits ready-to-use designated-initializer entries, one per known syscall,
-# so cli/asmspy_syscall_name.h just #includes this file inside a `{ ... }`
-# array literal with no macro of its own: the compiler supplies the NUMBER
-# (via the __NR_ name it expands here) from the same headers it compiles
-# against. Names only, never hand-typed numbers, so a hand-maintained table
-# cannot drift as the kernel grows syscalls (nor break wherever a __NR_ this
-# file names is absent from an older/newer kernel's headers).
-#
-# (An earlier version emitted bare "SC(<name>)" tokens for a consumer-side
-# `#define SC(n) ...` to expand; that indirection is gone because a
-# function-like macro whose replacement starts with '[' makes clang-format's
-# language guesser misdetect a .h file as Objective-C — measured — and this
-# table now has exactly one, header-only, consumer, so the indirection
-# bought nothing.)
+# Names only, never numbers: asmspy_engine.c expands each through
+# `[__NR_<name>] = "<name>"`, so the compiler supplies the number from the same
+# headers it compiles against. A hand-maintained table would drift as the kernel
+# grows syscalls (and would break wherever a __NR_ this file names is absent);
+# this cannot.
 set -eu
 CC="${CC:-cc}"
 
 out=$(echo '#include <sys/syscall.h>' | "$CC" -E -dM - |
-    awk '/^#define __NR_[a-z_0-9]+ /{ n = substr($2, 6); \
-         print "[__NR_" n "] = \"" n "\"," }' | sort)
+    awk '/^#define __NR_[a-z_0-9]+ /{ print "SC(" substr($2, 6) ")" }' | sort)
 
 # A silently-empty table would degrade every syscall to "syscall#N" with no
 # other symptom, so make a broken toolchain/header set a hard build error.

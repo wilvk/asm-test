@@ -1447,7 +1447,16 @@ static void pi_read_one_thread(pid_t pid, const char *tid_s,
 
     /* /proc/<tid>/syscall: "<nr> <a0>..<a5> <sp> <pc>", or "running", or
      * EPERM/ENOENT/... — opened directly (see the function comment) so a
-     * failure is reported with the errno THIS open actually raised. */
+     * failure is reported with the errno THIS open actually raised.
+     *
+     * The file is mode 0400, so `fopen` succeeding proves only the DAC bit
+     * allows it — ptrace_may_access is checked at READ, not open. Measured:
+     * for a same-uid non-descendant under this host's Yama ptrace_scope=1,
+     * fopen SUCCEEDS and fgets fails with errno==EPERM; only a DIFFERENT-uid
+     * target fails at fopen (EACCES). So the fgets failure is not optional to
+     * check: skipping it would route the common same-uid denial into the
+     * "empty" branch below, asserting a false fact (refused, not empty) —
+     * exactly backwards from "an absent syscall row always states why". */
     snprintf(p, sizeof p, "/proc/%d/task/%.20s/syscall", (int)pid, tid_s);
     errno = 0;
     FILE *sf = fopen(p, "r");
@@ -1462,9 +1471,24 @@ static void pi_read_one_thread(pid_t pid, const char *tid_s,
         return;
     }
     line[0] = '\0';
-    if (fgets(line, sizeof line, sf))
-        line[strcspn(line, "\n")] = '\0';
+    errno = 0;
+    char *got = fgets(line, sizeof line, sf);
+    int rd_errno = errno;
+    int rd_err = ferror(sf); /* checked before fclose invalidates the stream */
     fclose(sf);
+    if (!got) {
+        if (rd_err && (rd_errno == EPERM || rd_errno == EACCES))
+            snprintf(t->syscall_why, sizeof t->syscall_why,
+                     "needs ptrace permission (Yama ptrace_scope / uid)");
+        else if (rd_err)
+            snprintf(t->syscall_why, sizeof t->syscall_why, "unreadable: %s",
+                     strerror(rd_errno));
+        else /* clean EOF, no error: the file really did read as empty */
+            snprintf(t->syscall_why, sizeof t->syscall_why,
+                     "empty /proc/<tid>/syscall");
+        return;
+    }
+    line[strcspn(line, "\n")] = '\0';
     if (!line[0]) {
         snprintf(t->syscall_why, sizeof t->syscall_why,
                  "empty /proc/<tid>/syscall");
@@ -1527,11 +1551,18 @@ static void pi_read_threads(pid_t pid, asmspy_procinfo_t *out) {
         }
         tids[j + 1] = v;
     }
+    /* Rotate, not swap: a plain swap of tids[0] and tids[i] deposits
+     * whatever WAS at tids[0] (the smallest remaining tid) at index i,
+     * breaking "then the rest ascending by tid" for every row from 1 to i.
+     * Only reachable when the leader is not the numerically smallest of its
+     * own tids (pid wraparound) — rare, but the fix is exact either way:
+     * shift tids[0..i) up by one slot (memmove handles the overlap) to
+     * close the gap the leader leaves, then place it at the front. */
     for (int i = 0; i < n; i++)
         if (tids[i] == (long)pid) {
-            long t = tids[0];
-            tids[0] = tids[i];
-            tids[i] = t;
+            long leader = tids[i];
+            memmove(&tids[1], &tids[0], (size_t)i * sizeof tids[0]);
+            tids[0] = leader;
             break;
         }
 

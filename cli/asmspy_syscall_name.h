@@ -1,13 +1,12 @@
 /* asmspy_syscall_name.h — syscall-number -> name lookup, shared.
  *
  * The compiling host's own <sys/syscall.h> names every syscall it knows:
- * cli/gen-syscall-names.sh emits one ready-to-use designated-initializer
- * entry per __NR_name macro into the generated
- * $(BUILD)/asmspy_syscall_names.inc, so the NUMBER always comes from the
- * SAME headers as the name — this cannot drift out of step with the kernel
- * the way a hand-written table would. Sparse: a number with no entry yields
- * NULL, and the caller renders the decimal instead (an unknown number is
- * honest; an invented name is not).
+ * cli/gen-syscall-names.sh emits one "SC(name)" line per __NR_name macro into
+ * the generated $(BUILD)/asmspy_syscall_names.inc, so the NUMBER always comes
+ * from the SAME headers as the name — this cannot drift out of step with the
+ * kernel the way a hand-written table would. Sparse: a number with no entry
+ * yields NULL, and the caller renders the decimal instead (an unknown number
+ * is honest; an invented name is not).
  *
  * Header-only because TWO translation units need this table and must NOT
  * share a link edge:
@@ -25,15 +24,18 @@
  * Same file-extraction discipline as the other cli/asmspy_*.h view-model
  * modules (asmspy_arch.h, asmspy_ghash.h, asmspy_treefilter.h, …).
  *
- * The generated .inc is #included directly inside the array literal below
- * with no local macro of this TU's own: an earlier draft defined a small
- * `#define`-based helper here to expand the .inc's entries, but a
- * function-like macro whose replacement starts with an open bracket makes
- * clang-format's language guesser misdetect a .h file as Objective-C (a
- * measured tool quirk, specific to the .h extension — the identical text in
- * a .c file never triggers it). Moving the bracket syntax into the generator
- * output removes the only such macro from this file, sidestepping the
- * misdetection entirely rather than fighting it.
+ * The X-macro is expanded through TWO levels — SC(n) hands off to
+ * SC_E(i, s) rather than writing "[__NR_##n] = #n," directly — because a
+ * function-like macro whose replacement is `[` immediately followed by a
+ * `##`-pasted identifier (as in a direct "[__NR_##n]") trips clang-format's
+ * Objective-C message-send heuristic in a .h file specifically (measured:
+ * the identical text in cli/asmspy_engine.c, a .c file, never triggers it,
+ * since only an ambiguous extension needs the language guessed at all).
+ * SC_E's body is "[i] = s," — a bracket around a plain parameter, no `##`
+ * immediately inside it — which the same heuristic does not flag (measured).
+ * Splitting the macro this way keeps gen-syscall-names.sh's output (and thus
+ * cli/asmspy_engine.c's own use of it) completely unchanged; the workaround
+ * lives entirely in the one file that needs it.
  */
 #ifndef ASMSPY_SYSCALL_NAME_H
 #define ASMSPY_SYSCALL_NAME_H
@@ -46,7 +48,11 @@
  * with no syscall at it stays NULL. `static`: each including TU gets its own
  * private copy, so linking both together never collides. */
 static const char *const asmspy_syscall_names_tbl[] = {
+#define SC_E(i, s) [i] = s,
+#define SC(n)      SC_E(__NR_##n, #n)
 #include "asmspy_syscall_names.inc"
+#undef SC
+#undef SC_E
 };
 
 /* nr -> its name ("read", "openat", ...), or NULL when `nr` is negative, out
