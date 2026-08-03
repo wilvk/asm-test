@@ -473,14 +473,14 @@ static Projection atlas_of(const std::vector<Ref> &refs) {
 }
 ```
 
-**First, scope the existing byte-exact round-trip loop — and pin it, do not merely comment it.** The 10 000-address check at [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). It runs on `main()`'s `p`, which is default-constructed today — but **Task 9 flips that default to `Atlas`**, so "it already runs on a Hilbert projection" stops being true the moment the last task lands. Make the layout explicit rather than inherited:
+**First, scope the existing byte-exact round-trip loop — and pin it, do not merely comment it.** The 10 000-address check at [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). It runs on `main()`'s `p`, which is default-constructed today — but **Task 10 flips that default to `Atlas`**, so "it already runs on a Hilbert projection" stops being true the moment the last task lands. Make the layout explicit rather than inherited:
 
 ```cpp
 // This loop asserts the BYTE-EXACT round trip, which is a Hilbert-layout
 // promise and not an atlas one (the plan's contract table says so: an atlas
 // cell covers bytes_per_cell bytes and unproject returns the first of them).
 // Pinned to Hilbert EXPLICITLY rather than relying on the struct default,
-// because Task 9 changes that default. The atlas's own contract — the
+// because Task 10 changes that default. The atlas's own contract — the
 // REGION-level round trip — is asserted in the atlas blocks below.
 Projection h = p;
 h.layout = Projection::Layout::Hilbert;
@@ -1161,7 +1161,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 >
 > **The spurs survive flattening**, which is why they can go in the ON group without loss: `rail_lift` is already a constant that [encodes nothing](../../../desktop/src/scene3d/causal.cpp#L247), so a flattened spur is still a tent — out of the floor, across, back down. It loses only the anchor-vs-resume height difference, an *incidental* dwell cue the layer already refuses to claim (`rail_span() == 0`, pinned by `test_crossing.cpp`).
 >
-> **One residual to look at in the container render, not a blocker:** with the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it. That is a legibility question for Task 9 Step 4, not a correctness one.
+> **One residual to look at in the container render, not a blocker:** with the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it. That is a legibility question for Task 10 Step 4, not a correctness one.
 
 **Files:**
 - Modify: `desktop/src/scene3d/trajscale.h` — add `traj_vertex_y` and `comet_window` (Task 1 created this header)
@@ -2286,7 +2286,7 @@ No layout gate is needed here — `atlas_labels` returns empty under Hilbert, wh
 - [ ] **Step 7: Run the suite**
 
 Run: `make desktop-test`, then `make docker-desktop`.
-Expected: PASS. Nothing renders differently yet — `Projection::layout` still defaults to `Hilbert` until Task 9 — so any golden movement here is a real defect, not churn. That ordering is deliberate: it lets this task's drawing land while the picture is still frozen, so Task 9's regeneration has exactly one cause.
+Expected: PASS. Nothing renders differently yet — `Projection::layout` still defaults to `Hilbert` until Task 10 — so any golden movement here is a real defect, not churn. That ordering is deliberate: it lets this task's drawing land while the picture is still frozen, so Task 10's regeneration has exactly one cause.
 
 - [ ] **Step 8: Commit**
 
@@ -2297,7 +2297,300 @@ git commit -m "space: label the atlas rectangles in place, from the regions them
 
 ---
 
-### Task 9: Flip the default, regenerate goldens, document
+### Task 9: Say when the floor reflows under a growing capture
+
+The spec's risk table asks for two things — *"layout is keyed on the region set; recompute only when that set changes, and record the reflow in the HUD"* — and names the failure mode outright: **"a growing capture that reflows silently is the failure mode to avoid."**
+
+**The first half is already true and needs no code.** `rebuild_layout()` runs inside `build_projection()`, which the shell calls only from the lazy weave at [shell.cpp:1176](../../../desktop/src/ui/shell.cpp#L1176) (`if (!sv.built)`), so the layout is recomputed once per weave, never per frame. The second half is the work here.
+
+**Where the reflow actually happens, and why the note cannot live in `space/` alone.** A live batch does not set `sv.built = false`; [shell.cpp:279-285](../../../desktop/src/ui/shell.cpp#L279) **replaces the whole `SceneView`** — `s.scenes[i] = SceneView{}` — preserving only the camera, the HUD state and the primer, with a comment saying why ("else a growing capture would snap the user's 3D view back to the default orbit on every event batch"). The previous projection is destroyed at that line. So detecting a reflow means carrying a digest of the old layout through that reset, exactly the way the camera is already carried. That is the whole shape of this task: a pure digest + comparison in `space/`, and one more field on the preserve-list.
+
+**Not Hilbert-specific, and not atlas-specific.** Adding a region reflows *both* layouts — compaction shifts every later region's domain offset, so a Hilbert floor re-scrambles just as surely as a treemap re-tiles. The digest therefore covers what determines the mapping under either: `order`, `domain_off` and `rects`. This is why the task stands on its own rather than being folded into Task 2, and why it is worth landing before the flip.
+
+**Files:**
+- Modify: `desktop/src/space/types.h` — `layout_note` on `Projection`, beside `data_span_note`
+- Modify: `desktop/src/space/projection.h`, `desktop/src/space/projection.cpp` — `LayoutFingerprint`, `layout_fingerprint()`, `layout_reflow_note()`
+- Modify: `desktop/src/ui/shell.h` — `layout_fp` on `SceneView`
+- Modify: `desktop/src/ui/shell.cpp` — preserve it across the growth reset (`:279-285`), set the note in the weave (`:1176-1188`)
+- Modify: `desktop/src/scene3d/hud.cpp:532` — surface it beside `data_span_note`
+- Test: `desktop/test/test_projection.cpp` (the rule) and `desktop/test/test_shell.cpp` (the wiring)
+
+**Interfaces:**
+- Consumes: `Projection::rects` (Task 2) — but degrades to `order` + `domain_off` under Hilbert, so it does not require the atlas.
+- Produces:
+  - `struct space::LayoutFingerprint { bool valid; size_t regions; uint64_t digest; }`
+  - `space::LayoutFingerprint space::layout_fingerprint(const Projection &);`
+  - `std::string space::layout_reflow_note(const LayoutFingerprint &prev, const LayoutFingerprint &now);`
+  - `std::string Projection::layout_note` — empty except on a weave that moved the floor.
+
+**What the note must not do.** It reports that the floor was re-laid out; it does not claim *how much* moved, and it must never fire on a first weave. A reader who has no mental map yet cannot have it reset, so `prev.valid == false` returns no note — and a recording with no regions has no floor at all. Both are silence by rule, not by threshold.
+
+- [ ] **Step 1: Write the failing test for the rule**
+
+Add to `desktop/test/test_projection.cpp`, after Task 8's label blocks:
+
+```cpp
+// --- the reflow notice: a growing capture must not re-lay the floor silently -
+{
+    // Rebuilding the SAME region set is not a reflow. build_projection is a
+    // pure function of the regions, so a weave that changes nothing produces
+    // an identical layout — the spec's "recompute only when that set changes"
+    // falls out of that, and this pins it rather than assuming it.
+    const Projection a = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
+    const Projection b = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
+    const LayoutFingerprint fa = layout_fingerprint(a);
+    const LayoutFingerprint fb = layout_fingerprint(b);
+    check("an unchanged region set digests identically", fa.digest == fb.digest,
+          "two builds of one region set disagreed");
+    check("recomputing an unchanged layout is not a reflow",
+          layout_reflow_note(fa, fb).empty(),
+          "warned about a floor that did not move: \"" +
+              layout_reflow_note(fa, fb) + "\"");
+}
+{
+    // A region appears — the live-capture case the spec is about.
+    static const Ref kOne = {0x0000000000400000ull, 4096, Region::Code};
+    static const Ref kTwo = {0x0000000000900000ull, 4096, Region::Heap};
+    const std::string note =
+        layout_reflow_note(layout_fingerprint(atlas_of({kOne})),
+                           layout_fingerprint(atlas_of({kOne, kTwo})));
+    check("a new region reflows the floor, and says so", !note.empty(),
+          "a growing capture re-laid its floor silently — the exact failure "
+          "the spec's risk table names");
+    check("the note names what changed",
+          note.find("1 region became 2") != std::string::npos, note);
+}
+{
+    // Same region COUNT, one of them grew. Under Hilbert this shifts every
+    // later region's domain offset, so the floor re-scrambles just as surely
+    // as a treemap re-tiles — the notice is not an atlas feature.
+    std::vector<Region> small, grown;
+    Region r0;
+    r0.base = 0x400000ull;
+    r0.len = 4096;
+    r0.kind = Region::Code;
+    Region r1 = r0;
+    r1.base = 0x900000ull;
+    r1.len = 4096;
+    small = {r0, r1};
+    r1.len = 8192;
+    grown = {r0, r1};
+    const std::string note = layout_reflow_note(
+        layout_fingerprint(build_projection(std::move(small))),
+        layout_fingerprint(build_projection(std::move(grown))));
+    check("a region that GREW reflows the floor under Hilbert too",
+          !note.empty(),
+          "compaction shifted every later region and the HUD said nothing");
+    check("the same-count wording says what actually changed",
+          note.find("extents changed") != std::string::npos, note);
+}
+{
+    // Silence by rule, not by threshold.
+    const Projection p = atlas_of({kRefs[0]});
+    check("the first layout is not a reflow",
+          layout_reflow_note(LayoutFingerprint{}, layout_fingerprint(p)).empty(),
+          "warned about a floor the reader had never seen");
+    const Projection empty = build_projection({});
+    check("a recording with no regions has no fingerprint",
+          !layout_fingerprint(empty).valid,
+          "an empty plane is not a layout to compare against");
+    check("appearing from nothing is not a reflow",
+          layout_reflow_note(layout_fingerprint(empty),
+                             layout_fingerprint(p))
+              .empty(),
+          "a floor drawn for the first time is not a floor that moved");
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
+Expected: FAIL — `layout_fingerprint` not declared.
+
+- [ ] **Step 3: Implement the rule**
+
+In `types.h`, beside `data_span_note` on `struct Projection`:
+
+```cpp
+// 3D-axis-budget T9: set on a weave whose layout MOVED relative to the
+// previous one — a growing live capture gaining a region, mostly. Empty on a
+// first weave and on any weave that re-laid the floor identically, so a
+// non-empty note always means the reader's mental map just changed under
+// them. The HUD surfaces it exactly like data_span_note above.
+std::string layout_note;
+```
+
+In `projection.h`:
+
+```cpp
+// A digest of everything that decides WHERE an address lands on the plane:
+// `order`, the compacted domain boundaries, the layout, and (under Atlas) the
+// rectangles. Two projections with equal digests place every address
+// identically, so comparing digests across a weave answers "did the floor
+// move" without keeping the old projection alive.
+//
+// `valid` is false for a projection with no regions — there is no floor to
+// have moved — and a comparison involving an invalid fingerprint is never a
+// reflow.
+struct LayoutFingerprint {
+    bool valid = false;
+    size_t regions = 0;
+    uint64_t digest = 0;
+};
+LayoutFingerprint layout_fingerprint(const Projection &proj);
+
+// The HUD note for a weave that moved the floor, or "" when it did not. NOT
+// atlas-specific: adding a region shifts every later region's domain offset,
+// so a Hilbert floor re-scrambles too, and a growing capture deserves the same
+// notice under either layout.
+std::string layout_reflow_note(const LayoutFingerprint &prev,
+                               const LayoutFingerprint &now);
+```
+
+In `projection.cpp`, beside `region_cells`:
+
+```cpp
+namespace {
+// FNV-1a, byte-wise over each value so the digest is byte-order-independent
+// and an inserted region cannot collide with a resized one by luck of layout.
+void fp_mix(uint64_t &h, uint64_t v) {
+    for (int i = 0; i < 8; i++) {
+        h ^= (v >> (i * 8)) & 0xffull;
+        h *= 1099511628211ull;
+    }
+}
+std::string fp_regions(size_t n) {
+    return std::to_string(n) + (n == 1 ? " region" : " regions");
+}
+} // namespace
+
+LayoutFingerprint layout_fingerprint(const Projection &proj) {
+    LayoutFingerprint fp;
+    if (proj.regions.empty())
+        return fp; // no floor to have moved
+    fp.valid = true;
+    fp.regions = proj.regions.size();
+    uint64_t h = 14695981039346656037ull;
+    fp_mix(h, proj.order);
+    fp_mix(h, static_cast<uint64_t>(proj.layout));
+    for (uint64_t d : proj.domain_off)
+        fp_mix(h, d); // Hilbert's whole mapping, given order
+    for (const AtlasRect &r : proj.rects) {
+        fp_mix(h, r.x0);
+        fp_mix(h, r.y0);
+        fp_mix(h, r.x1);
+        fp_mix(h, r.y1);
+    }
+    fp.digest = h;
+    return fp;
+}
+
+std::string layout_reflow_note(const LayoutFingerprint &prev,
+                               const LayoutFingerprint &now) {
+    if (!prev.valid || !now.valid)
+        return std::string(); // a first floor is not a floor that moved
+    if (prev.digest == now.digest)
+        return std::string(); // recomputed, but identical: not a reflow
+    if (prev.regions != now.regions)
+        return "floor re-laid out: " + fp_regions(prev.regions) + " became " +
+               std::to_string(now.regions);
+    return "floor re-laid out: " + fp_regions(now.regions) +
+           ", extents changed";
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
+Expected: PASS.
+
+- [ ] **Step 5: Wire it through the shell**
+
+Add to `SceneView` ([shell.h:67](../../../desktop/src/ui/shell.h#L67)), beside the other per-view state:
+
+```cpp
+// 3D-axis-budget T9: the layout digest of the LAST weave, so a growing
+// capture can tell the reader its floor was re-laid out. Survives the
+// live-growth SceneView reset (shell.cpp:279-285) on the same terms as the
+// camera — it is the only thing that remembers the layout the reader was
+// actually looking at.
+space::LayoutFingerprint layout_fp;
+```
+
+Preserve it across the growth reset at [shell.cpp:279-285](../../../desktop/src/ui/shell.cpp#L279), adding one line to the block that already saves the camera, HUD and primer:
+
+```cpp
+scene3d::Camera cam = s.scenes[i].cam;
+scene3d::HudState hud = s.scenes[i].hud;
+dt_primer_state primer = s.scenes[i].primer;
+space::LayoutFingerprint fp = s.scenes[i].layout_fp; // T9
+s.scenes[i] = SceneView{};
+s.scenes[i].cam = cam;
+s.scenes[i].hud = hud;
+s.scenes[i].primer = primer;
+s.scenes[i].layout_fp = fp; // T9
+```
+
+**This line is the whole task's hinge.** Drop it and the fingerprint resets with everything else, `prev.valid` is false on every batch, and the notice can never fire — a silent failure that no pure test can catch, which is why Step 6 tests it through the shell.
+
+Then in the weave at [shell.cpp:1188](../../../desktop/src/ui/shell.cpp#L1188), immediately after `proj.data_span_note = std::move(span_note);` — while `proj` is still in scope, *before* `build_terrain` moves it:
+
+```cpp
+// T9: did this weave move the floor the reader was already looking at?
+const space::LayoutFingerprint fp = space::layout_fingerprint(proj);
+proj.layout_note = space::layout_reflow_note(sv.layout_fp, fp);
+sv.layout_fp = fp;
+```
+
+And surface it in `hud.cpp`, beside `data_span_note` at [:532](../../../desktop/src/scene3d/hud.cpp#L532):
+
+```cpp
+if (!terr.proj.layout_note.empty())
+    ImGui::TextColored(kDim, "%s", terr.proj.layout_note.c_str());
+```
+
+- [ ] **Step 6: Write the wiring test**
+
+The rule is tested; what is not is that the fingerprint *survives the reset*. Model it on the camera-preservation check that already guards this exact block ([test_shell.cpp:1858-1865](../../../desktop/test/test_shell.cpp#L1858)) — set a sentinel, grow the capture, re-sync, assert it survived:
+
+```cpp
+// 3D-axis-budget T9: the layout fingerprint must survive the live-growth
+// SceneView reset, exactly as the camera above does. If it does not, every
+// batch compares against an invalid fingerprint, the reflow notice can never
+// fire, and the failure is SILENT — no pure test can see it, because the rule
+// itself is correct.
+ls.scenes[i].layout_fp.valid = true;
+ls.scenes[i].layout_fp.digest = 0xD00Dull;
+ls.scenes[i].layout_fp.regions = 7;
+sess.feed_line(
+    R"({"k":"df_step","step":1,"off":0,"disasm":"nop","ops":[]})");
+shell_sync_live_tab(ls);
+check("25t6/layout fingerprint preserved",
+      ls.scenes[i].layout_fp.valid &&
+          ls.scenes[i].layout_fp.digest == 0xD00Dull,
+      "a live re-weave dropped the previous layout digest, so the reflow "
+      "notice can never fire");
+```
+
+Note this asserts on the state *after* `shell_sync_live_tab` but *before* the lazy 3D weave runs (the weave is gated on `!sv.built` inside the pane draw, which this test does not reach), so the sentinel is still the value that was preserved rather than a freshly-computed digest. That ordering is what makes the check specific to the preserve-list.
+
+- [ ] **Step 7: Run both**
+
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
+Then: `make build/desktop_test_shell && ./build/desktop_test_shell`
+
+Expected: PASS. **`test_shell` has pre-existing failures unrelated to this plan** (the attach / no-host cases), so read the named checks rather than the exit code, and confirm `25t6/layout fingerprint preserved` and `25t6/camera preserved` both pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add desktop/src/space/types.h desktop/src/space/projection.h desktop/src/space/projection.cpp desktop/src/ui/shell.h desktop/src/ui/shell.cpp desktop/src/scene3d/hud.cpp desktop/test/test_projection.cpp desktop/test/test_shell.cpp
+git commit -m "space: tell the reader when a growing capture re-lays the floor"
+```
+
+---
+
+### Task 10: Flip the default, regenerate goldens, document
 
 **Files:**
 - Modify: `desktop/src/space/types.h` — default `Projection::layout` to `Atlas` (the member default lives on the struct, in `types.h`)
@@ -2353,11 +2646,11 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 ## Self-review
 
-**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, **8 (the in-place labels — its stated payoff)** and 9. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only), Tasks 7a/7b (the harness and the opcode-channel image gate) and Task 7c (the crossings channel, in a pure test). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
+**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, **8 (the in-place labels — its stated payoff)**, **9 (the reflow notice its risk table asks for)** and 10. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only), Tasks 7a/7b (the harness and the opcode-channel image gate) and Task 7c (the crossings channel, in a pure test). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
 
 **Why the motif gate is split across 7b and 7c.** The two channels are not testable by the same instrument, and pretending otherwise was the earlier draft's mistake. `opcode` is a terrain tint, so it is only visible in a rendered frame and its data comes from `space/` — 7b. `crossings` is geometry built by `views/build_crossing_layer`, which a GL test would have to link `views/` to produce, and whose real fixture can only come from a live tracer — 7c, in the pure test that already owns the contract. Gating both from one frame would have meant either dragging `views/` into the GL closure or, as written, asserting on a layer with no data uploaded.
 
-**Type consistency.** `AtlasLabel` and `atlas_labels(const Projection &, uint32_t)` are defined once, in Task 8, and live in `projection.h`/`projection.cpp` beside `region_cells`; `draw_atlas_labels` is declared once, in `hud.h`, beside `draw_trajectory_ruler`. `load_recording_file` returns **`std::optional<Recording>`** — Tasks 7b and 7c both test it as a bool (`!rec` / `rec.has_value()`), never against `nullptr`. `Scene`, `Camera` and `SceneLayers` are **`asmdesk::scene3d::`** and are written qualified everywhere in 7a's header, because `asmdesk::testing` does not enclose `asmdesk::scene3d`. `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `split_rect` returns `bool` and takes an `int32_t *out` — it is the one helper here whose signature is not obvious from its job, because it can refuse. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
+**Type consistency.** `AtlasLabel` and `atlas_labels(const Projection &, uint32_t)` are defined once, in Task 8, and `LayoutFingerprint` / `layout_fingerprint` / `layout_reflow_note` once, in Task 9; all five live in `projection.h`/`projection.cpp` beside `region_cells`. `Projection::layout_note` (Task 9) and `Projection::data_span_note` are both plain `std::string` members set by the shell and read by `hud.cpp`, never computed in the HUD. `draw_atlas_labels` is declared once, in `hud.h`, beside `draw_trajectory_ruler`. `load_recording_file` returns **`std::optional<Recording>`** — Tasks 7b and 7c both test it as a bool (`!rec` / `rec.has_value()`), never against `nullptr`. `Scene`, `Camera` and `SceneLayers` are **`asmdesk::scene3d::`** and are written qualified everywhere in 7a's header, because `asmdesk::testing` does not enclose `asmdesk::scene3d`. `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `split_rect` returns `bool` and takes an `int32_t *out` — it is the one helper here whose signature is not obvious from its job, because it can refuse. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
 
 **Where the spec is superseded.** Two of the spec's statements did not survive verification and this plan overrides them; both should be read as corrected here rather than followed as written:
 
@@ -2369,7 +2662,7 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | Assumption | Verdict |
 |---|---|
 | `Projection` lives in `projection.h` | **false** — it is in `space/types.h:30-55`. Tasks 2 and 9 corrected |
-| `atlas_cells_per_side()` is a needed new concept | **false** — `1 << order` already is the grid side, read in 13 sources and 10 tests. Dropped; the decision to keep `order` is now stated up front instead of deferred to Task 9 |
+| `atlas_cells_per_side()` is a needed new concept | **false** — `1 << order` already is the grid side, read in 13 sources and 10 tests. Dropped; the decision to keep `order` is now stated up front instead of deferred to Task 10 |
 | `scene_locate_off(p, region, off, &u, &v) -> bool` | **false** — `Located scene_locate_off(const Projection&, const Recording&, uint64_t)`. Task 3 now probes through `place_address(proj, addr)`, which needs no `Recording` |
 | `locate.cpp`/`stepplace.cpp` re-derive Hilbert arithmetic | **false** — both already call `proj.project()`. Task 3 is a regression gate, not a refactor, and says so |
 | `region_cells()` is layout-neutral | **false** — it walks `d2xy` directly (`projection.cpp:426`). Task 2 gives it an atlas branch; `test_focus.cpp` guards it |
@@ -2446,11 +2739,19 @@ The decisive fact is geometric, not aesthetic: the lifetime pillars and the sedi
 | **Task 7a's header could not compile.** It declared everything in `namespace asmdesk::testing` while naming `Scene`, `Camera` and `SceneLayers` unqualified — those are `asmdesk::scene3d`, and only `Recording` is `asmdesk`. `test_scene_fbo.cpp` gets away with it via a file-scope `using namespace asmdesk::scene3d;`; a header cannot, and 7b's `using` lines come after its `#include` | Every signature qualified `scene3d::`, in both the Interfaces block and the header body, with an explicit "do not fix this with a `using namespace` in a header" note |
 | **Component 1's stated payoff had no task.** The spec's deliverable is "region-major, 100 % packed, **labelled in place**" and it says outright *"This — not locality — is the real win."* Tasks 2/3/9 build the rects, prove the funnel and flip the default; **none of them drew a label.** Today's region names exist only as a side-panel legend (`hud.cpp:1176-1187`) | **New Task 8**, ordered before the default flip so the labels are live when the screenshots regenerate. Pure placement rule in `space/` (`atlas_labels`, tested in the null harness beside `region_cells`), thin `draw_atlas_labels` in `hud.cpp` reusing `draw_trajectory_ruler`'s world→screen transform. Refuses under Hilbert rather than fabricating an anchor on a snake, and is partial by design above a legibility threshold — with the legend as the disclosure |
 
-Four smaller corrections in the same pass:
+**Eighth pass — the spec's Risks table is a requirements section too.** Pass 7 checked the spec's deliverable bullets and found the missing labels; it still read the Risks table as commentary. It is not: each row names a mitigation, and one of them — *"record the reflow in the HUD"*, against a failure mode the spec spells out as **"a growing capture that reflows silently is the failure mode to avoid"** — had no task. It was briefly recorded as a deferred open risk on the grounds that `Projection` has nowhere to hold a previous region set. That reasoning was wrong about the tree: the state does not belong on `Projection` at all.
+
+| Defect | Fix in this revision |
+|---|---|
+| **The reflow notice had no task**, and the deferral argued that nothing could hold the previous layout. But a live batch does not re-weave in place — [shell.cpp:279-285](../../../desktop/src/ui/shell.cpp#L279) **replaces the whole `SceneView`**, already carrying the camera, HUD and primer across the reset for exactly this class of reason. The place to hold a previous-layout digest is that preserve-list, which costs one field and one line | **New Task 9.** A pure `layout_fingerprint()` / `layout_reflow_note()` pair in `space/` (tested in the null harness beside `region_cells` and `atlas_labels`), a `layout_fp` on `SceneView` preserved across the growth reset, and a `Projection::layout_note` surfaced beside `data_span_note` — the note mechanism the tree already has. Code compiled and run under `-Wall -Wextra` + ASan before landing |
+| The deferral also assumed the notice was atlas-specific, so it could wait for the flip | **False, and it is why the task stands alone.** Adding a region shifts every later region's `domain_off`, so a *Hilbert* floor re-scrambles just as surely as a treemap re-tiles. The digest covers `order` + `domain_off` + `rects`, works under both layouts, and lands before Task 10 rather than after it |
+| The spec's *other* half — "recompute only when that set changes" — was never checked, only assumed | Verified: `rebuild_layout()` runs inside `build_projection()`, which the shell calls only from the `!sv.built` weave gate ([shell.cpp:1176](../../../desktop/src/ui/shell.cpp#L1176)), so it is already once per weave and needs no code. Task 9 says so rather than re-implementing it |
+
+Four smaller corrections in the seventh pass:
 
 | Defect | Fix |
 |---|---|
-| Task 2 said to leave the 10 000-address byte-exact loop alone "because it already runs on a default-constructed (`Hilbert`) projection" — **Task 9 flips that default to `Atlas`**, falsifying the sentence and leaving a Hilbert-only assertion running under the atlas. It happens to survive (that fixture's plane exceeds its domain, so every region gets `bytes_per_cell == 1`), but by accident of three fixture lengths, not by contract | The loop is now **pinned** to `Layout::Hilbert` on an explicit copy, with the accident recorded so nobody restores the reliance on it |
+| Task 2 said to leave the 10 000-address byte-exact loop alone "because it already runs on a default-constructed (`Hilbert`) projection" — **Task 10 flips that default to `Atlas`**, falsifying the sentence and leaving a Hilbert-only assertion running under the atlas. It happens to survive (that fixture's plane exceeds its domain, so every region gets `bytes_per_cell == 1`), but by accident of three fixture lengths, not by contract | The loop is now **pinned** to `Layout::Hilbert` on an explicit copy, with the accident recorded so nobody restores the reliance on it |
 | Task 4's file reference `camera.h:99-107` is `eye()`/`view()`; `reset()` is `:81` and `top_down()` is `:84-88`. And `frame(u, v, radius)` at `:75` already owns both of `fit()`'s clamps plus the non-reorienting rule the task depends on | References corrected; `fit()` now routes through `frame()` instead of re-deriving the clamps |
 | Task 3 called the `test_focus.cpp` sweep "a small loop change", but `:130` is `const space::Projection proj` — it cannot be flipped in place. `test_stepplace.cpp` also has no `<cmath>` for the `std::fabs` the new block uses | Both stated, with the two-copy sweep written out |
 | Task 1 committed after running only its own binary, yet it changes `traj_scale_` — a rendered-frame input — for exactly the recordings this plan exists to fix | A full-suite step added before the commit, with the "ordinary case is bit-identical, so churn means the defect became visible" reasoning |
@@ -2460,6 +2761,6 @@ Four smaller corrections in the same pass:
 1. ~~Task 7b's memcpy recording may have to be hand-authored~~ — **resolved, see Task 7b Step 0.** The premise was wrong twice: the opcode channel never reads `mem`, so nothing about that gate is at risk from `mem` having no producer; and the *syscalls* case, which the draft called safe, was the one the generated corpus could never produce — `asmtrace_record.c` emits no `syscall` events at all. Nothing is hand-authored now: the three image fixtures are generated, and the crossings fixture is a frozen real capture. What remains is a bounded, stated limit rather than a risk: the generated routines are author-chosen byte arrays, so 7b's claim is about honest *classification* of real disasm, not about real programs, and the test header says so.
 2. Task 5's flat worldline is coplanar with the terrain floor. The lift constant is an eyeball judgement that only the container render can settle — a path that vanishes under a tall cell is the failure mode, and it will not show up in any pure test.
 3. Task 2's cell budgets can give a region fewer cells than it has bytes (quantised away, `bytes_per_cell > 1`) **or more** (`bytes_per_cell == 1`, the rect's tail decoding to nothing). Both are honest and both are tested; the plan asserts only the region-level round trip, which is what the atlas can promise. If a caller is later found to depend on byte-exactness under `Atlas`, that is a design finding, not a rounding bug to paper over.
-4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 9 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
-5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 9 Step 4 is where it would show up.
-6. **The spec's live-capture reflow mitigation is half-implemented, deliberately.** Its risk table asks for two things — *"recompute only when [the region set] changes"* and *"record the reflow in the HUD"*. The first falls out for free: `rebuild_layout()` runs inside `build_projection()`, which a growing capture only calls when it rebuilds the terrain, so the layout is already keyed to the weave rather than recomputed per frame. The second is **not** in any task here. It needs somewhere to hold the previous region set to compare against, which `Projection` does not have and which this plan has no other reason to add. It is recorded here rather than bolted onto Task 9 because a reflow notice invented without a live growing capture to watch would be untestable by anything in this plan — the honest place for it is a follow-up brief alongside the live-capture work, and a reader of a *replayed* recording never sees a reflow at all.
+4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 10 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
+5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 10 Step 4 is where it would show up.
+6. The reflow notice (Task 9) reports **that** the floor moved, never **how much**. Quantifying the disruption would need the previous rects kept alive and a distance metric over two tilings, and no threshold on that metric could be justified from anything measured here — so the note is a fact, and whether a reflow was disruptive stays the reader's judgement. If live use shows the notice firing constantly on ordinary growth, the fix is to make the layout stable under append (a real design change), not to add a silence threshold.
