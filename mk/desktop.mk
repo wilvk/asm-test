@@ -513,6 +513,8 @@ $(BUILD)/desktop/test/t/test_fidelity.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+# 61 T7c: the crossing channel's real-capture fixture (a frozen asmspy run).
+$(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_drillin.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 # The 3D-scene FBO smoke reads BOTH trees (10-spacetime-3d-overview.md T7): the
 # two GENERATED golden scenes (and the hand-authored rich-`mem` one under

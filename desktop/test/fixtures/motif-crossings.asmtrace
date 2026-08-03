@@ -1,0 +1,1243 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-serve","exact":true,"trust":"exact"},"arch":"x86_64","ts":1785767625}
+{"k":"codeimage","base":106172748284393,"len":97,"version":0,"when":1,"bytes":"f30f1efa554889e54883ec20897decbe01000000488d05000e00004889c7b800000000e8dffeffff8945fc837dfc0078238b45fcba01000000488d0de50d00004889ce89c7e86dfeffff8b45fc89c7e8a3feffffe86efeffff8b45ec83c001c9c3"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"mov dword ptr [rbp - 0x14], edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"mov esi, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"lea rax, [rip + 0xe00]"}
+{"k":"trace","basis":"rel","kind":"insn","off":27,"disasm":"mov rdi, rax"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"mov eax, 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"call 0x609044f240f0"}
+{"k":"trace","basis":"rel","kind":"insn","off":40,"disasm":"mov dword ptr [rbp - 4], eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":43,"disasm":"cmp dword ptr [rbp - 4], 0"}
+{"k":"trace","basis":"rel","kind":"insn","off":47,"disasm":"js 0x609044f2423d"}
+{"k":"trace","basis":"rel","kind":"insn","off":49,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":52,"disasm":"mov edx, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":57,"disasm":"lea rcx, [rip + 0xde5]"}
+{"k":"trace","basis":"rel","kind":"insn","off":64,"disasm":"mov rsi, rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":67,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":69,"disasm":"call 0x609044f240a0"}
+{"k":"trace","basis":"rel","kind":"insn","off":74,"disasm":"mov eax, dword ptr [rbp - 4]"}
+{"k":"trace","basis":"rel","kind":"insn","off":77,"disasm":"mov edi, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":79,"disasm":"call 0x609044f240e0"}
+{"k":"trace","basis":"rel","kind":"insn","off":84,"disasm":"call 0x609044f240b0"}
+{"k":"trace","basis":"rel","kind":"insn","off":89,"disasm":"mov eax, dword ptr [rbp - 0x14]"}
+{"k":"trace","basis":"rel","kind":"insn","off":92,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":95,"disasm":"leave"}
+{"k":"trace","basis":"rel","kind":"insn","off":96,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":27,"truncated":false}
+{"k":"syscall","line":"restart_syscall(0x0, 0x0, 0x7ffdb508b680, ...) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"syscall","line":"clock_nanosleep(0, 0, {0.005000000}, 0x0) = 0"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_WRONLY) = 3","payload":"/dev/null"}
+{"k":"syscall","line":"write(fd=3, <1 bytes>, 1) = 1","payload":"x"}
+{"k":"syscall","line":"close(fd=3) = 0"}
+{"k":"syscall","line":"getpid() = 12"}
+{"k":"end","events":1241,"truncated":false,"drops":{"lost":0,"throttled":false}}
