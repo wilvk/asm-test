@@ -668,6 +668,11 @@ DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o) \
                       $(DESKTOP_VIEW_APP:%=$(BUILD)/desktop/app/vw/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
+
+# NOTE: the --shot object list lives further down, immediately after
+# DESKTOP_GL_MISSING and EGL_LIBS are defined. It cannot be here: both are set
+# ~150 lines below, so an ifeq at this point would always take the
+# headers-present branch and $(EGL_LIBS) would expand to nothing.
 # Freetype rasteriser TU, app + viewer only, when DESKTOP_FREETYPE=1 (F3).
 ifeq ($(DESKTOP_FREETYPE),1)
 DESKTOP_APP_OBJ    += $(BUILD)/desktop/app/ig/imgui_freetype.o
@@ -806,6 +811,30 @@ endif
 ifeq ($(shell ls /usr/include/EGL/egl.h /usr/local/include/EGL/egl.h 2>/dev/null | head -1),)
 DESKTOP_GL_MISSING += libegl1-mesa-dev
 endif
+
+# --shot (the documentation screenshots): the manifest model, the EGL/FBO
+# capture host and the PNG encoder. APP-ONLY for the same reason regsynth is:
+# asmtest-viewer is the permissively-distributable render-only binary and must
+# gain no EGL linkage and no stb_image_write (D4). Appending to DESKTOP_APP_OBJ
+# here rather than adding to desktop_app_objs is what keeps them out of BOTH
+# trees.
+#
+# This block MUST come after DESKTOP_GL_MISSING and EGL_LIBS above: placed with
+# the other object lists ~150 lines earlier, the ifeq would always take the
+# headers-present branch and $(EGL_LIBS) would expand to nothing, which shows up
+# as a pile of undefined eglGetProcAddress references at link time.
+#
+# On a host without the EGL/GL headers the capture host is replaced by a stub
+# that explains itself, so a bare host still builds a WORKING app — it just
+# cannot take screenshots. Same gate the FBO smoke uses.
+ifeq ($(strip $(DESKTOP_GL_MISSING)),)
+DESKTOP_UI_APP    := shot shot_render png_write
+DESKTOP_SHOT_LIBS := $(EGL_LIBS)
+else
+DESKTOP_UI_APP    := shot shot_render_stub png_write
+DESKTOP_SHOT_LIBS :=
+endif
+DESKTOP_APP_OBJ += $(DESKTOP_UI_APP:%=$(BUILD)/desktop/app/ui/%.o)
 
 # doc 45 T9: the window-picker's Xvfb integration lane needs a REAL (virtual)
 # X11 display + a dummy second window to hit-test — xvfb-run and X11 dev
@@ -993,7 +1022,8 @@ $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
                           $(DESKTOP_CAP_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(LINK_LIBBPF) \
-	  $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) $(X11_LIBS) -ldl -lpthread -o $@
+	  $(GLFW_LIBS) $(GL_LIBS) $(DESKTOP_SHOT_LIBS) $(FREETYPE_LIBS) \
+	  $(X11_LIBS) -ldl -lpthread -o $@
 	@echo "built $@ — the full app (GPL-2.0 as a whole; links the engines)"
 
 $(BUILD)/asmtest-viewer: $(DESKTOP_RENDER_OBJ)

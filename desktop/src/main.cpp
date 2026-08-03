@@ -6,6 +6,7 @@
 // frames this loop drives. Stock Dear ImGui GLFW + OpenGL3 example shape
 // (03-desktop-shell.md T6).
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -26,6 +27,9 @@
 #include "ui/gl_scene_host.h"
 #include "ui/settings.h"         // user text-scale / theme / window size (20 T5)
 #include "ui/shell.h"
+#ifndef ASMTEST_DESKTOP_RENDER_ONLY
+#include "ui/shot_render.h" // --shot, full binary only (D4)
+#endif
 #include "ui/theme.h"            // dt_set_light_theme (20 T5)
 #include "views/observer_draw.h" // obs_graph_enable (node-editor canvas, 15 T3)
 
@@ -100,7 +104,29 @@ static void glfw_error(int code, const char *desc) {
     std::fprintf(stderr, "glfw error %d: %s\n", code, desc);
 }
 
-int main() {
+int main(int argc, char **argv) {
+#ifndef ASMTEST_DESKTOP_RENDER_ONLY
+    // --shot <manifest.json> [--out <dir>]: render the documented screenshots
+    // offscreen and exit, without ever creating a window (surfaceless EGL, so
+    // no display is needed at all). Handled before glfwInit for that reason.
+    //
+    // FULL BINARY ONLY. The permissive viewer links no EGL and no PNG encoder
+    // (D4), so this whole block — and ui/shot_render.o — is absent there.
+    {
+        std::string shot_manifest, shot_out = "build/shots";
+        for (int i = 1; i < argc; i++) {
+            if (std::strcmp(argv[i], "--shot") == 0 && i + 1 < argc)
+                shot_manifest = argv[++i];
+            else if (std::strcmp(argv[i], "--out") == 0 && i + 1 < argc)
+                shot_out = argv[++i];
+        }
+        if (!shot_manifest.empty())
+            return asmdesk::shot_run(shot_manifest, shot_out);
+    }
+#else
+    (void)argc;
+    (void)argv;
+#endif
     glfwSetErrorCallback(glfw_error);
     if (!glfwInit()) {
         std::fprintf(stderr, "asmtest-desktop: glfwInit failed\n");
