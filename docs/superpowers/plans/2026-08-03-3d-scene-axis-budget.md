@@ -22,6 +22,36 @@
 - **GL is available in the container.** [Dockerfile.desktop:17-19,43,48](../../../Dockerfile.desktop#L17) pins software Mesa (llvmpipe) + EGL with `LIBGL_ALWAYS_SOFTWARE=1` specifically so the scene FBO smoke renders offscreen. Pixel-level assertions therefore genuinely run under `make docker-desktop` and must **not** be written as self-skipping (CLAUDE.md).
 - **clang-format 18 is canonical.** Use `make docker-fmt`. `desktop/` addon includes in `shell.cpp` are order-sensitive — keep the existing fence comments; a bare `clang-format -i` re-sorts them into an `imgui_internal.h #error`.
 - **Shared tree.** Many agents work this repo concurrently. Commit by explicit path, never `git add -A`.
+- **There is NO gtest — do not write `TEST(...)` / `EXPECT_*` / `ASSERT_*`.** No `gtest`, `googletest`, `catch2` or `doctest` appears in any makefile. Every test is a standalone binary with its own `main()`, using this exact house idiom:
+
+```cpp
+static int failures;
+static void fail(const std::string &what, const std::string &why) {
+    std::fprintf(stderr, "FAIL: %s (%s)\n", what.c_str(), why.c_str());
+    failures++;
+}
+static void check(const std::string &what, bool cond, const std::string &why) {
+    if (!cond)
+        fail(what, why);
+}
+
+int main() {
+    // ... checks ...
+    if (failures) {
+        std::fprintf(stderr, "%d <name> check(s) failed\n", failures);
+        return 1;
+    }
+    std::printf("test_<name>: all checks passed\n");
+    return 0;
+}
+```
+
+  The third argument to `check` is the **failure explanation**, printed only on failure — write what actually went wrong (`"got order " + std::to_string(p.order)`), never a restatement of the assertion.
+- **Exact API signatures** (copy these; earlier drafts got them wrong):
+  - `bool Projection::project(uint64_t addr, float *u, float *v) const`
+  - `bool Projection::unproject(float u, float v, uint64_t *addr, const Region **r) const` — **four** args, and the last is a `const Region **`, not an index
+  - `Projection build_projection(std::vector<Region> regions)` — takes a `std::vector<Region>` by value; build one by filling `Region{base, len, kind}` and moving it in
+  - `space::TrajPoint` field order is `{t, addr, fidelity, is_access, tid, placed}` — `t` comes **first**. Prefer named field assignment over brace-init so a field reorder cannot silently transpose values.
 
 ---
 
@@ -30,76 +60,138 @@
 Lands first and independently of the re-encoding, so the live defect is fixed regardless of when the substrate work completes.
 
 **Files:**
-- Modify: `desktop/src/scene3d/scene.cpp:797-802`
+- Create: `desktop/src/scene3d/trajscale.h` — the scale rule, **header-only**
+- Modify: `desktop/src/scene3d/scene.cpp:797-802` — call it
 - Create: `desktop/test/test_scene_traj.cpp` — **does not exist**; this task creates it
 - Modify: `mk/desktop.mk` — register the new test binary (see Global Constraints)
 
 **Interfaces:**
-- Consumes: `space::TrajectorySet`, `space::Projection` (unchanged).
-- Produces: no signature change. `Scene::traj_scale_` becomes bounded such that every emitted vertex Y lies in `[0, 0.6]`.
+- Consumes: nothing from earlier tasks.
+- Produces: `float scene_traj_scale(uint32_t nsteps, uint64_t max_t, float time_scale)` in `asmdesk::scene3d`, header-only. `Scene::set_trajectories` routes through it so every emitted vertex Y lies in `[0, 0.6]`.
+
+**Why a new header rather than a member of `scene.cpp`:** `scene.o` links GL, so a test touching it needs a GL context for a piece of pure arithmetic. [camera.h](../../../desktop/src/scene3d/camera.h) and `linequad.h` are already header-only for exactly this reason — `test_camera.cpp`'s own comment calls them "header-only citizens" whose binary "links NOTHING but the header". This test joins them: it stays in the null harness and links only its own object.
 
 - [ ] **Step 1: Write the failing test**
 
 ```cpp
-// A `mem` stream can outlast the trace's own step count (sediment.cpp:33-37).
-// The worldline must not escape its 0.6 world-unit envelope when it does.
-TEST(scene_traj, mem_step_past_nsteps_stays_in_envelope) {
-    space::TrajectorySet ts;
-    space::Trajectory tr;
-    tr.points.push_back({/*addr=*/0x1000, /*t=*/0, /*is_access=*/false, /*placed=*/true});
-    // t far beyond the terrain's stated extent
-    tr.points.push_back({/*addr=*/0x1000, /*t=*/100000, /*is_access=*/false, /*placed=*/true});
-    ts.trajectories.push_back(tr);
+// test_scene_traj.cpp — the worldline's vertical scale rule. Null harness, no
+// GL: this binary links nothing but the header-only scene3d/trajscale.h, on
+// the same terms as test_camera.cpp's citizens.
+#include <cstdio>
+#include <string>
 
-    Scene s;
-    s.nsteps = 10; // terrain under-reports
-    const float scale = scene_traj_scale(s.nsteps, /*max_t=*/100000, s.time_scale);
-    EXPECT_LE(100000.0f * scale, 0.6f + 1e-4f);
+#include "scene3d/trajscale.h"
+
+using asmdesk::scene3d::scene_traj_scale;
+
+static int failures;
+static void fail(const std::string &what, const std::string &why) {
+    std::fprintf(stderr, "FAIL: %s (%s)\n", what.c_str(), why.c_str());
+    failures++;
+}
+static void check(const std::string &what, bool cond, const std::string &why) {
+    if (!cond)
+        fail(what, why);
+}
+
+int main() {
+    // A `mem` stream can outlast the trace's own step count — the same mismatch
+    // space/sediment.cpp:33-37 already guards. The worldline must not escape
+    // its 0.6 world-unit envelope when it does.
+    {
+        const float scale = scene_traj_scale(/*nsteps=*/10, /*max_t=*/100000,
+                                             /*time_scale=*/0.0f);
+        const float top = 100000.0f * scale;
+        check("a mem step past nsteps stays inside the 0.6 envelope",
+              top <= 0.6f + 1e-4f, "top of the worldline reached " +
+                                       std::to_string(top));
+    }
+    // The ordinary case is unchanged: nsteps covers every step, so the path
+    // still tops out AT 0.6 rather than being needlessly compressed.
+    {
+        const float scale = scene_traj_scale(1000, 999, 0.0f);
+        check("a well-formed trace still spans the full envelope",
+              std::fabs(999.0f * scale - 0.6f) < 0.01f,
+              "top was " + std::to_string(999.0f * scale) + ", wanted ~0.6");
+    }
+    // nsteps == 0 must NOT fall back to a fixed per-step constant: at the
+    // golden's 35560 steps the old 0.02f produced 711 world units, ~300x the
+    // camera radius and past zfar.
+    {
+        const float scale = scene_traj_scale(0, 35560, 0.0f);
+        const float top = 35560.0f * scale;
+        check("nsteps == 0 does not blow the envelope", top <= 0.6f + 1e-4f,
+              "top of the worldline reached " + std::to_string(top));
+    }
+    // An explicit time_scale is still honoured verbatim — callers that set it
+    // are stating a scale, not asking for one.
+    check("an explicit time_scale is passed through",
+          scene_traj_scale(1000, 999, 0.25f) == 0.25f, "explicit scale ignored");
+
+    if (failures) {
+        std::fprintf(stderr, "%d scene_traj check(s) failed\n", failures);
+        return 1;
+    }
+    std::printf("test_scene_traj: all checks passed\n");
+    return 0;
 }
 ```
 
 - [ ] **Step 2: Register the new test binary in `mk/desktop.mk`**
 
-The file is new, so without this it never builds and never runs in CI. Add the link rule beside its neighbours:
+The file is new, so without this it never builds and never runs in CI. It links only its own object, exactly like `test_camera`:
 
 ```make
-$(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o \
-                                  $(BUILD)/desktop/test/sc/scene.o
+$(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 ```
 
-and add `$(BUILD)/desktop_test_scene_traj \` to the `DESKTOP_TESTS` list at [mk/desktop.mk:1199](../../../mk/desktop.mk#L1199). It includes `linmath.h` transitively via `scene.h`, so also add it to the order-only prereq group at [mk/desktop.mk:1684-1685](../../../mk/desktop.mk#L1684).
+and add `$(BUILD)/desktop_test_scene_traj \` to the `DESKTOP_TESTS` list at [mk/desktop.mk:1199](../../../mk/desktop.mk#L1199). It does **not** include `linmath.h`, so it needs no entry in the order-only prereq group.
 
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: FAIL — `scene_traj_scale` not declared.
 
-- [ ] **Step 4: Extract the scale rule and apply sediment's guard**
+- [ ] **Step 4: Write the header and apply sediment's guard**
 
-Add to `desktop/src/scene3d/scene.h`, beside the `time_scale` member:
-
-```cpp
-// The worldline's world-Y per trace step. `max_t` is the largest TrajPoint.t
-// actually present. nsteps is the TERRAIN's extent and can UNDER-REPORT it —
-// a `mem` stream can outlast the trace's own step count (the same mismatch
-// space/sediment.cpp:33-37 already guards). Extending the denominator rather
-// than clamping the data keeps every real step on the axis.
-float scene_traj_scale(uint32_t nsteps, uint64_t max_t, float time_scale);
-```
-
-In `desktop/src/scene3d/scene.cpp`:
+Create `desktop/src/scene3d/trajscale.h`:
 
 ```cpp
-float scene_traj_scale(uint32_t nsteps, uint64_t max_t, float time_scale) {
+// trajscale.h — the worldline's world-Y per trace step, as PURE ARITHMETIC.
+// Header-only and dependency-free (no GL, no ImGui, no linmath), on the same
+// terms as camera.h and linequad.h, so test_scene_traj.cpp links nothing but
+// its own object and the rule is checkable with no context at all.
+#ifndef ASMDESK_SCENE3D_TRAJSCALE_H
+#define ASMDESK_SCENE3D_TRAJSCALE_H
+
+#include <algorithm>
+#include <cstdint>
+
+namespace asmdesk::scene3d {
+
+// `max_t` is the largest TrajPoint.t actually present. `nsteps` is the
+// TERRAIN's extent and can UNDER-REPORT it — a `mem` stream can outlast the
+// trace's own step count (the same mismatch space/sediment.cpp:33-37 already
+// guards, with the same max()). EXTENDING the denominator rather than clamping
+// the data is what keeps every real step on the axis: a step past the stated
+// extent is still a real step. A positive `time_scale` is a caller STATING a
+// scale and is returned verbatim.
+inline float scene_traj_scale(uint32_t nsteps, uint64_t max_t,
+                              float time_scale) {
     if (time_scale > 0.0f)
         return time_scale;
     const uint64_t top = std::max<uint64_t>(nsteps, max_t + 1);
-    return top > 0 ? 0.6f / static_cast<float>(top) : 0.02f;
+    return top > 0 ? 0.6f / static_cast<float>(top) : 0.6f;
 }
+
+} // namespace asmdesk::scene3d
+#endif // ASMDESK_SCENE3D_TRAJSCALE_H
 ```
 
-Then in `Scene::set_trajectories`, replace lines 800-801 with a pre-pass for `max_t` followed by:
+Note the final fallback is `0.6f`, not the old `0.02f`: with `max_t + 1` in the `max()`, `top` is zero only when there are no points at all, so any surviving constant must still be envelope-safe rather than a per-step rate.
+
+Then in `Scene::set_trajectories`, `#include "scene3d/trajscale.h"` and replace lines 800-801 with a pre-pass for `max_t` followed by:
 
 ```cpp
 uint64_t max_t = 0;
@@ -117,7 +209,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add desktop/src/scene3d/scene.cpp desktop/src/scene3d/scene.h desktop/test/test_scene_traj.cpp mk/desktop.mk
+git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.cpp desktop/test/test_scene_traj.cpp mk/desktop.mk
 git commit -m "scene3d: bound the worldline envelope when a mem step outlasts nsteps"
 ```
 
@@ -141,55 +233,79 @@ struct AtlasRect { float u0, v0, u1, v1; };
 
 - [ ] **Step 1: Write the failing tests**
 
+Add to the existing `desktop/test/test_projection.cpp`, reusing its `check`/`fail` helpers and its `Ref` struct. Add a local builder beside the existing setup:
+
 ```cpp
-TEST(projection_atlas, packs_the_whole_floor) {
-    Projection p = build_test_projection({{0x1000, 4096, Region::Code},
-                                          {0x8000, 61440, Region::Mmap}});
+// An atlas-layout projection over the given regions. Mirrors main()'s existing
+// build, then switches layout — build_projection() itself stays layout-neutral.
+static Projection atlas_of(const std::vector<Ref> &refs) {
+    std::vector<Region> in;
+    for (const Ref &r : refs) {
+        Region reg;
+        reg.base = r.base;
+        reg.len = r.len;
+        reg.kind = r.kind;
+        in.push_back(reg);
+    }
+    Projection p = build_projection(std::move(in));
     p.layout = Projection::Layout::Atlas;
     rebuild_layout(p);
+    return p;
+}
+```
+
+Then, inside `main()`:
+
+```cpp
+// --- the atlas layout: 100% packed, decodable, locally contiguous ----------
+{
+    // 4096 : 61440 == 1 : 15, so the code rect is exactly 1/16 of the floor.
+    static const Ref kSmall = {0x0000000000400000ull, 4096, Region::Code};
+    static const Ref kBig = {0x0000000001000000ull, 61440, Region::Mmap};
+    const Projection p = atlas_of({kSmall, kBig});
+
     float area = 0.0f;
     for (const AtlasRect &r : p.rects)
         area += (r.u1 - r.u0) * (r.v1 - r.v0);
-    // 100% packed by construction — this is the "only 1/4 of the floor" fix.
-    EXPECT_NEAR(area, 1.0f, 1e-4f);
-}
+    // The whole point: no power-of-4 padding, so no empty three-quarters.
+    check("the atlas packs the whole floor", std::fabs(area - 1.0f) < 1e-4f,
+          "covered " + std::to_string(area) + " of the unit plane");
 
-TEST(projection_atlas, area_is_proportional_to_len) {
-    // 4096 : 61440 == 1 : 15, so the code rect must be 1/16 of the floor.
-    Projection p = build_test_projection({{0x1000, 4096, Region::Code},
-                                          {0x8000, 61440, Region::Mmap}});
-    p.layout = Projection::Layout::Atlas;
-    rebuild_layout(p);
+    // regions come out sorted by base, so index 0 is the code region.
     const AtlasRect &code = p.rects[0];
-    EXPECT_NEAR((code.u1 - code.u0) * (code.v1 - code.v0), 1.0f / 16.0f, 1e-4f);
-}
+    const float code_area = (code.u1 - code.u0) * (code.v1 - code.v0);
+    check("rect area is proportional to Region::len",
+          std::fabs(code_area - 1.0f / 16.0f) < 1e-4f,
+          "code rect covered " + std::to_string(code_area) + ", wanted 0.0625");
 
-TEST(projection_atlas, round_trips_every_region_base) {
-    Projection p = build_test_projection({{0x1000, 4096, Region::Code},
-                                          {0x8000, 61440, Region::Mmap}});
-    p.layout = Projection::Layout::Atlas;
-    rebuild_layout(p);
+    // Round trip: cell quantisation means the exact address need not survive,
+    // but the REGION must — that is what makes the floor decodable.
     for (const Region &rg : p.regions) {
         float u = 0, v = 0;
-        ASSERT_TRUE(p.project(rg.base, &u, &v));
+        check("a region base projects under the atlas", p.project(rg.base, &u, &v),
+              "project refused a base inside the domain");
         uint64_t back = 0;
-        ASSERT_TRUE(p.unproject(u, v, &back));
-        // Same cell, so the same region — cell quantisation means the exact
-        // address need not survive, but the region must.
-        EXPECT_EQ(region_index_of(p, back), region_index_of(p, rg.base));
+        const Region *got = nullptr;
+        check("a projected cell unprojects", p.unproject(u, v, &back, &got),
+              "unproject refused a cell the atlas had just placed");
+        check("the round trip lands in the same region",
+              got != nullptr && got->base == rg.base,
+              "a region base round-tripped into a different region");
     }
 }
-
-TEST(projection_atlas, adjacent_offsets_stay_adjacent_within_a_region) {
-    Projection p = build_test_projection({{0x1000, 65536, Region::Code}});
-    p.layout = Projection::Layout::Atlas;
-    rebuild_layout(p);
+{
+    // Serpentine order within a region: neighbouring offsets stay neighbours.
+    // This is the locality Hilbert was bought for, kept where it means something.
+    static const Ref kOne = {0x0000000000400000ull, 65536, Region::Code};
+    const Projection p = atlas_of({kOne});
     float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
-    ASSERT_TRUE(p.project(0x1000, &u0, &v0));
-    ASSERT_TRUE(p.project(0x1000 + 64, &u1, &v1));
-    // Serpentine order: neighbouring offsets are within one cell step.
+    check("first offset projects", p.project(0x400000ull, &u0, &v0), "refused");
+    check("next offset projects", p.project(0x400000ull + 64, &u1, &v1), "refused");
     const float cell = 1.0f / static_cast<float>(atlas_cells_per_side(p));
-    EXPECT_LE(std::hypot(u1 - u0, v1 - v0), cell * 1.5f);
+    const float d = std::hypot(u1 - u0, v1 - v0);
+    check("adjacent offsets stay adjacent within a region", d <= cell * 1.5f,
+          "neighbouring offsets landed " + std::to_string(d / cell) +
+              " cells apart");
 }
 ```
 
@@ -245,17 +361,40 @@ These two are documented as *"the ONE address route"* and *"the shared plane ari
 
 - [ ] **Step 1: Write the failing test**
 
+Add to the existing `desktop/test/test_locate.cpp`, reusing its `check` helper:
+
 ```cpp
-TEST(locate_atlas, scene_locate_off_agrees_with_project_under_atlas) {
-    Projection p = build_test_projection({{0x1000, 4096, Region::Code}});
-    p.layout = Projection::Layout::Atlas;
-    rebuild_layout(p);
-    float lu = 0, lv = 0;
-    ASSERT_TRUE(scene_locate_off(p, /*region=*/0, /*off=*/0x40, &lu, &lv));
-    float pu = 0, pv = 0;
-    ASSERT_TRUE(p.project(0x1040, &pu, &pv));
-    EXPECT_NEAR(lu, pu, 1e-5f);
-    EXPECT_NEAR(lv, pv, 1e-5f);
+// The ONE address route must agree with the projection under BOTH layouts —
+// that agreement is what contains the blast radius of a layout swap. If this
+// holds, picking, goto, zoning and every (u,v)-keyed layer follow for free.
+{
+    std::vector<Region> in;
+    Region reg;
+    reg.base = 0x0000000000400000ull;
+    reg.len = 4096;
+    reg.kind = Region::Code;
+    in.push_back(reg);
+    Projection p = build_projection(std::move(in));
+
+    for (const auto layout : {Projection::Layout::Hilbert,
+                              Projection::Layout::Atlas}) {
+        p.layout = layout;
+        rebuild_layout(p);
+        const char *name =
+            layout == Projection::Layout::Atlas ? "atlas" : "hilbert";
+        float lu = 0, lv = 0;
+        check(std::string("scene_locate_off places an offset (") + name + ")",
+              scene_locate_off(p, /*region=*/0, /*off=*/0x40, &lu, &lv),
+              "the one address route refused an in-domain offset");
+        float pu = 0, pv = 0;
+        check(std::string("project places the same address (") + name + ")",
+              p.project(0x400040ull, &pu, &pv), "project refused it");
+        check(std::string("locate and project agree (") + name + ")",
+              std::fabs(lu - pu) < 1e-5f && std::fabs(lv - pv) < 1e-5f,
+              "locate gave (" + std::to_string(lu) + "," + std::to_string(lv) +
+                  ") but project gave (" + std::to_string(pu) + "," +
+                  std::to_string(pv) + ")");
+    }
 }
 ```
 
@@ -294,19 +433,48 @@ git commit -m "space: make the shared address funnel layout-agnostic"
 
 - [ ] **Step 1: Write the failing test**
 
-```cpp
-TEST(camera, fit_frames_a_quarter_plane_closer_than_the_whole) {
-    Camera whole; whole.fit(0.0f, 0.0f, 1.0f, 1.0f);
-    Camera quarter; quarter.fit(0.0f, 0.0f, 0.5f, 0.5f);
-    EXPECT_LT(quarter.radius, whole.radius);
-    EXPECT_NEAR(quarter.target[0], 0.25f, 1e-5f);
-    EXPECT_NEAR(quarter.target[2], 0.25f, 1e-5f);
-}
+Add to the existing `desktop/test/test_camera.cpp`, reusing its `check` helper:
 
-TEST(camera, fit_respects_the_dolly_clamps) {
-    Camera c; c.fit(0.0f, 0.0f, 0.001f, 0.001f);
-    EXPECT_GE(c.radius, Camera::kMinRadius);
-    EXPECT_LE(c.radius, Camera::kMaxRadius);
+```cpp
+// 3D-axis-budget T4: fit-to-bounds. reset() framed the whole unit plane
+// unconditionally, so an atlas occupying a fraction of it sat small in a
+// mostly-empty viewport with no way to say so.
+{
+    Camera whole;
+    whole.fit(0.0f, 0.0f, 1.0f, 1.0f);
+    Camera quarter;
+    quarter.fit(0.0f, 0.0f, 0.5f, 0.5f);
+    check("fitting a smaller region dollies closer", quarter.radius < whole.radius,
+          "quarter radius " + std::to_string(quarter.radius) +
+              " was not closer than whole " + std::to_string(whole.radius));
+    check("fit centres the target on the region",
+          std::fabs(quarter.target[0] - 0.25f) < 1e-5f &&
+              std::fabs(quarter.target[2] - 0.25f) < 1e-5f,
+          "target landed at (" + std::to_string(quarter.target[0]) + "," +
+              std::to_string(quarter.target[2]) + "), wanted (0.25,0.25)");
+    check("fit never lifts the target off the ground plane",
+          quarter.target[1] == 0.0f,
+          "a camera whose horizon lies about where the ground is");
+}
+{
+    // A degenerate region must not produce a camera inside the near plane —
+    // the same clamp-don't-break discipline dolly() already uses.
+    Camera c;
+    c.fit(0.0f, 0.0f, 0.001f, 0.001f);
+    check("fit respects the dolly clamps",
+          c.radius >= Camera::kMinRadius && c.radius <= Camera::kMaxRadius,
+          "radius " + std::to_string(c.radius) + " escaped [" +
+              std::to_string(Camera::kMinRadius) + "," +
+              std::to_string(Camera::kMaxRadius) + "]");
+}
+{
+    // reset() must still land where the existing checks in this file expect.
+    Camera r;
+    r.reset();
+    check("reset still frames the whole plane from the default angles",
+          std::fabs(r.target[0] - 0.5f) < 1e-5f &&
+              std::fabs(r.target[2] - 0.5f) < 1e-5f,
+          "reset moved the default target");
 }
 ```
 
@@ -350,42 +518,83 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset"
 ### Task 5: The PC comet — time out of the spatial budget
 
 **Files:**
-- Modify: `desktop/src/scene3d/scene.h`, `desktop/src/scene3d/scene.cpp` (`set_trajectories`, `render`)
+- Modify: `desktop/src/scene3d/trajscale.h` — add `traj_vertex_y` and `comet_window` (Task 1 created this header)
+- Modify: `desktop/src/scene3d/scene.h`, `desktop/src/scene3d/scene.cpp` (`set_trajectories`, `render`) — call them
 - Modify: `desktop/src/scene3d/hud.cpp` — remove the `draw_trajectory_ruler` call from the Plane scene
 - Test: `desktop/test/test_scene_traj.cpp` (created and registered by Task 1 — no `mk/desktop.mk` change needed here)
 
 **Interfaces:**
 - Consumes: `scene_traj_scale` (Task 1) — retained for the non-Plane scenes that still spatialise time.
-- Produces: `uint32_t Scene::comet_tail = 256;` (trail length in steps) and `Scene::comet_mode` (`bool`, default `true` for the Plane scene). With `comet_mode`, every worldline vertex is emitted at `y = 0`.
+- Produces, in `scene3d/trajscale.h` (header-only, so the test needs no GL):
+  - `float traj_vertex_y(uint64_t t, float scale, bool comet_mode)`
+  - `std::pair<uint64_t, uint64_t> comet_window(uint64_t slice_step, uint32_t tail)`
+- Produces, on `Scene`: `uint32_t comet_tail = 256;` (trail length in steps) and `bool comet_mode` (default `true` for the Plane scene). The arithmetic lives in the header; `Scene` only holds the settings and calls it.
 
 - [ ] **Step 1: Write the failing test**
 
+Both rules go in `scene3d/trajscale.h` (Task 1's header) as pure functions, so `test_scene_traj.cpp` keeps linking nothing but its own object — no GL, no `Scene`. `Scene::set_trajectories` and `render()` then *call* them rather than owning the arithmetic.
+
+Append to `desktop/test/test_scene_traj.cpp`, inside `main()`:
+
 ```cpp
-TEST(scene_traj, comet_mode_flattens_the_worldline) {
-    space::TrajectorySet ts;
-    space::Trajectory tr;
-    for (uint64_t t = 0; t < 1000; ++t)
-        tr.points.push_back({0x1000 + t * 8, t, false, true});
-    ts.trajectories.push_back(tr);
-
-    Scene s;
-    s.nsteps = 1000;
-    s.comet_mode = true;
-    s.set_trajectories(ts, atlas_projection());
-    for (float y : s.debug_vertex_heights())
-        EXPECT_FLOAT_EQ(y, 0.0f); // time is no longer a spatial axis
+// Comet mode: trace time is no longer a spatial axis, so every worldline
+// vertex sits on the floor and the path is read through the playhead instead.
+{
+    const float scale = scene_traj_scale(1000, 999, 0.0f);
+    for (uint64_t t : {uint64_t(0), uint64_t(1), uint64_t(500), uint64_t(999)}) {
+        const float y = traj_vertex_y(t, scale, /*comet_mode=*/true);
+        check("comet mode flattens the worldline", y == 0.0f,
+              "step " + std::to_string(t) + " sat at y=" + std::to_string(y));
+    }
+    // With comet mode OFF the old spatial behaviour is unchanged — the other
+    // scenes still spatialise time and must not regress.
+    check("non-comet mode still lifts by trace time",
+          traj_vertex_y(999, scale, false) > 0.0f,
+          "the spatial-time path lost its height");
 }
-
-TEST(scene_traj, comet_tail_selects_a_window_ending_at_the_playhead) {
-    Scene s;
-    s.comet_mode = true;
-    s.comet_tail = 100;
-    s.slice_step = 500;
-    const auto w = s.comet_window();
-    EXPECT_EQ(w.first, 400u);
-    EXPECT_EQ(w.second, 500u);
+// The trail is a window ENDING at the playhead. Nothing outside it is
+// discarded — the path is real, just not recent — so this selects emphasis,
+// not existence.
+{
+    const auto w = comet_window(/*slice_step=*/500, /*comet_tail=*/100);
+    check("the comet trail ends at the playhead", w.second == 500u,
+          "window ended at " + std::to_string(w.second));
+    check("the comet trail starts one tail behind it", w.first == 400u,
+          "window started at " + std::to_string(w.first));
+}
+{
+    // Saturating at zero: near the start of a recording the trail is short,
+    // never negative and never wrapped.
+    const auto w = comet_window(/*slice_step=*/10, /*comet_tail=*/100);
+    check("the comet trail saturates at the start of the recording",
+          w.first == 0u && w.second == 10u,
+          "window was [" + std::to_string(w.first) + "," +
+              std::to_string(w.second) + "]");
 }
 ```
+
+Add to `scene3d/trajscale.h`:
+
+```cpp
+// A worldline vertex's world Y. In comet mode trace time is NOT a spatial
+// axis — the path lies on the floor and is read through the playhead — so
+// this is flat 0. The other scenes still spatialise time and keep the lift.
+inline float traj_vertex_y(uint64_t t, float scale, bool comet_mode) {
+    return comet_mode ? 0.0f : static_cast<float>(t) * scale;
+}
+
+// The trail window [lo, hi] ending at the playhead, `tail` steps long and
+// saturating at 0. render() draws this window full-bright and fades the rest;
+// nothing is discarded, because the path outside the window is real, just not
+// recent.
+inline std::pair<uint64_t, uint64_t> comet_window(uint64_t slice_step,
+                                                  uint32_t tail) {
+    const uint64_t lo = slice_step > tail ? slice_step - tail : 0;
+    return {lo, slice_step};
+}
+```
+
+(`trajscale.h` gains `#include <utility>` for `std::pair`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -432,27 +641,44 @@ git commit -m "scene3d: the PC comet — trace time animates rather than occupyi
 
 - [ ] **Step 1: Write the failing test**
 
+Add to the existing `desktop/test/test_layers.cpp`, reusing its `check` helper. The file already asserts registry exhaustiveness, so adding a bool without a row fails there by name — this adds the row's own properties:
+
 ```cpp
-TEST(layers, motifs_has_a_registry_row_and_is_toggleable) {
-    const auto &all = scene_layers_all();
-    auto it = std::find_if(all.begin(), all.end(),
-                           [](const LayerDesc &d) { return std::string(d.id) == "motifs"; });
-    ASSERT_NE(it, all.end()) << "every SceneLayers bool needs exactly one row";
-    EXPECT_EQ(it->group, LayerDesc::Group::Activity);
-    // A re-encoding of exact data — no new claim, but not a raw field either.
-    EXPECT_EQ(it->grade, LayerGrade::Derived);
-
-    SceneLayers l;
-    EXPECT_TRUE(l.*(it->flag)) << "defaults ON, matching the registry convention";
-    l.*(it->flag) = false; // and must be switchable off — that is what optional means
-    EXPECT_FALSE(l.*(it->flag));
+// The motif layer is OPTIONAL: it carries a registry row like every other
+// bool, and the scene must stand with it off.
+{
+    const std::vector<LayerDesc> &all = scene_layers_all();
+    const LayerDesc *row = nullptr;
+    for (const LayerDesc &d : all)
+        if (std::string(d.id) == "motifs")
+            row = &d;
+    check("motifs has a registry row", row != nullptr,
+          "every SceneLayers bool needs exactly one row in scene_layers_all()");
+    if (row != nullptr) {
+        check("motifs groups under activity",
+              row->group == LayerDesc::Group::Activity,
+              "a what-happened layer filed under the wrong group");
+        // A re-encoding of exact data: no new claim, but not a raw recorded
+        // field either. NOT Statistical — nothing here is sampled.
+        check("motifs grades as derived", row->grade == LayerGrade::Derived,
+              "an opcode/crossing re-encoding is neither exact nor statistical");
+        SceneLayers l;
+        check("motifs defaults on, matching the registry convention",
+              l.*(row->flag), "the default deviates from the all-true convention");
+        l.*(row->flag) = false;
+        check("motifs can be switched off — that is what optional means",
+              !(l.*(row->flag)), "the toggle did not take");
+    }
 }
-
-TEST(layers, motifs_abstain_rather_than_guess) {
-    // OpClass::Unknown and SyscallClass::Other must map to the neutral tint,
-    // never to a neighbouring family's colour (D7).
-    EXPECT_EQ(motif_colour_for(space::OpClass::Unknown), kMotifNeutral);
-    EXPECT_EQ(motif_colour_for(space::SyscallClass::Other), kMotifNeutral);
+// D7: abstain rather than guess. An unclassifiable opcode and an unlisted
+// syscall must read as the neutral tint, never as a neighbouring family.
+{
+    check("an unknown opcode class abstains",
+          motif_colour_for(space::OpClass::Unknown) == kMotifNeutral,
+          "an unclassified opcode borrowed a real class's colour");
+    check("an unlisted syscall abstains",
+          motif_colour_for(space::SyscallClass::Other) == kMotifNeutral,
+          "an unlisted syscall was folded into a known family");
 }
 ```
 
@@ -541,26 +767,68 @@ inline bool images_distinct(const Image &a, const Image &b,
 
 - [ ] **Step 2: Write the failing test**
 
+Follow `test_scene_fbo.cpp`'s two-half shape: a PURE half that always runs, and a GL half. **The GL half must not self-skip in this binary** — `Dockerfile.desktop` pins software Mesa + EGL so it really renders, and a test that can only self-skip is not a test (CLAUDE.md). Fail loudly if no context is obtainable.
+
 ```cpp
-// Three recordings whose behaviour we already know must be pairwise DISTINCT
-// with motifs on. Non-blankness is not enough: an encoding that renders every
-// program the same way has failed regardless of how principled it is.
-TEST(motif_distinctness, known_recordings_are_pairwise_distinct) {
-    const char *fixtures[] = {"memcpy.asmtrace", "simd.asmtrace", "syscalls.asmtrace"};
-    std::vector<Image> shots;
-    for (const char *f : fixtures)
-        shots.push_back(render_plane_scene(f, /*motifs=*/true));
-    for (size_t i = 0; i < shots.size(); ++i)
-        for (size_t j = i + 1; j < shots.size(); ++j)
-            EXPECT_TRUE(images_distinct(shots[i], shots[j]))
-                << fixtures[i] << " vs " << fixtures[j];
+static int failures;
+static void fail(const std::string &what, const std::string &why) {
+    std::fprintf(stderr, "FAIL: %s (%s)\n", what.c_str(), why.c_str());
+    failures++;
+}
+static void check(const std::string &what, bool cond, const std::string &why) {
+    if (!cond)
+        fail(what, why);
 }
 
-TEST(motif_distinctness, geometry_is_still_correct_with_motifs_off) {
-    // "Optional" has to mean the scene stands without it.
-    const Image shot = render_plane_scene("memcpy.asmtrace", /*motifs=*/false);
-    EXPECT_FALSE(image_blank(shot));
-    EXPECT_TRUE(image_has_floor_coverage(shot, /*min_fraction=*/0.5f));
+int main() {
+    static const char *kFixtures[3] = {"motif-memcpy.asmtrace",
+                                       "motif-simd.asmtrace",
+                                       "motif-syscalls.asmtrace"};
+
+    // A missing fixture is a FAILURE, never a skip — the same rule
+    // test_scene_fbo.cpp:90 already states for its golden scenes.
+    for (const char *f : kFixtures)
+        check(std::string("fixture is present: ") + f, fixture_exists(f),
+              "the acceptance gate cannot run without its inputs");
+
+    if (!gl_context_available())
+        // NOT a skip. The container pins software Mesa + EGL for exactly this.
+        fail("a GL context is obtainable",
+             "no EGL device — run this under `make docker-desktop`, which "
+             "pins libgl1-mesa-dri + libegl1-mesa-dev with "
+             "LIBGL_ALWAYS_SOFTWARE=1");
+
+    if (failures == 0) {
+        // Three recordings whose behaviour we already know must be pairwise
+        // DISTINCT with motifs on. Non-blankness is not enough: an encoding
+        // that renders every program alike has failed however principled it is.
+        Image shots[3];
+        for (int i = 0; i < 3; i++)
+            shots[i] = render_plane_scene(kFixtures[i], /*motifs=*/true);
+        for (int i = 0; i < 3; i++)
+            for (int j = i + 1; j < 3; j++)
+                check(std::string("distinct: ") + kFixtures[i] + " vs " +
+                          kFixtures[j],
+                      images_distinct(shots[i], shots[j]),
+                      "two programs with different behaviour rendered alike — "
+                      "the encoding conveys nothing about what ran");
+
+        // "Optional" has to mean the scene stands without the layer.
+        const Image bare = render_plane_scene(kFixtures[0], /*motifs=*/false);
+        check("the scene still renders with motifs off", !image_blank(bare),
+              "turning the optional layer off emptied the viewport");
+        check("the floor is still substantially covered with motifs off",
+              image_floor_fraction(bare) >= 0.5f,
+              "covered " + std::to_string(image_floor_fraction(bare)) +
+                  " of the floor — the atlas should pack it");
+    }
+
+    if (failures) {
+        std::fprintf(stderr, "%d motif check(s) failed\n", failures);
+        return 1;
+    }
+    std::printf("test_motif_distinctness: all checks passed\n");
+    return 0;
 }
 ```
 
@@ -601,7 +869,10 @@ git commit -m "desktop(test): gate the motif encoding on pairwise distinctness"
 
 - [ ] **Step 1: Audit for Hilbert-specific assumptions BEFORE flipping anything**
 
-Some existing tests reason from the Hilbert cell mapping rather than from the projection's contract. [test_converge.cpp:51-52](../../../desktop/test/test_converge.cpp#L51) is the known case — it argues *"len is a power of four → a 1:1 domain, so distinct addresses land in distinct cells"*, which the atlas does not guarantee.
+Some existing tests reason from the Hilbert cell mapping rather than from the projection's contract. **Two are already known:**
+
+- [test_converge.cpp:51-52](../../../desktop/test/test_converge.cpp#L51) argues *"len is a power of four → a 1:1 domain, so distinct addresses land in distinct cells"* — the atlas does not guarantee this.
+- [test_projection.cpp:105](../../../desktop/test/test_projection.cpp#L105) asserts `p.order == 9` outright, with the comment *"order is ceil(log4(sum len)) clamped to [6,12]"*. `order` is a **Hilbert** concept; under the atlas it is either meaningless or merely the cell quantisation. Decide which, and make the assertion say so rather than deleting it.
 
 Run: `grep -rn "power of four\|power-of-four\|4\^\|1:1 domain\|hilbert\|Hilbert" desktop/test/ desktop/src/`
 
@@ -649,5 +920,10 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | An image-distinctness helper exists to reuse | **false** — nothing defines `images_distinct`. Task 7 now builds it (Step 1) |
 | Pixel assertions can run in CI | **true** — `Dockerfile.desktop` pins software Mesa + EGL for exactly this. The gate must be judged from `make docker-desktop`, since a host without EGL self-skips and reports a false green |
 | The observed-data-span projection is still the catalog's open blocker | **false** — doc 54's phase-0 plumbing landed it; `observed data` appears as a region in the live HUD. The atlas has data regions to lay out |
+| The repo uses gtest | **false** — no gtest/catch2/doctest anywhere. Every test is a standalone `main()` over a hand-rolled `check(what, cond, why)`. All seven code blocks rewritten in that idiom |
+| `Projection::unproject` takes `(u, v, &addr)` | **false** — four args, `(u, v, uint64_t *addr, const Region **r)`. Corrected in Tasks 2 and 3 |
+| `build_test_projection` / `region_index_of` exist to reuse | **false** — invented. Task 2 now builds through the real `build_projection(std::vector<Region>)` and a local `atlas_of()` helper |
+| `TrajPoint` is `{addr, t, ...}` | **false** — it is `{t, addr, fidelity, is_access, tid, placed}`. The plan now uses named assignment rather than brace-init so a reorder cannot transpose values |
+| A test of the scale rule needs `Scene` (and therefore GL) | **false, and it was a design smell** — `scene_traj_scale` and the comet rules now live in a header-only `scene3d/trajscale.h`, joining `camera.h` and `linequad.h`. Tasks 1 and 5 link nothing but their own object |
 
 **Remaining known risk, not resolvable on paper.** Task 7's memcpy fixture may have to be hand-authored, because `mem` has no producer (`test_scene_fbo.cpp:20-23`). A hand-tuned fixture would make the acceptance gate self-confirming. Task 7 Step 0 forces that decision *before* any code is written rather than leaving it to be discovered — and the `simd` and `syscalls` cases are unaffected, since neither needs a `mem` stream.
