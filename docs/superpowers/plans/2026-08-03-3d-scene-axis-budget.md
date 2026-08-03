@@ -82,7 +82,7 @@ The byte-exact row is the one to watch: [test_projection.cpp:110-120](../../../d
 
 Lands first and independently of the re-encoding, so the live defect is fixed regardless of when the substrate work completes.
 
-**And it is not merely interim.** The spec calls this an "interim guard" and says Component 2 "deletes the unbounded-Y defect at the root", which reads as though Task 5 makes this commit redundant. It does not: `traj_scale_` also places the observed-lifetime pillars, the sediment strata, the access arcs and the causal spur feet (see Task 5's blocker banner for the line references), and a `mem` step past `nsteps` blows *their* geometry out of the envelope by exactly the same arithmetic. This clamp keeps bounding all four after the worldline flattens.
+**And it is not merely interim.** The spec calls this an "interim guard" and says Component 2 "deletes the unbounded-Y defect at the root", which reads as though Task 5 makes this commit redundant. It does not: `traj_scale_` also places the observed-lifetime pillars, the sediment strata and the access arcs — three opt-in layers that **keep** trace time on Y (see Task 5's resolution for why, and for the line references) — and a `mem` step past `nsteps` blows *their* geometry out of the envelope by exactly the same arithmetic. This clamp keeps bounding all three after the worldline flattens.
 
 **Files:**
 - Create: `desktop/src/scene3d/trajscale.h` — the scale rule, **header-only**
@@ -1010,33 +1010,49 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 
 ### Task 5: Time leaves the spatial budget
 
-> ## ⛔ BLOCKED — take this back to the spec before implementing
+> ## The trace-time Y axis has five consumers, not one — and the rule for which of them flatten
 >
-> **`traj_scale_` is not the worldline's private Y scale. It is the shared trace-time Y axis of five subsystems**, and the earlier drafts' consumer table listed three uniforms while missing four *geometry producers* that place their vertices on it:
+> **`traj_scale_` is not the worldline's private Y scale.** Earlier drafts' consumer table listed three *uniforms* and missed four *geometry producers* standing on the same axis:
 >
-> | Consumer of `t * traj_scale_` | Where |
-> |---|---|
-> | causal spurs — anchor and resume heights | [causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280) |
-> | observed-lifetime pillars (58 T4) | [data_layers_gl.cpp:201-204](../../../desktop/src/scene3d/data_layers_gl.cpp#L201) |
-> | access arcs | [data_layers_gl.cpp:246-247](../../../desktop/src/scene3d/data_layers_gl.cpp#L246) |
-> | sediment strata columns | [data_layers_gl.cpp:294-299](../../../desktop/src/scene3d/data_layers_gl.cpp#L294) |
-> | the line shader's own `pos.y already IS t*scale` | [shaders/embedded.h:255-257](../../../desktop/src/scene3d/shaders/embedded.h#L255) |
+> | Consumer of `t * traj_scale_` | Where | Default | Geometry |
+> |---|---|---|---|
+> | the worldline itself (line shader: `pos.y already IS t*scale`) | [embedded.h:255-257](../../../desktop/src/scene3d/shaders/embedded.h#L255) | **on** | diagonal |
+> | causal spurs — anchor and resume heights | [causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280) | **on** | diagonal |
+> | observed-lifetime pillars (58 T4) | [data_layers_gl.cpp:201-204](../../../desktop/src/scene3d/data_layers_gl.cpp#L201) | off | **vertical-only** |
+> | access arcs / data ribbon | [data_layers_gl.cpp:246-247](../../../desktop/src/scene3d/data_layers_gl.cpp#L246) | off | diagonal |
+> | sediment strata columns | [data_layers_gl.cpp:294-299](../../../desktop/src/scene3d/data_layers_gl.cpp#L294) | off | **vertical-only** |
 >
-> And the coupling is *documented*: [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) states that **"a spur hangs on a worldline vertex at world Y = t * traj_scale()"**. Flatten the worldline alone and every spur foot detaches from the path it points at.
+> And the coupling is *documented*: [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) states that **"a spur hangs on a worldline vertex at world Y = t * traj_scale()"**. Flatten the worldline without the spurs and every spur foot detaches from the path it points at.
 >
-> **The spec contradicts itself on this.** Component 2 says *"Y carries access density, and nothing else"* — which taken literally strips the Y axis from four shipped layers (`lifetime`, `data_ribbon`/sediment, the access arcs, the causal spurs). But the Non-goals say *"Re-deriving the depiction catalog. The 14 layers and 12 scenes stand."* Both cannot hold. This is a spec decision, not an implementation detail, and it is the one thing in this plan that cannot be settled by reading the tree.
+> ### The resolution: flatten what is ON by default; leave the opt-in layers on the axis
 >
-> **The assumption this task is written under, pending that decision:** flatten **the worldline only**, re-anchor the spur feet to the flattened path, and leave the other four layers on `traj_scale_`. That keeps Task 1's clamp permanently load-bearing (it bounds the pillars and strata too, not just the path) and keeps `draw_trajectory_ruler` meaningful — it now labels the axis those four layers use, though its caption must stop naming the *trajectory*. Tasks 1–4 and 6–8 do not depend on this and should not wait for it.
+> The spec appears to contradict itself — Component 2's *"Y carries access density, and nothing else"* against the Non-goal *"the 14 layers and 12 scenes stand"*. It does not, once "Y" is read as **the scene you get by default**, which is the only thing Component 2's complaint is about (a pre-drawn future crowding the default view). An overlay you have to switch on is not competing for that budget: when you ask for a Gantt, you are asking for time on an axis.
+>
+> That reading is not a compromise invented here — it is [scene.h:60-144](../../../desktop/src/scene3d/scene.h#L60)'s own documented convention, the same one Task 6 pins: a layer that adds geometry defaults ON, a layer that re-lifts the terrain's reading defaults OFF. The split falls exactly along it.
+>
+> | | Layers | Task 5 does |
+> |---|---|---|
+> | default **ON** | `vehicle` (the worldline), `crossings` (the spurs) | **flatten both**, through the same `flat_time` so the spur foot stays welded to the path by construction |
+> | default **OFF** | `lifetime`, `data_ribbon`, `sediment` | **untouched.** They keep `traj_scale_`, and `scene_traj_scale` (Task 1) keeps bounding them |
+>
+> **Why not flatten all five.** Two of the opt-in layers are *vertical-only*: both endpoints of every segment they emit share the same `(u,v)`, so trace-time Y is their entire extent. Flattening a lifetime pillar makes it zero-length and GL draws nothing; flattening a sediment column collapses all its bands to one coincident point. For those two, "flatten" is a synonym for "delete" — and the spec's own rationale does not reach them anyway: a Gantt bar is not a pre-drawn future, it is a summary, and [data_layers_gl.cpp:184](../../../desktop/src/scene3d/data_layers_gl.cpp#L184) says so ("Whole-recording geometry — it does not move with the playhead, which is the point of a Gantt"). Deleting them would also undo a deliberate guard: a single-touch pillar is given a one-step stub precisely so it is "never a vanished touch", and flattening turns every pillar into the vanished thing that code exists to prevent.
+>
+> **The spurs survive flattening**, which is why they can go in the ON group without loss: `rail_lift` is already a constant that [encodes nothing](../../../desktop/src/scene3d/causal.cpp#L247), so a flattened spur is still a tent — out of the floor, across, back down. It loses only the anchor-vs-resume height difference, an *incidental* dwell cue the layer already refuses to claim (`rail_span() == 0`, pinned by `test_crossing.cpp`).
+>
+> **One residual to look at in the container render, not a blocker:** with the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it. That is a legibility question for Task 8 Step 4, not a correctness one.
 
 **Files:**
 - Modify: `desktop/src/scene3d/trajscale.h` — add `traj_vertex_y` and `comet_window` (Task 1 created this header)
 - Modify: `desktop/src/scene3d/scene.h`, `desktop/src/scene3d/scene.cpp` (`set_trajectories`, `render`) — call them
-- Modify: `desktop/src/scene3d/causal.cpp:280-282` — re-anchor the spur feet onto the flattened path
-- Modify: `desktop/src/scene3d/hud.cpp:383` + `desktop/src/scene3d/hud.h:170-180` — re-caption the ruler: it measures the axis the lifetime/sediment/arc/spur layers ride, **not** the trajectory, which has left it. The call site at [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829) **stays** (it is the function's only caller, already gated to `SceneKind::Plane`); deleting it would strand four layers on an unlabelled axis
+- Modify: `desktop/src/scene3d/causal.cpp:280-282` — flatten the spur feet through the **same** `traj_vertex_y` the path uses, so `scene.h:365`'s promise holds by construction rather than by coincidence
+- Modify: `desktop/src/scene3d/shaders/embedded.h:255-257` — the line shader compares `pos.y` against `uHeadY`; with flat Y that degenerates (see Step 3)
+- Modify: `desktop/src/ui/shell.cpp:1829` — **gate** the `draw_trajectory_ruler` call, do not delete it (see Step 3)
+- Modify: `desktop/src/scene3d/hud.cpp:383` + `desktop/src/scene3d/hud.h:170-180` — re-caption the ruler: it now measures the axis the three opt-in layers ride, **not** the trajectory, which has left it
+- **Not modified:** `data_layers_gl.cpp`. The lifetime pillars, access arcs and sediment strata keep `traj_scale_` untouched — see the resolution above. If a diff to that file appears in this task, something has gone wrong.
 - Test: `desktop/test/test_scene_traj.cpp` (created and registered by Task 1 — no `mk/desktop.mk` change needed here)
 
 **Interfaces:**
-- Consumes: `scene_traj_scale` (Task 1) — **still live, and permanently so**: four layers above ride the scale it computes, and its `max(nsteps, max_t + 1)` guard bounds their geometry as well as the path's. An earlier readiness review claimed this function lost its last consumer once the worldline flattened; that was wrong, and the four call sites above are why.
+- Consumes: `scene_traj_scale` (Task 1) — **still live, and permanently so**: the three opt-in layers ride the scale it computes, and its `max(nsteps, max_t + 1)` guard bounds their geometry as well as the path's. An earlier readiness review claimed this function lost its last consumer once the worldline flattened; that was wrong, and `data_layers_gl.cpp` is why.
 - Produces, in `scene3d/trajscale.h` (header-only, so the test needs no GL):
   - `float traj_vertex_y(uint64_t t, float scale, bool flat)`
   - `std::pair<uint64_t, uint64_t> comet_window(uint64_t follow_step, uint32_t tail)`
@@ -1051,7 +1067,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 | `head_y = follow_step * traj_scale_` (`:1470`) | the vehicle head's Y | the head is found by **step**, not height — `find_head` already returns a position; the uniform becomes the window from `comet_window` |
 | `tail_half = 3.0f * traj_scale_` (`:1471`) | a ±Y band ≈ 3 steps | collapses to zero when Y is flat — replaced by `comet_tail` **in steps**, which is what it was always approximating |
 | `time_cut_y = slice_step * traj_scale_` (`:1475`) | the terrain-playhead dimming cut, a *different clock* | becomes a step comparison, not a height one. **The two clocks stay distinct** — this is the spec's explicit non-goal; do not fuse `slice_step` and `follow_step` |
-| `ay/by = anchor_t/resume_t * traj_scale_` ([causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280)) | the spur's foot, on the worldline it hangs from | the foot must follow the path down. `scene.h:365` promises the two coincide; keeping the spur on `traj_scale_` while the path flattens *breaks* that promise rather than preserving it |
+| `ay/ry = anchor_t/resume_t * traj_scale_` ([causal.cpp:280-282](../../../desktop/src/scene3d/causal.cpp#L280)) | the spur's foot, on the worldline it hangs from | flattens **with** the path, through the same `traj_vertex_y` call. `scene.h:365` promises the two coincide; leaving the spur on `traj_scale_` while the path flattens would *break* that promise, not preserve it. `rail_y = max(ay, ry) + rail_lift` needs no change — `rail_lift` is already a constant, so the tent survives |
 
 **Z-fighting is a real consequence, not a detail.** A flat worldline at `y = 0` is coplanar with the terrain floor and will z-fight or vanish under any cell with nonzero height. Lift the path by a small constant above the terrain's own surface at that cell (or draw it with a depth offset) — and say which in a comment, because "the path disappeared into the ground" is the failure this note exists to prevent.
 
@@ -1112,8 +1128,13 @@ Add to `scene3d/trajscale.h` (which gains `#include <utility>` for `std::pair`):
 // The !flat branch is NOT "for the other scenes": no other scene reaches this
 // code (gl_scene_host.cpp:74 routes every non-Plane kind to standalone_). It
 // is the pre-flattening path, kept testable, and it is the SAME arithmetic the
-// lifetime pillars, sediment strata, access arcs and causal spur feet still
-// use — so the spur foot calls THIS, and stays welded to the path it hangs on.
+// three OPT-IN layers still use on their own axis — the lifetime pillars, the
+// sediment strata and the access arcs, which keep trace time on Y because a
+// layer you switch on is asking for it (see this task's resolution).
+//
+// The causal spur foot calls THIS with the same `flat` the path uses, never
+// traj_scale_ directly, so scene.h:365's "a spur hangs on a worldline vertex"
+// stays true by construction instead of by two call sites agreeing.
 inline float traj_vertex_y(uint64_t t, float scale, bool flat) {
     return flat ? 0.0f : static_cast<float>(t) * scale;
 }
@@ -1141,9 +1162,26 @@ In `set_trajectories`, emit `traj_vertex_y(pt.t, scale, flat_time)` for every ve
 
 The **line shader** reads the same axis and must move with it: [shaders/embedded.h:255-257](../../../desktop/src/scene3d/shaders/embedded.h#L255) documents that `pos.y already IS t*scale` and compares it against `uHeadY`. With flat Y that comparison degenerates to `0 <= 0` for every vertex, so the head/tail fade would light the whole path at once. Carry the step per vertex (or the window in step space) instead — this is a shader change, not only a CPU one, and an earlier draft's consumer table did not mention it.
 
-In `causal.cpp:280-282`, take the spur foot from the same `traj_vertex_y` the path uses, so `scene.h:365`'s promise still holds by construction rather than by coincidence.
+In `causal.cpp:280-282`, take the spur foot from the same `traj_vertex_y(t, scale, flat_time)` call the path uses — one expression, both consumers — so `scene.h:365`'s promise holds by construction rather than by coincidence. `rail_y` is untouched.
 
-**Do not delete the `draw_trajectory_ruler` call** at [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829). An earlier draft did, on the reasoning that the function "stays in hud.cpp for the scenes that still spatialise time" — it does not; that call is its **only** caller and it is already gated to `SceneKind::Plane`, so deleting it would leave the function dead *and* strand the four layers that still ride the axis with no scale on screen. Re-caption it instead ([hud.h:170-177](../../../desktop/src/scene3d/hud.h#L170) and the caption in `hud.cpp`): it measures trace time for the lifetime pillars, sediment strata, access arcs and spur feet — no longer for the trajectory, which has left the axis. If the spec decision in the blocker banner goes the other way and those four layers flatten too, *then* the ruler and its call site are deleted together, and so is `scene_traj_scale`.
+**Gate the `draw_trajectory_ruler` call; do not delete it and do not leave it unconditional.** An earlier draft deleted it, on the reasoning that the function "stays in hud.cpp for the scenes that still spatialise time" — it does not: [shell.cpp:1829](../../../desktop/src/ui/shell.cpp#L1829) is its **only** caller and is already gated to `SceneKind::Plane`. After the resolution above, the trace-time axis exists exactly when one of the three opt-in layers is drawn, so that is the gate:
+
+```cpp
+// `f.layers` and NOT `sv.hud.layers`: f.layers is the set AFTER lod_apply
+// (shell.cpp:1762), which can clear a layer the reader asked for at distance.
+// Gating on the requested set would leave a ruler labelling an axis the
+// entity budget had already dropped the geometry for.
+if (sv.kind == scene3d::SceneKind::Plane &&
+    (f.layers.lifetime || f.layers.data_ribbon || f.layers.sediment))
+    scene3d::draw_trajectory_ruler(
+        ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+        ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+        sv.terr.nsteps, s.scene_host->traj_scale());
+```
+
+`f` is in scope at the call site — it is built at [shell.cpp:1755-1770](../../../desktop/src/ui/shell.cpp#L1755), in the same function.
+
+Leaving the call unconditional would label an axis the default scene no longer uses — a ruler for nothing, which is worse than no ruler, and exactly the fabricated correspondence the `SceneKind::Plane` gate beside it already guards against. Deleting it would strand the three layers on an unlabelled axis the moment a reader switches one on. Re-caption it too ([hud.h:170-177](../../../desktop/src/scene3d/hud.h#L170) and the caption in `hud.cpp`): it measures trace time for the pillars, strata and arcs — **not** for the trajectory, which has left the axis.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1788,17 +1826,26 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 |---|---|
 | **Task 4's calibrated pad factors cannot satisfy the test they were calibrated against.** [test_camera.cpp:111](../../../desktop/test/test_camera.cpp#L111) is `c.radius == d.radius` — *exact* float equality — and `1.0f / tanf(0.4f) * 0.9301f` is ≈ 2.19988, not `2.2f`. No pad value fixes a two-rounding product reliably across libm versions. The draft's "a failure at `:111` means the calibration is off" sent the implementer into an unwinnable loop | Radius is now `extent * kWholePlaneRadius` — linear, exact at extent 1 by construction, and free of `fovy`, `tan` and both magic constants |
 | **`top_down()` would silently start recentring the target.** Today it leaves `target` alone and [shell.cpp:1464](../../../desktop/src/ui/shell.cpp#L1464) calls it on a possibly-panned camera; routing it through `fit()` would teleport the user to the plane centre. No existing test catches it — the file's top-down block uses a default camera | `top_down()` takes `fit_radius` only, never `fit`; a new test pans first and pins the target |
-| **`traj_scale_` is a five-consumer shared axis, not the worldline's private scale.** Causal spurs, lifetime pillars, access arcs, sediment strata and the line shader all place geometry at `t * traj_scale_`, and [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) documents that a spur *hangs on a worldline vertex at that Y*. Flattening the path alone detaches every spur foot. The spec contradicts itself here — "Y carries access density, and nothing else" versus "the 14 layers stand" | Task 5 now opens with a ⛔ blocker banner naming all five call sites and the contradiction, states the assumption it is written under, and adds the spur re-anchor, the shader change and the ruler re-caption to its file list |
+| **`traj_scale_` is a five-consumer shared axis, not the worldline's private scale.** Causal spurs, lifetime pillars, access arcs, sediment strata and the line shader all place geometry at `t * traj_scale_`, and [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) documents that a spur *hangs on a worldline vertex at that Y*. Flattening the path alone detaches every spur foot. The spec appears to contradict itself here — "Y carries access density, and nothing else" versus "the 14 layers stand" | **Resolved** (see below). Task 5 now names all five call sites, flattens the two default-ON consumers and leaves the three opt-in ones on the axis, and adds the spur flatten, the shader change and the ruler gate + re-caption to its file list |
+
+**The Component 2 / Non-goals contradiction, resolved.** Read "Y" in *"Y carries access density, and nothing else"* as **the scene you get by default** — which is the only thing Component 2's complaint is about — and both spec statements hold at once. An overlay the reader switches on is not competing for the default view's axis budget. The split falls exactly along [scene.h:60-144](../../../desktop/src/scene3d/scene.h#L60)'s own documented ON/OFF convention, the same one Task 6 pins, so it is the registry's rule rather than a compromise invented for this plan:
+
+| | Layers (verified defaults) | Task 5 |
+|---|---|---|
+| default **ON** | `vehicle` ([:59](../../../desktop/src/scene3d/scene.h#L59)), `crossings` ([:123](../../../desktop/src/scene3d/scene.h#L123)) | flatten both, through one shared `traj_vertex_y` call so the spur foot stays welded to the path |
+| default **OFF** | `lifetime` ([:103](../../../desktop/src/scene3d/scene.h#L103)), `data_ribbon` ([:108](../../../desktop/src/scene3d/scene.h#L108)), `sediment` ([:113](../../../desktop/src/scene3d/scene.h#L113)) | untouched; `data_layers_gl.cpp` takes no diff in this task |
+
+The decisive fact is geometric, not aesthetic: the lifetime pillars and the sediment strata emit segments whose **two endpoints share the same `(u,v)`**, so trace-time Y is their entire extent — flattening makes them zero-length and GL draws nothing. For those two, "flatten" is a synonym for "delete", and the spec's rationale (a pre-drawn future crowding the view) does not reach a Gantt summary anyway. The spurs, by contrast, are diagonal and survive as tents, because `rail_lift` is already a constant that encodes nothing.
 
 **Two claims from the fourth-pass readiness review were themselves wrong, and are corrected here rather than left standing:**
 
-- *"`scene_traj_scale` has no surviving consumer once Task 5 lands."* False — four layers ride the scale it computes. Task 1 is load-bearing permanently, not interim, and Task 1 and Task 5 both now say so.
-- *"`draw_trajectory_ruler` becomes dead code, so delete the call."* Half right: it is the function's only caller and it is Plane-gated, but the axis it labels stays alive for those same four layers. Deleting it would strand them on an unlabelled axis. It is re-captioned, not removed.
+- *"`scene_traj_scale` has no surviving consumer once Task 5 lands."* False — the three opt-in layers ride the scale it computes. Task 1 is load-bearing permanently, not interim, and Task 1 and Task 5 both now say so.
+- *"`draw_trajectory_ruler` becomes dead code, so delete the call."* Half right: it is the function's only caller and it is Plane-gated, but the axis it labels stays alive for those three layers. Deleting it would strand them on an unlabelled axis, and leaving it unconditional would label an axis the *default* scene no longer has. It is gated on the effective (post-`lod_apply`) layer set and re-captioned, not removed.
 
 **Remaining known risks, not resolvable on paper.**
 
 1. Task 7b's memcpy recording may have to be hand-authored, because `mem` has no producer (`test_scene_fbo.cpp:20-23`). A hand-tuned input would make the acceptance gate self-confirming. Step 0 forces that decision *before* any code is written; the `simd` and `syscalls` cases are unaffected.
 2. Task 5's flat worldline is coplanar with the terrain floor. The lift constant is an eyeball judgement that only the container render can settle — a path that vanishes under a tall cell is the failure mode, and it will not show up in any pure test.
 3. Task 2's cell budgets can give a region fewer cells than it has bytes (quantised away, `bytes_per_cell > 1`) **or more** (`bytes_per_cell == 1`, the rect's tail decoding to nothing). Both are honest and both are tested; the plan asserts only the region-level round trip, which is what the atlas can promise. If a caller is later found to depend on byte-exactness under `Atlas`, that is a design finding, not a rounding bug to paper over.
-4. **Task 5 is blocked on a spec decision** — whether the four other trace-time-on-Y layers flatten with the worldline or keep the axis. See its ⛔ banner. This is the only item here that is not a judgement call an implementer can make, and it does not gate any other task.
+4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 8 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
 5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 8 Step 4 is where it would show up.
