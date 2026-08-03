@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional> // 61 T3: std::cref, for the two-layout sweep
 #include <set>
 #include <string>
 #include <vector>
@@ -236,53 +237,79 @@ int main() {
     }
 
     // === T2 — the region membership rule ====================================
+    // 61 T3: swept over BOTH layouts. region_cells() is the one address route
+    // that walks the mapping directly rather than delegating to project(), so
+    // running this file's existing containment and disjointness contracts
+    // under Atlas too is the strongest single guard on that branch. `proj` is
+    // const, so the sweep takes two copies rather than flipping it in place.
     {
-        for (size_t i = 0; i < proj.regions.size(); i++) {
-            const space::Region &r = proj.regions[i];
-            const std::vector<uint32_t> cells = space::region_cells(proj, i);
-            check("T2: region " + r.label + " owns at least one cell",
-                  !cells.empty(), "empty cell set for a non-empty region");
-            std::set<uint32_t> owned(cells.begin(), cells.end());
-            check("T2: region " + r.label + "'s cell set has no duplicates",
-                  owned.size() == cells.size(), "duplicate cells");
-            // Containment: every cell project() can place an address of this
-            // region into is in the set.
-            const uint32_t n = uint32_t(1) << proj.order;
-            bool all_in = true;
-            for (uint64_t off = 0; off < r.len; off++) {
-                float u = 0.0f, v = 0.0f;
-                if (!proj.project(r.base + off, &u, &v))
-                    continue;
-                const uint32_t x = static_cast<uint32_t>(u * n);
-                const uint32_t y = static_cast<uint32_t>(v * n);
-                if (!owned.count(y * n + x))
-                    all_in = false;
+        space::Projection hil = proj, atl = proj;
+        hil.layout = space::Projection::Layout::Hilbert;
+        atl.layout = space::Projection::Layout::Atlas;
+        space::rebuild_layout(hil);
+        space::rebuild_layout(atl);
+        // rebuild_layout falls BACK to Hilbert rather than refusing, so without
+        // this the sweep below could quietly run the same layout twice and
+        // report a green atlas gate having never built one.
+        check("T2: the atlas sweep really got an atlas",
+              atl.layout == space::Projection::Layout::Atlas &&
+                  atl.rects.size() == atl.regions.size(),
+              "rebuild_layout fell back to Hilbert — every atlas check below "
+              "would pass vacuously");
+        for (const space::Projection &pj : {std::cref(hil), std::cref(atl)}) {
+            const std::string lay =
+                pj.layout == space::Projection::Layout::Atlas ? " [atlas]"
+                                                              : " [hilbert]";
+            for (size_t i = 0; i < pj.regions.size(); i++) {
+                const space::Region &r = pj.regions[i];
+                const std::vector<uint32_t> cells = space::region_cells(pj, i);
+                check("T2: region " + r.label + " owns at least one cell" + lay,
+                      !cells.empty(), "empty cell set for a non-empty region");
+                std::set<uint32_t> owned(cells.begin(), cells.end());
+                check("T2: region " + r.label + "'s cell set has no duplicates" +
+                          lay,
+                      owned.size() == cells.size(), "duplicate cells");
+                // Containment: every cell project() can place an address of
+                // this region into is in the set.
+                const uint32_t n = uint32_t(1) << pj.order;
+                bool all_in = true;
+                for (uint64_t off = 0; off < r.len; off++) {
+                    float u = 0.0f, v = 0.0f;
+                    if (!pj.project(r.base + off, &u, &v))
+                        continue;
+                    const uint32_t x = static_cast<uint32_t>(u * n);
+                    const uint32_t y = static_cast<uint32_t>(v * n);
+                    if (!owned.count(y * n + x))
+                        all_in = false;
+                }
+                check("T2: region " + r.label +
+                          " contains every cell project() places in it" + lay,
+                      all_in,
+                      "a placed address landed outside its own region set");
             }
-            check("T2: region " + r.label +
-                      " contains every cell project() places in it",
-                  all_in, "a placed address landed outside its own region set");
-        }
-        // Exclusivity: with a domain that fits the plane (this fixture, and
-        // every ordinary recording) the sets are strictly disjoint — no cell
-        // of a neighbour.
-        for (size_t i = 0; i < proj.regions.size(); i++) {
-            const std::vector<uint32_t> a = space::region_cells(proj, i);
-            std::set<uint32_t> sa(a.begin(), a.end());
-            for (size_t j = i + 1; j < proj.regions.size(); j++) {
-                const std::vector<uint32_t> b = space::region_cells(proj, j);
-                size_t shared = 0;
-                for (uint32_t c : b)
-                    if (sa.count(c))
-                        shared++;
-                check("T2: region " + proj.regions[i].label + " owns no cell of " +
-                          proj.regions[j].label,
-                      shared == 0,
-                      std::to_string(shared) + " cell(s) shared");
+            // Exclusivity: with a domain that fits the plane (this fixture, and
+            // every ordinary recording) the sets are strictly disjoint — no
+            // cell of a neighbour. Under the atlas this holds by construction:
+            // the rects tile without overlap.
+            for (size_t i = 0; i < pj.regions.size(); i++) {
+                const std::vector<uint32_t> a = space::region_cells(pj, i);
+                std::set<uint32_t> sa(a.begin(), a.end());
+                for (size_t j = i + 1; j < pj.regions.size(); j++) {
+                    const std::vector<uint32_t> b = space::region_cells(pj, j);
+                    size_t shared = 0;
+                    for (uint32_t c : b)
+                        if (sa.count(c))
+                            shared++;
+                    check("T2: region " + pj.regions[i].label +
+                              " owns no cell of " + pj.regions[j].label + lay,
+                          shared == 0,
+                          std::to_string(shared) + " cell(s) shared");
+                }
             }
+            check("T2: an out-of-range region index owns nothing" + lay,
+                  space::region_cells(pj, pj.regions.size()).empty(),
+                  "an out-of-range index must not fabricate a footprint");
         }
-        check("T2: an out-of-range region index owns nothing",
-              space::region_cells(proj, proj.regions.size()).empty(),
-              "an out-of-range index must not fabricate a footprint");
     }
 
     // === T2 — the uploaded mask matches the membership rule =================
