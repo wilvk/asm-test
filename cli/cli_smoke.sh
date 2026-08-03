@@ -2313,13 +2313,19 @@ if [ "${ASMSPY_HAVE_M32:-}" = "yes" ]; then
 
     # --info NEVER attaches, so unlike the engines above it must SUCCEED on a
     # 32-bit target — and instead report the same refusal as DATA. pi_verdict
-    # (cli/asmspy_proc.c) blanks exactly five of the nine modes for a 32-bit
-    # tracee (dataflow/stream/trace/log/watch: the single-step engines that
-    # decode a syscall number against the x86-64 table); tree/graph/procs/
-    # sample are untouched by that branch (a carry-forward gap from Task 3
-    # this leg exists to close: those five had NO test at all before now,
-    # because test_procinfo links the gatherer directly and cannot spawn a
-    # real 32-bit build-system victim).
+    # (cli/asmspy_proc.c) blanks eight of the nine modes for a 32-bit tracee —
+    # every single-step engine (dataflow/stream/trace/log/watch/tree/graph/
+    # procs) carries the identical `asmspy_elf_class(pid) == 32` guard in
+    # cli/asmspy_engine.c and refuses BEFORE attaching, for the identical
+    # reason (registers/syscalls decoded against the wrong ABI). Only
+    # --sample is untouched: it is IBS silicon, a fact about the HOST, not
+    # the target. Originally this list named only the first five (a
+    # carry-forward gap from Task 3); review (finding D) caught that the
+    # other three engines ALREADY refuse for real forty lines above this
+    # very block, while --info's own advisory said "ok" for them — a
+    # confidently-wrong answer with no test to catch it. Extended
+    # pi_verdict to match what the engines actually do, then flipped this
+    # assertion to match.
     set +e
     iout=$(timeout 30 "$ASM" --info "$IVPID" --json 2>&1); irc=$?
     set -e
@@ -2331,8 +2337,8 @@ if [ "${ASMSPY_HAVE_M32:-}" = "yes" ]; then
 events = [json.loads(l) for l in sys.stdin if l.strip()]
 evt = next(e for e in events if e.get("k") == "procinfo")
 modes = {m["mode"]: m for m in evt["trace"]["modes"]}
-refused = ["dataflow", "stream", "trace", "log", "watch"]
-untouched = ["tree", "graph", "procs", "sample"]
+refused = ["dataflow", "stream", "trace", "log", "watch", "tree", "graph", "procs"]
+untouched = ["sample"]
 for name in refused:
     m = modes[name]
     assert m["ok"] is False, "%s should be refused for a 32-bit tracee, got ok=%r" % (name, m["ok"])
@@ -2340,8 +2346,8 @@ for name in refused:
 for name in untouched:
     m = modes[name]
     assert "32-bit" not in m["why"], \
-        "%s was refused with the 32-bit reason, though pi_verdict only blanks 5 of 9 modes: %r" % (name, m["why"])
-print("  --info --json: dataflow/stream/trace/log/watch report the 32-bit refusal; tree/graph/procs/sample do not")' \
+        "%s was refused with the 32-bit reason, though pi_verdict leaves it to the IBS-host gate: %r" % (name, m["why"])
+print("  --info --json: dataflow/stream/trace/log/watch/tree/graph/procs all report the 32-bit refusal; sample does not")' \
         || fail "--info --json: the 32-bit mode-advisory structural check failed"
     else
         printf '%s\n' "$iout" | grep -q '"mode":"dataflow","ok":false,"why":"32-bit' \
@@ -3621,8 +3627,15 @@ wait "$DFWPID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 echo "--- --info (attach-free process snapshot) ---"
 
-# Against OUR OWN shell: a target this smoke holds no ptrace permission for
-# under ptrace_scope=1, so a run that succeeds proves --info never attached.
+# Against OUR OWN shell — a target this smoke usually holds no ptrace
+# permission for under ptrace_scope=1. NOTE: a clean exit here does NOT by
+# itself prove --info never attached (a failed attach is not fatal to any
+# assertion below, and this repo's own docs tell operators to set
+# ptrace_scope=0, under which the attach could even succeed) — it only
+# proves the snapshot itself is well-formed. The actual never-attaches
+# enforcement is the `strace -f -e trace=ptrace` probe further down, which
+# observes the syscall directly rather than inferring its absence from
+# black-box behavior.
 info_json="$($BUILD/asmspy --info $$ --json 2>/dev/null)"
 
 echo "$info_json" | head -1 | grep -q '"asmtrace"' \
@@ -3652,14 +3665,24 @@ fi
 #  1. addresses cross the wire as hex STRINGS, never JSON numbers — a number
 #     is a double in many readers, which silently rounds a 64-bit pointer.
 #     `modules[0].base` is always present (every process maps a module), so
-#     it is the reliable probe; a thread's own `syscall.pc`/`sp`/`args` make
-#     the SAME claim but are only populated when the syscall file is
-#     readable, which $$ under ptrace_scope=1 is not (see above) — that
-#     absence is itself asserted next.
-#  2. a thread with NO readable syscall must OMIT the `syscall` object and
-#     carry a non-empty `syscall_why`, never a blank/absent reason. This smoke
-#     runs under exactly that condition (no ptrace permission on $$), so it is
-#     the natural place to pin the absent-with-a-reason contract down.
+#     it is the reliable probe.
+#  2. every thread row carries EXACTLY ONE of `syscall` / `syscall_why` —
+#     never both, never neither. This used to assert `syscall_why`
+#     specifically and `syscall` absent, on the assumption that $$ (this
+#     smoke's own shell) never has ptrace permission on itself — true under
+#     the default `ptrace_scope=1`, but this repo's own
+#     docs/getting-started/host-setup.md tells operators to SET
+#     `ptrace_scope=0`, and Yama is not namespaced, so `make docker-cli`
+#     inherits whatever the HOST already has. Under scope=0 (or
+#     CAP_SYS_PTRACE, or root) `/proc/<tid>/syscall` on our own pid can be
+#     readable, and the old assertion broke on a premise it never actually
+#     verified — the emitter is correct in both states; only the test's
+#     assumption about WHICH branch fires was wrong. The dichotomy is what
+#     the emitter's if/else construction always guarantees, in every
+#     environment (mirrors the "have_syscall implies a why" invariant
+#     cli/test_procinfo.c checks at the struct level, :329-363 / :547-568,
+#     extended here to a strict either/or since the JSON omits one key
+#     entirely rather than leaving it blank).
 if command -v python3 >/dev/null 2>&1; then
     printf '%s' "$info_json" | python3 -c 'import json,sys
 lines = [l for l in sys.stdin if l.strip()]
@@ -3673,15 +3696,53 @@ assert isinstance(m0["base"], str) and m0["base"].startswith("0x"), \
     "modules[0].base is not a hex string: %r" % (m0["base"],)
 assert isinstance(m0["size"], int), \
     "modules[0].size should stay a JSON number: %r" % (m0["size"],)
-t0 = evt["threads"][0]
-assert "syscall" not in t0, \
-    "no ptrace permission on this pid, yet a syscall object was emitted"
-assert t0.get("syscall_why"), \
-    "thread with no readable syscall carries no syscall_why"
-print("  json validated (python3 json.load): hex-string base, syscall_why present without syscall)")' \
-        || fail "--info --json: structural check failed (address-as-string / syscall_why contract)"
+assert evt["threads"], "no thread rows to check the syscall dichotomy on"
+for t in evt["threads"]:
+    has_sc = "syscall" in t
+    has_why = "syscall_why" in t
+    assert has_sc != has_why, \
+        "thread %r carries syscall=%s syscall_why=%s -- exactly one must be present" % (
+            t.get("tid"), has_sc, has_why)
+    if has_why:
+        assert t["syscall_why"], "syscall_why key present but empty on thread %r" % (t.get("tid"),)
+print("  json validated (python3 json.load): hex-string base, syscall XOR syscall_why on every thread")' \
+        || fail "--info --json: structural check failed (address-as-string / syscall dichotomy)"
 else
     echo "  json structural checks skipped (python3 absent)"
+fi
+
+# THE premise of --info, actually enforced: every assertion above is a
+# black-box behavioral check that would stay green even if --info attached —
+# a failed attach is not fatal to any of them, and an attach that SUCCEEDED
+# (against a target that opted in via PR_SET_PTRACER_ANY, like spy_victim
+# below) would SIGSTOP a live process while every other assertion in this
+# section kept passing. strace observes the ptrace(2) syscall itself,
+# independent of whether an attach would succeed or fail against the target,
+# so it is the one check here that cannot be fooled by permission state.
+if command -v strace >/dev/null 2>&1; then
+    "$BUILD/spy_victim" >/dev/null 2>&1 &
+    NAPID=$!
+    sleep 1
+    kill -0 "$NAPID" 2>/dev/null || fail "spy_victim did not start for the never-ptrace probe"
+    NASTRACE="$BUILD/info_never_ptrace.strace"
+    rm -f "$NASTRACE"
+    strace -f -e trace=ptrace -o "$NASTRACE" -- "$BUILD/asmspy" --info "$NAPID" --json >/dev/null 2>&1
+    narc=$?
+    [ "$narc" -eq 0 ] || fail "--info under strace exited $narc against a live, attachable target"
+    kill -0 "$NAPID" 2>/dev/null \
+        || fail "the never-ptrace probe target died — --info must never touch it"
+    kill "$NAPID" 2>/dev/null || true
+    wait "$NAPID" 2>/dev/null || true
+    NAPID=""
+    nptrace=$(grep -c "ptrace(" "$NASTRACE" || true)
+    if [ "$nptrace" -ne 0 ]; then
+        cat "$NASTRACE" >&2
+        fail "--info made $nptrace ptrace(2) call(s) against a live target — it must never attach"
+    fi
+    rm -f "$NASTRACE"
+    echo "  --info under 'strace -f -e trace=ptrace': zero ptrace(2) calls against a live, attachable target"
+else
+    echo "  never-ptrace strace probe skipped (strace absent)"
 fi
 
 # It must be FAST — this is fired automatically as an operator browses.

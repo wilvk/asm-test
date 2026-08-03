@@ -15,12 +15,21 @@
 # base and its gcc (13.3.0) — gcc-multilib is a metapackage that must match the
 # gcc already installed here, so pinning it independently would only be able to
 # conflict with it. Same discipline as libipt-dev / libncurses-dev above.
+#
+# strace backs the --info smoke's "never calls ptrace" proof (asmspy-plan gui
+# process-details Task 4, review finding C): asmspy --info's whole premise is
+# that it is attach-free, and that claim had no enforcement — a hand-injected
+# ptrace(2) call left every other --info assertion green. `strace -f -e
+# trace=ptrace` wraps the invocation and the smoke asserts zero ptrace lines in
+# its output. strace becomes the tracee's real parent via fork+exec, so this
+# needs no extra capability under plain `docker run` — the same reason the
+# ptrace-based engine tests above already work here without one.
 ARG BASE_IMAGE=asmtest-bindings-base
 FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libipt-dev libncurses-dev \
-      gcc-multilib \
+      gcc-multilib strace \
  && rm -rf /var/lib/apt/lists/*
 COPY . .
 CMD sh -c 'make cli-smoke'

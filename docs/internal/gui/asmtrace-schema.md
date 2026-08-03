@@ -74,7 +74,7 @@ override is later needed.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `backend` | str | yes | Measured producer id: `ptrace-syscalls`, `ptrace-stream`, `ptrace-region`, `ptrace-tree`, `ptrace-graph`, `ptrace-procs`, `ptrace-dataflow`, `hwdebug-watch`, `ibs-op`, `sw-clock`, `emu-l0`. |
+| `backend` | str | yes | Measured producer id: `ptrace-syscalls`, `ptrace-stream`, `ptrace-region`, `ptrace-tree`, `ptrace-graph`, `ptrace-procs`, `ptrace-dataflow`, `hwdebug-watch`, `ibs-op`, `sw-clock`, `emu-l0`, `proc-snapshot` (`asmspy --info`'s `procinfo` header). |
 | `exact` | bool | yes | `true` = every event in the window was observed; `false` = a **sample**. |
 | `trust` | str | yes | `"exact"` \| `"statistical"` \| `"weak"` \| `"strong"` — the tier vocabulary already used by the trace tiers. |
 | `window` | obj | no | `{"base":u64,"len":u64}` when the capture was scoped to a region. |
@@ -1001,12 +1001,21 @@ falls back to the recorded `disasm` strings (D10) or to bare offsets.
 A snapshot of a **single process**, taken by reading only `/proc` and the
 mapped ELF — never ptrace, never an attach. It is emitted **once**, as the
 sole event of the one-event recording `asmspy --info <pid> --json` writes
-(header, this one `procinfo`, `end`); unlike every other kind above it never
-repeats within a recording. Fields mirror
-[`asmspy_procinfo_t`](../../../cli/libasmspy.h#L208) (and the
-[`asmspy_fingerprint_t`](../../../cli/libasmspy.h#L94) it embeds as `runtime`),
-field for field — that struct is authoritative; this shape is a direct
-serialization of it.
+(header, this one `procinfo`, `end`) — like `graph`/`topo`/`survey`/`end`, it
+is a once-per-recording snapshot rather than a per-step stream.
+
+The JSON body above is **authoritative** for the wire shape; the fields'
+*semantics* come from [`asmspy_procinfo_t`](../../../cli/libasmspy.h#L208)
+(and the [`asmspy_fingerprint_t`](../../../cli/libasmspy.h#L94) it embeds as
+`runtime`), but the mapping is not a flat field-for-field mirror the way
+`graph`/`topo`/`watch` above are: the wire nests the struct's members into
+eight named objects (`identity`/`runtime`/`counters`/`threads`/`code`/
+`modules`/`trace`/`containment`/`children`), several fields are renamed in the
+process (`n_fds` → `counters.fds`, `static_linked` → `runtime.static`,
+`ns_differs` → `containment.differs`), and `runtime` carries only 7 of
+`asmspy_fingerprint_t`'s 18 fields (the ones this shape needs, not the whole
+struct). Read the JSON shape above as the contract; use the struct link for
+field-level intent, not for the wire layout.
 
 Four encoding rules carry weight beyond "whatever the struct happens to hold":
 
@@ -1025,6 +1034,14 @@ Four encoding rules carry weight beyond "whatever the struct happens to hold":
 - **`why` and `remedy` are `""` when there is nothing to say, never absent.**
   A consumer may always read `trace.why`, `trace.remedy`, and each mode's
   `why` without a presence check.
+
+`trace.attachable` is `1` yes / `0` no / `-1` unknown — the third value is a
+real measurement outcome (Yama `ptrace_scope` restricts attach to descendants
+only, so a same-uid, non-descendant target is genuinely undetermined without
+trying) and MUST NOT be collapsed into either other; only `1` appears in the
+worked example above, but `-1` is the common case on any host with the
+default `ptrace_scope=1` — a reader that treats "not 1" as "refused" will
+mislabel exactly that case.
 
 `trace.modes` walks the same `ASMSPY_MODE__COUNT` list as the CLI's own engine
 flags, by [`asmspy_mode_name`](../../../cli/libasmspy.h#L165) — `"log"`,

@@ -1873,12 +1873,25 @@ static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
             snprintf(out->mode_why[m], sizeof out->mode_why[m], "%.90s",
                      out->attach_why);
     }
-    /* An i386 tracee reports its syscall numbers against a DIFFERENT table,
-     * so the single-step engines refuse rather than name every call wrong. */
+    /* An i386 tracee reports its registers and syscall numbers against a
+     * DIFFERENT ABI/table, so every single-step engine refuses BEFORE
+     * attaching rather than report confident nonsense — this is not just
+     * the five that decode a syscall NUMBER (dataflow/stream/trace/log/
+     * watch): asmspy_engine_tree/_graph/_procs (cli/asmspy_engine.c) carry
+     * the IDENTICAL `asmspy_elf_class(pid) == 32` guard, for the identical
+     * reason ("every register read ... assumes the x86-64 ABI"), because
+     * they single-step too, just to build a call tree/graph/topology
+     * instead of decoding one syscall at a time. Originally this list only
+     * named the first five (Task 3); the other three engines already
+     * refused for real, so --info advised "ok" for a mode that would
+     * immediately refuse if actually run — review found this gap (finding
+     * D) with no test covering it. --sample is deliberately NOT here: it
+     * is IBS silicon, a fact about the HOST, gated separately just below. */
     if (out->fp.elf_class == 32) {
-        const asmspy_mode_t x86_only[] = {ASMSPY_MODE_DATAFLOW,
-                                          ASMSPY_MODE_STREAM, ASMSPY_MODE_TRACE,
-                                          ASMSPY_MODE_LOG, ASMSPY_MODE_WATCH};
+        const asmspy_mode_t x86_only[] = {
+            ASMSPY_MODE_DATAFLOW, ASMSPY_MODE_STREAM, ASMSPY_MODE_TRACE,
+            ASMSPY_MODE_LOG,      ASMSPY_MODE_WATCH,  ASMSPY_MODE_TREE,
+            ASMSPY_MODE_GRAPH,    ASMSPY_MODE_PROCS};
         for (size_t i = 0; i < sizeof x86_only / sizeof x86_only[0]; i++) {
             out->mode_ok[x86_only[i]] = 0;
             snprintf(out->mode_why[x86_only[i]], sizeof out->mode_why[0],

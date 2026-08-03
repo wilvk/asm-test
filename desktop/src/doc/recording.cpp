@@ -32,12 +32,19 @@ using nlohmann::json;
 // — captured code bytes at a version", owned by 08): it is now a DEFINED kind
 // with a producer, and unlike the serve-only three it is an ordinary recording
 // event that the `end` footer counts.
-static const std::array<const char *, 23> kKnownKinds = {
+//
+// `procinfo` joins them the same way (asmtrace-schema.md, "`procinfo` — one
+// attach-free process snapshot"): `asmspy --info <pid> --json` is a real
+// producer, so it belongs here rather than in the schema's still-RESERVED
+// list above. Missed in the original Task 4 diff — review caught that every
+// `--info --json` recording was being counted as unknown-kind noise here,
+// rendered by the shell as "(1 event(s) of unknown kind, kept)".
+static const std::array<const char *, 24> kKnownKinds = {
     {"trace",  "coverage",  "syscall", "stream",     "call",
      "graph",  "topo",      "survey",  "watch",      "df_step",
      "df_edge", "regstate", "result",  "note",       "stitch",
      "end",    "session",   "cmd",     "err",        "codeimage",
-     "mem",    "blame",     "statediff"}};
+     "mem",    "blame",     "statediff", "procinfo"}};
 
 bool is_known_kind(const std::string &kind) {
     for (const char *k : kKnownKinds)

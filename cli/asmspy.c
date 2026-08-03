@@ -8124,22 +8124,26 @@ static int bad_arg(const char *what, const char *got) {
  *
  * Addresses are emitted as hex STRINGS — a JSON number is a double in many
  * readers, which silently rounds a 64-bit pointer. */
-static void info_emit_json(const asmspy_procinfo_t *pi, const char *record,
-                           int to_stdout) {
+static int info_emit_json(const asmspy_procinfo_t *pi, const char *record,
+                          int to_stdout) {
     rec_t rec;
     char *b = malloc(256 * 1024); /* the body; bounded by the struct's caps */
     size_t cap = 256 * 1024, n = 0;
     int overflow = 0; /* sticky: the body did not fit */
     char e1[512], e2[512];
     if (!b)
-        return;
+        return -1;
 
         /* A body that overflows would be TRUNCATED MID-TOKEN — syntactically
      * invalid JSON that a reader reports as a corrupt recording rather than
      * as our bug. So overflow is tracked and refused loudly below, never
-     * emitted. 256 KB is far above the worst case the caps allow (64 threads
-     * + 64 modules + 32 children + 4 KB argv is well under 64 KB); this
-     * guard exists so that if that ever stops being true, it fails honestly. */
+     * emitted. Measured max-fill (every cap maxed: 64 threads, 64 modules,
+     * 32 children, 4 KB argv, every string field at its buffer's capacity):
+     * 195,212 bytes — comfortably under the 256 KB cap, but review found the
+     * original "well under 64 KB" estimate here was off by ~3x, which is
+     * exactly the kind of error that would mislead anyone raising the cap
+     * later. This guard exists so that if 256 KB ever stops being enough
+     * anyway, it fails honestly instead of emitting a truncated body. */
 #define APP(...)                                                               \
     do {                                                                       \
         int _w = snprintf(b + n, n < cap ? cap - n : 0, __VA_ARGS__);          \
@@ -8164,8 +8168,22 @@ static void info_emit_json(const asmspy_procinfo_t *pi, const char *record,
     APP("\"argv\":[");
     {
         const char *a = pi->argv;
+        /* A single entry can be up to ASMSPY_PI_ARGV_BYTES-1 bytes (all of
+         * it, if there is only one), and asmtrace_escape's worst case is
+         * every byte expanding to "\u00xx" (6 chars) — a fixed 1024-byte
+         * buffer silently clipped anything past ~1017 plain characters,
+         * with argv_truncated staying false (that flag is only set by the
+         * gatherer's OWN 4096-byte/64-entry caps, which this buffer had
+         * nothing to do with): review measured a 2600-char argv[1] crossing
+         * the wire at exactly 1017 chars while the human TEXT form printed
+         * all of it — two channels of the SAME snapshot disagreeing, the
+         * "confidently wrong" class this plan named when it deleted
+         * has_symtab/build_id. Sized to the real source bound instead
+         * (4096*6+16 = 24608 bytes, still far inside the 256 KB body cap)
+         * so a full-length entry escapes intact rather than being clipped
+         * by an arbitrary second cap the wire format never states. */
+        char ea[ASMSPY_PI_ARGV_BYTES * 6 + 16];
         for (int i = 0; i < pi->argc; i++) {
-            char ea[1024];
             asmtrace_escape(ea, sizeof ea, a);
             APP("%s\"%s\"", i ? "," : "", ea);
             a += strlen(a) + 1;
@@ -8281,18 +8299,27 @@ static void info_emit_json(const asmspy_procinfo_t *pi, const char *record,
                 "to emit a truncated recording\n",
                 cap);
         free(b);
-        return;
+        return -1;
     }
     /* `exact` because every field was READ, not sampled — the snapshot is a
      * true statement about the instant it was taken. `to_stdout` is 0 for a
      * bare --record=<f>, which records without putting NDJSON on a stdout the
-     * human text is already using. */
+     * human text is already using.
+     *
+     * rec_open's own contract says the caller must fail when it returns
+     * nonzero (a --record path that could not be opened) — propagate that
+     * up rather than silently succeeding with nothing written, which is
+     * exactly the bug review found here: `cmd_info` used to ignore this
+     * entirely and always return 0. */
     if (rec_open(&rec, record, to_stdout ? stdout : NULL, "proc-snapshot", 1,
-                 "exact", (pid_t)pi->pid) == 0) {
-        rec_emit(&rec, "procinfo", b);
-        rec_close(&rec, 0, 0, 0, NULL);
+                 "exact", (pid_t)pi->pid) != 0) {
+        free(b);
+        return -1;
     }
+    rec_emit(&rec, "procinfo", b);
+    rec_close(&rec, 0, 0, 0, NULL);
     free(b);
+    return 0;
 }
 
 static void info_print_text(const asmspy_procinfo_t *pi) {
@@ -8364,12 +8391,23 @@ static int cmd_info(pid_t pid, int json, const char *record) {
      * human text. Gating the recording on --json would silently drop a
      * recording the user asked for, which rec_open's own contract calls out
      * as never a detail. */
-    if (json || record)
-        info_emit_json(pi, record, json);
+    int rc = 0;
+    if (json || record) {
+        /* A failed --record (bad path) or a refused overflow means the
+         * output the user explicitly asked for did not happen — that must
+         * fail the process, exactly like every other --record-capable mode
+         * (cmd_tree/cmd_graph/... all `return 1` when rec_open fails).
+         * `--info $p --json --record=/nonexistent/x && upload x` must never
+         * fire the `&&` on an absent file. Text still prints below when
+         * !json, since it is a genuinely separate, independently useful
+         * output — but the exit code reports the recording's own fate. */
+        if (info_emit_json(pi, record, json) != 0)
+            rc = 1;
+    }
     if (!json)
         info_print_text(pi);
     free(pi);
-    return 0;
+    return rc;
 }
 
 static int usage(const char *argv0) {
