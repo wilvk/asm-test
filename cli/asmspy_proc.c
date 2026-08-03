@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -27,6 +28,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_syscall_name.h" /* syscall-number -> name table, shared with asmspy_engine.c */
 
 /* ================================================================== */
 /* Process list                                                        */
@@ -1393,6 +1395,159 @@ static void pi_user(long uid, char *out, size_t cap) {
         snprintf(out, cap, "%ld", uid);
 }
 
+/* ================================================================== */
+/* Threads — the attach-free "what is it doing right now" (Task 2)     */
+/* ================================================================== */
+
+/* A name beside a syscall number is friendlier than the bare decimal, and an
+ * unresolved number still renders as ITSELF (honest) rather than nothing. */
+static void pi_syscall_name(long nr, char *out, size_t cap) {
+    const char *nm = asmspy_syscall_name(nr);
+    if (nm && *nm)
+        snprintf(out, cap, "%.*s", (int)cap - 1, nm);
+    else
+        snprintf(out, cap, "%ld", nr);
+}
+
+/* One task's /proc rows. `state`/`wchan` are unrestricted; `syscall` needs
+ * ptrace PERMISSION (no attach) and its absence is REPORTED, never blank.
+ *
+ * read_first_line() always returns void (it swallows its own fopen's errno),
+ * so every read through it below is checked via the buffer it filled, never
+ * via a return value. The /proc/<tid>/syscall read is the one exception:
+ * naming WHY it failed needs the real errno from THIS open, so it is opened
+ * directly here instead — reporting a stale errno left over from an earlier,
+ * unrelated call would be a wrong reason, which is worse than a vague one. */
+static void pi_read_one_thread(pid_t pid, const char *tid_s,
+                               asmspy_pi_thread_t *t) {
+    char p[96], line[512];
+
+    t->tid = atol(tid_s);
+    t->syscall_nr = -1;
+
+    snprintf(p, sizeof p, "/proc/%d/task/%.20s/comm", (int)pid, tid_s);
+    read_first_line(p, t->comm, sizeof t->comm);
+
+    snprintf(p, sizeof p, "/proc/%d/task/%.20s/stat", (int)pid, tid_s);
+    read_first_line(p, line, sizeof line);
+    if (line[0]) {
+        char *rp = strrchr(line, ')');
+        unsigned long long ut = 0, st = 0;
+        if (rp)
+            sscanf(rp + 2,
+                   "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu",
+                   &t->state, &ut, &st);
+        t->cpu_jiffies = ut + st;
+    }
+
+    snprintf(p, sizeof p, "/proc/%d/task/%.20s/wchan", (int)pid, tid_s);
+    read_first_line(p, t->wchan, sizeof t->wchan);
+    if (!strcmp(t->wchan, "0")) /* the kernel's "not sleeping" spelling */
+        t->wchan[0] = '\0';
+
+    /* /proc/<tid>/syscall: "<nr> <a0>..<a5> <sp> <pc>", or "running", or
+     * EPERM/ENOENT/... — opened directly (see the function comment) so a
+     * failure is reported with the errno THIS open actually raised. */
+    snprintf(p, sizeof p, "/proc/%d/task/%.20s/syscall", (int)pid, tid_s);
+    errno = 0;
+    FILE *sf = fopen(p, "r");
+    if (!sf) {
+        int e = errno;
+        if (e == EPERM || e == EACCES)
+            snprintf(t->syscall_why, sizeof t->syscall_why,
+                     "needs ptrace permission (Yama ptrace_scope / uid)");
+        else
+            snprintf(t->syscall_why, sizeof t->syscall_why, "unreadable: %s",
+                     strerror(e));
+        return;
+    }
+    line[0] = '\0';
+    if (fgets(line, sizeof line, sf))
+        line[strcspn(line, "\n")] = '\0';
+    fclose(sf);
+    if (!line[0]) {
+        snprintf(t->syscall_why, sizeof t->syscall_why,
+                 "empty /proc/<tid>/syscall");
+        return;
+    }
+    if (!strncmp(line, "running", 7)) {
+        snprintf(t->syscall_why, sizeof t->syscall_why, "running in user mode");
+        return;
+    }
+    unsigned long long a[6] = {0}, sp = 0, pc = 0;
+    long nr = -1;
+    if (sscanf(line, "%ld %llx %llx %llx %llx %llx %llx %llx %llx", &nr, &a[0],
+               &a[1], &a[2], &a[3], &a[4], &a[5], &sp, &pc) < 9) {
+        snprintf(t->syscall_why, sizeof t->syscall_why, "unparsed: %.40s",
+                 line);
+        return;
+    }
+    t->have_syscall = 1;
+    t->syscall_nr = nr;
+    pi_syscall_name(nr, t->syscall_name, sizeof t->syscall_name);
+    memcpy(t->syscall_args, a, sizeof a);
+    t->sp = sp;
+    t->pc = pc;
+}
+
+/* Every task of `pid`, leader FIRST (it is the row an operator looks for),
+ * then the rest ascending by tid — a stable order, because a row that moves
+ * while you read it is a row you cannot point at. */
+static void pi_read_threads(pid_t pid, asmspy_procinfo_t *out) {
+    char tp[64];
+    snprintf(tp, sizeof tp, "/proc/%d/task", (int)pid);
+    DIR *d = opendir(tp);
+    if (!d)
+        return;
+    long tids[ASMSPY_PI_THREADS_CAP];
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!is_all_digits(e->d_name))
+            continue;
+        if (n >= ASMSPY_PI_THREADS_CAP) {
+            out->threads_truncated = 1;
+            continue;
+        }
+        tids[n++] = atol(e->d_name);
+    }
+    closedir(d);
+
+    /* ascending, then swap the leader to the front */
+    for (int i = 1; i < n; i++) {
+        long v = tids[i];
+        int j = i - 1;
+        while (j >= 0 && tids[j] > v) {
+            tids[j + 1] = tids[j]; /* split from `j--`: the combined form
+                                    * (tids[j + 1] = tids[j--]) reads and
+                                    * modifies `j` unsequenced, which -Wall
+                                    * -Wextra correctly flags (-Wsequence-
+                                    * point) as undefined behaviour */
+            j--;
+        }
+        tids[j + 1] = v;
+    }
+    for (int i = 0; i < n; i++)
+        if (tids[i] == (long)pid) {
+            long t = tids[0];
+            tids[0] = tids[i];
+            tids[i] = t;
+            break;
+        }
+
+    for (int i = 0; i < n; i++) {
+        char s[24];
+        snprintf(s, sizeof s, "%ld", tids[i]);
+        pi_read_one_thread(pid, s, &out->threads_v[out->n_threads_v++]);
+        if (pi_over_budget(out)) {
+            out->budget_exceeded = 1;
+            if (i + 1 < n)
+                out->threads_truncated = 1;
+            break;
+        }
+    }
+}
+
 int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
     char p[80], line[512];
     FILE *f;
@@ -1600,6 +1755,7 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
         }
     }
 
+    pi_read_threads(pid, out);
     asmspy_fingerprint(pid, &out->fp);
     if (pi_over_budget(out))
         out->budget_exceeded = 1;

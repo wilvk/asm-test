@@ -41,6 +41,7 @@
 
 #include "asmspy.h"
 #include "asmspy_arch.h" /* register/step/detach arch seam (x86-64 | AArch64) + ASMSPY_HOST_ARCH */
+#include "asmspy_syscall_name.h" /* syscall-number -> name table, shared with asmspy_proc.c */
 #include "asmtest_codeimage.h" /* asmtest_codeimage_t — the attach_jit versioned-decode param (unused today, NULL) */
 #include "asmtest_ibs.h" /* the out-of-band statistical sampler (asmspy_engine_sample) */
 
@@ -244,22 +245,12 @@ static void decode_cstr(pid_t pid, uint64_t addr, char *out, size_t cap) {
     snprintf(out, cap, "%s", tmp);
 }
 
-/* Every syscall name the compiling host's headers know, indexed by number. The
- * SC() list is generated from <sys/syscall.h> (cli/gen-syscall-names.sh), and
- * the NUMBER comes from the same headers via __NR_ — so this cannot drift out
- * of step with the kernel the way a hand-written table would. Sparse: numbers
- * with no entry stay NULL and fall back to the numeric form. */
-static const char *const sc_names[] = {
-#define SC(n) [__NR_##n] = #n,
-#include "asmspy_syscall_names.inc"
-#undef SC
-};
-
-static const char *scname(long nr) {
-    if (nr < 0 || (size_t)nr >= sizeof sc_names / sizeof sc_names[0])
-        return NULL;
-    return sc_names[nr];
-}
+/* The syscall-number -> name table now lives in asmspy_syscall_name.h — a
+ * header both this engine and asmspy_proc.c's attach-free process snapshot
+ * include, so there is one definition of the table, not two (see that
+ * header's block comment for why it must be header-only rather than a link
+ * dependency). This shim keeps every call site below unchanged. */
+static const char *scname(long nr) { return asmspy_syscall_name(nr); }
 
 /* Where a syscall keeps its primary PATH argument — decoding it is what turns
  * an opaque "syscall#262(0x7f.., 0x7f.., ..)" into a line worth reading.
@@ -612,12 +603,13 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd,
 /*                                                                      */
 /* Two separate questions, with two different answers.                  */
 /*                                                                      */
-/* HOW MANY args does a syscall take? Not derivable here. sc_names is   */
-/* generated from the compiling host's own <sys/syscall.h> precisely so */
-/* it cannot drift, and the obvious move is to get arity from the same  */
-/* place — but it is not there to get. MEASURED in the asmtest-cli      */
-/* image: 741 __NR_* macros, and ZERO macros carrying an arity or arg   */
-/* count; no syscall_64.tbl (that is kernel-source-only), no man2 pages.*/
+/* HOW MANY args does a syscall take? Not derivable here. The name table */
+/* (asmspy_syscall_name.h) is generated from the compiling host's own   */
+/* <sys/syscall.h> precisely so it cannot drift, and the obvious move   */
+/* is to get arity from the same place — but it is not there to get.    */
+/* MEASURED in the asmtest-cli image: 741 __NR_* macros, and ZERO       */
+/* macros carrying an arity or arg count; no syscall_64.tbl (that is    */
+/* kernel-source-only), no man2 pages.                                  */
 /* Every __NR_ is a NUMBER. There is no __NR_x_NARGS to expand.         */
 /*                                                                      */
 /* WHAT do the args MEAN? Not derivable even in principle: "this word   */

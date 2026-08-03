@@ -40,7 +40,9 @@ endif
 # The syscall-name table asmspy decodes against is generated from the COMPILING
 # host's own <sys/syscall.h> (names only; the numbers come from __NR_ at compile
 # time), so it tracks whatever kernel headers are installed instead of drifting.
-# asmspy_engine.c #includes it, hence the -I$(BUILD) below.
+# cli/asmspy_syscall_name.h #includes it — asmspy_engine.c's --log decoder AND
+# asmspy_proc.c's attach-free process snapshot include THAT header (not this
+# .inc directly), hence the -I$(BUILD) below wherever either TU compiles.
 $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 	CC='$(CC)' sh $< >$@
 
@@ -49,11 +51,13 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 $(BUILD)/%.o: cli/%.c cli/libasmspy.h cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               cli/asmspy_autoregion.h cli/asmspy_arch.h \
+              cli/asmspy_syscall_name.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
 
 $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
+$(BUILD)/asmspy_proc.o: $(BUILD)/asmspy_syscall_names.inc
 
 # asmspy.o is the FRONT END (main, the headless subcommands, the ncurses TUI);
 # the engine it drives is libasmspy below, not a loose object here.
@@ -107,10 +111,13 @@ $(BUILD)/asmspy: $(ASMSPY_LIB_DEPS) $(ASMSPY_OBJS) $(ASMSPY_LIB)
 # the .so bundles the hwtrace + data-flow tiers it calls into (as
 # libasmtest_dataflow bundles pic/codeimage.o) so it resolves standalone.
 $(BUILD)/pic/asmspy_engine.o: cli/asmspy_engine.c cli/libasmspy.h \
-                              cli/asmspy_arch.h $(BUILD)/asmspy_syscall_names.inc \
+                              cli/asmspy_arch.h cli/asmspy_syscall_name.h \
+                              $(BUILD)/asmspy_syscall_names.inc \
                               $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
 $(BUILD)/pic/asmspy_proc.o: cli/asmspy_proc.c cli/libasmspy.h \
+                            cli/asmspy_syscall_name.h \
+                            $(BUILD)/asmspy_syscall_names.inc \
                             $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
 
@@ -466,9 +473,9 @@ $(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
 # gatherer that quietly attached could not do. Links the resolver TU directly,
 # like test_symtab.
 $(BUILD)/test_procinfo: cli/test_procinfo.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
-                        | $(BUILD)
-	$(CC) $(CFLAGS) -Icli -pthread cli/test_procinfo.c $(BUILD)/asmspy_proc.o \
-	  -lstdc++ -o $@
+                        | $(BUILD) $(BUILD)/asmspy_syscall_names.inc
+	$(CC) $(CFLAGS) -Icli -I$(BUILD) -pthread cli/test_procinfo.c \
+	  $(BUILD)/asmspy_proc.o -lstdc++ -o $@
 
 # test_libasmspy — the standalone proof that libasmspy is a LIBRARY (07 T0).
 # Its LINK LINE is the test: libasmspy.a + the tier objects the engine calls

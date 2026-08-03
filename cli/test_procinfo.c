@@ -228,6 +228,38 @@ int main(void) {
     check("dead pid refused", asmspy_procinfo(0x7ffffff, pi) < 0,
           "a nonexistent pid must fail, not return an empty snapshot");
 
+    /* --- threads: the attach-free "what is it doing now" ------------- */
+    check("self reread", asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+    check("thread rows", pi->n_threads_v >= 1, "no thread rows");
+    check("row 0 is the leader", pi->threads_v[0].tid == (long)getpid(),
+          "leader is not first");
+    check("row 0 comm", pi->threads_v[0].comm[0] != '\0', "no comm");
+    check("row 0 state",
+          pi->threads_v[0].state == 'R' || pi->threads_v[0].state == 'S',
+          "odd thread state");
+    check("rows within cap", pi->n_threads_v <= ASMSPY_PI_THREADS_CAP,
+          "cap exceeded");
+    check("truncation is stated",
+          pi->threads_truncated == (pi->threads > ASMSPY_PI_THREADS_CAP),
+          "truncated flag disagrees with the thread count");
+
+    /* An absent syscall row must always carry its reason: a blank cell is
+     * indistinguishable from "it is doing nothing", which is never true. */
+    for (int i = 0; i < pi->n_threads_v; i++)
+        check("absent syscall states why",
+              pi->threads_v[i].have_syscall || pi->threads_v[i].syscall_why[0],
+              "have_syscall == 0 with an empty syscall_why");
+
+    /* wchan on a SLEEPING task names the kernel function it sleeps in.
+     * Our parent (a shell awaiting us) is reliably sleeping; a running
+     * task correctly has no wchan, so only assert on a sleeper. */
+    check("parent reread", asmspy_procinfo(getppid(), pi) == 0, "nonzero");
+    for (int i = 0; i < pi->n_threads_v; i++)
+        if (pi->threads_v[i].state == 'S')
+            check("sleeping thread names its wchan",
+                  pi->threads_v[i].wchan[0] != '\0',
+                  "empty wchan on a sleeper");
+
     free(pi);
     if (failures) {
         fprintf(stderr, "test_procinfo: %d FAILURE(S)\n", failures);
