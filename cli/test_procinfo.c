@@ -656,10 +656,31 @@ int main(void) {
               "module-transition slow path");
     }
 
-    /* Captured now, before any forced-truncation trickery below, for the
-     * module-cap block's "rank happens before cap" check (further down):
-     * the true top module's symbol count from a natural, untruncated
-     * snapshot. */
+    /* BUG FOUND IN CONTAINER-LANE REVIEW (2026-08-04): this used to read
+     * `pi->modules[0].syms` straight off the struct left behind by the
+     * forced-budget-overrun block just above — which is a PARTIAL gather by
+     * construction (that block's own "symbol attribution stopped early"
+     * check, just above, proves sum_syms < syms_total there). The budget
+     * hooks are reset to -1 (disarmed) right after that block, but `pi`
+     * itself is never re-populated, so the old comment's claim — "before
+     * any forced-truncation trickery ... a natural, untruncated snapshot" —
+     * was false: it was reading the truncated snapshot the trickery above
+     * produced. Whether the stale value happened to equal the TRUE natural
+     * top module's count depended entirely on this process's module
+     * address order versus the forced trip point (whichever module
+     * pi_read_code_and_modules reaches first past that point loses its
+     * count) — true by coincidence on one host, false on another (the
+     * container this was caught in), which is exactly the shape of bug a
+     * mutation-testing pass on one host cannot see. Re-gather FRESH here,
+     * with both budget hooks already disarmed, so the baseline actually
+     * comes from an untruncated call rather than reusing the interrupted
+     * one. */
+    check("self reread (natural, for the module-cap baseline)",
+          asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+
+    /* The true top module's symbol count from the fresh, untruncated
+     * snapshot just above — the module-cap block's "rank happens before
+     * cap" check (further down) compares against this. */
     unsigned long best_syms_before = pi->modules[0].syms;
 
     /* --- JIT methods/source, ACTUALLY exercised -----------------------
