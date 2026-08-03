@@ -513,6 +513,48 @@ assert isinstance(d["defuse"], list)' \
     fi
     rm -f "$svtree" "$svdf"
 
+    # --serve dataflow "insns": the ordered `trace` instruction stream.
+    #
+    # WHY: a two-recording view aligns its pair on a trace-or-coverage stream
+    # (dt_diff_build refuses without one) while the divergence worldline's ribs
+    # come from `statediff`. Only the dataflow engine emits statediff, and only
+    # the region engine emitted trace, so no single capture could fill that
+    # scene — it refused with "both recordings need a trace or coverage stream
+    # to be aligned". The trace here is not synthesised: vt->insn_off[] is the
+    # same array df_step already states.
+    echo "--- asmspy --serve dataflow insns (ordered trace stream) ---"
+    svon="$BUILD/serve_insns_on_$$.ndjson"
+    svoff="$BUILD/serve_insns_off_$$.ndjson"
+    rm -f "$svon" "$svoff"
+    if [ -n "$hb" ] && [ -n "$hl" ]; then
+        hbd=$(printf '%d' "$hb")
+        set +e
+        { printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":40,"steps":true,"statediff":true,"insns":true}\n' \
+            "$AVPID" "$hbd" "$hl"; sleep 6; } \
+            | timeout 40 "$ASM" --serve > "$svon" 2>/dev/null
+        { printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":40,"steps":true,"statediff":true}\n' \
+            "$AVPID" "$hbd" "$hl"; sleep 6; } \
+            | timeout 40 "$ASM" --serve > "$svoff" 2>/dev/null
+        set -e
+        non=$(grep -c '"k":"trace"' "$svon" || true)
+        noff=$(grep -c '"k":"trace"' "$svoff" || true)
+        nstep=$(grep -c '"k":"df_step"' "$svon" || true)
+        [ "$non" -gt 0 ] \
+            || fail "--serve dataflow insns:true emitted no trace events"
+        # One trace per step: the stream IS the step sequence, not a summary.
+        [ "$non" = "$nstep" ] \
+            || fail "--serve dataflow insns: $non trace vs $nstep df_step — not 1:1"
+        # NEGATIVE CONTROL: the default must stay byte-identical to before, or
+        # every existing dataflow recording silently changes shape.
+        [ "$noff" = "0" ] \
+            || fail "--serve dataflow WITHOUT insns emitted trace events (default not off)"
+        # The pair must now be alignable: trace AND statediff in one recording.
+        grep -q '"k":"statediff"' "$svon" \
+            || fail "--serve dataflow insns: lost the statediff stream"
+        echo "  insns: $non trace events 1:1 with df_step; default off; statediff intact"
+    fi
+    rm -f "$svon" "$svoff"
+
     # 39 T4: a continuous session must SURVIVE a QUIET region — the pinned region
     # not entered for one entry wait — and keep capturing the later burst. 35's
     # re-arm loop cleared its stop flag only on a PRODUCTIVE pass, so a single

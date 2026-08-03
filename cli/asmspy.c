@@ -2297,6 +2297,10 @@ typedef struct {
     int emit_mem; /* 29 R2: --mem armed the `mem` address stream */
     int emit_blame;     /* 41 L3: --blame armed the `blame` backward cone */
     int emit_statediff; /* 41 L3: --statediff armed the `statediff` delta */
+    /* --insns armed the ordered `trace` instruction stream. Off by default:
+     * a two-recording view needs it to ALIGN a pair, but adding it
+     * unconditionally would change every existing dataflow recording. */
+    int emit_trace;
     int continuous; /* 35 T1: re-arm loop -> emit a df_invocation per pass */
     unsigned pass;  /* 35 T1: 0-based invocation ordinal, ++ per sink call */
 } dataflow_ctx;
@@ -2370,7 +2374,8 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
                             const asmtest_defuse_t *g, const uint8_t *code,
                             size_t len, uint64_t base, uint64_t when,
                             int emit_mem, int emit_blame, int emit_statediff,
-                            int continuous, unsigned pass, long result) {
+                            int emit_trace, int continuous, unsigned pass,
+                            long result) {
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
     char body[65536];
     if (!rec_on(r))
@@ -2396,6 +2401,39 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         first = cur;
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
+        /* The ordered instruction stream, as `trace` events, in the SAME shape
+         * the region engine emits (basis/kind/off/disasm).
+         *
+         * WHY THE DATAFLOW ENGINE EMITS THIS. Two-recording views align their
+         * pair on a `trace` or `coverage` stream — dt_diff_build refuses without
+         * one — while the ribs of the divergence worldline come from
+         * `statediff`. Only this engine produces statediff (it is derived from
+         * the per-step register ring), and only the region engine produced
+         * trace, so no single capture could fill that scene: it refused with
+         * "both recordings need a trace or coverage stream to be aligned".
+         *
+         * This is not a synthesis. The single-stepping producer genuinely
+         * observed these instructions, in this order, at these offsets —
+         * vt->insn_off[] is the same array df_step states below. Emitting it
+         * under its own kind states what was already recorded, rather than
+         * asking a reader to reconstruct an execution order from operand
+         * records.
+         *
+         * Off by default, so every existing recording stays byte-identical. */
+        if (emit_trace) {
+            if (dis[0]) {
+                char esc[4 * 160];
+                asmtrace_escape(esc, sizeof esc, dis);
+                rec_emitf(r, "trace",
+                          "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                          "\"disasm\":\"%s\"",
+                          (unsigned long long)vt->insn_off[s], esc);
+            } else {
+                rec_emitf(r, "trace",
+                          "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                          (unsigned long long)vt->insn_off[s]);
+            }
+        }
         /* 37 T1: `base` is the scoped region base `off` (pc - base_ip) is
          * relative to — state it on the wire as `rbase` so a reader resolves the
          * span instead of deriving it (the auto candidate walk emits several
@@ -2502,7 +2540,8 @@ static void dataflow_render_sink(void *ctx, long result,
     /* 37 T4: this headless sink holds no codeimage timeline, so `when` is
      * always 0 (omitted) — only the serve sink stamps it. */
     dataflow_record(dc->r, vt, g, code, len, base, 0, dc->emit_mem,
-                    dc->emit_blame, dc->emit_statediff, dc->continuous, pass,
+                    dc->emit_blame, dc->emit_statediff, dc->emit_trace,
+                    dc->continuous, pass,
                     result);
 
     if (dc->json) {
@@ -2895,8 +2934,8 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
-                        int mem, int blame, int statediff, int fpregs,
-                        int continuous, int window_ms) {
+                        int mem, int blame, int statediff, int insns,
+                        int fpregs, int continuous, int window_ms) {
     asmspy_symtab_t t;
     rec_t rec;
     /* 41 L3: statediff IS a delta of the register ring, so arm it (like fpregs). */
@@ -3015,8 +3054,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         const char *rname =
             s ? s->name
               : (auto_region ? (autoname[0] ? autoname : "?") : region);
-        dataflow_ctx dc = {pid,   rname,      json, &rec, mem, blame,
-                           statediff, continuous, 0};
+        dataflow_ctx dc = {pid,   rname,     json,  &rec,       mem,
+                           blame, statediff, insns, continuous, 0};
         /* status to STDERR so --json stdout stays a single clean object */
         fprintf(stderr,
                 "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
@@ -3196,6 +3235,10 @@ typedef struct {
     int mem;   /* dataflow/auto: arm the `mem` address stream (29 R2 `--mem`) */
     int blame; /* dataflow/auto: arm the `blame` backward cone (41 L3) */
     int statediff; /* dataflow/auto: arm the `statediff` delta (41 L3; arms steps) */
+    /* dataflow/auto: also emit the ordered `trace` instruction stream, which is
+     * what lets a two-recording view ALIGN this pair (dt_diff_build refuses
+     * without a trace or coverage stream). Off by default. */
+    int insns;
     int fpregs; /* dataflow/auto: arm the XMM/MXCSR deck (31 R4 `fpregs:true`) */
     int continuous; /* dataflow/auto: re-arm until stop (35 `continuous:true`) */
     long max;
@@ -3540,8 +3583,8 @@ static void serve_dataflow_sink(void *ctx, long result,
      * runs only AFTER dataflow_record, so a change this pass caused is dated to
      * the NEXT one, never this one. 0 (omitted) when codeimage is unavailable. */
     uint64_t when = s->img ? asmtest_codeimage_now(s->img) : 0;
-    dataflow_record(&s->rec, vt, g, code, len, base, when, s->p.mem,
-                    s->p.blame, s->p.statediff, s->p.continuous, pass, result);
+    dataflow_record(&s->rec, vt, g, code, len, base, when, s->p.mem, s->p.blame,
+                    s->p.statediff, s->p.insns, s->p.continuous, pass, result);
     serve_codeimage_refresh(s);
 }
 
@@ -4454,6 +4497,16 @@ static int serve_parse_start(const char *line, serve_params_t *p,
         p->statediff = b;
         if (b)
             p->steps = 1;
+    }
+    /* The ordered `trace` instruction stream from a dataflow session. A
+     * two-recording view aligns its pair on trace-or-coverage, so this is what
+     * makes a dataflow pair comparable at all. */
+    if ((v = sj_find(line, "insns")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"insns\" must be true or false";
+            return -1;
+        }
+        p->insns = b;
     }
     /* 31 R4: dataflow/auto opt-in for the wide XMM/MXCSR deck. A BOOLEAN like
      * `steps`; it arms the register ring too, so `fpregs:true` alone yields a
@@ -8336,6 +8389,7 @@ int main(int argc, char **argv) {
         int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
         int blame = 0;  /* --blame: arm the `blame` backward cone (41 L3) */
         int statediff = 0; /* --statediff: arm the `statediff` delta (41 L3) */
+        int insns = 0;      /* --insns: also emit the ordered `trace` stream */
         int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
         int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
         int window_ms = AUTO_WINDOW_MS;  /* --window=MS: the --auto sample
@@ -8358,6 +8412,8 @@ int main(int argc, char **argv) {
                 blame = 1;
             else if (strcmp(argv[i], "--statediff") == 0)
                 statediff = 1;
+            else if (strcmp(argv[i], "--insns") == 0)
+                insns = 1;
             else if (strcmp(argv[i], "--fpregs") == 0)
                 fpregs = 1;
             else if (strcmp(argv[i], "--continuous") == 0)
@@ -8424,8 +8480,8 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps, mem, blame, statediff, fpregs,
-                            continuous, window_ms);
+                            sampler, record, steps, mem, blame, statediff,
+                            insns, fpregs, continuous, window_ms);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

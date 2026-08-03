@@ -137,10 +137,16 @@ require_events "$OUT/trace-blend.asmtrace" "serve trace"
 # --- Plane / LanePrism / Divergence A ----------------------------------------
 # fpregs is here for the SCRUBBER's wide register deck. The lane prism does not
 # need it: the dataflow producer reads XMM operands directly, which is measured.
+#
+# insns adds the ordered `trace` stream. The divergence worldline aligns its two
+# recordings on a trace-or-coverage stream and draws its ribs from statediff;
+# only this engine emits statediff, and until `insns` existed only the REGION
+# engine emitted trace, so no single capture could fill that scene — it refused
+# with "both recordings need a trace or coverage stream to be aligned".
 alive "serve dataflow (seed 1)"
 say "df-a      <- pid $v1 blend_tile (continuous, ${DF_SECONDS}s)"
 serve_capture "$OUT/df-a.asmtrace" "$DF_SECONDS" \
-    "$(printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":0,"steps":true,"mem":true,"fpregs":true,"statediff":true,"continuous":true}' \
+    "$(printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":0,"steps":true,"mem":true,"fpregs":true,"statediff":true,"insns":true,"continuous":true}' \
        "$v1" "$sym_base" "$sym_len")"
 require_nonempty "$OUT/df-a.asmtrace" "serve dataflow (seed 1)"
 require_events "$OUT/df-a.asmtrace" "serve dataflow (seed 1)"
@@ -155,7 +161,7 @@ v2=$VICTIM_PID
 resolve_sym blend_tile
 say "df-b      <- pid $v2 blend_tile (continuous, ${DF_SECONDS}s, seed 2)"
 serve_capture "$OUT/df-b.asmtrace" "$DF_SECONDS" \
-    "$(printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":0,"steps":true,"mem":true,"fpregs":true,"statediff":true,"continuous":true}' \
+    "$(printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":0,"steps":true,"mem":true,"fpregs":true,"statediff":true,"insns":true,"continuous":true}' \
        "$v2" "$sym_base" "$sym_len")"
 require_nonempty "$OUT/df-b.asmtrace" "serve dataflow (seed 2)"
 require_events "$OUT/df-b.asmtrace" "serve dataflow (seed 2)"
