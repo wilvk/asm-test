@@ -72,7 +72,7 @@ What actually changes is only **which cell a domain offset lands in**: a Hilbert
 | Region-level round trip | guaranteed | **guaranteed** for every cell that decodes; a cell inside a rect but past its region's bytes *refuses*, exactly as a Hilbert padding cell already does |
 | `Terrain` dimensions, cell indices, `y*n+x` arithmetic | `1 << order` | **unchanged** |
 
-The byte-exact row is the one to watch: [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) asserts byte-exact round trip over 10 000 addresses. That assertion is a **Hilbert-layout property** and must be scoped to `Layout::Hilbert` in Task 2, with the atlas asserting the region-level contract instead. Silently weakening it would be the wrong move — the two layouts genuinely promise different things, and the tests should say so.
+The byte-exact row is the one to watch: [test_projection.cpp:110-129](../../../desktop/test/test_projection.cpp#L110) asserts byte-exact round trip over 10 000 addresses. That assertion is a **Hilbert-layout property** and must be scoped to `Layout::Hilbert` in Task 2, with the atlas asserting the region-level contract instead. Silently weakening it would be the wrong move — the two layouts genuinely promise different things, and the tests should say so.
 
 **Honesty note — what "100 % packed" does and does not mean.** No layout can decode more cells than the domain has bytes, and `order` is the smallest with `4^order >= total`, so the decodable fraction `total / 4^order` sits in `(1/4, 1]` under **both** layouts. The atlas does not change it, and an earlier draft's claim that packing "is the occupancy fix" was wrong on that point. What the atlas changes is **where the undecodable cells sit and what they mean**: under Hilbert they are one connected blob at the tail of the curve that belongs to no region and can be labelled as nothing; under the atlas every cell belongs to some region's rectangle, and the slack is the bounded rounding tail inside each rect. The floor becomes *decodable* — point at a rectangle and it names a region, at a size proportional to that region's length — and that is Component 1's real claim. Do not restate it as "the floor is now fully painted": it is not, and a test asserting so would fail. Task 7b's screen-space gate is written accordingly.
 
@@ -473,7 +473,7 @@ static Projection atlas_of(const std::vector<Ref> &refs) {
 }
 ```
 
-**First, scope the existing byte-exact round-trip loop — and pin it, do not merely comment it.** The 10 000-address check at [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). It runs on `main()`'s `p`, which is default-constructed today — but **Task 10 flips that default to `Atlas`**, so "it already runs on a Hilbert projection" stops being true the moment the last task lands. Make the layout explicit rather than inherited:
+**First, scope the existing byte-exact round-trip loop — and pin it, do not merely comment it.** The 10 000-address check at [test_projection.cpp:110-129](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). It runs on `main()`'s `p`, which is default-constructed today — but **Task 10 flips that default to `Atlas`**, so "it already runs on a Hilbert projection" stops being true the moment the last task lands. Make the layout explicit rather than inherited:
 
 ```cpp
 // This loop asserts the BYTE-EXACT round trip, which is a Hilbert-layout
@@ -784,10 +784,13 @@ void rebuild_layout(Projection &p) {
 
 Then branch the two methods. **The Hilbert path stays byte-for-byte unchanged** — the atlas branch goes in front of the existing tail in each.
 
+**Where exactly the `project()` branch goes.** Below the `if (addr - r.base >= r.len) return false;` refusal at [projection.cpp:333](../../../desktop/src/space/projection.cpp#L333), never above it. That line is the unmapped-address guard — an address in the gap above `r`, which the binary search still resolves to `r` — and it is part of the lookup, not of the Hilbert tail that starts at `const uint64_t d = ...`. Pasted above it, the atlas silently *places* every unmapped address, and `test_projection.cpp`'s "unmapped address is refused" block would not catch it until Task 10 flips the default eight tasks later.
+
 ```cpp
 // In Projection::project, after the existing region lookup has produced `lo`
-// and `const Region &r` (so the atlas reuses the SAME domain search — there is
-// no second address->region resolution to drift):
+// and `const Region &r` AND after that lookup's `addr - r.base >= r.len`
+// refusal (so the atlas reuses the SAME domain search and the SAME rejection —
+// there is no second address->region resolution to drift):
 if (layout == Layout::Atlas && lo - 1 < rects.size()) {
     const AtlasRect &rect = rects[lo - 1];
     const uint64_t cells =
@@ -1604,7 +1607,9 @@ Expected: PASS, with `test_scene_fbo` reporting exactly what it reported before.
 
 - [ ] **Step 3: Factor the object closure in `mk/desktop.mk`**
 
-The link rule at [mk/desktop.mk:1800-1821](../../../mk/desktop.mk#L1800) lists twenty-odd objects. Lift them into a variable so 7b's binary cannot drift from it:
+The link rule at [mk/desktop.mk:1800-1821](../../../mk/desktop.mk#L1800) lists twenty-odd objects. Lift them into a variable so 7b's binary cannot drift from it — **plus one object that list does not currently carry.**
+
+**`sp/opcode_terrain.o` must be ADDED, not merely lifted.** `render_plane_scene` above calls `space::build_opcode_terrain` and `space::opcode_guest_from_arch`, and both are out-of-line in [space/opcode_terrain.cpp](../../../desktop/src/space/opcode_terrain.cpp#L28) — the existing `desktop_test_scene_fbo` rule never links that object because nothing in that file ever called them. Lifting the list verbatim therefore link-errors 7b's binary with two undefined references, and **`test_scene_fbo` will not warn you**: `render_plane_scene` is an inline in a header, so a translation unit that never calls it emits nothing and Step 2 still passes green. The failure would surface only at 7b Step 6, after the three fixtures had been generated and committed. Its build rule already exists ([mk/desktop.mk:1577](../../../mk/desktop.mk#L1577)); only the link line is missing it.
 
 ```make
 # The object closure a GL test links. Factored (3D-axis-budget T7a) so the FBO
@@ -1612,6 +1617,7 @@ The link rule at [mk/desktop.mk:1800-1821](../../../mk/desktop.mk#L1800) lists t
 DESKTOP_GL_TEST_OBJS := \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     ...the rest of the existing list, verbatim, minus the test's own .o... \
+    $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(DESKTOP_TEST_DOC)
 
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
@@ -1932,7 +1938,7 @@ The three byte arrays must differ in the quantity the gate reads, which is **dom
 Keep each small enough to hold the test under a second. Three constraints the emitter imposes, all of which fail loudly rather than silently:
 
 - **The bytes must run to a `ret` under Unicorn**, because `record_scene_abs` drives the same emulator L0 producer the other scene goldens use; a routine that faults produces `emulator producer failed for <out>` and a non-zero exit, not a truncated file.
-- **The window is bounded** — the emitter refuses with `scene %s exceeds the %d-byte window` past `REC_WINDOW`.
+- **The window is 64 bytes.** `REC_WINDOW` is `64` ([asmtrace_record.c:72](../../../tools/asmtrace_record.c#L72)) and the emitter refuses with `scene %s exceeds the %d-byte window` past it. That is the binding constraint on all three arrays and it is tight — the whole routine, loop and `ret` included, must fit in 64 bytes, which is roughly a dozen instructions. Size for it before writing the bytes rather than trimming afterwards; `SCENE_HOT_LOOP` next door is the worked example of how much fits.
 - **`motif-simd` needs real packed XMM instructions**, not merely SIMD-looking ones, since `OpClass` is decided by the recorded mnemonic. Verify the classification landed rather than assuming it: after regenerating, `grep -o '"[a-z]*"' tests/golden-asmtrace/motif-simd.asmtrace | sort -u | head` should show the packed mnemonics you wrote. If all three scenes classify the same way, the gate in Step 6 will fail and it will be *this* that is wrong, not the encoding.
 
 Then:
@@ -2606,6 +2612,13 @@ Task 2 settled the two structural questions — `order` keeps its meaning and it
 
 - [test_converge.cpp:51-52](../../../desktop/test/test_converge.cpp#L51) argues *"len is a power of four → a 1:1 domain, so distinct addresses land in distinct cells"*. The atlas does not guarantee this (see the contract table). Rewrite the setup against the contract — `project`/`unproject` region-level round trip — not against the mapping.
 
+**Three blocks of `test_projection.cpp` will look like they should break here, and do not — verified, so do not "fix" them.** Task 2 pinned the byte-exact 10 000-address loop to Hilbert; its three neighbours keep running on `main()`'s `p`, which this step turns into an atlas: the boundary-byte round trip (`:132`), the 10 000-pair locality check (`:145`), and the whole-plane sweep at `:198` whose comment reads *"the Hilbert map is a bijection over [0, n*n)"*. All three survive, for stated reasons rather than by luck of the run:
+
+- the boundary and sweep blocks need `bytes_per_cell == 1`, and this fixture's plane (262 144 cells) exceeds its domain (229 376 bytes), so every region's rect holds at least a cell per byte — `accepted == total` still counts exactly the domain's bytes, because a rect's rounding tail refuses exactly as a Hilbert padding cell does;
+- the locality block needs 1-byte neighbours to stay 4-adjacent, which is precisely what the serpentine buys — consecutive ordinals are adjacent within a row *and* across the row break (Task 2 Step 1 pins that directly).
+
+The `:198` comment is now false as written and the grep below catches it: it is triage class (a), a comment to update, not a behavioural dependency.
+
 Run: `grep -rn "power of four\|power-of-four\|4\^\|1:1 domain\|hilbert\|Hilbert" desktop/test/ desktop/src/`
 
 Triage each hit into one of: (a) a comment needing an update, (b) a test whose *setup* relies on the mapping — rewrite it against the contract, or (c) a genuine behavioural dependency, which is a design finding and must be reported, not patched over. **These are not golden churn.** A failure here is a real bug.
@@ -2755,6 +2768,17 @@ Four smaller corrections in the seventh pass:
 | Task 4's file reference `camera.h:99-107` is `eye()`/`view()`; `reset()` is `:81` and `top_down()` is `:84-88`. And `frame(u, v, radius)` at `:75` already owns both of `fit()`'s clamps plus the non-reorienting rule the task depends on | References corrected; `fit()` now routes through `frame()` instead of re-deriving the clamps |
 | Task 3 called the `test_focus.cpp` sweep "a small loop change", but `:130` is `const space::Projection proj` — it cannot be flipped in place. `test_stepplace.cpp` also has no `<cmath>` for the `std::fabs` the new block uses | Both stated, with the two-copy sweep written out |
 | Task 1 committed after running only its own binary, yet it changes `traj_scale_` — a rendered-frame input — for exactly the recordings this plan exists to fix | A full-suite step added before the commit, with the "ordinary case is bit-identical, so churn means the defect became visible" reasoning |
+
+**Ninth pass — checking the LINK CLOSURE, and re-executing the newest task's fixtures.** Pass 8 added Tasks 8 and 9; nothing had reviewed them, and the pattern every pass has followed is that defects live in whatever the previous pass wrote. Both survived: Task 9's anchors are exact (the preserve-list at [shell.cpp:278-286](../../../desktop/src/ui/shell.cpp#L278) saves precisely cam/hud/primer; `proj` is still in scope at `:1188` immediately before `build_terrain` moves it; `SceneView` reaches `LayoutFingerprint` through `space/terrain.h`; the wiring test matches [test_shell.cpp:1858](../../../desktop/test/test_shell.cpp#L1858) verbatim), and Task 8's numbers were re-derived by running the layout under ASan/UBSan — rects `(0,0)-(16,256)` and `(16,0)-(256,256)`, anchors exactly `(0.031250, 0.500000)` and `(0.531250, 0.500000)`, the saturated plane's largest rect **2 cells** with zero degenerate (so `atlas_labels` really is empty there), and all three `kRefs` anchors decoding home. What this pass found instead was in the *build*, which no previous pass had read.
+
+| Defect | Fix in this revision |
+|---|---|
+| **7a's factored closure would not link 7b.** `DESKTOP_GL_TEST_OBJS` was specified as the existing `desktop_test_scene_fbo` list "verbatim" — but that list has never carried `sp/opcode_terrain.o`, because nothing in `test_scene_fbo.cpp` called into it. `render_plane_scene` does, twice, and both symbols are out-of-line. Worse, **Step 2 could not have caught it**: `render_plane_scene` is an inline in a header, so a TU that never calls it emits no reference and `test_scene_fbo` still links green — the undefined references would appear only at 7b Step 6, after the three fixtures were generated and committed | Step 3 now says the object must be **added, not lifted**, with the inline-emission reason spelled out so nobody "simplifies" it back out |
+| **Task 7b Step 5 never stated the window size.** "The window is bounded" gives an implementer nothing to size three byte arrays against; `REC_WINDOW` is **64** | The number, the refusal message, and the observation that 64 bytes is roughly a dozen instructions — with `SCENE_HOT_LOOP` named as the worked example |
+| **Task 2's `project()` branch had an ambiguous insertion point.** "In front of the existing tail" leaves `if (addr - r.base >= r.len) return false;` on the wrong side of the question. Above it, the atlas places every unmapped address — and the existing "unmapped address is refused" block runs on `main()`'s `p`, so it would go green until Task 10 flipped the default eight tasks later | The branch is now pinned **below** that refusal, with the reason (it is part of the lookup, not of the Hilbert tail) |
+| Task 10's audit named only `test_converge.cpp`, leaving three blocks of `test_projection.cpp` that *look* Hilbert-shaped running on a flipped `p` — including one whose comment says "the Hilbert map is a bijection" | All three verified to survive, each for a stated reason (`bytes_per_cell == 1` on that fixture; the serpentine's cross-row adjacency), and recorded in Step 1 so the implementer does not "fix" a passing test |
+
+One line reference corrected: the byte-exact loop ends at `test_projection.cpp:129`, not `:120` — the `#L110` anchor was right.
 
 **Remaining known risks, not resolvable on paper.**
 
