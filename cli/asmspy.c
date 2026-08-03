@@ -77,6 +77,13 @@ typedef struct {
      * writing, and the events it swallows are COUNTED and the recording marked
      * truncated, because a gap the client asked for is still a gap. */
     pthread_mutex_t *mu;
+    /* 61 T7c: a SESSION-level file sink (--serve --record=<path>), owned by the
+     * serve loop rather than by this rec_t: one writer, opened once, with ONE
+     * header, teed into by every engine the session runs. `file` above cannot
+     * serve this — rec_open writes a header per open, so a per-engine file sink
+     * produces a header per engine, and a stream with two headers is not a
+     * recording (load_recording_file reads line 1). NULL outside serve. */
+    asmtrace_writer_t *shared;
     volatile int paused;
     unsigned long long paused_dropped;
 } rec_t;
@@ -165,9 +172,13 @@ static void rec_emit(rec_t *r, const char *kind, const char *body) {
         r->paused_dropped++;
         r->file.truncated = 1;
         r->out.truncated = 1;
+        if (r->shared)
+            r->shared->truncated = 1;
     } else {
         if (r->have_file)
             asmtrace_emit(&r->file, kind, body);
+        if (r->shared)
+            asmtrace_emit(r->shared, kind, body);
         if (r->have_out) {
             asmtrace_emit(&r->out, kind, body);
             /* a live stream must be readable as it is produced */
@@ -221,6 +232,10 @@ static void rec_close(rec_t *r, unsigned long long lost, int throttled,
         asmtrace_close(&r->file, lost, throttled, &skip);
     if (r->have_out)
         asmtrace_close(&r->out, lost, throttled, &skip);
+    /* 61 T7c: r->shared is deliberately NOT closed here. It belongs to the
+     * serve loop, which closes it once at quit — closing it per engine would
+     * write an `end` footer per engine and claim the recording ended each
+     * time, which is the same defect as a header per engine. */
     r->have_file = r->have_out = 0;
 }
 
@@ -3276,6 +3291,10 @@ typedef struct {
                          * tracer tail on a self-end, so serve_stop must not
                          * emit a second one (reset per session start)      */
     FILE *out;          /* the client's event stream                    */
+    /* 61 T7c: the SESSION recording (--serve --record=<f>), or NULL. One
+     * writer for however many engines this session runs, so a capture that
+     * changes engine is still ONE loadable file. Owned by serve_loop. */
+    asmtrace_writer_t *sess_file;
     pthread_mutex_t mu; /* serialises lifecycle lines against events    */
     rec_t rec;
     asmspy_symtab_t syms;
@@ -4278,6 +4297,9 @@ static void *serve_tracer(void *arg) {
      * slice [header .. end] out of the stream and hold a valid recording. */
     pthread_mutex_lock(&s->mu);
     rec_open(&s->rec, NULL, s->out, backend, exact, trust, s->p.pid);
+    /* 61 T7c: tee this engine into the SESSION recording, if one is open. NULL
+     * when --record was not given, which rec_emit treats as "no shared sink". */
+    s->rec.shared = s->sess_file;
     fflush(s->out);
     pthread_mutex_unlock(&s->mu);
     s->rec.mu = &s->mu;
@@ -4963,13 +4985,32 @@ static int serve_resolve_region(serve_params_t *p, const char **why) {
 
 /* ---- the command loop ---------------------------------------------- */
 
-static int serve_loop(FILE *in, FILE *out) {
+static int serve_loop(FILE *in, FILE *out, const char *record) {
     serve_session_t s;
     char line[8192];
     sigset_t block;
+    asmtrace_writer_t sess_file;
+    int have_sess = 0;
 
     memset(&s, 0, sizeof s);
     s.out = out;
+    /* 61 T7c: the session recording — ONE writer, ONE header, for however many
+     * engines this session runs. `pid` is 0 here because a session may outlive
+     * any one target (and a `launch` has no pid until its tracer thread forks
+     * it); the per-engine `session` events on the client stream name the pid,
+     * and the header's pid field is not what a reader uses to attribute an
+     * event. */
+    if (record) {
+        asmtrace_prov_t prov = {"ptrace-serve", 1, "exact", 0, NULL, 0};
+        if (asmtrace_open(&sess_file, record, 0) != 0) {
+            fprintf(stderr, "--record: cannot write %s: %s\n", record,
+                    strerror(errno));
+            return 1;
+        }
+        asmtrace_header(&sess_file, "asmspy", &prov, 0, NULL);
+        have_sess = 1;
+        s.sess_file = &sess_file;
+    }
     pthread_mutex_init(&s.mu, NULL);
     atomic_init(&s.running, 0);
     atomic_init(&s.stop, 0);
@@ -5156,6 +5197,10 @@ static int serve_loop(FILE *in, FILE *out) {
      * the property that makes this a tracer and not a debugger. */
     serve_stop(&s, atomic_load(&s.running) ? "quit" : "max");
     pthread_mutex_destroy(&s.mu);
+    /* Closed ONCE, here, for the whole session — never per engine (rec_close
+     * says why). */
+    if (have_sess)
+        asmtrace_close(&sess_file, 0, 0, NULL);
     return 0;
 }
 
@@ -5163,7 +5208,7 @@ static int serve_loop(FILE *in, FILE *out) {
  * SOCK_STREAM listener taking ONE client at a time. No TLS and no auth by
  * design: the socket is filesystem-permissioned, and ssh is the remote
  * transport (the desktop spawns `ssh <host> asmspy --serve`). */
-static int cmd_serve(const char *sockpath) {
+static int cmd_serve(const char *sockpath, const char *record) {
     struct sockaddr_un sa;
     int lfd, cfd;
     FILE *in, *out;
@@ -5176,7 +5221,7 @@ static int cmd_serve(const char *sockpath) {
 
     if (!sockpath) {
         setvbuf(stdout, NULL, _IOLBF, 0);
-        return serve_loop(stdin, stdout);
+        return serve_loop(stdin, stdout, record);
     }
 
     if (strlen(sockpath) >= sizeof sa.sun_path) {
@@ -5218,7 +5263,7 @@ static int cmd_serve(const char *sockpath) {
         return 1;
     }
     setvbuf(out, NULL, _IOLBF, 0);
-    serve_loop(in, out);
+    serve_loop(in, out, record);
     fclose(in);
     fclose(out);
     return 0;
@@ -8200,7 +8245,10 @@ static int usage(const char *argv0) {
         "--serve\n"
         "\n"
         "--record=<f> writes a .asmtrace NDJSON recording of the run (every\n"
-        "headless mode); --json streams that SAME format to stdout instead of\n"
+        "headless mode), and after --serve records the WHOLE session -- every\n"
+        "engine it runs -- as ONE recording, so a capture that changes engine\n"
+        "is still a single loadable file; --json streams that SAME format to\n"
+        "stdout instead of\n"
         "the human text, so `--log <pid> --json > x.asmtrace` IS a recording.\n"
         "A run that SKIPS still records: the file closes with the measured\n"
         "reason. Syscall recordings split the payload out of the line, so a\n"
@@ -8289,12 +8337,25 @@ int main(int argc, char **argv) {
     /* --serve[=<path>]: the live-session control loop. Placed FIRST because it
      * is the only mode that takes no pid on the command line — the client sends
      * one per session (docs/internal/gui/asmtrace-schema.md, Serve protocol). */
-    if (strcmp(argv[1], "--serve") == 0)
-        return cmd_serve(NULL);
-    if (strncmp(argv[1], "--serve=", 8) == 0) {
-        if (!argv[1][8])
-            return bad_arg("socket path", argv[1]);
-        return cmd_serve(argv[1] + 8);
+    if (strcmp(argv[1], "--serve") == 0 ||
+        strncmp(argv[1], "--serve=", 8) == 0) {
+        const char *sock = NULL, *record = NULL;
+        int si;
+        if (argv[1][7] == '=') {
+            if (!argv[1][8])
+                return bad_arg("socket path", argv[1]);
+            sock = argv[1] + 8;
+        }
+        /* 61 T7c: --record=<f> after --serve records the WHOLE session to one
+         * file. Previously accepted and silently ignored — worse than a
+         * refusal, since usage() documents --record for every headless mode. */
+        for (si = 2; si < argc; si++) {
+            if (strncmp(argv[si], "--record=", 9) == 0 && argv[si][9])
+                record = argv[si] + 9;
+            else
+                return bad_arg("serve option", argv[si]);
+        }
+        return cmd_serve(sock, record);
     }
     /* --launch <mode> -- <cmd> [args...]: doc 45 T1/T2, another mode that
      * takes no pid on the command line — grouped with --serve for the same
