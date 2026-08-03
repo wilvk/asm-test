@@ -65,6 +65,20 @@
 #include "asmspy.h"
 #include "asmspy_tidsort.h"
 
+/* Test-only hooks into cli/asmspy_proc.c's pi_over_budget / (its extended
+ * comment there explains why there are two, not one) — NOT declared in
+ * libasmspy.h, reachable only because this file links asmspy_proc.o
+ * directly, like test_symtab.c. -1 (both hooks' default, restored after
+ * every use below) leaves pi_over_budget's real, elapsed-time behavior
+ * untouched. A test sets ONLY asmspy_test_rearm_budget_on_pi_rcm_entry —
+ * never asmspy_test_budget_trip_after directly, since calls made before
+ * pi_read_code_and_modules is even entered (a /proc-wide children scan,
+ * pi_read_threads) would otherwise consume it first, and how many such
+ * calls happen depends on how many processes/threads exist on the host
+ * RIGHT NOW — not something a test can pin down or portably control. */
+extern long asmspy_test_budget_trip_after;
+extern long asmspy_test_rearm_budget_on_pi_rcm_entry;
+
 static int failures;
 
 static void check(const char *what, int cond, const char *why) {
@@ -567,6 +581,12 @@ int main(void) {
           pi->n_modules < 2 || pi->modules[0].syms >= pi->modules[1].syms,
           "modules are not symbol-count-descending");
     check("no JIT here", pi->jit_methods == 0, "a static C test has no JIT");
+    /* This is the "no false positive" HALF of the budget-flag pair only —
+     * it does not, and cannot by itself, prove a genuine overrun gets
+     * flagged (a `pi_over_budget` hardcoded to `return 0` passes this one
+     * unconditionally). The "positive: a real overrun DOES get flagged"
+     * half lives in the "forced budget overrun" block further down, using
+     * the test-only `asmspy_test_budget_trip_after` hook. */
     check("no false budget-exceeded on a fast self-gather",
           pi->budget_exceeded == 0,
           "budget_exceeded should be false after an ordinary, fast "
@@ -576,6 +596,65 @@ int main(void) {
           "a static C test with no JIT should show zero anon-exec bytes — "
           "[vdso]/[vsyscall] are KNOWN, NAMED kernel regions, not the "
           "unnamed JIT surface this field exists to measure");
+
+    /* --- a positive assertion that a genuine overrun DOES get flagged ----
+     * The negative check above (no false positive on a fast run) cannot by
+     * itself catch `pi_over_budget` hardcoded to `return 0` — the exact
+     * escape the round-2 review found ("neutering pi_over_budget... passes
+     * test_procinfo with zero failures"). Force a real one via the
+     * test-only rearm-on-entry hook, CALIBRATED BY DIRECT MEASUREMENT
+     * against this binary's own n_modules/syms_total (not guessed — see
+     * the task-3 report) to land specifically INSIDE the symbol-
+     * attribution loop, decoupled from the /proc-children-scan and
+     * pi_read_threads calls that happen before pi_read_code_and_modules is
+     * even entered (see the hook's own comment in asmspy_proc.c for why
+     * those can't be counted on):
+     *
+     *   Rearmed to 13 the moment pi_read_code_and_modules starts. The
+     *   module-merge loop (this binary measures n_modules==6, no
+     *   truncation) consumes 6 of those as "not yet", leaving 7. The
+     *   sampled check inside the symbol loop (every 1024th symbol,
+     *   syms_total==15301, 15 samples total: k=0,1024,...,14336) then
+     *   consumes the remaining 7 as "not yet" too, and its 8th sample
+     *   (k~=7168 of 15301) is where the countdown reaches zero — squarely
+     *   inside the loop, not at either edge.
+     *
+     *   Under the UN-fixed shape (checked after the memo's `continue`),
+     *   the symbol loop calls pi_over_budget only on module-TRANSITION
+     *   iterations — about `n_modules` (6) times for a stream that
+     *   clusters by module — so its running total (6 merge-loop + 6
+     *   symbol-loop-transitions = 12) never reaches 13 before the loop
+     *   completes naturally, and the loop runs to completion instead of
+     *   stopping early. That difference is exactly what the two checks
+     *   below detect. */
+    {
+        asmspy_test_rearm_budget_on_pi_rcm_entry = 13;
+        check("self reread (forced budget overrun)",
+              asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+        asmspy_test_rearm_budget_on_pi_rcm_entry = -1;
+        asmspy_test_budget_trip_after = -1; /* restore real elapsed-time use */
+
+        check("a forced overrun is flagged (budget_exceeded)",
+              pi->budget_exceeded != 0,
+              "a genuine overrun must set budget_exceeded — the positive "
+              "half the negative-only check above cannot cover");
+
+        unsigned long long sum_syms = 0;
+        for (int i = 0; i < pi->n_modules; i++)
+            sum_syms += pi->modules[i].syms;
+        check("the module LIST still completed (not truncated)",
+              pi->modules_truncated == 0,
+              "this scenario is calibrated to trip DURING symbol "
+              "attribution, after the small, fast module-merge loop had "
+              "already finished — modules_truncated should read false");
+        check("symbol attribution stopped early (silently partial)",
+              sum_syms < pi->syms_total,
+              "expected sum(modules[].syms) < syms_total: the forced "
+              "overrun should interrupt the symbol-attribution loop "
+              "partway through — only observable if the budget check is "
+              "reachable from the memo's fast path, not just the rare "
+              "module-transition slow path");
+    }
 
     /* Captured now, before any forced-truncation trickery below, for the
      * module-cap block's "rank happens before cap" check (further down):

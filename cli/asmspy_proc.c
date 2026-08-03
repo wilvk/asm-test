@@ -1369,9 +1369,44 @@ static unsigned long long pi_now_ns(void) {
            (unsigned long long)ts.tv_nsec;
 }
 
+/* Test-only hooks — referenced ONLY from cli/test_procinfo.c (which links
+ * this translation unit directly, like test_symtab.c), never declared in
+ * libasmspy.h, and never touched by production code. Both -1 (their value
+ * in every non-test binary) mean "inactive, use the real elapsed time" —
+ * pi_over_budget's normal-path behavior is untouched unless a test sets
+ * one of these.
+ *
+ * asmspy_test_budget_trip_after: when >= 0, pi_over_budget() reports "not
+ * yet" for exactly this many more calls, then "yes" — permanently, from
+ * then on. A test does NOT set this one directly (see the next one).
+ *
+ * asmspy_test_rearm_budget_on_pi_rcm_entry: when >= 0,
+ * pi_read_code_and_modules — right after its OWN upfront budget check
+ * (which still sees the real elapsed time, unaffected) — copies this
+ * value into asmspy_test_budget_trip_after, ARMING the countdown from
+ * that exact point on. A test sets ONLY this one. Why the indirection: a
+ * full asmspy_procinfo gather calls pi_over_budget from several EARLIER,
+ * unrelated sections first — a /proc children scan that calls it once per
+ * ENTRY IN /proc (system-wide, not just our own children), and
+ * pi_read_threads once per thread — whose call counts depend on live
+ * system/process state a test cannot pin down or portably control
+ * (measured: on this dev host, with ~600+ other live processes, the
+ * children scan alone consumes a same-order-of-magnitude countdown before
+ * pi_read_code_and_modules is ever entered). Arming HERE, at this
+ * function's own entry, decouples the two — a test only has to reason
+ * about calls THIS function makes. */
+long asmspy_test_budget_trip_after = -1;
+long asmspy_test_rearm_budget_on_pi_rcm_entry = -1;
+
 /* The 250 ms budget. Sections check it and stop filling rather than run
  * long on a pathological target; the flag is sticky and always reported. */
 static int pi_over_budget(const asmspy_procinfo_t *pi) {
+    if (asmspy_test_budget_trip_after >= 0) {
+        if (asmspy_test_budget_trip_after == 0)
+            return 1; /* tripped — stays tripped, never re-armed itself */
+        asmspy_test_budget_trip_after--;
+        return 0;
+    }
     return (pi_now_ns() - pi->ts_ns) > 250000000ull;
 }
 
@@ -1577,6 +1612,10 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
         out->modules_truncated = 1; /* the list below never even started */
         return;
     }
+    if (asmspy_test_rearm_budget_on_pi_rcm_entry >=
+        0) /* test-only, see above */
+        asmspy_test_budget_trip_after =
+            asmspy_test_rearm_budget_on_pi_rcm_entry;
 
     asmspy_symtab_t syms;
     int have_syms = (asmspy_symtab_load(pid, &syms) == 0);
@@ -1646,6 +1685,23 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
          * symbol count. */
         int last = -1;
         for (size_t k = 0; k < syms.n; k++) {
+            /* Sampled, and at the TOP of the loop body — not after either
+             * `continue` below. The memo fast path (`tmp[last].syms++;
+             * continue;`) hits on nearly every iteration by design (that is
+             * the whole point of the memo), so a check placed after it —
+             * even the `!mn` skip just below — only ever runs on the rare
+             * module-transition iterations: its granularity was "once per
+             * DISTINCT module encountered", not "once per symbol". A target
+             * dominated by one or a few huge modules (a static Go/Rust
+             * binary, a debug build of a large C++ monolith) would then run
+             * this whole pass as one unpreemptible unit. Sampled (not every
+             * k) because `pi_over_budget` is cheap but not free, and this
+             * loop runs tens to hundreds of thousands of times on a real
+             * target — checking every single iteration is its own cost. */
+            if ((k & 0x3FF) == 0 && pi_over_budget(out)) {
+                out->budget_exceeded = 1;
+                break;
+            }
             const char *mn = syms.v[k].module;
             if (!mn)
                 continue;
@@ -1659,10 +1715,6 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
                     last = i;
                     break;
                 }
-            if (pi_over_budget(out)) {
-                out->budget_exceeded = 1;
-                break;
-            }
         }
 
         for (int i = 0; i < out->n_threads_v; i++) {
@@ -1719,6 +1771,15 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
         FILE *f = fopen(p, "r");
         if (f) {
             while (fgets(line, sizeof line, f)) {
+                /* At the TOP, before the sscanf-failure `continue` below can
+                 * skip it — same reasoning as the symbol loop above. Maps
+                 * lines number in the thousands even on a heavy target (not
+                 * the hundreds of thousands a symbol table can reach), so
+                 * this one is cheap to check unsampled, every line. */
+                if (pi_over_budget(out)) {
+                    out->budget_exceeded = 1;
+                    break;
+                }
                 unsigned long long a = 0, b = 0;
                 char perms[8] = "", rest[256] = "";
                 if (sscanf(line, "%llx-%llx %7s %*s %*s %*s %255[^\n]", &a, &b,
@@ -1741,10 +1802,6 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
                                 tmp[i].exec = 1;
                             break;
                         }
-                }
-                if (pi_over_budget(out)) {
-                    out->budget_exceeded = 1;
-                    break;
                 }
             }
             fclose(f);
