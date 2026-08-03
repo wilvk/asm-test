@@ -116,6 +116,7 @@ guides/runner
 guides/benchmarks
 guides/cross-system-benchmarking
 guides/emulator
+guides/desktop-gui-scenes
 guides/fuzzing-shim
 guides/tracing/index
 guides/disassembly
