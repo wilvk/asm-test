@@ -295,8 +295,14 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
 }
 
 const char *vertical_axes_note() {
-    return "two vertical meanings share this screen axis: terrain height = "
-           "access density (log), path height = trace time (steps)";
+    // 61 T5: the path no longer carries trace time — it lies flat and is read
+    // through the playhead, which is what returns this axis to access density.
+    // The three OPT-IN layers still put trace time here, so the axis can still
+    // carry two meanings; it just does not do so in the default scene, and the
+    // note says which case the reader is in rather than claiming both always.
+    return "vertical = access density (log). trace time is the PLAYHEAD, not "
+           "an axis: the path lies flat. the opt-in lifetime / ribbon / "
+           "sediment layers do stand trace time on this axis (steps)";
 }
 
 std::string camera_here_text(const space::Projection &proj, float u, float v) {

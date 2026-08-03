@@ -7,7 +7,9 @@
 
 #include "scene3d/trajscale.h"
 
+using asmdesk::scene3d::comet_window;
 using asmdesk::scene3d::scene_traj_scale;
+using asmdesk::scene3d::traj_vertex_y;
 
 static int failures;
 static void fail(const std::string &what, const std::string &why) {
@@ -52,6 +54,49 @@ int main() {
     // are stating a scale, not asking for one.
     check("an explicit time_scale is passed through",
           scene_traj_scale(1000, 999, 0.25f) == 0.25f, "explicit scale ignored");
+
+    // --- 61 T5: flat time ---------------------------------------------------
+    // Trace time is no longer a spatial axis, so every worldline vertex sits on
+    // the floor and the path is read through the playhead instead.
+    {
+        const float scale = scene_traj_scale(1000, 999, 0.0f);
+        for (uint64_t t : {uint64_t(0), uint64_t(1), uint64_t(500),
+                           uint64_t(999)}) {
+            const float y = traj_vertex_y(t, scale, /*flat=*/true);
+            check("flat time flattens the worldline", y == 0.0f,
+                  "step " + std::to_string(t) + " sat at y=" +
+                      std::to_string(y));
+        }
+        // With flat time OFF the pre-flattening behaviour is bit-identical. NOT
+        // because "the other scenes still spatialise time" — they never call
+        // this at all (gl_scene_host.cpp routes them to standalone_) — but
+        // because the same scale still places the lifetime pillars, sediment
+        // strata, access arcs and spur feet, and this is the arithmetic they
+        // share.
+        check("spatial time still lifts by trace step",
+              traj_vertex_y(999, scale, false) == 999.0f * scale,
+              "the spatial-time path lost its height");
+    }
+    // The trail is a window ENDING at the followed step. Nothing outside it is
+    // discarded — the path is real, just not recent — so this selects emphasis,
+    // not existence. Note it is keyed on follow_step (the vehicle's clock), NOT
+    // slice_step (the terrain's): the spec forbids fusing the two.
+    {
+        const auto w = comet_window(/*follow_step=*/500, /*tail=*/100);
+        check("the comet trail ends at the followed step", w.second == 500u,
+              "window ended at " + std::to_string(w.second));
+        check("the comet trail starts one tail behind it", w.first == 400u,
+              "window started at " + std::to_string(w.first));
+    }
+    {
+        // Saturating at zero: near the start of a recording the trail is short,
+        // never negative and never wrapped.
+        const auto w = comet_window(/*follow_step=*/10, /*tail=*/100);
+        check("the comet trail saturates at the start of the recording",
+              w.first == 0u && w.second == 10u,
+              "window was [" + std::to_string(w.first) + "," +
+                  std::to_string(w.second) + "]");
+    }
 
     if (failures) {
         std::fprintf(stderr, "%d scene_traj check(s) failed\n", failures);

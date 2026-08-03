@@ -1825,7 +1825,21 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // drawing a trajectory-time ruler over one would be the fabricated
     // correspondence this whole family avoids. The HUD's axis block names the
     // real axis on every kind.
-    if (sv.kind == scene3d::SceneKind::Plane)
+    // 61 T5: the trajectory has LEFT the trace-time axis, but the axis itself
+    // is still ridden by the three opt-in layers (lifetime pillars, sediment
+    // strata, access arcs) — so the ruler is gated on one of them being drawn
+    // rather than deleted or left unconditional. Unconditional would label an
+    // axis the default scene no longer uses, which is worse than no ruler and
+    // exactly the fabricated correspondence the SceneKind gate beside it
+    // already guards against; deleting it would strand those three layers on
+    // an unlabelled axis the moment a reader switches one on.
+    //
+    // `f.layers` and NOT `sv.hud.layers`: f.layers is the set AFTER lod_apply,
+    // which can clear a layer the reader asked for at distance. Gating on the
+    // requested set would leave a ruler labelling an axis the entity budget had
+    // already dropped the geometry for.
+    if (sv.kind == scene3d::SceneKind::Plane &&
+        (f.layers.lifetime || f.layers.data_ribbon || f.layers.sediment))
         scene3d::draw_trajectory_ruler(
             ImGui::GetWindowDrawList(), sv.cam, vp_origin,
             ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),

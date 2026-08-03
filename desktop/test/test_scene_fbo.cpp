@@ -1156,11 +1156,22 @@ int main() {
 
         const uint64_t kFollow = 2; // t=2: a placed, exact PC vertex
         uint32_t vid = pick_id_vertex(n, kFollow);
+        // 61 T5: follow_step is set BEFORE the pick render, and the order is
+        // now load-bearing rather than incidental. This fixture visits address
+        // 4194304 five times (t=0..4); with trace time off the Y axis those
+        // five visits are ONE POINT IN SPACE, so exactly one of their ids can
+        // own that pixel. Which one is not arbitrary — the scene re-draws the
+        // FOLLOWED vertex so it wins, because doc 44's rule is that the
+        // followed citizen reuses its underlying PC vertex's pick id and the
+        // head glyph sits on exactly this point. Asking for t=2's id while
+        // following t=0 would be asking to distinguish two visits that are no
+        // longer distinguishable in space; the playhead is what selects among
+        // them now. That is the axis budget being spent, not a pick defect.
+        scene.follow_step = kFollow;
         int vpx = pixel_of_id(scene, cam, W, H, vid);
         check("T6 GL: the followed vertex is on screen", vpx >= 0,
               "vertex not rendered");
         if (vpx >= 0) {
-            scene.follow_step = kFollow;
             SceneLayers with_vehicle;              // vehicle = true by default
             capture(scene, cam, cf, with_vehicle); // draws the head glyph
             int px_x = vpx % W, py = vpx / W;      // bottom-left origin
@@ -1170,6 +1181,19 @@ int main() {
                   "vertex's pick id",
                   got == vid,
                   "the head glyph changed the pick id underneath it");
+            // 61 T5: and the follow is what CHOOSES among coincident visits.
+            // Move the playhead to another visit of the SAME address and the
+            // same pixel must now answer with THAT visit — otherwise the
+            // earliest visit would own the point forever and following the
+            // path would stop changing what a click means.
+            scene.follow_step = 4; // another visit to 4194304
+            const uint32_t got4 = scene.pick(cam, W, H, px_x, y_top);
+            check("T6 GL: the followed visit owns the shared pixel",
+                  got4 == pick_id_vertex(n, 4),
+                  "with time off the Y axis several visits to one address "
+                  "share a pixel, so the FOLLOWED one must win it; this pixel "
+                  "still answered with a visit the reader is not on");
+            scene.follow_step = kFollow; // leave the block as it found it
         }
 
         // An absent/unplaced follow_step draws NOTHING — never a mis-snapped

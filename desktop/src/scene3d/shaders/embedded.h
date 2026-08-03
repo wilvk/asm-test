@@ -250,17 +250,20 @@ void main(){
 
 // --- trajectory: a line strip / points at world (u, t*scale, v). Exact fidelity
 //     is opaque; statistical is stippled + translucent (uStipple + uColor.a).
-// T6 (44-faithful-city-phase-a): vY carries pos.y through unchanged — since
-// EVERY vertex in one upload shares the SAME world-Y-per-step scale
-// (scene.cpp's `scale`, Scene::traj_scale_), pos.y already IS t*scale, so the
-// comet tail needs no new per-vertex attribute: the frag shader compares vY
-// against uHeadY (= followed_t * traj_scale_, computed on the CPU once per
-// frame) directly.
+// T6 (44-faithful-city-phase-a): vY carries pos.y through unchanged. It USED
+// to be the comet tail's clock too — every vertex of one upload shares the
+// same world-Y-per-step scale, so pos.y was t*scale and no per-vertex
+// attribute was needed. 61 T5 took trace time off the spatial axis, which
+// makes pos.y a constant lift and that inference false, so the step now
+// travels with the vertex as `step`/`vStep`. vY stays because the geometry is
+// still the geometry; nothing reads it as a clock any more.
 inline const char *kTrajVert = R"GLSL(#version 130
 in vec3 pos;
+in float step; // 61 T5: the vertex's trace step (0 where not supplied)
 uniform mat4 uMVP;
 uniform float uPointSize;
 out float vY;
+out float vStep;
 // T2 (55): kTrajFrag is linked against BOTH this shader and kLineVert, and a
 // fragment input with no matching vertex output will not link -- so the two
 // halo varyings are declared here too, at values that put every fragment of a
@@ -269,6 +272,7 @@ noperspective out float vEdgePx;
 noperspective out float vCoreHalfPx;
 void main(){
   vY = pos.y;
+  vStep = step;
   vEdgePx = 0.0;
   vCoreHalfPx = 1.0;
   gl_Position = uMVP * vec4(pos, 1.0);
@@ -301,6 +305,7 @@ inline const char *kLineVert = R"GLSL(#version 130
 in vec3 pos;    // this vertex's own endpoint
 in vec3 other;  // the segment's OTHER endpoint
 in float side;  // -1 / +1: which side of the centreline this corner sits on
+in float step;  // 61 T5: this endpoint's trace step (0 where not supplied)
 in uint vid;    // pick id (id pass only; the colour VAO leaves it disabled)
 uniform mat4 uMVP;
 uniform vec2 uViewportPx;   // (width, height) in pixels
@@ -310,6 +315,7 @@ uniform int uDepthCue;      // T2 (55): 1 = attenuate width with eye distance
 uniform float uDepthCueRef; // the eye distance at which the width is nominal
 uniform float uHaloPadPx;   // T2 (55): halo ring per side, 0 = no halo at all
 out float vY;
+out float vStep;
 // noperspective, and it is load-bearing: both carry SCREEN-SPACE PIXEL
 // distances, and the default (perspective-correct) interpolation reports the
 // value that is linear in EYE space instead. The perpendicular offset below is
@@ -324,6 +330,7 @@ noperspective out float vCoreHalfPx; // half the CORE width here, px
 flat out uint fId;
 void main(){
   vY = pos.y;
+  vStep = step;
   fId = vid;
   vec4 cp = uMVP * vec4(pos, 1.0);
   vec4 co = uMVP * vec4(other, 1.0);
@@ -377,7 +384,8 @@ void main(){
 }
 )GLSL";
 
-// T1 (49-one-time-truth): uTimeCutY/uHasTimeCut clip the path to the terrain
+// T1 (49-one-time-truth), respelled in steps by 61 T5:
+// uTimeCutStep/uHasTimeCut clip the path to the terrain
 // playhead — DIM past the cut, never discard (the vertices beyond it are real
 // recorded data; hiding them would claim the recording ends there). Applied
 // FIRST, before the existing stipple/comet branches, so a statistical path
@@ -385,6 +393,14 @@ void main(){
 // the (possibly dimmed) base colour unchanged.
 inline const char *kTrajFrag = R"GLSL(#version 130
 in float vY;
+// 61 T5: the vertex's TRACE STEP. Both readings below used to come off vY,
+// which worked only because pos.y WAS t*scale. With trace time off the spatial
+// axis pos.y is a constant lift, so `vY > uTimeCutY` and `abs(vY - uHeadY)`
+// would be true (or false) for the whole path at once -- the playhead cut
+// would stop cutting and the comet would light every vertex. Both are step
+// comparisons by nature, so the step travels with the vertex and they are
+// spelled in steps here.
+in float vStep;
 // T2 (55): both SCREEN-space pixel distances -- see kLineVert for why the
 // noperspective qualifier here is load-bearing rather than a micro-optimisation
 // (it must match the vertex shader's declaration, or the program will not link).
@@ -400,9 +416,13 @@ uniform vec4 uHaloColor;
 uniform vec4 uColor;
 uniform int uStipple;         // 1 = statistical: never a solid exact tube
 uniform int uHasHead;         // T6: 1 on the followed trajectory's draw call
-uniform float uHeadY;         // T6: the head's world Y (followed_t * scale)
-uniform float uTailHalf;      // T6: half-width of the brightened tail band
-uniform float uTimeCutY;      // T1 (49): the terrain playhead's world Y
+// 61 T5: the comet trail, as a STEP window ending at the followed step
+// (scene3d/trajscale.h's comet_window). Nothing outside it is discarded -- the
+// path there is real, just not recent -- so this selects emphasis, not
+// existence.
+uniform float uCometLo;       // 61 T5: window start, in trace steps
+uniform float uCometHi;       // 61 T5: window end == the followed step
+uniform float uTimeCutStep;   // T1 (49) / 61 T5: the terrain playhead's STEP
 uniform int uHasTimeCut;      // T1 (49): 0 when the playhead is at the end
 out vec4 frag;
 // T4 (55-scene-render-quality): Interleaved Gradient Noise (Jimenez 2014) --
@@ -414,7 +434,7 @@ float ign(vec2 p) {
 }
 void main(){
   vec4 c = uColor;
-  if (uHasTimeCut == 1 && vY > uTimeCutY) {
+  if (uHasTimeCut == 1 && vStep > uTimeCutStep) {
     c.rgb *= 0.35; // dim, not discard: "recorded, not yet reached in this view"
   }
   // T2 (55): the halo ring. Taken BEFORE the time-cut dim and the comet tail
@@ -443,8 +463,16 @@ void main(){
   // gaps stay gaps and still show what is behind them. An opaque halo would
   // fill them and launder a sampled survey into a solid, exact-looking path.
   if (halo) { frag = uHaloColor; return; }
-  if (uHasHead == 1 && abs(vY - uHeadY) < uTailHalf) {
-    c = vec4(mix(c.rgb, vec3(1.0), 0.6), max(c.a, 0.95)); // comet tail
+  // 61 T5: the comet tail, FADED by recency across the window rather than a
+  // hard band. The head end is brightest; the far end of the trail meets the
+  // path's own colour, so there is no edge to mistake for a boundary in the
+  // data. Outside the window the path keeps its base colour -- it is real,
+  // just not recent.
+  if (uHasHead == 1 && vStep >= uCometLo && vStep <= uCometHi) {
+    float span = uCometHi - uCometLo;
+    float recency = span > 0.0 ? (vStep - uCometLo) / span : 1.0;
+    c = vec4(mix(c.rgb, vec3(1.0), 0.6 * recency),
+             max(c.a, mix(c.a, 0.95, recency)));
   }
   frag = c;
 }

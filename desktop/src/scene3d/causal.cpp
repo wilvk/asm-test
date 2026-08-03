@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "scene3d/scene.h"
+#include "scene3d/trajscale.h" // 61 T5: traj_vertex_y + kFlatPathLift
 
 namespace asmdesk::scene3d {
 
@@ -277,9 +278,25 @@ void Scene::set_crossing_layer(const space::CrossingLayer &layer) {
     std::vector<float> glyphs[kMagBuckets];
 
     for (const space::CrossingSpur &sp : layer.spurs) {
-        const float ay = static_cast<float>(sp.anchor_t) * traj_scale_;
+        // 61 T5: the spur foot goes through the SAME traj_vertex_y call the
+        // worldline vertices do, with the SAME flat_time — scene.h promises a
+        // spur hangs on a worldline vertex, and leaving the foot on
+        // traj_scale_ while the path flattens would BREAK that promise rather
+        // than preserve it. The tent survives flattening because rail_lift is
+        // already a constant that encodes nothing; only the anchor-vs-resume
+        // height difference is lost, an incidental dwell cue this layer
+        // already refuses to claim (rail_span() == 0).
+        // The foot rides the SAME surface the path does — flat_path_y at the
+        // spur's own anchor cell — so a spur still lands ON the worldline it
+        // hangs from rather than under the column the path is draped over.
+        const float lift =
+            flat_time ? flat_path_y(sp.anchor_u, sp.anchor_v) : 0.0f;
+        const float ay =
+            traj_vertex_y(sp.anchor_t, traj_scale_, flat_time) + lift;
         const float ry =
-            sp.has_resume ? static_cast<float>(sp.resume_t) * traj_scale_ : ay;
+            sp.has_resume
+                ? traj_vertex_y(sp.resume_t, traj_scale_, flat_time) + lift
+                : ay;
         const float rail_y = (ay > ry ? ay : ry) + layer.rail_lift;
         const float a[3] = {sp.anchor_u, ay, sp.anchor_v};
         const float rail[3] = {sp.rail_u, rail_y, sp.rail_v};
