@@ -97,6 +97,7 @@ comparison and roadmap.
 :hidden:
 
 getting-started/installation
+getting-started/host-setup
 getting-started/quickstart
 getting-started/writing-tests
 getting-started/examples

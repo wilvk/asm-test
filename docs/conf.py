@@ -45,7 +45,15 @@ language = "en"
 # via GitHub blob URLs (never doc cross-references), so excluding them here is
 # what keeps `-W` (fail_on_warning) green — an included-but-untoctreed file, or
 # a doc-xref into one, would warn.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "internal/**"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "internal/**",
+    # Working design specs, not user-facing pages. Like internal/**, these live
+    # under docs/ for proximity to what they describe but are never published.
+    "superpowers/**",
+]
 
 # -- MyST (Markdown) configuration -------------------------------------------
 

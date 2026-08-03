@@ -184,8 +184,15 @@ Structure:
 
 ### Framing decision for host-specific values
 
-The runbook states the two gates as **measured on a reference host, alongside the
-general rule**, rather than either bare numbers or a vague generality:
+The permission setup itself now lives in its own page,
+`docs/getting-started/host-setup.md` (added 2026-08-03), which carries the
+persistent sysctl drop-in, what each setting unlocks, the security tradeoffs, and
+the narrower per-process alternatives. The scenes guide **links** to it rather
+than repeating it — the settings are not screenshot-specific.
+
+What the scenes guide states in its own runbook is the two gates as **measured on
+a reference host, alongside the general rule**, rather than either bare numbers or
+a vague generality:
 
 - `kernel.yama.ptrace_scope` — 1 here, and the default on Ubuntu. Attach to a
   non-child is denied. This is why `PR_SET_PTRACER_ANY` in the sample app is

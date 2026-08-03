@@ -113,8 +113,13 @@ blocked) is fixed once per host/container by one of these grants:
 | Facility | Grant (pick one) | Notes |
 |---|---|---|
 | Whole-window Intel PT / AMD LBR | `sudo sysctl kernel.perf_event_paranoid=-1`, **or** `setcap cap_perfmon+ep <binary>`, **or** (container) `--cap-add=PERFMON` | Unprivileged PT still arms with a **128 KiB AUX ring** — stated, not failed |
+| AMD IBS survey (`--sample`, `--auto --sampler=ibs`) | same as above — IBS is a PMU facility | Ubuntu's compiled-in `perf_event_paranoid=4` blocks it even though `ibs_op`/`ibs_fetch` are present |
+| asmspy attach to a process you did not launch | `sudo sysctl kernel.yama.ptrace_scope=0`, **or** the target calls `PR_SET_PTRACER`, **or** `CAP_SYS_PTRACE` | Yama `ptrace_scope` is **not namespaced** — a container inherits the host value |
 | ptrace-stealth fallback stepper | Yama `PR_SET_PTRACER`, **or** `CAP_SYS_PTRACE` | Default Docker seccomp already permits `ptrace(2)` on host kernel ≥ 4.8 |
 | eBPF emission/code-image slicer | `CAP_BPF` + kernel BTF | See [eBPF code-image detector](#ebpf-code-image-detector) below |
+
+To set all of these persistently in one step, with the security tradeoffs spelled
+out, see [Host setup for tracing](../getting-started/host-setup.md).
 
 **Zero-config whole-window scope is Linux-only.** The region-free `using (new
 AsmTrace())` whole-window facility is **Linux-only across every binding**. Off Linux the
