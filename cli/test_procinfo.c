@@ -44,14 +44,23 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Linux 4.17+; not guaranteed exposed under plain -D_DEFAULT_SOURCE on an
+ * older libc, so fall back to the raw kernel value (MAP_FIXED's bit OR'd
+ * with 0x100000) rather than requiring _GNU_SOURCE repo-wide for one test. */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
 
 #include "asmspy.h"
 #include "asmspy_tidsort.h"
@@ -317,8 +326,9 @@ int main(void) {
      * `parent`/`premise_ok` live at FUNCTION scope, not just this block: the
      * per-thread section below reuses this same, already-confirmed premise
      * to assert the parent's syscall_why specifically names ptrace
-     * permission, rather than making a second real ptrace(2) call — this
-     * file's own header promises exactly one. */
+     * permission, rather than making a THIRD real ptrace(2) call — this
+     * file's own header now promises exactly two (the second is Task 3's
+     * verdict-forcing block, further down). */
     pid_t parent = getppid();
     int premise_ok;
     {
@@ -557,6 +567,57 @@ int main(void) {
           pi->n_modules < 2 || pi->modules[0].syms >= pi->modules[1].syms,
           "modules are not symbol-count-descending");
     check("no JIT here", pi->jit_methods == 0, "a static C test has no JIT");
+    check("no false budget-exceeded on a fast self-gather",
+          pi->budget_exceeded == 0,
+          "budget_exceeded should be false after an ordinary, fast "
+          "self-gather");
+    check("anon_exec_bytes excludes bracketed pseudo-mappings",
+          pi->anon_exec_bytes == 0,
+          "a static C test with no JIT should show zero anon-exec bytes — "
+          "[vdso]/[vsyscall] are KNOWN, NAMED kernel regions, not the "
+          "unnamed JIT surface this field exists to measure");
+
+    /* Captured now, before any forced-truncation trickery below, for the
+     * module-cap block's "rank happens before cap" check (further down):
+     * the true top module's symbol count from a natural, untruncated
+     * snapshot. */
+    unsigned long best_syms_before = pi->modules[0].syms;
+
+    /* --- JIT methods/source, ACTUALLY exercised -----------------------
+     * The only prior assertion here was jit_methods == 0, which the
+     * zero-initialized struct already satisfies whether or not the JIT
+     * block runs at all — deleting the entire JIT block left the suite
+     * green. Write a real /tmp/perf-<pid>.map for OUR OWN pid (the exact
+     * text-tier discovery path asmspy_jitmap_refresh already reads) and
+     * confirm the count and source come back right, then remove it and
+     * confirm both reset. */
+    {
+        char pm[64];
+        snprintf(pm, sizeof pm, "/tmp/perf-%d.map", (int)getpid());
+        FILE *jf = fopen(pm, "w");
+        check("jit: perf-map scratch file created", jf != NULL,
+              strerror(errno));
+        if (jf) {
+            fprintf(jf, "400000 100 fake_jit_method_one\n");
+            fprintf(jf, "500000 200 fake_jit_method_two\n");
+            fclose(jf);
+
+            check("self reread (with a fake perf-map)",
+                  asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+            check("jit_methods counts the perf-map entries",
+                  pi->jit_methods == 2,
+                  "expected 2 JIT methods from the fake perf-map");
+            check("jit_source names the perf-map",
+                  strcmp(pi->jit_source, "perf-map") == 0, pi->jit_source);
+
+            unlink(pm);
+            check("self reread (perf-map removed)",
+                  asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+            check("jit_methods resets once the perf-map is gone",
+                  pi->jit_methods == 0,
+                  "expected 0 JIT methods once the fake perf-map is removed");
+        }
+    }
 
     /* Per-module symbol counts must be genuinely PER MODULE: a counter that
      * stamps the same value into every module (all-equal) or never
@@ -573,12 +634,14 @@ int main(void) {
         int any_nonzero = 0, all_same = 1;
         unsigned long first = pi->modules[0].syms;
         unsigned long long any_size = 0;
+        unsigned long long sum_syms = 0;
         for (int i = 0; i < pi->n_modules; i++) {
             if (pi->modules[i].syms > 0)
                 any_nonzero = 1;
             if (pi->modules[i].syms != first)
                 all_same = 0;
             any_size += pi->modules[i].size;
+            sum_syms += pi->modules[i].syms;
         }
         check("per-module symbol counts are not all zero", any_nonzero,
               "every module reported zero symbols");
@@ -588,6 +651,16 @@ int main(void) {
               "a broken per-module counter)");
         check("module sizes are populated", any_size > 0,
               "every module reported a zero mapped size");
+        /* A single symbol double-counted (e.g. two same-basename modules
+         * both matching every symbol tagged with that basename) or dropped
+         * would show up here even when the ranked-descending/not-all-equal
+         * checks above stay green. Guarded on modules_truncated==0: when
+         * the 64-row cap genuinely dropped a module that DID contribute
+         * symbols, the sum legitimately falls short — that is not a bug. */
+        check("sum of per-module syms equals syms_total when untruncated",
+              pi->modules_truncated != 0 || sum_syms == pi->syms_total,
+              "modules[].syms should exactly account for syms_total when "
+              "nothing was truncated away");
     }
 
     /* --- pc_sym: a thread's pc resolves to a real function name ---------
@@ -645,13 +718,28 @@ int main(void) {
      * — so a pile of throwaway regular files, mmap'd PROT_READ at offset 0
      * under distinct paths, count as real, distinct "modules" without
      * needing 64+ real shared libraries to be installed on whatever host
-     * runs this test. */
+     * runs this test.
+     *
+     * Placed at explicit LOW fixed addresses (MAP_FIXED_NOREPLACE), not
+     * left to the allocator: measured on this host, an unconstrained
+     * mmap(NULL, ...) lands ABOVE every already-loaded shared library
+     * (ld.so maps libc/libstdc++/... before main() ever runs), so an
+     * address-order regression (I1 — cap the module list before ranking
+     * it) would NOT be caught here otherwise — the real, high-symbol
+     * libraries would happen to sort first regardless, the same way they
+     * would on a from-scratch test that never forces the issue. Forcing
+     * these dummies below 0x10000000 — far under where a PIE executable or
+     * its shared libraries load — reproduces the actual failure mode
+     * (real, high-symbol modules mapped at HIGHER addresses than a pile of
+     * zero-value ones, exactly what a live VS Code process showed). */
     {
         char dir[] = "/tmp/asmspy_pi_modcap_XXXXXX";
         char *tmpdir = mkdtemp(dir);
         check("modcap: scratch dir created", tmpdir != NULL, strerror(errno));
         if (tmpdir) {
             enum { NDUMMY = ASMSPY_PI_MODULES_CAP + 8 };
+            const uintptr_t DUMMY_BASE = 0x10000000u;
+            const uintptr_t DUMMY_STRIDE = 0x10000u; /* >> the 4096-byte map */
             int fds[NDUMMY];
             void *maps[NDUMMY];
             int nmapped = 0;
@@ -666,7 +754,9 @@ int main(void) {
                     unlink(path);
                     continue;
                 }
-                void *m = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+                void *want = (void *)(DUMMY_BASE + (uintptr_t)i * DUMMY_STRIDE);
+                void *m = mmap(want, 4096, PROT_READ,
+                               MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, 0);
                 if (m == MAP_FAILED) {
                     close(fd);
                     unlink(path);
@@ -690,6 +780,40 @@ int main(void) {
                   "n_modules should equal ASMSPY_PI_MODULES_CAP once "
                   "truncated");
 
+            /* I1: ranking must happen over the FULL module set, then cap —
+             * not cap first (address order) then rank whatever survived.
+             * The dummy files here are all zero-symbol, so under a correct
+             * rank-before-cap implementation the true top real module (its
+             * syms captured above, before this block existed) is completely
+             * unaffected by adding 72 more zero-symbol candidates and must
+             * still be modules[0] (qsort ranks descending). Under the
+             * previous cap-then-rank shape this depended entirely on
+             * address order — on a real desktop target it dropped libc
+             * itself while keeping dozens of zero-symbol rows. */
+            check("top-ranked module survives forcing the module cap "
+                  "(rank happens before cap, not after)",
+                  pi->modules[0].syms == best_syms_before,
+                  "the highest-symbol module from before the forced "
+                  "overflow should still be ranked first afterward");
+
+            /* I3: scan_modules never validates ELF-ness — let alone
+             * executability — of the module list (that is precisely why
+             * these non-ELF, PROT_READ-only dummy files register as
+             * "modules" at all), so `exec` must come from the real 'x'
+             * permission of an actual mapped segment, not a hardcoded 1. */
+            {
+                int saw_dummy_nonexec = 0;
+                for (int i = 0; i < pi->n_modules; i++)
+                    if (strstr(pi->modules[i].name, ".bin") &&
+                        !pi->modules[i].exec)
+                        saw_dummy_nonexec = 1;
+                check("a PROT_READ-only dummy module reports exec == 0",
+                      saw_dummy_nonexec,
+                      "expected at least one surviving dummy (\"mN.bin\") "
+                      "row with exec==0 — a data-only mapping must not be "
+                      "stamped executable");
+            }
+
             for (int i = 0; i < nmapped; i++) {
                 char path[128];
                 snprintf(path, sizeof path, "%s/m%d.bin", tmpdir, i);
@@ -697,6 +821,85 @@ int main(void) {
                 close(fds[i]);
                 unlink(path);
             }
+            rmdir(tmpdir);
+        }
+    }
+
+    /* --- same-basename modules merge into ONE row, size summed (I2) -----
+     * Two distinct files sharing a basename (live on this very box: this
+     * host's Firefox maps two different omni.ja, at .../firefox/omni.ja
+     * and .../firefox/browser/omni.ja) must not become two rows: the
+     * symbol table's own per-symbol module tag is JUST the basename
+     * (asmspy_sym_t::module, set in load_module_syms), so it already
+     * cannot attribute symbols between two same-named files by path —
+     * presenting them as separate rows would present a distinction
+     * nothing downstream can measure, and silently hand one of the two a
+     * false "0 symbols" row. Reproduced here with two non-ELF dummy files
+     * of DIFFERENT, DISTINGUISHABLE sizes (the merge — a row-count and
+     * size-summing property — is checkable independent of symbol
+     * attribution, which needs a real ELF this test does not construct). */
+    {
+        char dir[] = "/tmp/asmspy_pi_dupbase_XXXXXX";
+        char *tmpdir = mkdtemp(dir);
+        check("dupbase: scratch dir created", tmpdir != NULL, strerror(errno));
+        if (tmpdir) {
+            char dirA[160], dirB[160], pathA[192], pathB[192];
+            snprintf(dirA, sizeof dirA, "%s/dirA", tmpdir);
+            snprintf(dirB, sizeof dirB, "%s/dirB", tmpdir);
+            int okA = (mkdir(dirA, 0700) == 0);
+            int okB = (mkdir(dirB, 0700) == 0);
+            check("dupbase: subdirs created", okA && okB, strerror(errno));
+            snprintf(pathA, sizeof pathA, "%s/dup.bin", dirA);
+            snprintf(pathB, sizeof pathB, "%s/dup.bin", dirB);
+
+            const size_t SZ_A = 8192, SZ_B = 4096;
+            int fdA = -1, fdB = -1;
+            void *mapA = MAP_FAILED, *mapB = MAP_FAILED;
+            if (okA) {
+                fdA = open(pathA, O_RDWR | O_CREAT | O_EXCL, 0600);
+                if (fdA >= 0 && ftruncate(fdA, (off_t)SZ_A) == 0)
+                    mapA = mmap(NULL, SZ_A, PROT_READ, MAP_PRIVATE, fdA, 0);
+            }
+            if (okB) {
+                fdB = open(pathB, O_RDWR | O_CREAT | O_EXCL, 0600);
+                if (fdB >= 0 && ftruncate(fdB, (off_t)SZ_B) == 0)
+                    mapB = mmap(NULL, SZ_B, PROT_READ, MAP_PRIVATE, fdB, 0);
+            }
+            check("dupbase: both same-basename files mapped",
+                  mapA != MAP_FAILED && mapB != MAP_FAILED,
+                  "could not map both dup.bin copies");
+
+            check("self reread (with a same-basename duplicate)",
+                  asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+
+            int nrows = 0;
+            unsigned long long merged_size = 0;
+            for (int i = 0; i < pi->n_modules; i++)
+                if (!strcmp(pi->modules[i].name, "dup.bin")) {
+                    nrows++;
+                    merged_size = pi->modules[i].size;
+                }
+            check("same-basename files merge into exactly one row", nrows == 1,
+                  "expected exactly one \"dup.bin\" row, not one per path");
+            check("merged row's size is the sum of both files",
+                  merged_size == SZ_A + SZ_B,
+                  "expected the merged row's size to be the sum of both "
+                  "same-basename files' mapped extents");
+
+            if (mapA != MAP_FAILED)
+                munmap(mapA, SZ_A);
+            if (mapB != MAP_FAILED)
+                munmap(mapB, SZ_B);
+            if (fdA >= 0)
+                close(fdA);
+            if (fdB >= 0)
+                close(fdB);
+            unlink(pathA);
+            unlink(pathB);
+            if (okA)
+                rmdir(dirA);
+            if (okB)
+                rmdir(dirB);
             rmdir(tmpdir);
         }
     }

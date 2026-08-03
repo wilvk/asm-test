@@ -1566,54 +1566,104 @@ static int pi_mod_cmp(const void *a, const void *b) {
 }
 
 static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
+    /* Don't compound an already-blown budget: this is the single most
+     * expensive section of the whole gather (ELF-parses every mapped
+     * module, possibly a separate debug file per module too), so if an
+     * earlier section (pi_read_threads, on a many-threaded target) already
+     * ran the clock out, entering it at all only adds MORE overrun on top
+     * of one already reported. */
+    if (pi_over_budget(out)) {
+        out->budget_exceeded = 1;
+        out->modules_truncated = 1; /* the list below never even started */
+        return;
+    }
+
     asmspy_symtab_t syms;
-    if (asmspy_symtab_load(pid, &syms) == 0) {
+    int have_syms = (asmspy_symtab_load(pid, &syms) == 0);
+    if (have_syms)
         out->syms_total = (unsigned long)syms.n;
 
-        /* per-module counts, and each thread's pc resolved to a name */
-        module_t *mods = NULL;
-        char exe_path[PATH_MAX];
-        int nm = scan_modules(pid, &mods, exe_path, sizeof exe_path);
+    /* Build an UNBOUNDED, basename-deduplicated module table FIRST — the
+     * 64-row cap must be applied AFTER ranking by symbol count, never
+     * before. scan_modules returns modules in /proc/maps ADDRESS order,
+     * which has no relationship to which ones a trace will actually resolve
+     * names against: capping first (this function's original shape) kept
+     * whichever 64 happened to be mapped lowest, which on a real desktop
+     * target dropped libc itself while keeping dozens of zero-symbol rows.
+     * Two distinct files sharing a basename (two Firefox omni.ja, a repro'd
+     * libdup.so at two paths — live on this very box) are ALSO merged into
+     * one row here: the symbol table's own per-symbol module tag is JUST
+     * the basename (asmspy_sym_t::module, set in load_module_syms), so it
+     * already cannot distinguish two same-named files by path — presenting
+     * them as two separate rows with two separate counts would present a
+     * distinction nothing downstream can measure, and silently hands one of
+     * the two a false "0 symbols" row instead. */
+    module_t *mods = NULL;
+    char exe_path[PATH_MAX];
+    int nm = scan_modules(pid, &mods, exe_path, sizeof exe_path);
+    if (nm < 0)
+        nm = 0;
+
+    asmspy_pi_module_t *tmp = nm > 0 ? calloc((size_t)nm, sizeof *tmp) : NULL;
+    int n_tmp = 0;
+    int list_incomplete = 0;
+    if (tmp) {
         for (int i = 0; i < nm; i++) {
             const char *b = strrchr(mods[i].path, '/');
             b = b ? b + 1 : mods[i].path;
-            if (out->n_modules >= ASMSPY_PI_MODULES_CAP) {
-                out->modules_truncated = 1;
+            int j;
+            for (j = 0; j < n_tmp; j++)
+                if (!strcmp(tmp[j].name, b))
+                    break;
+            if (j == n_tmp) {
+                snprintf(tmp[j].name, sizeof tmp[j].name, "%.63s", b);
+                snprintf(tmp[j].path, sizeof tmp[j].path, "%.255s",
+                         mods[i].path);
+                tmp[j].base = mods[i].load_start;
+                n_tmp++;
+            }
+            /* else: a same-basename duplicate — the FIRST path/base is
+             * kept, and its size/exec/syms fold into this row below. */
+            if (pi_over_budget(out)) {
+                out->budget_exceeded = 1;
+                list_incomplete = (i + 1 < nm);
                 break;
             }
-            asmspy_pi_module_t *m = &out->modules[out->n_modules++];
-            snprintf(m->name, sizeof m->name, "%.63s", b);
-            snprintf(m->path, sizeof m->path, "%.255s", mods[i].path);
-            m->base = mods[i].load_start;
-            m->exec = 1;
         }
-        free(mods);
+    }
+    free(mods);
 
-        /* Per-module counts in ONE pass over the symbols, not a scan per
-         * module. The nested form is 64 modules x 60k symbols on a real
-         * target — ~4M string compares against a 250 ms whole-gather budget
-         * whose justification is a measured 20 ms. The symbols are sorted by
-         * address and so cluster by module, which makes the last-hit memo
-         * hit almost always; the linear fallback is bounded by the 64-module
-         * cap, never by the symbol count. */
+    if (have_syms) {
+        /* Per-module counts in ONE pass over the symbols against the FULL
+         * (unbounded, basename-deduped) table above, not a scan per module
+         * and not the capped, display-ordered array — see the rank-before-
+         * cap comment above. The nested form is 64 modules x 60k symbols on
+         * a real target — ~4M string compares against a 250 ms whole-gather
+         * budget whose justification is a measured 20 ms. The symbols are
+         * sorted by address and so cluster by module, which makes the
+         * last-hit memo hit almost always; the linear fallback is bounded
+         * by n_tmp (every DISTINCT module actually mapped), never by the
+         * symbol count. */
         int last = -1;
         for (size_t k = 0; k < syms.n; k++) {
             const char *mn = syms.v[k].module;
             if (!mn)
                 continue;
-            if (last >= 0 && !strcmp(out->modules[last].name, mn)) {
-                out->modules[last].syms++;
+            if (last >= 0 && !strcmp(tmp[last].name, mn)) {
+                tmp[last].syms++;
                 continue;
             }
-            for (int i = 0; i < out->n_modules; i++)
-                if (!strcmp(out->modules[i].name, mn)) {
-                    out->modules[i].syms++;
+            for (int i = 0; i < n_tmp; i++)
+                if (!strcmp(tmp[i].name, mn)) {
+                    tmp[i].syms++;
                     last = i;
                     break;
                 }
+            if (pi_over_budget(out)) {
+                out->budget_exceeded = 1;
+                break;
+            }
         }
-        qsort(out->modules, (size_t)out->n_modules, sizeof out->modules[0],
-              pi_mod_cmp);
 
         for (int i = 0; i < out->n_threads_v; i++) {
             const asmspy_sym_t *s =
@@ -1642,12 +1692,27 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
         asmspy_jitmap_free(&j);
     }
 
-    /* anon-exec bytes (executable mappings with no backing file — the JIT
-     * surface an ELF symtab can't see) AND each module's total mapped
-     * extent (`size`, which the loop above never sets: scan_modules only
-     * ever records the load bias of a module's offset-0 mapping, never an
-     * end). ONE /proc/<pid>/maps pass serves both, rather than adding a
-     * second full parse just for `size`. */
+    /* anon-exec bytes, each module's total mapped extent (`size`), and each
+     * module's real exec bit — ONE /proc/<pid>/maps pass serves all three,
+     * matched by basename against the SAME deduplicated table built above
+     * (so a same-basename pair's bytes/exec-bit sum into their one merged
+     * row, exactly like `syms` above).
+     *
+     * anon-exec: an executable mapping with NO name AT ALL — a bracketed
+     * pseudo-mapping ([vdso], [vsyscall], [heap], [stack], ...) is a KNOWN,
+     * NAMED kernel region, not the JIT surface this field exists to measure
+     * (a static, non-JIT binary still carries an executable [vdso] page,
+     * which counted here before this fix — a fixed, non-JIT floor on every
+     * process, not a signal of anything).
+     *
+     * exec: scan_modules never validates ELF-ness of the module list, let
+     * alone executability (a plain PROT_READ data-only mapping at file
+     * offset 0 is indistinguishable from a real module's header segment to
+     * that scanner) — so `exec` must come from the ACTUAL 'x' permission of
+     * at least one of the module's real mapped segments, not a blanket 1.
+     * A module's offset-0 mapping is often read-only headers/rodata; the
+     * code segment proper is a separate, non-zero-offset mapping of the
+     * same file that this unfiltered-by-offset pass also sees. */
     {
         char p[64], line[512];
         snprintf(p, sizeof p, "/proc/%d/maps", (int)pid);
@@ -1659,7 +1724,7 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
                 if (sscanf(line, "%llx-%llx %7s %*s %*s %*s %255[^\n]", &a, &b,
                            perms, rest) < 3)
                     continue;
-                if (perms[2] == 'x' && rest[0] != '/')
+                if (perms[2] == 'x' && rest[0] == '\0')
                     out->anon_exec_bytes += b - a;
                 if (rest[0] == '/') {
                     /* match scan_modules' own " (deleted)" stripping so this
@@ -1667,16 +1732,34 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
                     char *del = strstr(rest, " (deleted)");
                     if (del)
                         *del = '\0';
-                    for (int i = 0; i < out->n_modules; i++)
-                        if (!strcmp(out->modules[i].path, rest)) {
-                            out->modules[i].size += b - a;
+                    const char *rb = strrchr(rest, '/');
+                    rb = rb ? rb + 1 : rest;
+                    for (int i = 0; i < n_tmp; i++)
+                        if (!strcmp(tmp[i].name, rb)) {
+                            tmp[i].size += b - a;
+                            if (perms[2] == 'x')
+                                tmp[i].exec = 1;
                             break;
                         }
+                }
+                if (pi_over_budget(out)) {
+                    out->budget_exceeded = 1;
+                    break;
                 }
             }
             fclose(f);
         }
     }
+
+    /* Rank by symbol count DESCENDING over the FULL table, THEN cap. */
+    if (n_tmp > 1)
+        qsort(tmp, (size_t)n_tmp, sizeof *tmp, pi_mod_cmp);
+    out->n_modules =
+        n_tmp < ASMSPY_PI_MODULES_CAP ? n_tmp : ASMSPY_PI_MODULES_CAP;
+    out->modules_truncated = (n_tmp > ASMSPY_PI_MODULES_CAP) || list_incomplete;
+    if (out->n_modules > 0)
+        memcpy(out->modules, tmp, (size_t)out->n_modules * sizeof *tmp);
+    free(tmp);
 }
 
 /* The attach verdict + which engines could run on this target. The facts
