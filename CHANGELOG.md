@@ -162,7 +162,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `syspkg-desktop` CI job). The AppImage pack step pins its own tooling
   (`scripts/fetch-appimagetool.sh`, `scripts/fetch-appimage-runtime.sh`) rather
   than letting `appimagetool` fetch its runtime stub from a rolling tag on every
-  pack. See [installation.md](docs/getting-started/installation.md#install-the-desktop-gui-app).
+  pack. See
+  [installation.md](https://github.com/wilvk/asm-test/blob/main/docs/getting-started/installation.md#install-the-desktop-gui-app).
 
 - **Live `blame` + `statediff` from the `asmspy` serve/dataflow leg**
   (docs/internal/archive/gui/41-live-blame-statediff-serve-leg.md). The backward-attribution
