@@ -1658,7 +1658,7 @@ Create `desktop/test/test_procinfo.cpp`:
 //    passes every small-value test and corrupts every real address.
 #include <cstdio>
 #include <fstream>
-#include <sstream>
+#include <optional>
 #include <string>
 
 #include "doc/recording.h"
@@ -1679,10 +1679,20 @@ static void check(const char *what, bool cond, const std::string &why) {
     }
 }
 
+// The loader is `std::optional<Recording> load_recording(std::istream &in,
+// std::string &err)` (doc/recording.h:133) — it reports a load failure as an
+// empty optional plus a reason, so a fixture that fails to load must surface
+// THAT reason rather than a generic parse error two layers up.
 static ProcInfo load(const char *name) {
     std::ifstream f(std::string(ASMTEST_FIXTURE_DIR) + "/" + name);
-    Recording r = recording_load(f);
-    return procinfo_parse(r);
+    std::string err;
+    std::optional<Recording> r = load_recording(f, err);
+    if (!r) {
+        ProcInfo bad;
+        bad.parse_error = std::string("load_recording failed: ") + err;
+        return bad;
+    }
+    return procinfo_parse(*r);
 }
 
 int main() {
@@ -1779,7 +1789,7 @@ int main() {
 }
 ```
 
-Confirm the loader entry point's real name before writing (`grep -n "Recording .*load" desktop/src/doc/recording.h`) and use it; `recording_load(std::istream&)` above is the expected spelling.
+The loader entry point is resolved and pinned: `std::optional<Recording> load_recording(std::istream &in, std::string &err)` at [`doc/recording.h:133`](../../../desktop/src/doc/recording.h#L133), with `load_recording_file(path, err)` beside it. `Recording::by_kind` is a `std::map<std::string, std::vector<Event>>`, so the `procinfo` event is `by_kind["procinfo"]` — empty when absent, which is the `parse_error` case.
 
 - [ ] **Step 3: Run it to verify it fails**
 
@@ -2351,9 +2361,10 @@ int main() {
     {
         std::ifstream f(std::string(ASMTEST_FIXTURE_DIR) +
                         "/procinfo_full.asmtrace");
-        Recording r = recording_load(f);
+        std::string err;
+        std::optional<Recording> r = load_recording(f, err);
         s.selected_pid = 4242;
-        s.details.shown = procinfo_parse(r);
+        s.details.shown = r ? procinfo_parse(*r) : ProcInfo{};
         check("fixture parsed", s.details.shown.valid, "bad fixture");
     }
     // NewFrame / draw_details_pane(s) / Render
@@ -2362,8 +2373,9 @@ int main() {
     {
         std::ifstream f(std::string(ASMTEST_FIXTURE_DIR) +
                         "/procinfo_refused.asmtrace");
-        Recording r = recording_load(f);
-        s.details.shown = procinfo_parse(r);
+        std::string err;
+        std::optional<Recording> r = load_recording(f, err);
+        s.details.shown = r ? procinfo_parse(*r) : ProcInfo{};
         s.details.status = "timed out after 2.0s — the probe was killed";
     }
     // NewFrame / draw_details_pane(s) / Render
