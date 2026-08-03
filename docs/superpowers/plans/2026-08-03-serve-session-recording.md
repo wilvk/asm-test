@@ -6,6 +6,11 @@
 
 **Architecture:** `--serve` gains a session-level `--record=<path>` sink, opened **once** with **one** header and teed into by every engine the session runs. Today each `start` calls `rec_open` afresh, so a two-engine session emits two headers and `load_recording_file` — which requires the header on line 1 — rejects the stream. The sink is a `shared` writer on the existing `rec_t`, so the "the file and the stream agree by construction" property that struct already guarantees is preserved rather than duplicated.
 
+**Status — ✅ COMPLETE (2026-08-04).** Task 1 landed as `ec611c17`
+(`--serve --record=<f>`, `cli/test_serve_record.c` in `cli-smoke`); Task 2 as
+`ec378e82` (the frozen fixture + the axis-budget plan's T7c, which is now
+closed). Both lanes green; the golden corpus did not move.
+
 **Tech Stack:** C11, `cli/asmspy.c` (the live ptrace tracer), `cli/asmtrace_ndjson.{c,h}` (the NDJSON writer), `desktop/test/` (the null C++ harness), Docker (`asmtest-cli`, `asmtest-desktop`).
 
 ## Global Constraints

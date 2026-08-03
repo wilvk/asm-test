@@ -12,9 +12,13 @@
 > with the code when you read it, the code wins — re-verify, then fix this doc in
 > the same change.
 >
-> **Status — 11/12 landed.** T1–T6, T7a, T7b, T8, T9, T10. **T7c (the crossings
-> channel against a real capture) is BLOCKED** on a producer gap and has its own
-> plan: [2026-08-03-serve-session-recording.md](../../superpowers/plans/2026-08-03-serve-session-recording.md).
+> **Status — ✅ 12/12, complete (2026-08-04).** T1–T6, T7a, T7b, T7c, T8, T9,
+> T10. T7c needed a producer change first — no single `asmspy` serve engine
+> emits `codeimage` + `trace` + `syscall`, and a two-engine session wrote a
+> header per engine — so
+> [2026-08-03-serve-session-recording.md](../../superpowers/plans/2026-08-03-serve-session-recording.md)
+> added a session-level `--serve --record=<f>` sink and T7c landed against a
+> frozen two-engine capture.
 
 ## What changed, in one paragraph
 
@@ -161,12 +165,24 @@ Silence is by rule, not by threshold: no note on a first weave, none for a
 recording with no regions, none when a recompute reproduced the same layout. The
 note reports **that** the floor moved, never how much.
 
-## What is not done
+## The producer gap T7c uncovered
 
-**T7c — the crossings channel against a real capture.** No single `asmspy`
-serve engine emits `codeimage` + `trace` + `syscall` together (`trace` gives the
-first two, `log` the third), and a two-engine session writes a header per engine,
-which `load_recording_file` rejects on line 1. Splicing the two recordings would
-be hand-authoring the container the test exists to avoid. The fix is a
-session-level `--serve --record=<f>` sink; see
-[its plan](../../superpowers/plans/2026-08-03-serve-session-recording.md).
+No single `asmspy` serve engine emits `codeimage` + `trace` + `syscall`
+together: `trace` gives the first two, `log` the third, `stream` its own kind,
+`dataflow` errors, `tree` arms a codeimage but emits call events. Two engines in
+one session do produce all three — but each `start` called `rec_open`, which
+writes a header per channel, so the stream carried a header PER ENGINE and
+`load_recording_file` rejected it on line 1. And `--serve --record=<f>` was
+accepted and silently ignored, since `main` never examined it.
+
+Splicing the two recordings into one file would have been hand-authoring the
+container the test exists to avoid, so the producer was fixed instead: the serve
+loop now owns ONE writer, opened once with ONE header, teed into by every engine
+through a `shared` pointer on the existing `rec_t`. `rec_close` deliberately
+does not close it — the session does, once, at quit — because a footer per
+engine claims the recording ended each time. That also gives the product "save
+this capture", which the file path could not express even though the live path
+already models a session as one growing recording.
+
+T7c's fixture is a frozen two-engine capture recorded through that sink: 1
+header, 1 codeimage, 1080 trace rows, 120 syscalls, 1 end footer.
