@@ -107,7 +107,7 @@ LJPID=""
 SGPID=""
 GSPID=""
 EVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} ${RVPID:+"$RVPID"} ${RWPID:+"$RWPID"} ${SRVPID:+"$SRVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" "$BUILD/watch_rec.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} ${RVPID:+"$RVPID"} ${RWPID:+"$RWPID"} ${SRVPID:+"$SRVPID"} ${NAPID:+"$NAPID"} ${BAPID:+"$BAPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" "$BUILD/watch_rec.log" "$BUILD/info_never_ptrace.strace" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -2357,7 +2357,7 @@ print("  --info --json: dataflow/stream/trace/log/watch/tree/graph/procs all rep
     # the human form names the reason too, not just the JSON.
     "$ASM" --info "$IVPID" 2>&1 | grep -qi '32-bit' \
         || fail "--info text: no 32-bit reason shown for any mode"
-    echo "  --info: reports dataflow/stream/trace/log/watch refused with the 32-bit reason"
+    echo "  --info: reports dataflow/stream/trace/log/watch/tree/graph/procs refused with the 32-bit reason"
 
     # the refusal must be a REFUSAL, not a failed attach: nothing was traced, so
     # the victim is untouched and still running
@@ -3658,6 +3658,14 @@ if $BUILD/asmspy --info 134217727 >/dev/null 2>&1; then
     fail "--info: a nonexistent pid must exit nonzero"
 fi
 
+# A --record path that cannot be opened must exit nonzero too (finding A):
+# info_emit_json's failure must reach cmd_info's return value, not just its
+# stderr line — "asmspy --info $p --json --record=/mnt/full/x && upload x"
+# must never fire the && on a recording that was never written.
+if $BUILD/asmspy --info $$ --json --record=/nonexistent/x >/dev/null 2>&1; then
+    fail "--info: a --record that cannot be opened must exit nonzero"
+fi
+
 # Strict structural checks when python3 is present; degrade cleanly otherwise
 # (same pattern as the --graph --json checks above).
 #
@@ -3726,8 +3734,16 @@ if command -v strace >/dev/null 2>&1; then
     kill -0 "$NAPID" 2>/dev/null || fail "spy_victim did not start for the never-ptrace probe"
     NASTRACE="$BUILD/info_never_ptrace.strace"
     rm -f "$NASTRACE"
+    # set +e / set -e (this file's own convention, e.g. the i386 --info block
+    # above): under set -eu a nonzero strace/asmspy exit would kill the WHOLE
+    # script right here, before narc=$? or the fail() below ever ran — and
+    # since this line's stdout+stderr are both /dev/null, that death would be
+    # SILENT, and leave NAPID's spy_victim running forever (nothing past this
+    # line, including its own kill/wait cleanup, would ever execute).
+    set +e
     strace -f -e trace=ptrace -o "$NASTRACE" -- "$BUILD/asmspy" --info "$NAPID" --json >/dev/null 2>&1
     narc=$?
+    set -e
     [ "$narc" -eq 0 ] || fail "--info under strace exited $narc against a live, attachable target"
     kill -0 "$NAPID" 2>/dev/null \
         || fail "the never-ptrace probe target died — --info must never touch it"
@@ -3743,6 +3759,37 @@ if command -v strace >/dev/null 2>&1; then
     echo "  --info under 'strace -f -e trace=ptrace': zero ptrace(2) calls against a live, attachable target"
 else
     echo "  never-ptrace strace probe skipped (strace absent)"
+fi
+
+# Regression test for finding E (the argv escape-buffer clip): a real
+# process with a single argv entry past the 1024-byte buffer this used to
+# clip at, but still well under the gatherer's real 4096-byte/64-entry cap,
+# must cross the wire INTACT — not silently cut to ~1017 chars with
+# argv_truncated staying false, which is exactly what shipped before the
+# fix (a 2600-char entry clipped to 1017, while the human TEXT form of the
+# SAME snapshot printed all of it).
+if command -v python3 >/dev/null 2>&1; then
+    BIGARG=$(python3 -c "print('a' * 2600)")
+    sh -c 'sleep 60; :' "$BIGARG" >/dev/null 2>&1 &
+    BAPID=$!
+    sleep 1
+    kill -0 "$BAPID" 2>/dev/null || fail "the big-argv victim did not start"
+    baout=$($BUILD/asmspy --info "$BAPID" --json 2>/dev/null)
+    printf '%s' "$baout" | sed -n '2p' | python3 -c 'import json,sys
+evt = json.loads(sys.stdin.readline())
+argv = evt["identity"]["argv"]
+assert argv, "no argv captured for the big-argv victim"
+last = argv[-1]
+assert len(last) == 2600, "argv[-1] is %d chars, expected 2600 (clipped?)" % len(last)
+assert evt["identity"]["argv_truncated"] is False, \
+    "argv_truncated is %r for a snapshot well under the real cap" % (evt["identity"]["argv_truncated"],)
+print("  --info --json: a 2600-char argv entry crosses the wire intact (argv_truncated:false)")' \
+        || fail "--info --json: the argv escape-buffer regression check failed"
+    kill "$BAPID" 2>/dev/null || true
+    wait "$BAPID" 2>/dev/null || true
+    BAPID=""
+else
+    echo "  argv escape-buffer regression check skipped (python3 absent)"
 fi
 
 # It must be FAST — this is fired automatically as an operator browses.

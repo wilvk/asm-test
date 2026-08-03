@@ -1008,10 +1008,11 @@ The JSON body above is **authoritative** for the wire shape; the fields'
 *semantics* come from [`asmspy_procinfo_t`](../../../cli/libasmspy.h#L208)
 (and the [`asmspy_fingerprint_t`](../../../cli/libasmspy.h#L94) it embeds as
 `runtime`), but the mapping is not a flat field-for-field mirror the way
-`graph`/`topo`/`watch` above are: the wire nests the struct's members into
-eight named objects (`identity`/`runtime`/`counters`/`threads`/`code`/
-`modules`/`trace`/`containment`/`children`), several fields are renamed in the
-process (`n_fds` → `counters.fds`, `static_linked` → `runtime.static`,
+`graph`/`topo`/`watch` above are: the wire groups the struct's members into
+nine named top-level members — six objects (`identity`, `runtime`,
+`counters`, `code`, `trace`, `containment`) and three arrays (`threads`,
+`modules`, `children`) — several fields are renamed in the process
+(`n_fds` → `counters.fds`, `static_linked` → `runtime.static`,
 `ns_differs` → `containment.differs`), and `runtime` carries only 7 of
 `asmspy_fingerprint_t`'s 18 fields (the ones this shape needs, not the whole
 struct). Read the JSON shape above as the contract; use the struct link for
