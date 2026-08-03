@@ -157,7 +157,7 @@ bool render_one(const ShotSpec &s, const std::string &out_dir) {
     // then renders correctly but sits on the Home rail with no Recording pane,
     // and every scene shot comes out identical because there is no SceneView to
     // set a kind on. Measured: that produced six byte-identical PNGs.
-    int first = -1;
+    int first = -1, second = -1;
     for (const std::string &p : s.open) {
         std::string oerr;
         const int idx = shell_open(st, p, oerr);
@@ -167,10 +167,18 @@ bool render_one(const ShotSpec &s, const std::string &out_dir) {
         }
         if (first < 0)
             first = idx;
+        else if (second < 0)
+            second = idx;
     }
-    // -1 would mean the Home rail. The A side is the tab the shot is OF; a
-    // second recording (the Divergence B side) stays open but unselected.
+    // -1 would mean the Home rail.
     st.active_tab = first;
+    // ATTACHING the B side is a separate act from opening it. shell_b() returns
+    // null unless b_index is set — that is what the `d` binding does — and with
+    // no B the shell hands the scene a DEFAULT-CONSTRUCTED DivergenceScene:
+    // not refused, just empty, which draws as "0 rib(s), 0 hollow" and looks
+    // exactly like two recordings that agreed. Measured: that is precisely how
+    // the divergence shot came out blank.
+    st.b_index = second;
 
     ImGuiIO &io = ImGui::GetIO();
     for (int frame = 0; frame <= s.warmup; frame++) {
