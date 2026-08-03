@@ -17,7 +17,9 @@
 - **Treemap area is proportional to `Region::len`.** Any other weighting is a fabricated emphasis. An equal-area mode, if ever added, must be user-selected and labelled.
 - **`SceneLayers` is exhaustive by test.** Every bool needs exactly one `LayerDesc` row in `scene_layers_all()` or `test_layers.cpp` fails by name.
 - **Statistical never merges into exact.** A `TF_STAT` surface stays in its own `Terrain`, drawn in separate ink with a persistent `STATISTICAL — survey` label.
-- **Build/verify via Docker.** `make docker-desktop-test`, `make docker-fmt-check`. Never `make X >/dev/null 2>&1` — it hides compile errors and leaves a stale binary "passing".
+- **How to run tests.** There is **no** `docker-desktop-test` target and no `TEST=` parameter. One test: `make build/desktop_test_<name> && ./build/desktop_test_<name>`. Whole suite: `make desktop-test`. Containerised lane (what CI runs): `make docker-desktop`. Format gate: `make docker-fmt-check`. Never `make X >/dev/null 2>&1` — it hides compile errors and leaves a stale binary "passing".
+- **Registering a new test.** `desktop/test/*.cpp` compiles via the pattern rule at [mk/desktop.mk:421](../../../mk/desktop.mk#L421), so a new file needs only two additions: a link rule (`$(BUILD)/desktop_test_<name>: $(BUILD)/desktop/test/t/test_<name>.o` + the two-line `$(CXX)` recipe, pattern at [mk/desktop.mk:1686](../../../mk/desktop.mk#L1686)) and an entry in `DESKTOP_TESTS` ([mk/desktop.mk:1199](../../../mk/desktop.mk#L1199)). A test that includes `linmath.h` also needs the order-only prereq at [mk/desktop.mk:1685](../../../mk/desktop.mk#L1685). **A test not in `DESKTOP_TESTS` never runs in CI** — it is not a test.
+- **GL is available in the container.** [Dockerfile.desktop:17-19,43,48](../../../Dockerfile.desktop#L17) pins software Mesa (llvmpipe) + EGL with `LIBGL_ALWAYS_SOFTWARE=1` specifically so the scene FBO smoke renders offscreen. Pixel-level assertions therefore genuinely run under `make docker-desktop` and must **not** be written as self-skipping (CLAUDE.md).
 - **clang-format 18 is canonical.** Use `make docker-fmt`. `desktop/` addon includes in `shell.cpp` are order-sensitive — keep the existing fence comments; a bare `clang-format -i` re-sorts them into an `imgui_internal.h #error`.
 - **Shared tree.** Many agents work this repo concurrently. Commit by explicit path, never `git add -A`.
 
@@ -29,7 +31,8 @@ Lands first and independently of the re-encoding, so the live defect is fixed re
 
 **Files:**
 - Modify: `desktop/src/scene3d/scene.cpp:797-802`
-- Test: `desktop/test/test_scene_traj.cpp` (create if absent)
+- Create: `desktop/test/test_scene_traj.cpp` — **does not exist**; this task creates it
+- Modify: `mk/desktop.mk` — register the new test binary (see Global Constraints)
 
 **Interfaces:**
 - Consumes: `space::TrajectorySet`, `space::Projection` (unchanged).
@@ -55,12 +58,24 @@ TEST(scene_traj, mem_step_past_nsteps_stays_in_envelope) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Register the new test binary in `mk/desktop.mk`**
 
-Run: `make docker-desktop-test TEST=test_scene_traj`
+The file is new, so without this it never builds and never runs in CI. Add the link rule beside its neighbours:
+
+```make
+$(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o \
+                                  $(BUILD)/desktop/test/sc/scene.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+```
+
+and add `$(BUILD)/desktop_test_scene_traj \` to the `DESKTOP_TESTS` list at [mk/desktop.mk:1199](../../../mk/desktop.mk#L1199). It includes `linmath.h` transitively via `scene.h`, so also add it to the order-only prereq group at [mk/desktop.mk:1684-1685](../../../mk/desktop.mk#L1684).
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: FAIL — `scene_traj_scale` not declared.
 
-- [ ] **Step 3: Extract the scale rule and apply sediment's guard**
+- [ ] **Step 4: Extract the scale rule and apply sediment's guard**
 
 Add to `desktop/src/scene3d/scene.h`, beside the `time_scale` member:
 
@@ -94,15 +109,15 @@ for (const space::Trajectory &tr : ts.trajectories)
 const float scale = scene_traj_scale(nsteps, max_t, time_scale);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
-Run: `make docker-desktop-test TEST=test_scene_traj`
+Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add desktop/src/scene3d/scene.cpp desktop/src/scene3d/scene.h desktop/test/test_scene_traj.cpp
+git add desktop/src/scene3d/scene.cpp desktop/src/scene3d/scene.h desktop/test/test_scene_traj.cpp mk/desktop.mk
 git commit -m "scene3d: bound the worldline envelope when a mem step outlasts nsteps"
 ```
 
@@ -180,7 +195,7 @@ TEST(projection_atlas, adjacent_offsets_stay_adjacent_within_a_region) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `make docker-desktop-test TEST=test_projection`
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: FAIL — `Projection::Layout` not declared.
 
 - [ ] **Step 3: Implement the squarified treemap + serpentine**
@@ -204,7 +219,7 @@ reversed on odd rows so consecutive offsets stay adjacent across the row break.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `make docker-desktop-test TEST=test_projection`
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
@@ -246,7 +261,7 @@ TEST(locate_atlas, scene_locate_off_agrees_with_project_under_atlas) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `make docker-desktop-test TEST=test_locate`
+Run: `make build/desktop_test_locate && ./build/desktop_test_locate`
 Expected: FAIL — mismatch, because the helper re-derives Hilbert arithmetic.
 
 - [ ] **Step 3: Make both helpers delegate to `Projection::project`**
@@ -255,7 +270,7 @@ Replace any open-coded Hilbert index maths in `locate.cpp` and `stepplace.cpp` w
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `make docker-desktop-test TEST=test_locate && make docker-desktop-test TEST=test_stepplace`
+Run: `make build/desktop_test_locate && ./build/desktop_test_locate && make build/desktop_test_stepplace && ./build/desktop_test_stepplace`
 Expected: PASS. Existing Hilbert-layout tests must also still pass — run the full file, not just the new case.
 
 - [ ] **Step 5: Commit**
@@ -297,7 +312,7 @@ TEST(camera, fit_respects_the_dolly_clamps) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `make docker-desktop-test TEST=test_camera`
+Run: `make build/desktop_test_camera && ./build/desktop_test_camera`
 Expected: FAIL — no member `fit`.
 
 - [ ] **Step 3: Implement `fit`**
@@ -320,7 +335,7 @@ Then `reset()` sets the default angles and calls `fit(0,0,1,1)`; `top_down()` ke
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `make docker-desktop-test TEST=test_camera`
+Run: `make build/desktop_test_camera && ./build/desktop_test_camera`
 Expected: PASS (2 new tests plus the existing file).
 
 - [ ] **Step 5: Commit**
@@ -337,7 +352,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset"
 **Files:**
 - Modify: `desktop/src/scene3d/scene.h`, `desktop/src/scene3d/scene.cpp` (`set_trajectories`, `render`)
 - Modify: `desktop/src/scene3d/hud.cpp` — remove the `draw_trajectory_ruler` call from the Plane scene
-- Test: `desktop/test/test_scene_traj.cpp`
+- Test: `desktop/test/test_scene_traj.cpp` (created and registered by Task 1 — no `mk/desktop.mk` change needed here)
 
 **Interfaces:**
 - Consumes: `scene_traj_scale` (Task 1) — retained for the non-Plane scenes that still spatialise time.
@@ -374,7 +389,7 @@ TEST(scene_traj, comet_tail_selects_a_window_ending_at_the_playhead) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `make docker-desktop-test TEST=test_scene_traj`
+Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: FAIL — no member `comet_mode`.
 
 - [ ] **Step 3: Implement comet mode**
@@ -393,7 +408,7 @@ In `render()`, pass the window as a uniform and fade by distance from `hi`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `make docker-desktop-test TEST=test_scene_traj`
+Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -443,7 +458,7 @@ TEST(layers, motifs_abstain_rather_than_guess) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `make docker-desktop-test TEST=test_layers`
+Run: `make build/desktop_test_layers && ./build/desktop_test_layers`
 Expected: FAIL — no `motifs` member; the exhaustiveness test also flags it.
 
 - [ ] **Step 3: Implement the layer**
@@ -463,7 +478,7 @@ a crossing mark coloured by `SyscallClass` with the legend built from
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `make docker-desktop-test TEST=test_layers`
+Run: `make build/desktop_test_layers && ./build/desktop_test_layers`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -481,13 +496,50 @@ The gate that decides whether the encoding actually builds intuition. A principl
 
 **Files:**
 - Create: `desktop/test/test_motif_distinctness.cpp`
-- Modify: `mk/desktop.mk` — register the new test binary
+- Create: `desktop/test/image_distinct.h` — the comparator; **no such helper exists today** (verified: nothing defines `images_distinct`)
+- Modify: `mk/desktop.mk` — register the new test binary in `DESKTOP_GL_TESTS` ([mk/desktop.mk:2310](../../../mk/desktop.mk#L2310)), **not** `DESKTOP_TESTS` — it needs a GL context
+- Create: `desktop/test/fixtures/motif-{memcpy,simd,syscalls}.asmtrace`
 
 **Interfaces:**
-- Consumes: everything above, plus the existing image-distinctness helper the doc-screenshot gate uses.
-- Produces: nothing consumed downstream.
+- Consumes: everything above. Renders through the same offscreen-FBO path `test_scene_fbo.cpp` already uses.
+- Produces: `bool images_distinct(const Image &a, const Image &b, float min_fraction = 0.02f);` — true when at least `min_fraction` of pixels differ beyond a per-channel threshold.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 0: Decide the fixture-honesty question before writing anything**
+
+`test_scene_fbo.cpp:20-23` records that the rich-`mem` golden scene is **hand-authored** "because `mem` has no producer". So a memory-access fixture may have to be synthetic — and a hand-authored fixture can be tuned until it passes, which would make this gate self-confirming and worthless.
+
+Resolve it explicitly, and write the decision into the test file's header comment:
+
+- **Preferred:** generate all three from real runs via `make asmtrace-golden` ([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) so the distinctness claim is about real programs. The `simd` and `syscalls` cases need no `mem` stream — opcode class comes from disasm and crossings from the `syscall` kind — so **only** the memcpy case is at risk.
+- **If a hand-authored fixture is unavoidable:** say so in the header, and assert distinctness only on channels the fixture did not hand-set. Never assert on a quantity the fixture author chose.
+
+Do not proceed to Step 1 until this is settled — it decides whether the gate means anything.
+
+- [ ] **Step 1: Write the comparator**
+
+```cpp
+// image_distinct.h — pairwise frame distinctness. Deliberately crude: this
+// answers "would a reader see two different pictures", not "are these images
+// similar", so it counts differing pixels rather than computing a perceptual
+// metric. A threshold, not a score, because the gate is a yes/no.
+inline bool images_distinct(const Image &a, const Image &b,
+                            float min_fraction = 0.02f) {
+    if (a.w != b.w || a.h != b.h)
+        return true; // different geometry is trivially distinct
+    size_t differing = 0;
+    const size_t n = size_t(a.w) * size_t(a.h);
+    for (size_t i = 0; i < n; ++i) {
+        const int dr = int(a.px[i * 4 + 0]) - int(b.px[i * 4 + 0]);
+        const int dg = int(a.px[i * 4 + 1]) - int(b.px[i * 4 + 1]);
+        const int db = int(a.px[i * 4 + 2]) - int(b.px[i * 4 + 2]);
+        if (std::abs(dr) + std::abs(dg) + std::abs(db) > 24)
+            differing++;
+    }
+    return float(differing) / float(n) >= min_fraction;
+}
+```
+
+- [ ] **Step 2: Write the failing test**
 
 ```cpp
 // Three recordings whose behaviour we already know must be pairwise DISTINCT
@@ -512,24 +564,26 @@ TEST(motif_distinctness, geometry_is_still_correct_with_motifs_off) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
-Run: `make docker-desktop-test TEST=test_motif_distinctness`
+Run: `make build/desktop_test_motif_distinctness && ./build/desktop_test_motif_distinctness`
 Expected: FAIL — fixtures absent.
 
-- [ ] **Step 3: Generate the three fixtures**
+- [ ] **Step 4: Generate the three fixtures**
 
-Record them with the CLI against the bundled examples, and commit them under `desktop/test/fixtures/`. Each must be small enough to keep the test under a second. Note in the file header which example produced each, so a later reader can regenerate them.
+Per the Step 0 decision. Commit them under `desktop/test/fixtures/`, each small enough to keep the test under a second, and record in the test's header comment exactly what produced each one so a later reader can regenerate them.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass — in the container, not on the host**
 
-Run: `make docker-desktop-test TEST=test_motif_distinctness`
-Expected: PASS. **If the distinctness case fails, stop and report** — that is the design being refuted, not a test to loosen.
+Run: `make docker-desktop`
+Expected: PASS. The host may have no EGL device, in which case a GL test *self-skips* and a host-only run would report a false green. `Dockerfile.desktop` pins software Mesa + EGL precisely so this lane really renders — so **this gate must be judged from the container run**.
 
-- [ ] **Step 5: Commit**
+**If the distinctness case fails, stop and report.** That is the design being refuted, not a test to loosen. Do not lower `min_fraction` to make it pass.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add desktop/test/test_motif_distinctness.cpp desktop/test/fixtures mk/desktop.mk
+git add desktop/test/test_motif_distinctness.cpp desktop/test/image_distinct.h desktop/test/fixtures mk/desktop.mk
 git commit -m "desktop(test): gate the motif encoding on pairwise distinctness"
 ```
 
@@ -545,24 +599,32 @@ git commit -m "desktop(test): gate the motif encoding on pairwise distinctness"
 - Consumes: all prior tasks.
 - Produces: the user-visible change.
 
-- [ ] **Step 1: Flip the default and run the whole suite**
+- [ ] **Step 1: Audit for Hilbert-specific assumptions BEFORE flipping anything**
 
-Run: `make docker-desktop-test`
-Expected: golden-image failures across the suite — that is the point of this step. Read them; any *geometry* failure is a real bug, only *image* churn is expected.
+Some existing tests reason from the Hilbert cell mapping rather than from the projection's contract. [test_converge.cpp:51-52](../../../desktop/test/test_converge.cpp#L51) is the known case — it argues *"len is a power of four → a 1:1 domain, so distinct addresses land in distinct cells"*, which the atlas does not guarantee.
 
-- [ ] **Step 2: Regenerate the doc screenshots — ONCE, from the merged tree**
+Run: `grep -rn "power of four\|power-of-four\|4\^\|1:1 domain\|hilbert\|Hilbert" desktop/test/ desktop/src/`
+
+Triage each hit into one of: (a) a comment needing an update, (b) a test whose *setup* relies on the mapping — rewrite it against the contract (`project`/`unproject` round-trip), not the layout, or (c) a genuine behavioural dependency, which is a design finding and must be reported, not patched over. **These are not golden churn.** A failure here is a real bug.
+
+- [ ] **Step 2: Flip the default and run the whole suite**
+
+Run: `make docker-desktop`
+Expected: golden-image failures across the suite — that is the point of this step. Read every one; any *geometry* or *assertion* failure is a real bug, only *image* churn is expected.
+
+- [ ] **Step 3: Regenerate the doc screenshots — ONCE, from the merged tree**
 
 Run the `--serve` screenshot flow (headless `--record` never emits `codeimage`, and `codeimage` gates every 3D scene). Regenerate **after** the last recorder edit, never per-agent; two agents regenerating one golden must regenerate from the merged tree rather than picking a side.
 
-- [ ] **Step 3: Verify the screenshots are pairwise distinct**
+- [ ] **Step 4: Verify the screenshots are pairwise distinct**
 
 Gate on distinctness, not just non-blankness — the same rule Task 7 encodes.
 
-- [ ] **Step 4: Write the brief**
+- [ ] **Step 5: Write the brief**
 
 Add `docs/internal/gui/61-scene-axis-budget.md` following `_conventions.md`, cross-referencing [53](../../internal/gui/53-3d-catalog-build-roadmap.md) to record that the depiction catalog now composes onto the atlas substrate.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add desktop/src/space/projection.cpp docs/_static/gui docs/internal/gui/61-scene-axis-budget.md
@@ -577,4 +639,15 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 **Type consistency.** `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` / `atlas_cells_per_side` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` is defined once, in Task 2. `SceneLayers::motifs` is defined in Task 6 and consumed in Task 7.
 
-**Known gap, deliberately left.** Task 7's `render_plane_scene`, `images_distinct`, `image_blank` and `image_has_floor_coverage` are named but not defined here — they are the existing doc-screenshot helpers, and the implementer must locate them rather than write new ones. If they turn out not to exist in a reusable form, Task 7 grows a step to extract them, and that is a legitimate reason to reject the task rather than to hand-roll a fourth image comparator.
+**Verified against the tree (2026-08-03), after a first draft got several of these wrong.**
+
+| Assumption | Verdict |
+|---|---|
+| `make docker-desktop-test TEST=<x>` runs one test | **false** — no such target, no `TEST=` parameter. Corrected throughout; see Global Constraints |
+| `test_scene_traj.cpp` exists | **false** — Task 1 creates *and registers* it. `mk/desktop.mk` registration is now an explicit step; an unregistered test never runs |
+| `test_projection` / `test_camera` / `test_locate` / `test_stepplace` / `test_layers` exist | **true** — Tasks 2, 3, 4, 6 extend existing files |
+| An image-distinctness helper exists to reuse | **false** — nothing defines `images_distinct`. Task 7 now builds it (Step 1) |
+| Pixel assertions can run in CI | **true** — `Dockerfile.desktop` pins software Mesa + EGL for exactly this. The gate must be judged from `make docker-desktop`, since a host without EGL self-skips and reports a false green |
+| The observed-data-span projection is still the catalog's open blocker | **false** — doc 54's phase-0 plumbing landed it; `observed data` appears as a region in the live HUD. The atlas has data regions to lay out |
+
+**Remaining known risk, not resolvable on paper.** Task 7's memcpy fixture may have to be hand-authored, because `mem` has no producer (`test_scene_fbo.cpp:20-23`). A hand-tuned fixture would make the acceptance gate self-confirming. Task 7 Step 0 forces that decision *before* any code is written rather than leaving it to be discovered — and the `simd` and `syscalls` cases are unaffected, since neither needs a `mem` stream.
