@@ -1195,10 +1195,18 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         proj.data_span_note = std::move(span_note);
         // 61 T9: did this weave move the floor the reader was already looking
         // at? Computed HERE, while `proj` is still in scope and before
-        // build_terrain moves it. The first half of the spec's mitigation —
-        // "recompute only when the region set changes" — needs no code:
-        // rebuild_layout runs inside build_projection, which this !sv.built
-        // gate calls once per weave.
+        // build_terrain moves it.
+        //
+        // On the spec's other half — "recompute only when that set changes" —
+        // be precise about what the tree actually guarantees. rebuild_layout
+        // runs inside build_projection, which this !sv.built gate calls ONCE
+        // PER WEAVE, not once per frame; a weave whose region set did not
+        // change still recomputes. That recompute is harmless rather than
+        // unnoticed: build_projection is a pure function of the regions, so it
+        // reproduces an identical layout, the digest matches and no note fires
+        // (test_projection pins exactly that). The mitigation's INTENT — the
+        // reader is never told the floor moved when it did not — is met by the
+        // digest comparison below, not by suppressing the recompute.
         const space::LayoutFingerprint layout_fp = space::layout_fingerprint(proj);
         proj.layout_note = space::layout_reflow_note(sv.layout_fp, layout_fp);
         sv.layout_fp = layout_fp;

@@ -721,6 +721,24 @@ int main() {
               "got " + std::to_string(labels.size()) + " labels for 2 regions");
 
         const uint32_t ln = 1u << lp.order;
+        // The decode check below is only meaningful because THIS fixture gives
+        // both regions one byte per cell (4096+61440 == 65536 == the order-8
+        // plane exactly), so no rect has a rounding tail. STATED, not assumed:
+        // a rect can be granted up to ~4x its region's bytes, and then its
+        // centre cell can legitimately land past the region's last byte and
+        // refuse — the anchor names a RECTANGLE, and decodability is a property
+        // of the fixture, not a guarantee of atlas_labels.
+        uint64_t fixture_cells = 0, fixture_bytes = 0;
+        for (size_t i = 0; i < lp.rects.size(); i++) {
+            const AtlasRect &fr = lp.rects[i];
+            fixture_cells += uint64_t(fr.x1 - fr.x0) * uint64_t(fr.y1 - fr.y0);
+            fixture_bytes += lp.regions[i].len;
+        }
+        check("the label fixture is 1 byte per cell",
+              fixture_cells == fixture_bytes,
+              "the fixture gained a rounding tail, so a rect's centre cell need "
+              "no longer decode and the check below would fail for a reason "
+              "having nothing to do with labelling");
         for (const AtlasLabel &l : labels) {
             // The anchor is the rect's GEOMETRIC centre, so the label sits ON
             // the thing it names rather than beside it.
@@ -768,7 +786,16 @@ int main() {
         hreg.len = 4096;
         hreg.kind = Region::Code;
         hin.push_back(hreg);
-        const Projection hp = build_projection(std::move(hin));
+        // PINNED to Hilbert, not inherited from the struct default: 61 T10
+        // flips that default to Atlas, and this block would then build a real
+        // single-region atlas (order 6, one 64x64 rect = 4096 cells), sail past
+        // atlas_labels' 64-cell threshold, return one label and FAIL — while
+        // printing "a space-filling curve was given a label anchor", which
+        // would be actively false about what happened. Same idiom as the
+        // byte-exact loop above, for the same reason.
+        Projection hp = build_projection(std::move(hin));
+        hp.layout = Projection::Layout::Hilbert;
+        rebuild_layout(hp);
         check("the Hilbert layout labels nothing", atlas_labels(hp).empty(),
               "a space-filling curve was given a label anchor it cannot "
               "support");
@@ -800,6 +827,11 @@ int main() {
         const Projection rb = atlas_of({kRefs[0], kRefs[1], kRefs[2]});
         const LayoutFingerprint fa = layout_fingerprint(ra);
         const LayoutFingerprint fb = layout_fingerprint(rb);
+        check("the fingerprint is a real one, not a default",
+              fa.valid && fa.regions == 3 && fa.digest != 0,
+              "a layout_fingerprint that returned LayoutFingerprint{} would "
+              "satisfy every check in this block vacuously (0 == 0, and "
+              "layout_reflow_note short-circuits on !valid)");
         check("an unchanged region set digests identically", fa.digest == fb.digest,
               "two builds of one region set disagreed");
         check("recomputing an unchanged layout is not a reflow",
@@ -832,12 +864,29 @@ int main() {
         Region g1 = g0;
         g1.base = 0x900000ull;
         g1.len = 4096;
+        // Grow the FIRST region (the one that sorts first), so a LATER
+        // region's domain offset actually moves — which is the mechanism the
+        // comment and the failure message below both name. Growing the last
+        // region would still change the digest (via domain_off.back()) and the
+        // check would pass, but for a different reason than it claims.
         rsmall = {g0, g1};
-        g1.len = 8192;
+        g0.len = 8192;
         rgrown = {g0, g1};
-        const std::string note = layout_reflow_note(
-            layout_fingerprint(build_projection(std::move(rsmall))),
-            layout_fingerprint(build_projection(std::move(rgrown))));
+        // Both PINNED to Hilbert: this block's whole point is that the notice
+        // is not an atlas feature, and inheriting the struct default would let
+        // 61 T10's flip silently turn it into a second atlas test.
+        Projection ps = build_projection(std::move(rsmall));
+        Projection pg = build_projection(std::move(rgrown));
+        ps.layout = Projection::Layout::Hilbert;
+        pg.layout = Projection::Layout::Hilbert;
+        rebuild_layout(ps);
+        rebuild_layout(pg);
+        check("the GREW fixture really is testing Hilbert",
+              ps.layout == Projection::Layout::Hilbert &&
+                  pg.layout == Projection::Layout::Hilbert && ps.rects.empty(),
+              "this block must exercise the NON-atlas path");
+        const std::string note =
+            layout_reflow_note(layout_fingerprint(ps), layout_fingerprint(pg));
         check("a region that GREW reflows the floor under Hilbert too",
               !note.empty(),
               "compaction shifted every later region and the HUD said nothing");

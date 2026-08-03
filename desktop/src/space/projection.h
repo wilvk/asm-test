@@ -122,11 +122,19 @@ struct RegionStyle {
 };
 RegionStyle region_style(Region::Kind kind);
 
-// 61 T9: a digest of everything that decides WHERE an address lands on the
-// plane: `order`, the compacted domain boundaries, the layout, and (under
-// Atlas) the rectangles. Two projections with equal digests place every address
-// identically, so comparing digests across a weave answers "did the floor move"
-// without keeping the old projection alive.
+// 61 T9: a digest of the LAYOUT — `order`, the compacted domain boundaries,
+// the layout mode, and (under Atlas) the rectangles. Comparing digests across a
+// weave answers "did the floor move under the reader" without keeping the old
+// projection alive.
+//
+// Scope, stated exactly because the near-miss claim is tempting: this covers
+// what decides WHICH CELL a domain offset lands in. It deliberately does NOT
+// mix Region::base, so two region sets with identical lengths at different
+// bases digest the same — and that is correct for this question, because the
+// PICTURE is identical (the same cells, in the same places, owned by the same
+// regions in the same order); only which address sits under a given cell has
+// changed. Do not read this as "equal digests place every address identically",
+// which is a stronger claim than the digest supports.
 //
 // `valid` is false for a projection with no regions — there is no floor to have
 // moved — and a comparison involving an invalid fingerprint is never a reflow.

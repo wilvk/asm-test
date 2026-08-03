@@ -2157,13 +2157,25 @@ Add to `desktop/test/test_projection.cpp`, after Task 2's atlas blocks, reusing 
 {
     // Hilbert has nowhere to put a label and must say so by refusing, not by
     // anchoring on a snake's centroid — that would be fabricated structure.
+    //
+    // PIN THE LAYOUT EXPLICITLY. Do NOT write `const Projection h =
+    // build_projection(...)` and rely on the struct default, which is what an
+    // earlier revision of this snippet did: Task 10 flips that default to
+    // Atlas, and this block then builds a REAL single-region atlas (total 4096
+    // -> order 6, n = 64, one rect {0,0,64,64} = 4096 cells), clears
+    // atlas_labels' 64-cell threshold, returns one label, and FAILS — printing
+    // "a space-filling curve was given a label anchor", which is actively
+    // false about what happened. This is the same hazard, and the same fix, as
+    // the byte-exact loop in Task 2 Step 1.
     std::vector<Region> in;
     Region reg;
     reg.base = 0x400000ull;
     reg.len = 4096;
     reg.kind = Region::Code;
     in.push_back(reg);
-    const Projection h = build_projection(std::move(in));
+    Projection h = build_projection(std::move(in));
+    h.layout = Projection::Layout::Hilbert;
+    rebuild_layout(h);
     check("the Hilbert layout labels nothing", atlas_labels(h).empty(),
           "a space-filling curve was given a label anchor it cannot support");
 }
@@ -2381,9 +2393,23 @@ Add to `desktop/test/test_projection.cpp`, after Task 8's label blocks:
     small = {r0, r1};
     r1.len = 8192;
     grown = {r0, r1};
-    const std::string note = layout_reflow_note(
-        layout_fingerprint(build_projection(std::move(small))),
-        layout_fingerprint(build_projection(std::move(grown))));
+    // PIN BOTH to Hilbert rather than inheriting the default — this block's
+    // whole point is that the notice is NOT an atlas feature, and after Task
+    // 10's flip an unpinned pair would silently become a second atlas test
+    // that still passes while testing nothing it claims. Grow the region that
+    // sorts FIRST, too, so a LATER region's domain offset actually moves,
+    // which is the mechanism this block's own wording names.
+    Projection ps = build_projection(std::move(small));
+    Projection pg = build_projection(std::move(grown));
+    ps.layout = Projection::Layout::Hilbert;
+    pg.layout = Projection::Layout::Hilbert;
+    rebuild_layout(ps);
+    rebuild_layout(pg);
+    check("the GREW fixture really is testing Hilbert",
+          ps.layout == Projection::Layout::Hilbert && ps.rects.empty(),
+          "this block must exercise the NON-atlas path");
+    const std::string note =
+        layout_reflow_note(layout_fingerprint(ps), layout_fingerprint(pg));
     check("a region that GREW reflows the floor under Hilbert too",
           !note.empty(),
           "compaction shifted every later region and the HUD said nothing");
@@ -2618,6 +2644,8 @@ Task 2 settled the two structural questions — `order` keeps its meaning and it
 - the locality block needs 1-byte neighbours to stay 4-adjacent, which is precisely what the serpentine buys — consecutive ordinals are adjacent within a row *and* across the row break (Task 2 Step 1 pins that directly).
 
 The `:198` comment is now false as written and the grep below catches it: it is triage class (a), a comment to update, not a behavioural dependency.
+
+**That note covers those three blocks ONLY.** Tasks 8 and 9 add further blocks to the same file, and those are NOT covered: each must PIN its layout explicitly (`layout = Layout::Hilbert; rebuild_layout(...)`) rather than inherit the default. A block that names Hilbert in its check string while inheriting the default is exactly what this step's grep is for — do not wave a `Hilbert` hit in `test_projection.cpp` through on the strength of the paragraph above.
 
 Run: `grep -rn "power of four\|power-of-four\|4\^\|1:1 domain\|hilbert\|Hilbert" desktop/test/ desktop/src/`
 
