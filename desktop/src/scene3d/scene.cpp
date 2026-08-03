@@ -34,6 +34,7 @@
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
 #include "scene3d/shaders/embedded.h"
+#include "scene3d/trajscale.h" // 61 T1: the worldline's world-Y-per-step rule
 
 namespace asmdesk::scene3d {
 
@@ -797,8 +798,16 @@ void Scene::free_traj() {
 void Scene::set_trajectories(const space::TrajectorySet &ts,
                              const space::Projection &proj) {
     free_traj();
-    const float scale =
-        time_scale > 0.0f ? time_scale : (nsteps > 0 ? 0.6f / nsteps : 0.02f);
+    // 61 T1: `nsteps` is the TERRAIN's extent and a `mem` stream can outlast
+    // it, so the denominator is EXTENDED to cover the largest step actually
+    // present rather than the path being clamped — a step past the stated
+    // extent is still a real step. The rule itself is header-only arithmetic
+    // (scene3d/trajscale.h) so it is testable without a GL context.
+    uint64_t max_t = 0;
+    for (const space::Trajectory &tr : ts.trajectories)
+        for (const space::TrajPoint &pt : tr.points)
+            max_t = std::max(max_t, pt.t);
+    const float scale = scene_traj_scale(nsteps, max_t, time_scale);
     traj_scale_ = scale; // T6: render() derives uHeadY from this later
 
     std::vector<float> spur_verts; // GL_LINES pairs

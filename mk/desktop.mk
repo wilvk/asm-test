@@ -1197,6 +1197,7 @@ desktop-setup-render:
 # CLAUDE.md). vm_compat.o compiling in the test tree IS the regression test that
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
+                 $(BUILD)/desktop_test_scene_traj \
                  $(BUILD)/desktop_test_png_write \
                  $(BUILD)/desktop_test_shot_manifest \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
@@ -1684,6 +1685,14 @@ $(BUILD)/desktop_test_converge: $(BUILD)/desktop/test/t/test_converge.o \
 $(BUILD)/desktop/test/t/test_camera.o \
 $(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
 $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# 61 T1 (3D-axis-budget): the worldline's world-Y-per-step rule. scene3d/
+# trajscale.h is header-only and dependency-free for exactly the reason
+# camera.h above is — the scale is pure arithmetic, and scene.o links GL, so a
+# test of that arithmetic must not need a GL context. Links nothing but its own
+# object, and includes no linmath.h, so it needs no order-only prereq.
+$(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # 51 T1/T2/T3 (scene-focus-and-scale.md): the SUBJECT filter's pure half —
