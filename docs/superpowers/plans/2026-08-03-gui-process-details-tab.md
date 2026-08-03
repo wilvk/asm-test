@@ -2214,6 +2214,8 @@ std::string procinfo_status(const ProcInfoRunner &r);
 The shape, with the parts that carry judgement written out:
 
 ```cpp
+// Needs <fcntl.h>, <signal.h>, <sys/wait.h>, <unistd.h>, <cerrno>, <cstring>
+// in procinfo.cpp, plus "live/session.h" for resolve_asmspy_path().
 namespace {
 // Kill and reap, unconditionally. Called on every path that abandons a child
 // — a new selection, a timeout, the pane closing, destruction — because the
@@ -2235,7 +2237,67 @@ void reap(ProcInfoRunner &r) {
 
 // fork/exec `asmspy --info <pid> --json`, stdout on a NON-BLOCKING pipe: the
 // UI thread polls it from the frame loop and never waits on the child.
-bool spawn(ProcInfoRunner &r, long pid) { /* pipe, fork, dup2, execvp */ }
+//
+// Three details here are load-bearing rather than incidental:
+//
+//  - O_CLOEXEC on the pipe (pipe2, not pipe). A GUI process holds a lot of
+//    descriptors — GL, X11/Wayland, fontconfig, the serve host's own pipes —
+//    and a child that inherited them would keep them alive past its parent's
+//    intent. The write end is dup2'd (which clears CLOEXEC on the copy), so
+//    the child still gets its stdout.
+//  - The child's stderr goes to /dev/null. asmspy writes refusal prose there
+//    and a windowed app has no terminal for it; inheriting would scribble
+//    over whatever launched the GUI.
+//  - The read end is NON-BLOCKING. procinfo_tick runs in the frame loop, so a
+//    blocking read would freeze the UI for as long as the child took — the
+//    exact failure this one-shot design exists to avoid.
+bool spawn(ProcInfoRunner &r, long pid, double now_s) {
+    std::string exe =
+        r.asmspy_path.empty() ? resolve_asmspy_path() : r.asmspy_path;
+    if (exe.empty()) {
+        r.status = "no asmspy found on $PATH or at ./build/asmspy — build it "
+                   "with `make cli`, or set the path in Connect";
+        return false;
+    }
+    int fds[2];
+    if (::pipe2(fds, O_CLOEXEC) != 0) {
+        r.status = std::string("pipe: ") + std::strerror(errno);
+        return false;
+    }
+    pid_t child = ::fork();
+    if (child < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        r.status = std::string("fork: ") + std::strerror(errno);
+        return false;
+    }
+    if (child == 0) {
+        ::dup2(fds[1], STDOUT_FILENO); // the dup CLEARS O_CLOEXEC
+        int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0)
+            ::dup2(devnull, STDERR_FILENO);
+        char pidbuf[32];
+        std::snprintf(pidbuf, sizeof pidbuf, "%ld", pid);
+        // v1 probes LOCALLY even when an ssh host is configured: the Processes
+        // table lists local /proc, so an ssh-prefixed probe would render an
+        // unrelated remote pid's details. The pane states that mismatch.
+        char *argv[] = {const_cast<char *>(exe.c_str()),
+                        const_cast<char *>("--info"), pidbuf,
+                        const_cast<char *>("--json"), nullptr};
+        ::execvp(argv[0], argv);
+        ::_exit(127); // exec failed; the empty read reports it as a failure
+    }
+    ::close(fds[1]);
+    int fl = ::fcntl(fds[0], F_GETFL, 0);
+    ::fcntl(fds[0], F_SETFL, (fl < 0 ? 0 : fl) | O_NONBLOCK);
+    r.child_pid = child;
+    r.child_fd = fds[0];
+    r.in_flight_pid = pid;
+    r.spawned_at = now_s;
+    r.buf.clear();
+    r.spawns++;
+    return true;
+}
 } // namespace
 
 void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
@@ -2266,7 +2328,7 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
                            now_s - r.want_since >= r.debounce_s;
     const bool due = r.last_ok_at < 0 || now_s - r.last_ok_at >= r.refresh_s;
     if (idle && debounced && r.visible && due)
-        spawn(r, selected_pid);
+        spawn(r, selected_pid, now_s);
 }
 ```
 
