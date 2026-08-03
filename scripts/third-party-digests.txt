@@ -90,6 +90,16 @@ tarball-sha256  nlohmann-json  3.11.3  sha256:9bea4c8066ef4a1c206b2be5a36302f892
 # single-file scheme as the nlohmann-json row above). Added BY HAND —
 # refresh-thirdparty-digests.sh does not know this row.
 tarball-sha256  linmath        26211bb  sha256:e5ea6c6da3d78d4afa40d987770331837b98247ed5799b11a5e09e9abe84f311
+# stb_image_write.h: the PNG encoder behind the desktop GUI's --shot
+# documentation-screenshot mode (docs/guides/desktop-gui-scenes.md). Dual MIT /
+# public-domain, a single header compiled INTO asmtest-desktop ONLY — never
+# asmtest-viewer, which stays free of third-party image code (D4). Like linmath
+# above, stb ships NO tagged releases, so the pin is a commit: the "version"
+# token is that commit's short form and fetch-stb.sh resolves the full commit for
+# the raw-file URL. The digest is the SHA-256 of the single header at that commit
+# (self-hashed at pin time). The header is stb_image_write v1.16. Added BY HAND —
+# refresh-thirdparty-digests.sh does not know this row.
+tarball-sha256  stb-image-write  f75e8d1  sha256:cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05
 # --- Dear ImGui addons (gui 12-addon-supply-chain.md; fetched by fetch-<name>.sh
 # -> fetch-addon.sh, all bundled MIT/zlib, self-hashed at pin time). Added BY
 # HAND and CARRIED THROUGH refresh-thirdparty-digests.sh (keyed on name+version).

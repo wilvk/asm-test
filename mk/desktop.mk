@@ -24,6 +24,13 @@ JSON_HOME     ?= $(BUILD)/nlohmann-json/$(JSON_VERSION)
 # script resolves the full commit) — see scripts/fetch-linmath.sh.
 LINMATH_VERSION ?= 26211bb
 LINMATH_HOME    ?= $(BUILD)/linmath/$(LINMATH_VERSION)
+# stb_image_write.h: the PNG encoder behind --shot (the documentation
+# screenshots, docs/guides/desktop-gui-scenes.md). Same pinned-single-header
+# shape as linmath above — see scripts/fetch-stb.sh. Deliberately NOT added to
+# DESKTOP_CXXFLAGS: only ui/png_write.cpp includes it, and only the FULL app
+# compiles that TU, which is what keeps asmtest-viewer free of it (D4).
+STB_VERSION ?= f75e8d1
+STB_HOME    ?= $(BUILD)/stb/$(STB_VERSION)
 
 # -MMD -MP: per-object header deps so an incremental build stays correct across
 # the many desktop/ and imgui headers. Recursive (=), never := (CXX is set by
@@ -60,6 +67,19 @@ $(JSON_HOME)/nlohmann/json.hpp: scripts/fetch-json.sh scripts/third-party-digest
 	sh scripts/fetch-json.sh >/dev/null
 $(LINMATH_HOME)/linmath.h: scripts/fetch-linmath.sh scripts/third-party-digests.txt
 	sh scripts/fetch-linmath.sh >/dev/null
+$(STB_HOME)/stb_image_write.h: scripts/fetch-stb.sh scripts/third-party-digests.txt
+	sh scripts/fetch-stb.sh >/dev/null
+
+# ui/png_write.cpp is the ONLY TU that sees stb, in the app + test trees only.
+# The render tree is absent on purpose: asmtest-viewer must link no third-party
+# image code (D4), and the surest way to guarantee that is never to compile it.
+# -Wno-missing-field-initializers is for stb's own `stbi__write_context s = {0}`,
+# not for our code: scoped to this one TU so a real warning in png_write.cpp is
+# still visible rather than buried under a page of vendored-header noise.
+$(BUILD)/desktop/app/ui/png_write.o $(BUILD)/desktop/test/ui/png_write.o: \
+    DESKTOP_CXXFLAGS += -I$(STB_HOME) -Wno-missing-field-initializers
+$(BUILD)/desktop/app/ui/png_write.o $(BUILD)/desktop/test/ui/png_write.o: \
+    | $(STB_HOME)/stb_image_write.h
 
 # --- vendored Dear ImGui addons (12-addon-supply-chain.md) --------------------
 # Pattern per addon: a home var, a fetch rule (thin wrapper -> fetch-addon.sh),
@@ -1138,6 +1158,7 @@ desktop-setup-render:
 # CLAUDE.md). vm_compat.o compiling in the test tree IS the regression test that
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
+                 $(BUILD)/desktop_test_png_write \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
@@ -1760,6 +1781,13 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
 
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
     $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The --shot PNG writer. Links nothing but its own TU: stb is header-only and
+# png_write.cpp is pure (no GL, no ImGui, no doc model), so this stays one of
+# the cheapest tests in the lane.
+$(BUILD)/desktop_test_png_write: $(BUILD)/desktop/test/t/test_png_write.o \
+    $(BUILD)/desktop/test/ui/png_write.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The dock layout manager (13-foundation-moves.md T2): layout.o + imgui core,
