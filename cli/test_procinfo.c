@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_tidsort.h"
 
 static int failures;
 
@@ -59,12 +61,23 @@ static void check(const char *what, int cond, const char *why) {
  * all of that reachable. */
 
 /* Never enters a syscall, so /proc/<tid>/syscall for THIS tid reads
- * "running in user mode" — the whole point of spawning it. */
-static volatile int g_spin_stop;
+ * "running in user mode" — the whole point of spawning it.
+ *
+ * `atomic_int`, not `volatile int`: `volatile` prevents register-caching,
+ * it is not a synchronization primitive, and main()'s write here races
+ * (per the C11 memory model) with this loop's read of the SAME object —
+ * ThreadSanitizer flags it as a genuine data race, reproducibly, even
+ * though it is benign in practice on every architecture this project
+ * targets (an aligned int, no torn reads). Match this file's own house
+ * style for a poll/stop flag (cli/asmspy.c's atomic_bool g_sigstop /
+ * atomic_int running): plain atomic_load/atomic_store (the default
+ * sequentially-consistent ordering), rather than an explicit relaxed
+ * ordering found nowhere else in this codebase. */
+static atomic_int g_spin_stop;
 static void *spin_worker(void *arg) {
     (void)arg;
     volatile long sink = 0;
-    while (!g_spin_stop)
+    while (!atomic_load(&g_spin_stop))
         sink++;
     return NULL;
 }
@@ -82,12 +95,16 @@ static void *block_worker(void *arg) {
 
 /* Polls a shared stop flag; used only to inflate the live thread count past
  * ASMSPY_PI_THREADS_CAP so the cap + truncation flag are exercised for real,
- * mirroring the children-cap block's forked pause()rs. */
-static volatile int g_cap_stop;
+ * mirroring the children-cap block's forked pause()rs. Same atomic_int
+ * reasoning as g_spin_stop above: a plain `volatile int` here is the
+ * identical data race, just far less likely to be SAMPLED by a tool like
+ * TSan (this loop only reads the flag once per 20ms nanosleep, a much
+ * narrower window) — sampling luck, not correctness. */
+static atomic_int g_cap_stop;
 static void *cap_worker(void *arg) {
     (void)arg;
     struct timespec nap = {0, 20L * 1000 * 1000}; /* 20 ms */
-    while (!g_cap_stop)
+    while (!atomic_load(&g_cap_stop))
         nanosleep(&nap, NULL);
     return NULL;
 }
@@ -108,6 +125,67 @@ static void burn_cpu_ms(long ms) {
 }
 
 int main(void) {
+    /* --- asmspy_tidsort_leader_first: pure, so unit-tested here on
+     * SYNTHETIC arrays no live /proc listing can produce. Linux hands live
+     * tids back already ascending (creation order), so a real snapshot's
+     * input to this function is always pre-sorted with the leader already
+     * at index 0 — the sort body and the leader-rotate's "not the smallest"
+     * branch are BOTH unreachable from any live process short of pid
+     * wraparound (measured: disabling the sort entirely produces zero new
+     * failures in the live per-thread section further below). These arrays
+     * exercise exactly what a live process cannot: unsorted/descending
+     * input, the leader mid-array/last/largest, duplicate tids, n<=1, and a
+     * leader absent from the array. Each expected result was independently
+     * computed by running this exact function against these exact inputs
+     * (not hand-derived) before being written here. */
+    {
+        long a[4] = {10, 20, 30, 40}; /* leader in the middle */
+        asmspy_tidsort_leader_first(a, 4, 30);
+        check("tidsort: leader in the middle",
+              a[0] == 30 && a[1] == 10 && a[2] == 20 && a[3] == 40,
+              "expected [30,10,20,40]");
+    }
+    {
+        long a[4] = {30, 10, 40, 20}; /* leader last / numerically largest */
+        asmspy_tidsort_leader_first(a, 4, 40);
+        check("tidsort: leader last / numerically largest",
+              a[0] == 40 && a[1] == 10 && a[2] == 20 && a[3] == 30,
+              "expected [40,10,20,30]");
+    }
+    {
+        long a[5] = {50, 40, 30, 20, 10}; /* descending input */
+        asmspy_tidsort_leader_first(a, 5, 20);
+        check("tidsort: descending input",
+              a[0] == 20 && a[1] == 10 && a[2] == 30 && a[3] == 40 &&
+                  a[4] == 50,
+              "expected [20,10,30,40,50]");
+    }
+    {
+        long a[4] = {20, 10, 20, 30}; /* duplicate tids */
+        asmspy_tidsort_leader_first(a, 4, 20);
+        check("tidsort: duplicate tids",
+              a[0] == 20 && a[1] == 10 && a[2] == 20 && a[3] == 30,
+              "expected [20,10,20,30]");
+    }
+    {
+        long a[1] = {777}; /* n == 0: must not touch the array at all */
+        asmspy_tidsort_leader_first(a, 0, 777);
+        check("tidsort: n == 0 is a no-op", a[0] == 777,
+              "n==0 must not touch the array");
+    }
+    {
+        long a[1] = {42}; /* n == 1, leader present */
+        asmspy_tidsort_leader_first(a, 1, 42);
+        check("tidsort: n == 1", a[0] == 42, "expected [42]");
+    }
+    {
+        long a[3] = {30, 10, 20}; /* leader absent from the array */
+        asmspy_tidsort_leader_first(a, 3, 999);
+        check("tidsort: leader absent leaves the sort intact",
+              a[0] == 10 && a[1] == 20 && a[2] == 30,
+              "expected [10,20,30] (sorted, un-rotated)");
+    }
+
     asmspy_procinfo_t *pi =
         malloc(sizeof *pi); /* ~40 KB — never on the stack */
     if (!pi) {
@@ -313,7 +391,7 @@ int main(void) {
         if (pipe(pfd) != 0) {
             check("pipe() for the blocked worker", 0, strerror(errno));
         } else {
-            g_spin_stop = 0;
+            atomic_store(&g_spin_stop, 0);
             pthread_t spin_t, block_t;
             int have_spin =
                 (pthread_create(&spin_t, NULL, spin_worker, NULL) == 0);
@@ -334,7 +412,15 @@ int main(void) {
                   pi->threads_v[0].tid == (long)getpid(),
                   "leader is not first");
 
-            /* sort: strictly ascending by tid for every row after the leader */
+            /* sort: strictly ascending by tid for every row after the leader.
+             * INTEGRATION sanity check only, not the sort's real coverage:
+             * Linux's readdir("/proc/<pid>/task") already hands live tids
+             * back in creation order (ascending), so this passes whether or
+             * not asmspy_tidsort_leader_first's sort actually runs — a
+             * disabled sort produces zero new failures here (measured). The
+             * synthetic-array tests below are what actually exercise the
+             * sort and the leader-rotate on inputs a live process cannot
+             * produce (unsorted/descending, leader not-smallest, ...). */
             int sorted = 1;
             for (int i = 2; i < pi->n_threads_v; i++)
                 if (pi->threads_v[i - 1].tid >= pi->threads_v[i].tid)
@@ -359,7 +445,7 @@ int main(void) {
                   "no worker row resolved have_syscall with "
                   "syscall_name==\"read\"");
 
-            g_spin_stop = 1;
+            atomic_store(&g_spin_stop, 1);
             char one = 'x';
             ssize_t wn = write(pfd[1], &one, 1); /* unblock the read() */
             (void)wn;
@@ -382,7 +468,7 @@ int main(void) {
         enum { NTHREADS = ASMSPY_PI_THREADS_CAP + 8 };
         pthread_t thr[NTHREADS];
         int spawned = 0;
-        g_cap_stop = 0;
+        atomic_store(&g_cap_stop, 0);
         for (int i = 0; i < NTHREADS; i++) {
             if (pthread_create(&thr[i], NULL, cap_worker, NULL) != 0)
                 break;
@@ -400,7 +486,7 @@ int main(void) {
               pi->n_threads_v == ASMSPY_PI_THREADS_CAP,
               "n_threads_v should equal ASMSPY_PI_THREADS_CAP once truncated");
 
-        g_cap_stop = 1;
+        atomic_store(&g_cap_stop, 1);
         for (int i = 0; i < spawned; i++)
             pthread_join(thr[i], NULL);
     }

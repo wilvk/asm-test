@@ -29,6 +29,7 @@
 
 #include "asmspy.h"
 #include "asmspy_syscall_name.h" /* syscall-number -> name table, shared with asmspy_engine.c */
+#include "asmspy_tidsort.h" /* ascending + leader-first tid ordering, unit-tested on synthetic arrays */
 
 /* ================================================================== */
 /* Process list                                                        */
@@ -1537,34 +1538,10 @@ static void pi_read_threads(pid_t pid, asmspy_procinfo_t *out) {
     }
     closedir(d);
 
-    /* ascending, then swap the leader to the front */
-    for (int i = 1; i < n; i++) {
-        long v = tids[i];
-        int j = i - 1;
-        while (j >= 0 && tids[j] > v) {
-            tids[j + 1] = tids[j]; /* split from `j--`: the combined form
-                                    * (tids[j + 1] = tids[j--]) reads and
-                                    * modifies `j` unsequenced, which -Wall
-                                    * -Wextra correctly flags (-Wsequence-
-                                    * point) as undefined behaviour */
-            j--;
-        }
-        tids[j + 1] = v;
-    }
-    /* Rotate, not swap: a plain swap of tids[0] and tids[i] deposits
-     * whatever WAS at tids[0] (the smallest remaining tid) at index i,
-     * breaking "then the rest ascending by tid" for every row from 1 to i.
-     * Only reachable when the leader is not the numerically smallest of its
-     * own tids (pid wraparound) — rare, but the fix is exact either way:
-     * shift tids[0..i) up by one slot (memmove handles the overlap) to
-     * close the gap the leader leaves, then place it at the front. */
-    for (int i = 0; i < n; i++)
-        if (tids[i] == (long)pid) {
-            long leader = tids[i];
-            memmove(&tids[1], &tids[0], (size_t)i * sizeof tids[0]);
-            tids[0] = leader;
-            break;
-        }
+    /* Ascending, then leader-first — extracted to asmspy_tidsort.h so this
+     * ordering (and the leader ROTATE, not swap: see that header) is unit-
+     * tested on synthetic arrays a live /proc listing can never produce. */
+    asmspy_tidsort_leader_first(tids, n, (long)pid);
 
     for (int i = 0; i < n; i++) {
         char s[24];

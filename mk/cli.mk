@@ -51,7 +51,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 $(BUILD)/%.o: cli/%.c cli/libasmspy.h cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               cli/asmspy_autoregion.h cli/asmspy_arch.h \
-              cli/asmspy_syscall_name.h \
+              cli/asmspy_syscall_name.h cli/asmspy_tidsort.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -116,7 +116,7 @@ $(BUILD)/pic/asmspy_engine.o: cli/asmspy_engine.c cli/libasmspy.h \
                               $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
 $(BUILD)/pic/asmspy_proc.o: cli/asmspy_proc.c cli/libasmspy.h \
-                            cli/asmspy_syscall_name.h \
+                            cli/asmspy_syscall_name.h cli/asmspy_tidsort.h \
                             $(BUILD)/asmspy_syscall_names.inc \
                             $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
@@ -473,6 +473,7 @@ $(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
 # gatherer that quietly attached could not do. Links the resolver TU directly,
 # like test_symtab.
 $(BUILD)/test_procinfo: cli/test_procinfo.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
+                        cli/asmspy_tidsort.h \
                         | $(BUILD) $(BUILD)/asmspy_syscall_names.inc
 	$(CC) $(CFLAGS) -Icli -I$(BUILD) -pthread cli/test_procinfo.c \
 	  $(BUILD)/asmspy_proc.o -lstdc++ -o $@
