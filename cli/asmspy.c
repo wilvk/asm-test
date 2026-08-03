@@ -3250,6 +3250,16 @@ typedef struct {
      * region that never changes. */
     uint8_t *ci_last;
     size_t ci_last_len;
+    /* WHICH span the code image tracks. Normally the session's own region
+     * (p.base/p.len), but a whole-process mode has no region and still wants a
+     * code image — mode "tree" arms this over the main executable's text so the
+     * desktop's 3D pane, which is present only when a recording carries
+     * codeimage regions, can host the module-excursion ribbon. Kept SEPARATE
+     * from p.base/p.len so a tree session is never misreported as a region
+     * session in its own header or refusals. Zero => fall back to p.base/p.len.
+     */
+    uint64_t ci_base;
+    uint64_t ci_len;
     /* A measured reason no lookup could produce. mode "auto" needs it: when
      * its SAMPLER self-skips, the thing that is unavailable is the sampler,
      * and only the sampler knows why — reporting the capture engine's generic
@@ -3344,12 +3354,12 @@ static void serve_codeimage_emit(serve_session_t *s) {
     if (!s->img)
         return;
     when = asmtest_codeimage_now(s->img);
-    if (asmtest_codeimage_bytes_at(s->img, (const void *)(uintptr_t)s->p.base,
+    if (asmtest_codeimage_bytes_at(s->img, (const void *)(uintptr_t)s->ci_base,
                                    when, &p, &n) != ASMTEST_CI_OK ||
         !p || !n)
         return;
-    if (n > s->p.len)
-        n = s->p.len;
+    if (n > s->ci_len)
+        n = s->ci_len;
     if (n > SERVE_CI_MAX_BYTES) {
         /* A span larger than one line can carry: emit the prefix with the
          * length it actually contains (the schema requires bytes == 2*len) and
@@ -3383,9 +3393,59 @@ static void serve_codeimage_emit(serve_session_t *s) {
     rec_emitf(&s->rec, "codeimage",
               "\"base\":%llu,\"len\":%llu,\"version\":%llu,\"when\":%llu,"
               "\"bytes\":\"%s\"",
-              (unsigned long long)s->p.base, (unsigned long long)n,
+              (unsigned long long)s->ci_base, (unsigned long long)n,
               s->ci_version, (unsigned long long)when, hexbuf);
     s->ci_version++;
+}
+
+/* The main executable's first executable mapping, from /proc/<pid>/maps. Used by
+ * whole-process modes, which have no region of their own but still want a code
+ * image: the desktop's 3D pane is present only when a recording carries
+ * codeimage regions, so without this a `tree` capture can never host the module
+ * ribbon. Returns 1 on success.
+ *
+ * "The main executable" is the mapping whose pathname matches /proc/<pid>/exe —
+ * matched by path rather than by "the first r-xp line", because the first
+ * executable mapping in maps order is frequently the loader, not the program. */
+static int serve_exe_text_span(pid_t pid, uint64_t *base, uint64_t *len) {
+    char mp[64], exe[PATH_MAX], line[PATH_MAX + 256];
+    ssize_t n;
+    FILE *f;
+    int found = 0;
+
+    snprintf(mp, sizeof mp, "/proc/%d/exe", (int)pid);
+    n = readlink(mp, exe, sizeof exe - 1);
+    if (n <= 0)
+        return 0;
+    exe[n] = '\0';
+
+    snprintf(mp, sizeof mp, "/proc/%d/maps", (int)pid);
+    f = fopen(mp, "r");
+    if (!f)
+        return 0;
+    while (fgets(line, sizeof line, f)) {
+        unsigned long long lo, hi;
+        char perms[8], path[PATH_MAX];
+        path[0] = '\0';
+        if (sscanf(line, "%llx-%llx %7s %*x %*s %*u %4095[^\n]", &lo, &hi, perms,
+                   path) < 3)
+            continue;
+        if (perms[2] != 'x')
+            continue;
+        {   /* strip the leading spaces sscanf's %[^\n] keeps */
+            const char *p2 = path;
+            while (*p2 == ' ')
+                p2++;
+            if (strcmp(p2, exe) != 0)
+                continue;
+        }
+        *base = (uint64_t)lo;
+        *len = (uint64_t)(hi - lo);
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
 }
 
 /* Track the session's region and emit version 0. Called once, before the engine
@@ -3393,7 +3453,13 @@ static void serve_codeimage_emit(serve_session_t *s) {
 static void serve_codeimage_arm(serve_session_t *s) {
     char why[320], esc[4 * 320];
     int rc;
-    if (s->img || !s->p.base || !s->p.len)
+    /* Default the tracked span to the session's region. A whole-process mode
+     * sets ci_base/ci_len itself before calling and is left alone here. */
+    if (!s->ci_base) {
+        s->ci_base = s->p.base;
+        s->ci_len = s->p.len;
+    }
+    if (s->img || !s->ci_base || !s->ci_len)
         return;
     if (!asmtest_codeimage_available()) {
         /* The gate is a MEASURED fact (soft-dirty / PAGEMAP_SCAN, Linux >= 6.7)
@@ -3409,13 +3475,13 @@ static void serve_codeimage_arm(serve_session_t *s) {
     s->img = asmtest_codeimage_new(s->p.pid);
     if (!s->img)
         return;
-    rc = asmtest_codeimage_track(s->img, (const void *)(uintptr_t)s->p.base,
-                                 s->p.len);
+    rc = asmtest_codeimage_track(s->img, (const void *)(uintptr_t)s->ci_base,
+                                 s->ci_len);
     if (rc != ASMTEST_CI_OK) {
         snprintf(why, sizeof why,
                  "codeimage unavailable: tracking 0x%llx+%llu returned status "
                  "%d (the region is not readable in this target)",
-                 (unsigned long long)s->p.base, (unsigned long long)s->p.len,
+                 (unsigned long long)s->ci_base, (unsigned long long)s->ci_len,
                  rc);
         asmtrace_escape(esc, sizeof esc, why);
         rec_emitf(&s->rec, "note", "\"text\":\"%s\"", esc);
@@ -3900,6 +3966,16 @@ static void serve_run_engine(serve_session_t *s) {
         f.max_depth = p->depth;
         f.focus = p->focus[0] ? p->focus : NULL;
         f.module = p->module[0] ? p->module : NULL;
+        /* A tree session has no region, but the desktop's 3D pane is present
+         * only when a recording carries codeimage regions — so without a code
+         * image a `tree` capture can never host the module-excursion ribbon,
+         * which is exactly the scene a call tree is FOR. Arm it over the main
+         * executable's text: a real span of the traced program, stated at its
+         * true address, not a placeholder. Best-effort — a target whose maps
+         * cannot be read still captures its calls, it just cannot be shown in
+         * 3D, and serve_codeimage_arm says so in a `note`. */
+        if (serve_exe_text_span(p->pid, &s->ci_base, &s->ci_len))
+            serve_codeimage_arm(s);
         s->rc = asmspy_engine_tree(p->pid, p->tid, p->follow, p->max, &s->stop,
                                    &s->syms, &f, serve_tree_sink, s);
         break;
@@ -4010,6 +4086,12 @@ static void serve_run_engine(serve_session_t *s) {
              * for each walked candidate, since they are different regions. */
             serve_codeimage_close(s);
             s->ci_version = 0;
+            /* Each walked candidate is a DIFFERENT region, so the tracked span
+             * must be re-derived from the new p.base/p.len. Without this reset
+             * serve_codeimage_arm's "already set" default would pin every
+             * candidate's code image to the first one's address. */
+            s->ci_base = 0;
+            s->ci_len = 0;
             serve_codeimage_arm(s);
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
                                            p->steps, p->fpregs, p->continuous,
@@ -4995,6 +5077,10 @@ static int serve_loop(FILE *in, FILE *out) {
          * region session numbers its own snapshots from 0 again, because it is
          * a different recording with its own header and footer. */
         s.ci_version = 0;
+        /* The tracked span is per-session too: a previous session's exe-text
+         * span must not leak into a region session's code image. */
+        s.ci_base = 0;
+        s.ci_len = 0;
         if (pthread_create(&s.th, NULL, serve_tracer, &s) != 0) {
             atomic_store(&s.running, 0);
             serve_err(&s, "start", "could not create the tracer thread");

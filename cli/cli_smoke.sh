@@ -465,6 +465,54 @@ assert isinstance(d["defuse"], list)' \
     fi
     rm -f "$dfcont" "$dfone"
 
+    # --serve mode "tree" arms a code image over the main executable's TEXT.
+    #
+    # WHY: the desktop's 3D pane is present only when a recording carries
+    # codeimage regions (view_presence.cpp gates Scene3D on
+    # regions_from_codeimage). A tree session has no region of its own, so
+    # without this it emitted no codeimage and the module-excursion ribbon — the
+    # one 3D scene a call tree is FOR — could never be shown from a live capture.
+    # Measured before the fix: mode=tree emitted call events and nothing else.
+    echo "--- asmspy --serve mode=tree (codeimage over the exe text) ---"
+    svtree="$BUILD/serve_tree_$$.ndjson"
+    svdf="$BUILD/serve_df_$$.ndjson"
+    rm -f "$svtree" "$svdf"
+    set +e
+    { printf '{"cmd":"start","mode":"tree","pid":%s,"max":40}\n' "$AVPID"; sleep 6; } \
+        | timeout 40 "$ASM" --serve > "$svtree" 2>/dev/null
+    set -e
+    grep -q '"k":"call"' "$svtree" \
+        || fail "--serve tree: no call events (the session did not run)"
+    grep -q '"k":"codeimage"' "$svtree" \
+        || fail "--serve tree: no codeimage — the 3D pane cannot host the module ribbon"
+    # The span must be a REAL address with a REAL length, not a zero placeholder.
+    grep -m1 '"k":"codeimage"' "$svtree" \
+        | grep -qE '"base":[1-9][0-9]*,"len":[1-9][0-9]*' \
+        || fail "--serve tree: codeimage carries a zero base/len"
+    echo "  tree: codeimage armed over the exe text, call events present"
+
+    # NEGATIVE CONTROL, and the reason the tracked span is a separate field: a
+    # REGION session must still track its OWN region, not the executable's text.
+    # Sharing p.base/p.len for both would silently retarget every dataflow
+    # capture's code image at the whole program.
+    hb=$("$ASM" --syms "$AVPID" hotfn 2>/dev/null | awk '/hotfn/{print $1; exit}')
+    hl=$("$ASM" --syms "$AVPID" hotfn 2>/dev/null | awk '/hotfn/{print $2; exit}')
+    if [ -n "$hb" ] && [ -n "$hl" ]; then
+        hbd=$(printf '%d' "$hb")
+        set +e
+        { printf '{"cmd":"start","mode":"dataflow","pid":%s,"base":%s,"len":%s,"max":60}\n' \
+            "$AVPID" "$hbd" "$hl"; sleep 6; } \
+            | timeout 40 "$ASM" --serve > "$svdf" 2>/dev/null
+        set -e
+        if grep -q '"k":"codeimage"' "$svdf"; then
+            grep -m1 '"k":"codeimage"' "$svdf" | grep -q "\"base\":$hbd," \
+                || fail "--serve dataflow: codeimage base is not the region's own base \
+(the exe-text span leaked into a region session)"
+            echo "  dataflow: codeimage still tracks the region's own base, OK"
+        fi
+    fi
+    rm -f "$svtree" "$svdf"
+
     # 39 T4: a continuous session must SURVIVE a QUIET region — the pinned region
     # not entered for one entry wait — and keep capturing the later burst. 35's
     # re-arm loop cleared its stop flag only on a PRODUCTIVE pass, so a single
