@@ -310,70 +310,91 @@ uint64_t plane_boundary(uint32_t order, uint64_t p, uint64_t total) {
 
 ***(b) The rectangles: an ORDER-PRESERVING binary split.*** **Not** the Bruls/Huizing/van Wijk squarify an earlier draft named. BHvW sorts by descending area, and `regions` is sorted by base *precisely so memory neighbours become plane neighbours* ([build_projection's own comment](../../../desktop/src/space/projection.cpp#L80)); reordering would break that **and** break `rects`' index-parallelism with `regions`, which the whole "join by index, no second key" contract rests on. BHvW's strip packing also does not tile exactly once budgets are integers — the earlier draft's "the budgets sum to `n*n` and the strips tile, so the grid is covered by construction" does not follow, because tiling is a property of the geometry, not of the budgets. This split keeps address order, always cuts the **longer** side so aspect ratios stay readable, and cuts on an integer cell boundary — so children tile their parent exactly at every level, and the root tiling is therefore exact.
 
+**Feasibility is chosen, never assumed.** An earlier draft picked `mid` purely by budget and then *clamped* the cut to reserve `need_l`/`need_r` columns. That clamp can invert: when `need_l + need_r > w` the `std::min(std::max(...))` collapses the cut past the opposite edge, a child gets zero width, and the recursion divides by zero at `(mid - lo + h - 1) / h`. It is a `ceil()` rounding artefact — `ceil(a/h) + ceil(b/h)` can exceed `ceil((a+b)/h)` — so it fires even though the rect *does* have a cell per region. Reproduced under ASan at 3809 regions on a 4096-cell plane; the draft's stated precondition ("the clamps below preserve it") was simply false, and its `nreg > plane` guard is far too loose to catch it.
+
+The fix is to restrict the scan that already runs: **consider only splits this rect can actually realise.** No second pass, no clamp that can invert, and the reserved columns come out of the same test that chose `mid`.
+
 ```cpp
-// Returns this subtree's encoded child reference: a `nodes` index, or
-// -(region index + 1) for a leaf. PRECONDITION: the rect has at least
-// (hi - lo) cells; rebuild_layout establishes it at the root and the
-// need_l/need_r clamps below preserve it at every level.
-int32_t split_rect(const std::vector<uint64_t> &b, size_t lo, size_t hi,
-                   AtlasRect r, std::vector<AtlasRect> &rects,
-                   std::vector<AtlasNode> &nodes) {
+// Fills *out with this subtree's encoded child reference — a `nodes` index, or
+// -(region index + 1) for a leaf — and returns false if the subtree admits no
+// realisable split at all, which rebuild_layout answers by falling back to
+// Hilbert. Verified exhaustively for every nreg in [2, 4096] on the order-6
+// plane and over 3000 randomised skewed length distributions: the refusal
+// never fires while nreg <= plane, so it is a guard rather than a live path.
+bool split_rect(const std::vector<uint64_t> &b, size_t lo, size_t hi,
+                AtlasRect r, std::vector<AtlasRect> &rects,
+                std::vector<AtlasNode> &nodes, int32_t *out) {
+    const uint32_t w = r.x1 - r.x0, h = r.y1 - r.y0;
+    if (uint64_t(w) * uint64_t(h) < uint64_t(hi - lo))
+        return false; // fewer cells than regions: unrepresentable, not clampable
     if (hi - lo == 1) {
         // The leaf takes the WHOLE rect. This is what makes the tiling exact,
         // and it is why a region's final cell count can differ from its budget
         // by the rounding accumulated down the tree — the budget picks the
         // cut, the geometry picks the area, and the geometry wins.
         rects[lo] = r;
-        return -static_cast<int32_t>(lo) - 1;
+        *out = -static_cast<int32_t>(lo) - 1;
+        return true;
     }
     const uint64_t span = b[hi] - b[lo];
-    // Cut the region RUN as near the half-budget as possible, keeping at least
-    // one region on each side. Linear, not binary-searched: nreg is small next
+    // Always cut the LONGER side, so aspect ratios stay readable.
+    const bool cut_x = w >= h;
+    const uint32_t across = cut_x ? h : w; // cells in one column (or row)
+    const uint32_t along = cut_x ? w : h;  // columns (or rows) to divide
+    if (across == 0)
+        return false;
+    // Cut the region RUN as near the half-budget as possible — but only among
+    // the splits that FIT: each side needs a cell per region, so a candidate is
+    // admissible only when the columns it forces on both sides still add up to
+    // `along`. Testing feasibility HERE rather than clamping afterwards is what
+    // makes the invariant real. Linear, not binary-searched: nreg is small next
     // to the cell count and a scan cannot get the tie-breaking wrong.
-    size_t mid = lo + 1;
+    size_t mid = 0;
     uint64_t best = UINT64_MAX;
+    uint32_t need_l = 0, need_r = 0;
     for (size_t i = lo + 1; i < hi; i++) {
+        const uint32_t nl = uint32_t((i - lo + across - 1) / across);
+        const uint32_t nr = uint32_t((hi - i + across - 1) / across);
+        if (uint64_t(nl) + uint64_t(nr) > along)
+            continue; // this rect cannot realise that split
         const uint64_t left = b[i] - b[lo];
         const uint64_t d =
             left * 2 > span ? left * 2 - span : span - left * 2;
         if (d < best) {
             best = d;
             mid = i;
+            need_l = nl;
+            need_r = nr;
         }
     }
+    if (best == UINT64_MAX)
+        return false; // no realisable split anywhere in the run
     const uint64_t left = b[mid] - b[lo];
-    const uint32_t w = r.x1 - r.x0, h = r.y1 - r.y0;
+    // need_l <= along - need_r is guaranteed by the scan, so this clamp can
+    // only narrow — it can no longer invert the rect.
+    uint32_t cut = uint32_t((uint64_t(along) * left + span / 2) / span);
+    cut = std::min(std::max(cut, need_l), along - need_r);
     AtlasNode nd;
     AtlasRect a = r, c = r;
-    if (w >= h) {
-        // Reserve enough columns that each side still has a cell per region.
-        const uint32_t need_l = uint32_t((mid - lo + h - 1) / h);
-        const uint32_t need_r = uint32_t((hi - mid + h - 1) / h);
-        uint32_t cut =
-            r.x0 + uint32_t((uint64_t(w) * left + span / 2) / span);
-        cut = std::min(std::max(cut, r.x0 + need_l), r.x1 - need_r);
+    if (cut_x) {
         nd.axis = 0;
-        nd.cut = cut;
-        a.x1 = cut;
-        c.x0 = cut;
+        nd.cut = r.x0 + cut;
+        a.x1 = c.x0 = nd.cut;
     } else {
-        const uint32_t need_l = uint32_t((mid - lo + w - 1) / w);
-        const uint32_t need_r = uint32_t((hi - mid + w - 1) / w);
-        uint32_t cut =
-            r.y0 + uint32_t((uint64_t(h) * left + span / 2) / span);
-        cut = std::min(std::max(cut, r.y0 + need_l), r.y1 - need_r);
         nd.axis = 1;
-        nd.cut = cut;
-        a.y1 = cut;
-        c.y0 = cut;
+        nd.cut = r.y0 + cut;
+        a.y1 = c.y0 = nd.cut;
     }
     // Reserve OUR slot before recursing — the children append to `nodes`.
     const size_t self = nodes.size();
     nodes.push_back(AtlasNode{});
-    nd.lo = split_rect(b, lo, mid, a, rects, nodes);
-    nd.hi = split_rect(b, mid, hi, c, rects, nodes);
+    if (!split_rect(b, lo, mid, a, rects, nodes, &nd.lo))
+        return false;
+    if (!split_rect(b, mid, hi, c, rects, nodes, &nd.hi))
+        return false;
     nodes[self] = nd;
-    return static_cast<int32_t>(self);
+    *out = static_cast<int32_t>(self);
+    return true;
 }
 ```
 
@@ -590,6 +611,39 @@ Then, inside `main()`:
     }
 }
 {
+    // A SATURATED plane: as many regions as the smallest plane has cells. This
+    // is the case the earlier draft's clamp crashed on — at 3809 one-byte
+    // regions on the 4096-cell order-6 plane, need_l + need_r exceeded the
+    // rect's width, the cut collapsed past the far edge, a child rect got zero
+    // height and split_rect divided by zero. Unreachable from a real /proc/maps
+    // (every mapping is at least a page, so `order` outruns the region count
+    // long before this), but a synthetic Projection is exactly what this
+    // directory builds, so the guard is tested rather than assumed.
+    std::vector<Ref> many;
+    for (uint64_t i = 0; i < 4000; i++)
+        many.push_back({0x1000ull + i * 0x10000ull, 1, Region::Code});
+    const Projection sat = atlas_of(many);
+    check("a saturated plane still produces an atlas", sat.rects.size() == 4000,
+          "rebuild_layout fell back, or built a partial rects vector");
+    bool degenerate = false;
+    for (const AtlasRect &r : sat.rects)
+        if (r.x1 <= r.x0 || r.y1 <= r.y0)
+            degenerate = true;
+    check("no rect is empty or inverted at saturation", !degenerate,
+          "a zero-area rect divides by zero in atlas_cell, and an inverted one "
+          "wraps r.x1 - r.x0 to a huge unsigned width");
+    // And the layout is still a layout: every region places, and lands home.
+    for (const Region &rg : sat.regions) {
+        float u = 0, v = 0;
+        uint64_t back = 0;
+        const Region *got = nullptr;
+        check("a saturated-plane region round-trips",
+              sat.project(rg.base, &u, &v) && sat.unproject(u, v, &back, &got) &&
+                  got != nullptr && got->base == rg.base,
+              "a region of a saturated plane lost its own cell");
+    }
+}
+{
     // `order` keeps its meaning and its VALUE under the atlas: it is the
     // plane's cell quantisation, which is what every 1<<order call site
     // already reads it as. Only the address->cell mapping changed. `p` and
@@ -641,10 +695,13 @@ In `projection.h`, declare:
 // which tiles the n = 1<<order grid exactly, plus p.nodes, the split tree
 // unproject() descends. Clears both for Hilbert. Idempotent.
 //
-// Falls BACK to Hilbert, silently in code but visibly in p.layout, when the
-// plane has fewer cells than there are regions — impossible for a real map,
-// since `order` is sized from the domain's byte count, but reachable with a
-// synthetic domain. A caller that cares reads p.layout back.
+// Falls BACK to Hilbert, silently in code but visibly in p.layout, in two
+// cases: the plane has fewer cells than there are regions, and the split
+// admits no realisable tiling. Both are impossible for a real map — `order` is
+// sized from the domain's byte count, so a plane crowded by regions needs a
+// synthetic domain — and the second has never been observed at all (see
+// split_rect). A caller that cares reads p.layout back; NEVER assume Atlas
+// stayed Atlas just because you set it.
 void rebuild_layout(Projection &p);
 ```
 
@@ -669,12 +726,16 @@ void rebuild_layout(Projection &p) {
     std::vector<uint64_t> b(nreg + 1, 0);
     for (size_t i = 1; i < nreg; i++)
         b[i] = plane_boundary(p.order, p.domain_off[i], total);
-    b[nreg] = plane; // PINNED, not computed: the last boundary IS the plane,
-                     // which is what makes the areas sum exactly.
+    b[nreg] = plane; // PINNED, not computed: the last boundary IS the plane.
     // A cell each, and strictly increasing: a region granted zero cells would
     // get an empty rect that project() could never place an address into.
-    // Sweep up, then back down off the pinned top; both fit because nreg <= plane.
-    for (size_t i = 1; i <= nreg; i++)
+    // Sweep up, then back down off the pinned top; both fit because nreg <=
+    // plane. The upward sweep stops at nreg-1 and NOT at nreg: running it over
+    // the pinned entry lets a zero-length trailing region push b[nreg] to
+    // plane+1, and the downward sweep starts one below and would never pull it
+    // back. Harmless for the tiling — the geometry sets the areas, not the
+    // budgets — but it would quietly falsify the pin this comment claims.
+    for (size_t i = 1; i < nreg; i++)
         if (b[i] < b[i - 1] + 1)
             b[i] = b[i - 1] + 1;
     for (size_t i = nreg; i-- > 1;)
@@ -682,7 +743,15 @@ void rebuild_layout(Projection &p) {
             b[i] = b[i + 1] - 1;
     p.rects.assign(nreg, AtlasRect{});
     p.nodes.reserve(nreg ? nreg - 1 : 0);
-    split_rect(b, 0, nreg, AtlasRect{0, 0, n, n}, p.rects, p.nodes);
+    int32_t root = 0;
+    if (!split_rect(b, 0, nreg, AtlasRect{0, 0, n, n}, p.rects, p.nodes,
+                    &root)) {
+        // No realisable tiling. Leave NOTHING half-built: a partially filled
+        // `rects` would hand project() a zero-area rect and divide by zero.
+        p.rects.clear();
+        p.nodes.clear();
+        p.layout = Projection::Layout::Hilbert; // see the header's note
+    }
 }
 ```
 
@@ -743,13 +812,17 @@ if (layout == Layout::Atlas) {
 }
 ```
 
-And `region_cells()` gets an atlas branch, before the Hilbert run walk:
+And `region_cells()` gets an atlas branch. **Placement is load-bearing, so read this before pasting.** The branch goes immediately after the existing `region_index >= proj.regions.size()` bound check at [projection.cpp:405](../../../desktop/src/space/projection.cpp#L405) — that is, *above* the `hi <= lo` early return, and *above* the `const uint32_t n = ...` the Hilbert path declares at `:412`, so it carries its own `n`. Two reasons, and both bite:
+
+- **Above `hi <= lo`.** That guard returns `{}` for a zero-length region. Under the atlas a zero-length region still *owns* a rect — `rebuild_layout`'s strictly-increasing clamp grants every region at least one cell — so returning `{}` there would contradict this task's own "region_cells matches the region's rect" assertion, and `test_focus`'s "owns at least one cell" check with it.
+- **Its own `n`.** Pasting the branch "before the Hilbert run walk" but after `:412` compiles; pasting it where it belongs does not, unless it declares `n` itself.
 
 ```cpp
 if (proj.layout == Projection::Layout::Atlas) {
     if (region_index >= proj.rects.size())
-        return out;
-    const AtlasRect &r = proj.rects[region_index];
+        return out; // rects is empty under a fallback — see rebuild_layout
+    const uint32_t n = uint32_t(1) << proj.order; // the Hilbert path's own `n`
+    const AtlasRect &r = proj.rects[region_index]; // is declared further down
     out.reserve(size_t(r.x1 - r.x0) * size_t(r.y1 - r.y0));
     for (uint32_t y = r.y0; y < r.y1; y++)
         for (uint32_t x = r.x0; x < r.x1; x++)
@@ -1379,8 +1452,21 @@ inline bool scene_exists(const char *dir, const char *name) {
 }
 
 // --- the EGL context, brought up at most once per process --------------------
-// Body lifted verbatim from test_scene_fbo.cpp:485.
-inline bool egl_up_once(std::string *why) { /* ...the existing egl_up body... */ }
+// NOT a verbatim lift, and an earlier draft said it was. The existing helper is
+//   static bool egl_up(EGLDisplay *out_dpy, EGLContext *out_ctx, std::string *why)
+// (test_scene_fbo.cpp:485) — it HANDS BACK the display and context rather than
+// owning them, because its caller keeps them in locals. Here they must outlive
+// the call, so keep egl_up's body byte-for-byte and add the two statics around
+// it; do not "simplify" by dropping the out-params, since test_scene_fbo.cpp
+// still calls it with them after Step 2 re-points that file at this header.
+inline bool egl_up(EGLDisplay *out_dpy, EGLContext *out_ctx, std::string *why) {
+    /* ...test_scene_fbo.cpp:485's body, unchanged... */
+}
+inline bool egl_up_once(std::string *why) {
+    static EGLDisplay dpy = EGL_NO_DISPLAY;
+    static EGLContext ctx = EGL_NO_CONTEXT;
+    return egl_up(&dpy, &ctx, why);
+}
 
 // Returns false with a reason where no GL device is reachable. Callers decide
 // what that MEANS: test_scene_fbo self-skips (its pure half has already run);
@@ -1940,7 +2026,7 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 **Why the motif gate is split across 7b and 7c.** The two channels are not testable by the same instrument, and pretending otherwise was the earlier draft's mistake. `opcode` is a terrain tint, so it is only visible in a rendered frame and its data comes from `space/` — 7b. `crossings` is geometry built by `views/build_crossing_layer`, which a GL test would have to link `views/` to produce, and whose real fixture can only come from a live tracer — 7c, in the pure test that already owns the contract. Gating both from one frame would have meant either dragging `views/` into the GL closure or, as written, asserting on a layer with no data uploaded.
 
-**Type consistency.** `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
+**Type consistency.** `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `split_rect` returns `bool` and takes an `int32_t *out` — it is the one helper here whose signature is not obvious from its job, because it can refuse. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
 
 **Where the spec is superseded.** Two of the spec's statements did not survive verification and this plan overrides them; both should be read as corrected here rather than followed as written:
 
@@ -1996,6 +2082,15 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 | **Task 4's calibrated pad factors cannot satisfy the test they were calibrated against.** [test_camera.cpp:111](../../../desktop/test/test_camera.cpp#L111) is `c.radius == d.radius` — *exact* float equality — and `1.0f / tanf(0.4f) * 0.9301f` is ≈ 2.19988, not `2.2f`. No pad value fixes a two-rounding product reliably across libm versions. The draft's "a failure at `:111` means the calibration is off" sent the implementer into an unwinnable loop | Radius is now `extent * kWholePlaneRadius` — linear, exact at extent 1 by construction, and free of `fovy`, `tan` and both magic constants |
 | **`top_down()` would silently start recentring the target.** Today it leaves `target` alone and [shell.cpp:1464](../../../desktop/src/ui/shell.cpp#L1464) calls it on a possibly-panned camera; routing it through `fit()` would teleport the user to the plane centre. No existing test catches it — the file's top-down block uses a default camera | `top_down()` takes `fit_radius` only, never `fit`; a new test pans first and pins the target |
 | **`traj_scale_` is a five-consumer shared axis, not the worldline's private scale.** Causal spurs, lifetime pillars, access arcs, sediment strata and the line shader all place geometry at `t * traj_scale_`, and [scene.h:365](../../../desktop/src/scene3d/scene.h#L365) documents that a spur *hangs on a worldline vertex at that Y*. Flattening the path alone detaches every spur foot. The spec appears to contradict itself here — "Y carries access density, and nothing else" versus "the 14 layers stand" | **Resolved** (see below). Task 5 now names all five call sites, flattens the two default-ON consumers and leaves the three opt-in ones on the axis, and adds the spur flatten, the shader change and the ruler gate + re-caption to its file list |
+
+**Sixth pass — running the algorithm instead of reading it.** The fifth pass verified every signature and line reference; it still did not *execute* Task 2's layout. Transcribing the helpers verbatim and running them found one crash and three smaller errors. The four plan fixtures were re-run after each fix and produce byte-identical numbers to the ones the tests assert (orders 8/8/12/9, code-rect fraction 0.0625, `n*n == 65536`, row-break distance 1 cell, `bytes_per_cell == 4`, exact tiling, no overlap, clean region round trip).
+
+| Defect | Fix in this revision |
+|---|---|
+| **`split_rect` divided by zero.** Its stated precondition — "the `need_l`/`need_r` clamps below preserve it at every level" — was false. When `need_l + need_r > w` (a `ceil()` rounding artefact, since `ceil(a/h) + ceil(b/h)` can exceed `ceil((a+b)/h)`), `std::min(std::max(...))` collapses the cut past the far edge, a child rect gets zero height, and the recursion divides by zero. Reproduced under ASan at 3809 one-byte regions on the 4096-cell order-6 plane. `rebuild_layout`'s `nreg > plane` guard is far too loose to catch it | The scan that picks `mid` now **tests feasibility instead of clamping afterwards**: a candidate split is admissible only when the columns it forces on both sides fit. `split_rect` returns `bool`; `rebuild_layout` falls back to Hilbert and clears `rects`/`nodes` rather than leaving a half-built layout. Verified over every `nreg` in [2, 4096] on the order-6 plane and 3000 randomised skewed length distributions: **0 crashes, 0 fallbacks, 0 contract violations** — so the refusal path is a guard, not a live one. A saturated-plane block in Task 2 Step 1 pins it |
+| `region_cells`'s atlas branch was placed "before the Hilbert run walk", which is *after* the `hi <= lo` guard and after the Hilbert path's `n` | Placement is now specified exactly — above `hi <= lo` (a zero-length region owns a rect but has no domain span, so the guard would contradict this task's own assertion and `test_focus`'s "owns at least one cell"), with its own `n` |
+| `b[nreg] = plane` was documented as PINNED but the upward clamp loop ran `i = 1..nreg` *inclusive*, so a zero-length trailing region pushes it to `plane+1` and the downward loop, starting one below, never restores it | The upward sweep stops at `nreg-1`. Harmless for the tiling either way — the geometry sets the areas, not the budgets — but the comment now describes what the code does |
+| `egl_up` was described as lifted verbatim; its real signature is `egl_up(EGLDisplay *, EGLContext *, std::string *)`, which hands the display and context back to a caller that keeps them in locals | 7a now keeps `egl_up` intact (`test_scene_fbo.cpp` still calls it with the out-params after Step 2) and wraps it in `egl_up_once`, which owns the two statics |
 
 **The Component 2 / Non-goals contradiction, resolved.** Read "Y" in *"Y carries access density, and nothing else"* as **the scene you get by default** — which is the only thing Component 2's complaint is about — and both spec statements hold at once. An overlay the reader switches on is not competing for the default view's axis budget. The split falls exactly along [scene.h:60-144](../../../desktop/src/scene3d/scene.h#L60)'s own documented ON/OFF convention, the same one Task 6 pins, so it is the registry's rule rather than a compromise invented for this plan:
 
