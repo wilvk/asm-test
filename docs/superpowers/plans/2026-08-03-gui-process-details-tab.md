@@ -1265,19 +1265,29 @@ Add before `usage()` (~line 8110):
  *
  * Addresses are emitted as hex STRINGS — a JSON number is a double in many
  * readers, which silently rounds a 64-bit pointer. */
-static void info_emit_json(const asmspy_procinfo_t *pi, const char *record) {
+static void info_emit_json(const asmspy_procinfo_t *pi, const char *record,
+                           int to_stdout) {
     rec_t rec;
     char *b = malloc(256 * 1024); /* the body; bounded by the struct's caps */
     size_t cap = 256 * 1024, n = 0;
+    int overflow = 0; /* sticky: the body did not fit */
     char e1[512], e2[512];
     if (!b)
         return;
 
+    /* A body that overflows would be TRUNCATED MID-TOKEN — syntactically
+     * invalid JSON that a reader reports as a corrupt recording rather than
+     * as our bug. So overflow is tracked and refused loudly below, never
+     * emitted. 256 KB is far above the worst case the caps allow (64 threads
+     * + 64 modules + 32 children + 4 KB argv is well under 64 KB); this
+     * guard exists so that if that ever stops being true, it fails honestly. */
 #define APP(...)                                                               \
     do {                                                                       \
-        n += (size_t)snprintf(b + n, n < cap ? cap - n : 0, __VA_ARGS__);      \
-        if (n >= cap)                                                          \
-            n = cap - 1;                                                       \
+        int _w = snprintf(b + n, n < cap ? cap - n : 0, __VA_ARGS__);          \
+        if (_w < 0 || (size_t)_w >= (n < cap ? cap - n : 0))                   \
+            overflow = 1;                                                      \
+        else                                                                   \
+            n += (size_t)_w;                                                   \
     } while (0)
 
     asmtrace_escape(e1, sizeof e1, pi->comm);
@@ -1404,10 +1414,20 @@ static void info_emit_json(const asmspy_procinfo_t *pi, const char *record) {
         pi->budget_exceeded ? "true" : "false");
 #undef APP
 
+    if (overflow) {
+        /* Refuse rather than emit malformed JSON a reader would call corrupt. */
+        fprintf(stderr, "--info: snapshot body exceeded %zu bytes — refusing "
+                        "to emit a truncated recording\n",
+                cap);
+        free(b);
+        return;
+    }
     /* `exact` because every field was READ, not sampled — the snapshot is a
-     * true statement about the instant it was taken. */
-    if (rec_open(&rec, record, stdout, "proc-snapshot", 1, "exact",
-                 (pid_t)pi->pid) == 0) {
+     * true statement about the instant it was taken. `to_stdout` is 0 for a
+     * bare --record=<f>, which records without putting NDJSON on a stdout the
+     * human text is already using. */
+    if (rec_open(&rec, record, to_stdout ? stdout : NULL, "proc-snapshot", 1,
+                 "exact", (pid_t)pi->pid) == 0) {
         rec_emit(&rec, "procinfo", b);
         rec_close(&rec, 0, 0, 0, NULL);
     }
@@ -1475,9 +1495,15 @@ static int cmd_info(pid_t pid, int json, const char *record) {
         free(pi);
         return 1;
     }
-    if (json)
-        info_emit_json(pi, record);
-    else
+    /* The two output channels are INDEPENDENT, exactly as every other mode
+     * treats them: --json puts NDJSON on stdout, --record=<f> puts it in a
+     * file, both does both, and --record with no --json still prints the
+     * human text. Gating the recording on --json would silently drop a
+     * recording the user asked for, which rec_open's own contract calls out
+     * as never a detail. */
+    if (json || record)
+        info_emit_json(pi, record, json);
+    if (!json)
         info_print_text(pi);
     free(pi);
     return 0;
