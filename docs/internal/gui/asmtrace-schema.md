@@ -546,6 +546,7 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) |
 | `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) |
 | `codeimage` | captured code bytes at a version | [08-observer-views.md](../archive/gui/08-observer-views.md) |
+| `procinfo` | one attach-free process snapshot | [gui process-details](../../superpowers/specs/2026-08-03-gui-process-details-tab-design.md) |
 
 `session` / `cmd` / `err` were reserved here for 07 and are now **defined** — see
 *Serve protocol* below. They are **serve-only**: they appear on a live control
@@ -558,6 +559,10 @@ range and the footer counts it.
 
 `mem` was reserved here for 10 and is now **defined** — see *`mem` — one memory
 access (address stream)* above (29 R2). An ordinary opt-in recording event.
+
+`procinfo` is **defined** — see *`procinfo` — one attach-free process snapshot*
+below. An ordinary recording event, emitted by `asmspy --info` as the sole event
+of a one-event recording.
 
 `df_invocation` (35) is **defined** — see *`df_invocation` — one continuous-capture
 pass delimiter* above. An ordinary recording event emitted only by a **continuous**
@@ -948,6 +953,92 @@ carrying the **measured** skip reason
 the soft-dirty / `PAGEMAP_SCAN` gate, Linux ≥ 6.7) and captures without it. A
 recording with no `codeimage` events is therefore normal, and means the viewer
 falls back to the recorded `disasm` strings (D10) or to bare offsets.
+
+## `procinfo` — one attach-free process snapshot
+
+> **Owned by [gui process-details](../../superpowers/specs/2026-08-03-gui-process-details-tab-design.md)**
+> (Task 4), appended under this file's D5 append-only rule. It **defines the
+> kind already reserved above** and adds no field to any existing kind and no
+> new envelope major.
+
+```json
+{"k":"procinfo",
+ "identity":{"pid":123,"ppid":1,"pgid":123,"sid":123,"uid":1000,"euid":1000,
+   "gid":1000,"egid":1000,"user":"will","euser":"will","comm":"code",
+   "argv":["/usr/share/code/code","--type=renderer"],"argv_truncated":false,
+   "exe":"/usr/share/code/code","exe_deleted":false,"cwd":"/home/will",
+   "state":"S","start_ticks":123456,"elapsed_s":1234.5},
+ "runtime":{"runtime":"Node/V8","evidence":"libnode.so","jitting":true,
+   "elf_class":64,"pie":true,"static":false,"interp":"ld-linux-x86-64.so.2"},
+ "counters":{"ts_ns":881234567890,"utime":4210,"stime":880,"clk_tck":100,
+   "rss_kb":626688,"vsize_kb":12058624,"peak_rss_kb":700000,
+   "io_read_bytes":1234,"io_write_bytes":0,"io_readable":true,
+   "fds":184,"fds_readable":true,"oom_score":200,"nice":0,"threads":12},
+ "threads":[{"tid":123,"comm":"code","state":"S","wchan":"futex_wait",
+   "cpu_jiffies":410,
+   "syscall":{"nr":202,"name":"futex","args":["0x7f..","0x80","0x0","0x0",
+     "0x0","0x0"],"pc":"0x7f1234","sp":"0x7ffd00",
+     "pc_sym":"__futex_abstimed_wait+0x1c"}},
+  {"tid":124,"comm":"V8 Worker","state":"S","wchan":"poll_schedule_timeout",
+   "cpu_jiffies":12,"syscall_why":"needs ptrace permission (Yama ptrace_scope / uid)"}],
+ "threads_truncated":false,
+ "code":{"syms_total":61530,"jit_methods":1402,"jit_source":"perf-map",
+   "anon_exec_bytes":12582912},
+ "modules":[{"name":"libnode.so","path":"/usr/lib/libnode.so","base":"0x7f0000",
+   "size":2117632,"exec":true,"syms":50123}],
+ "modules_truncated":false,
+ "trace":{"attachable":1,"why":"same uid, nothing else traces it","remedy":"",
+   "modes":[{"mode":"log","ok":true,"why":""},
+            {"mode":"sample","ok":false,"why":"needs an AMD IBS host — no ibs_op PMU here"}]},
+ "containment":{"ns_pid":4026531836,"ns_net":4026531833,"ns_mnt":4026531832,
+   "ns_user":4026531837,"differs":false,"cgroup":"/user.slice/user-1000.slice",
+   "seccomp":2,"no_new_privs":0,"dumpable":-1},
+ "children":[{"pid":124,"comm":"sh"}],
+ "children_truncated":false,
+ "budget_exceeded":false}
+```
+
+A snapshot of a **single process**, taken by reading only `/proc` and the
+mapped ELF — never ptrace, never an attach. It is emitted **once**, as the
+sole event of the one-event recording `asmspy --info <pid> --json` writes
+(header, this one `procinfo`, `end`); unlike every other kind above it never
+repeats within a recording. Fields mirror
+[`asmspy_procinfo_t`](../../../cli/libasmspy.h#L208) (and the
+[`asmspy_fingerprint_t`](../../../cli/libasmspy.h#L94) it embeds as `runtime`),
+field for field — that struct is authoritative; this shape is a direct
+serialization of it.
+
+Four encoding rules carry weight beyond "whatever the struct happens to hold":
+
+- **A thread with no readable syscall OMITS the `syscall` object and carries
+  `syscall_why` instead.** Absent-with-a-reason, never a blank `syscall`
+  object — `/proc/<pid>/task/<tid>/syscall` needs ptrace *permission* even
+  though reading it is not an attach, so this is the **normal** case under a
+  restrictive `ptrace_scope`, not a rare failure path.
+- **64-bit quantities that are addresses — `pc`, `sp`, `base`, and syscall
+  `args` — are hex STRINGS**, never JSON numbers. A JSON number is a double in
+  many readers, which silently rounds a 64-bit pointer; a reader must not
+  `parseInt`/arithmetic on these without first treating them as opaque hex
+  text (or explicitly parsing the `0x` prefix).
+- **Counts and byte totals stay JSON numbers** — `pid`s, `rss_kb`, `size`,
+  `syms`, and everything else that is a magnitude rather than a location.
+- **`why` and `remedy` are `""` when there is nothing to say, never absent.**
+  A consumer may always read `trace.why`, `trace.remedy`, and each mode's
+  `why` without a presence check.
+
+`trace.modes` walks the same `ASMSPY_MODE__COUNT` list as the CLI's own engine
+flags, by [`asmspy_mode_name`](../../../cli/libasmspy.h#L165) — `"log"`,
+`"stream"`, `"trace"`, `"dataflow"`, `"tree"`, `"graph"`, `"procs"`,
+`"sample"`, `"watch"` — so a consumer never needs its own copy of that list to
+render "which modes will work here."
+
+**Producer.** `asmspy --info <pid>` is the sole producer: it calls
+`asmspy_procinfo()` once, then emits the result as human text (default),
+`--json` on stdout, a `--record=<f>` file, or both — the two channels are
+independent, exactly like every other headless mode's `--json`/`--record`. A
+nonexistent pid is refused (nonzero exit) rather than rendered as an empty
+snapshot; a budget-exceeded gather still emits everything it collected before
+the cutoff, with `budget_exceeded:true` stating the gap plainly.
 
 ## `regstate` descriptor — `emu_x86_regs_t@x86_64/sysv`
 

@@ -2311,6 +2311,48 @@ if [ "${ASMSPY_HAVE_M32:-}" = "yes" ]; then
     done
     echo "  --log/--stream/--graph/--tree/--procs all refuse with a clear 32-bit message"
 
+    # --info NEVER attaches, so unlike the engines above it must SUCCEED on a
+    # 32-bit target — and instead report the same refusal as DATA. pi_verdict
+    # (cli/asmspy_proc.c) blanks exactly five of the nine modes for a 32-bit
+    # tracee (dataflow/stream/trace/log/watch: the single-step engines that
+    # decode a syscall number against the x86-64 table); tree/graph/procs/
+    # sample are untouched by that branch (a carry-forward gap from Task 3
+    # this leg exists to close: those five had NO test at all before now,
+    # because test_procinfo links the gatherer directly and cannot spawn a
+    # real 32-bit build-system victim).
+    set +e
+    iout=$(timeout 30 "$ASM" --info "$IVPID" --json 2>&1); irc=$?
+    set -e
+    [ "$irc" -eq 124 ] && fail "--info hung on a 32-bit tracee — it must never attach"
+    [ "$irc" -eq 0 ] \
+        || fail "--info refused a 32-bit tracee outright (rc=$irc) — it must always succeed, since it never attaches"
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$iout" | python3 -c 'import json,sys
+events = [json.loads(l) for l in sys.stdin if l.strip()]
+evt = next(e for e in events if e.get("k") == "procinfo")
+modes = {m["mode"]: m for m in evt["trace"]["modes"]}
+refused = ["dataflow", "stream", "trace", "log", "watch"]
+untouched = ["tree", "graph", "procs", "sample"]
+for name in refused:
+    m = modes[name]
+    assert m["ok"] is False, "%s should be refused for a 32-bit tracee, got ok=%r" % (name, m["ok"])
+    assert "32-bit" in m["why"], "%s why does not name the 32-bit reason: %r" % (name, m["why"])
+for name in untouched:
+    m = modes[name]
+    assert "32-bit" not in m["why"], \
+        "%s was refused with the 32-bit reason, though pi_verdict only blanks 5 of 9 modes: %r" % (name, m["why"])
+print("  --info --json: dataflow/stream/trace/log/watch report the 32-bit refusal; tree/graph/procs/sample do not")' \
+        || fail "--info --json: the 32-bit mode-advisory structural check failed"
+    else
+        printf '%s\n' "$iout" | grep -q '"mode":"dataflow","ok":false,"why":"32-bit' \
+            || fail "--info --json: dataflow mode does not report the 32-bit refusal"
+        echo "  --info --json: 32-bit mode advisory present (python3 absent; grep-only check)"
+    fi
+    # the human form names the reason too, not just the JSON.
+    "$ASM" --info "$IVPID" 2>&1 | grep -qi '32-bit' \
+        || fail "--info text: no 32-bit reason shown for any mode"
+    echo "  --info: reports dataflow/stream/trace/log/watch refused with the 32-bit reason"
+
     # the refusal must be a REFUSAL, not a failed attach: nothing was traced, so
     # the victim is untouched and still running
     kill -0 "$IVPID" 2>/dev/null \
@@ -3182,6 +3224,13 @@ wait "$RWPID" 2>/dev/null || true
 RWPID=""
 rm -f "$BUILD/watch_rec.log"
 
+# --info takes no engine "mode" (it never attaches), but it shares the same
+# --record contract as every mode above: this is the regression guard for
+# "--record with no --json still writes a file" (defect fixed pre-flight —
+# gating the recording on --json would silently drop a recording asked for).
+timeout 60 "$ASM" --info "$RVPID" --record="$RECDIR/info.asmtrace" >/dev/null 2>&1 || true
+rec_ok info procinfo
+
 # --record and --json COMPOSE: the same events reach the file and stdout.
 timeout 60 "$ASM" --log "$RVPID" 8 --json --record="$RECDIR/both.asmtrace" \
     >"$RECDIR/both.stdout" 2>/dev/null || true
@@ -3566,5 +3615,83 @@ fi
 
 kill -9 "$DFWPID" 2>/dev/null || true
 wait "$DFWPID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# --info — the attach-free process snapshot
+# ---------------------------------------------------------------------------
+echo "--- --info (attach-free process snapshot) ---"
+
+# Against OUR OWN shell: a target this smoke holds no ptrace permission for
+# under ptrace_scope=1, so a run that succeeds proves --info never attached.
+info_json="$($BUILD/asmspy --info $$ --json 2>/dev/null)"
+
+echo "$info_json" | head -1 | grep -q '"asmtrace"' \
+    || fail "--info --json: no .asmtrace header line"
+echo "$info_json" | grep -q '"k":"procinfo"' \
+    || fail "--info --json: no procinfo event"
+echo "$info_json" | tail -1 | grep -q '"k":"end"' \
+    || fail "--info --json: no end footer"
+echo "$info_json" | grep -q "\"pid\":$$" \
+    || fail "--info --json: wrong pid in identity"
+echo "$info_json" | grep -q '"attachable"' \
+    || fail "--info --json: no trace verdict"
+
+# The human form names the process and its runtime.
+$BUILD/asmspy --info $$ | grep -q "pid $$" \
+    || fail "--info text: no pid line"
+
+# A nonexistent pid is refused, not rendered blank.
+if $BUILD/asmspy --info 134217727 >/dev/null 2>&1; then
+    fail "--info: a nonexistent pid must exit nonzero"
+fi
+
+# Strict structural checks when python3 is present; degrade cleanly otherwise
+# (same pattern as the --graph --json checks above).
+#
+# Two properties earn their own assertion here rather than a passing grep:
+#  1. addresses cross the wire as hex STRINGS, never JSON numbers — a number
+#     is a double in many readers, which silently rounds a 64-bit pointer.
+#     `modules[0].base` is always present (every process maps a module), so
+#     it is the reliable probe; a thread's own `syscall.pc`/`sp`/`args` make
+#     the SAME claim but are only populated when the syscall file is
+#     readable, which $$ under ptrace_scope=1 is not (see above) — that
+#     absence is itself asserted next.
+#  2. a thread with NO readable syscall must OMIT the `syscall` object and
+#     carry a non-empty `syscall_why`, never a blank/absent reason. This smoke
+#     runs under exactly that condition (no ptrace permission on $$), so it is
+#     the natural place to pin the absent-with-a-reason contract down.
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$info_json" | python3 -c 'import json,sys
+lines = [l for l in sys.stdin if l.strip()]
+assert len(lines) == 3, "expected header + procinfo + end, got %d lines" % len(lines)
+hdr, evt, end = (json.loads(l) for l in lines)
+assert hdr.get("asmtrace") == 1
+assert evt["k"] == "procinfo"
+assert end["k"] == "end"
+m0 = evt["modules"][0]
+assert isinstance(m0["base"], str) and m0["base"].startswith("0x"), \
+    "modules[0].base is not a hex string: %r" % (m0["base"],)
+assert isinstance(m0["size"], int), \
+    "modules[0].size should stay a JSON number: %r" % (m0["size"],)
+t0 = evt["threads"][0]
+assert "syscall" not in t0, \
+    "no ptrace permission on this pid, yet a syscall object was emitted"
+assert t0.get("syscall_why"), \
+    "thread with no readable syscall carries no syscall_why"
+print("  json validated (python3 json.load): hex-string base, syscall_why present without syscall)")' \
+        || fail "--info --json: structural check failed (address-as-string / syscall_why contract)"
+else
+    echo "  json structural checks skipped (python3 absent)"
+fi
+
+# It must be FAST — this is fired automatically as an operator browses.
+t0=$(date +%s%N)
+$BUILD/asmspy --info $$ --json >/dev/null 2>&1
+t1=$(date +%s%N)
+ms=$(( (t1 - t0) / 1000000 ))
+echo "    --info wall: ${ms}ms"
+[ "$ms" -lt 1000 ] || fail "--info took ${ms}ms — too slow to fire on selection"
+
+echo "    --info OK"
 
 echo "cli-smoke: PASS"

@@ -8,6 +8,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `asmspy --info <pid>` — an attach-free process snapshot (identity, runtime,
+  per-thread `wchan` + current syscall, symbol/JIT surface, and which tracing
+  modes will work on the target). `--json` emits it as a one-event `.asmtrace`
+  recording carrying the new `procinfo` kind.
 - **Four standalone 3D scenes, on a substrate that is not the address plane**
   (docs/internal/gui/59-standalone-scenes.md). The 3D pane gains a scene
   selector; every kind states what each of its axes is *and what it is not*,

@@ -8115,6 +8115,263 @@ static int bad_arg(const char *what, const char *got) {
     return 2;
 }
 
+/* --info <pid> — the attach-free process snapshot (asmspy_procinfo).
+ *
+ * Human text by default; --json emits it as a valid ONE-EVENT .asmtrace
+ * recording (header + `procinfo` + end), the same contract every other
+ * mode's --json carries: `asmspy --info <pid> --json > x.asmtrace` IS a
+ * recording, so the desktop reads it with the ordinary loader.
+ *
+ * Addresses are emitted as hex STRINGS — a JSON number is a double in many
+ * readers, which silently rounds a 64-bit pointer. */
+static void info_emit_json(const asmspy_procinfo_t *pi, const char *record,
+                           int to_stdout) {
+    rec_t rec;
+    char *b = malloc(256 * 1024); /* the body; bounded by the struct's caps */
+    size_t cap = 256 * 1024, n = 0;
+    int overflow = 0; /* sticky: the body did not fit */
+    char e1[512], e2[512];
+    if (!b)
+        return;
+
+        /* A body that overflows would be TRUNCATED MID-TOKEN — syntactically
+     * invalid JSON that a reader reports as a corrupt recording rather than
+     * as our bug. So overflow is tracked and refused loudly below, never
+     * emitted. 256 KB is far above the worst case the caps allow (64 threads
+     * + 64 modules + 32 children + 4 KB argv is well under 64 KB); this
+     * guard exists so that if that ever stops being true, it fails honestly. */
+#define APP(...)                                                               \
+    do {                                                                       \
+        int _w = snprintf(b + n, n < cap ? cap - n : 0, __VA_ARGS__);          \
+        if (_w < 0 || (size_t)_w >= (n < cap ? cap - n : 0))                   \
+            overflow = 1;                                                      \
+        else                                                                   \
+            n += (size_t)_w;                                                   \
+    } while (0)
+
+    asmtrace_escape(e1, sizeof e1, pi->comm);
+    asmtrace_escape(e2, sizeof e2, pi->exe);
+    APP("\"identity\":{\"pid\":%ld,\"ppid\":%ld,\"pgid\":%ld,\"sid\":%ld,"
+        "\"uid\":%ld,\"euid\":%ld,\"gid\":%ld,\"egid\":%ld,",
+        pi->pid, pi->ppid, pi->pgid, pi->sid, pi->uid, pi->euid, pi->gid,
+        pi->egid);
+    {
+        char eu[64], ee[64];
+        asmtrace_escape(eu, sizeof eu, pi->user);
+        asmtrace_escape(ee, sizeof ee, pi->euser);
+        APP("\"user\":\"%s\",\"euser\":\"%s\",\"comm\":\"%s\",", eu, ee, e1);
+    }
+    APP("\"argv\":[");
+    {
+        const char *a = pi->argv;
+        for (int i = 0; i < pi->argc; i++) {
+            char ea[1024];
+            asmtrace_escape(ea, sizeof ea, a);
+            APP("%s\"%s\"", i ? "," : "", ea);
+            a += strlen(a) + 1;
+        }
+    }
+    APP("],\"argv_truncated\":%s,\"exe\":\"%s\",\"exe_deleted\":%s,",
+        pi->argv_truncated ? "true" : "false", e2,
+        pi->exe_deleted ? "true" : "false");
+    asmtrace_escape(e1, sizeof e1, pi->cwd);
+    APP("\"cwd\":\"%s\",\"state\":\"%c\",\"start_ticks\":%llu,"
+        "\"elapsed_s\":%.1f},",
+        e1, pi->state ? pi->state : '?', pi->start_ticks, pi->elapsed_s);
+
+    asmtrace_escape(e1, sizeof e1, pi->fp.runtime);
+    asmtrace_escape(e2, sizeof e2, pi->fp.evidence);
+    APP("\"runtime\":{\"runtime\":\"%s\",\"evidence\":\"%s\",\"jitting\":%s,"
+        "\"elf_class\":%d,\"pie\":%s,\"static\":%s,",
+        e1, e2, pi->fp.jitting ? "true" : "false", pi->fp.elf_class,
+        pi->fp.pie ? "true" : "false", pi->fp.static_linked ? "true" : "false");
+    asmtrace_escape(e1, sizeof e1, pi->fp.interp);
+    APP("\"interp\":\"%s\"},", e1);
+
+    APP("\"counters\":{\"ts_ns\":%llu,\"utime\":%llu,\"stime\":%llu,"
+        "\"clk_tck\":%lu,\"rss_kb\":%lu,\"vsize_kb\":%lu,\"peak_rss_kb\":%lu,"
+        "\"io_read_bytes\":%llu,\"io_write_bytes\":%llu,\"io_readable\":%s,"
+        "\"fds\":%d,\"fds_readable\":%s,\"oom_score\":%d,\"nice\":%d,"
+        "\"threads\":%d},",
+        pi->ts_ns, pi->utime, pi->stime, pi->clk_tck, pi->rss_kb, pi->vsize_kb,
+        pi->peak_rss_kb, pi->io_read_bytes, pi->io_write_bytes,
+        pi->io_readable ? "true" : "false", pi->n_fds,
+        pi->fds_readable ? "true" : "false", pi->oom_score, pi->nice,
+        pi->threads);
+
+    APP("\"threads\":[");
+    for (int i = 0; i < pi->n_threads_v; i++) {
+        const asmspy_pi_thread_t *t = &pi->threads_v[i];
+        asmtrace_escape(e1, sizeof e1, t->comm);
+        asmtrace_escape(e2, sizeof e2, t->wchan);
+        APP("%s{\"tid\":%ld,\"comm\":\"%s\",\"state\":\"%c\",\"wchan\":\"%s\","
+            "\"cpu_jiffies\":%llu",
+            i ? "," : "", t->tid, e1, t->state ? t->state : '?', e2,
+            t->cpu_jiffies);
+        if (t->have_syscall) {
+            asmtrace_escape(e1, sizeof e1, t->syscall_name);
+            APP(",\"syscall\":{\"nr\":%ld,\"name\":\"%s\",\"args\":[",
+                t->syscall_nr, e1);
+            for (int k = 0; k < 6; k++)
+                APP("%s\"0x%llx\"", k ? "," : "", t->syscall_args[k]);
+            asmtrace_escape(e2, sizeof e2, t->pc_sym);
+            APP("],\"pc\":\"0x%llx\",\"sp\":\"0x%llx\",\"pc_sym\":\"%s\"}",
+                t->pc, t->sp, e2);
+        } else {
+            asmtrace_escape(e1, sizeof e1, t->syscall_why);
+            APP(",\"syscall_why\":\"%s\"", e1);
+        }
+        APP("}");
+    }
+    asmtrace_escape(e1, sizeof e1, pi->jit_source);
+    APP("],\"threads_truncated\":%s,",
+        pi->threads_truncated ? "true" : "false");
+    APP("\"code\":{\"syms_total\":%lu,\"jit_methods\":%lu,\"jit_source\":\"%"
+        "s\","
+        "\"anon_exec_bytes\":%llu},",
+        pi->syms_total, pi->jit_methods, e1, pi->anon_exec_bytes);
+
+    APP("\"modules\":[");
+    for (int i = 0; i < pi->n_modules; i++) {
+        const asmspy_pi_module_t *m = &pi->modules[i];
+        asmtrace_escape(e1, sizeof e1, m->name);
+        asmtrace_escape(e2, sizeof e2, m->path);
+        APP("%s{\"name\":\"%s\",\"path\":\"%s\",\"base\":\"0x%llx\","
+            "\"size\":%llu,\"exec\":%s,\"syms\":%lu}",
+            i ? "," : "", e1, e2, m->base, m->size, m->exec ? "true" : "false",
+            m->syms);
+    }
+    APP("],\"modules_truncated\":%s,",
+        pi->modules_truncated ? "true" : "false");
+
+    asmtrace_escape(e1, sizeof e1, pi->attach_why);
+    asmtrace_escape(e2, sizeof e2, pi->attach_remedy);
+    APP("\"trace\":{\"attachable\":%d,\"why\":\"%s\",\"remedy\":\"%s\","
+        "\"modes\":[",
+        pi->attachable, e1, e2);
+    for (int m = 0; m < ASMSPY_MODE__COUNT; m++) {
+        asmtrace_escape(e1, sizeof e1, pi->mode_why[m]);
+        APP("%s{\"mode\":\"%s\",\"ok\":%s,\"why\":\"%s\"}", m ? "," : "",
+            asmspy_mode_name((asmspy_mode_t)m),
+            pi->mode_ok[m] ? "true" : "false", e1);
+    }
+    asmtrace_escape(e2, sizeof e2, pi->cgroup);
+    APP("]},\"containment\":{\"ns_pid\":%llu,\"ns_net\":%llu,\"ns_mnt\":%llu,"
+        "\"ns_user\":%llu,\"differs\":%s,\"cgroup\":\"%s\",\"seccomp\":%d,"
+        "\"no_new_privs\":%d,\"dumpable\":%d},",
+        pi->ns_pid, pi->ns_net, pi->ns_mnt, pi->ns_user,
+        pi->ns_differs ? "true" : "false", e2, pi->seccomp, pi->no_new_privs,
+        pi->dumpable);
+
+    APP("\"children\":[");
+    for (int i = 0; i < pi->n_children; i++) {
+        asmtrace_escape(e1, sizeof e1, pi->children[i].comm);
+        APP("%s{\"pid\":%ld,\"comm\":\"%s\"}", i ? "," : "",
+            pi->children[i].pid, e1);
+    }
+    APP("],\"children_truncated\":%s,\"budget_exceeded\":%s",
+        pi->children_truncated ? "true" : "false",
+        pi->budget_exceeded ? "true" : "false");
+#undef APP
+
+    if (overflow) {
+        /* Refuse rather than emit malformed JSON a reader would call corrupt. */
+        fprintf(stderr,
+                "--info: snapshot body exceeded %zu bytes — refusing "
+                "to emit a truncated recording\n",
+                cap);
+        free(b);
+        return;
+    }
+    /* `exact` because every field was READ, not sampled — the snapshot is a
+     * true statement about the instant it was taken. `to_stdout` is 0 for a
+     * bare --record=<f>, which records without putting NDJSON on a stdout the
+     * human text is already using. */
+    if (rec_open(&rec, record, to_stdout ? stdout : NULL, "proc-snapshot", 1,
+                 "exact", (pid_t)pi->pid) == 0) {
+        rec_emit(&rec, "procinfo", b);
+        rec_close(&rec, 0, 0, 0, NULL);
+    }
+    free(b);
+}
+
+static void info_print_text(const asmspy_procinfo_t *pi) {
+    printf("pid %ld  %s  [%s]  %c\n", pi->pid, pi->comm,
+           pi->fp.runtime[0] ? pi->fp.runtime : "?", pi->state);
+    {
+        const char *a = pi->argv;
+        printf("  cmd      ");
+        for (int i = 0; i < pi->argc; i++) {
+            printf("%s%s", i ? " " : "", a);
+            a += strlen(a) + 1;
+        }
+        printf("%s\n", pi->argv_truncated ? " …" : "");
+    }
+    printf("  exe      %s%s\n", pi->exe[0] ? pi->exe : "(unreadable)",
+           pi->exe_deleted ? "  (deleted)" : "");
+    printf("  user     %s (uid %ld)   ppid %ld   threads %d\n", pi->user,
+           pi->uid, pi->ppid, pi->threads);
+    printf("  rss      %lu KB   fds %s%d   cpu %llu jiffies @ %lu Hz\n",
+           pi->rss_kb, pi->fds_readable ? "" : "~", pi->n_fds,
+           pi->utime + pi->stime, pi->clk_tck);
+    printf("  attach   %s — %s\n",
+           pi->attachable == 1   ? "YES"
+           : pi->attachable == 0 ? "NO"
+                                 : "MAYBE",
+           pi->attach_why);
+    if (pi->attach_remedy[0])
+        printf("           -> %s\n", pi->attach_remedy);
+    printf("  modes    ");
+    for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
+        printf("%s%s", asmspy_mode_name((asmspy_mode_t)m),
+               pi->mode_ok[m] ? " ok  " : " NO  ");
+    printf("\n");
+    for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
+        if (!pi->mode_ok[m])
+            printf("           %-9s %s\n", asmspy_mode_name((asmspy_mode_t)m),
+                   pi->mode_why[m]);
+    printf("  names    %lu symbols · %d modules · %lu JIT methods%s%s\n",
+           pi->syms_total, pi->n_modules, pi->jit_methods,
+           pi->jit_source[0] ? " via " : "", pi->jit_source);
+    printf("  threads\n");
+    for (int i = 0; i < pi->n_threads_v; i++) {
+        const asmspy_pi_thread_t *t = &pi->threads_v[i];
+        printf("    %-8ld %-16.16s %c  %-24.24s %s\n", t->tid, t->comm,
+               t->state ? t->state : '?', t->wchan[0] ? t->wchan : "-",
+               t->have_syscall ? t->syscall_name : t->syscall_why);
+    }
+    if (pi->threads_truncated)
+        printf("    … (capped at %d of %d)\n", pi->n_threads_v, pi->threads);
+    if (pi->budget_exceeded)
+        printf("  NOTE     the 250ms gather budget ran out — some sections "
+               "carry only what they had\n");
+}
+
+static int cmd_info(pid_t pid, int json, const char *record) {
+    asmspy_procinfo_t *pi = malloc(sizeof *pi);
+    if (!pi) {
+        fprintf(stderr, "out of memory\n");
+        return 1;
+    }
+    if (asmspy_procinfo(pid, pi) != 0) {
+        fprintf(stderr, "no such process: %d\n", (int)pid);
+        free(pi);
+        return 1;
+    }
+    /* The two output channels are INDEPENDENT, exactly as every other mode
+     * treats them: --json puts NDJSON on stdout, --record=<f> puts it in a
+     * file, both does both, and --record with no --json still prints the
+     * human text. Gating the recording on --json would silently drop a
+     * recording the user asked for, which rec_open's own contract calls out
+     * as never a detail. */
+    if (json || record)
+        info_emit_json(pi, record, json);
+    if (!json)
+        info_print_text(pi);
+    free(pi);
+    return 0;
+}
+
 static int usage(const char *argv0) {
     fprintf(
         stderr,
@@ -8123,6 +8380,11 @@ static int usage(const char *argv0) {
         "  %s --list [active|scan]    list processes (active=recent CPU; "
         "scan=string-rich memory)\n"
         "  %s --syms   <pid> [filter] list resolved function symbols\n"
+        "  %s --info   <pid> [--json] [--record=<f>]  process snapshot: "
+        "identity, runtime, threads (wchan + current syscall), symbols, and "
+        "WHICH TRACING MODES will work on this target. Reads only /proc and "
+        "the mapped ELF — it NEVER attaches, so it is safe to run against "
+        "anything you can read, and safe to repeat\n"
         "  %s --log    <pid> [n] [--follow] [--json] [--record=<f>]  stream n "
         "syscalls with data\n"
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
@@ -8214,7 +8476,7 @@ static int usage(const char *argv0) {
         "debugger) may never reach a fixed n in batch mode; interrupt with "
         "Ctrl-C.\n",
         argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
-        argv0, argv0, argv0, argv0, argv0);
+        argv0, argv0, argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -8332,6 +8594,21 @@ int main(int argc, char **argv) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         return cmd_syms(pid, argc >= 4 ? argv[3] : NULL);
+    }
+    if (strcmp(argv[1], "--info") == 0 && argc >= 3) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        int json = 0;
+        const char *record = NULL;
+        for (int i = 3; i < argc; i++) { /* --json, --record=, any order */
+            if (strcmp(argv[i], "--json") == 0)
+                json = 1;
+            else if (strncmp(argv[i], "--record=", 9) == 0)
+                record = argv[i] + 9;
+            else
+                return bad_arg("info option", argv[i]);
+        }
+        return cmd_info(pid, json, record);
     }
     if (strcmp(argv[1], "--log") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

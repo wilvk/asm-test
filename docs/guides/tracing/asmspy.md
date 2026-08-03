@@ -216,6 +216,8 @@ exercises.
 ```bash
 asmspy --list [active|scan]        # list processes; active=recent CPU, scan=string-rich memory first
 asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name, module)
+asmspy --info   <pid> [--json] [--record=<f>]  # process snapshot: identity, runtime, threads,
+                                    # symbols, and which tracing modes will work (never attaches)
 asmspy --log    <pid> [n] [--follow]                   # stream n syscalls with decoded data (default 20)
 asmspy --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]   # n live samples of a function (default 3;
                                    # samples whichever thread reaches it first, --tid pins one)
@@ -533,6 +535,50 @@ single-stepping, no code patching; near-zero perturbation). The address can be
 a data symbol, `sym+off`, or a raw `0xADDR`. x86-64 (DR0-3) and AArch64
 (`NT_ARM_HW_WATCH`); self-skips where the host exposes no watchpoint slots
 (qemu-user, some hypervisors) or arming is otherwise refused.
+
+**Process snapshot** — `--info` answers *what is this process, and what can
+I do with it*: identity (pid/ppid/user/argv/exe/cwd), the same runtime
+fingerprint (language runtime, ELF class, PIE/static, whether it is actively
+JIT-compiling), per-thread state (`wchan`, and the syscall it is currently in,
+when readable), the resolved symbol/JIT surface, mapped modules, and — the
+reason it exists — **which of the other subcommands would work here right
+now**, with the measured reason for each one that would not (Yama
+`ptrace_scope`, ownership, a 32-bit tracee, a host with no AMD IBS PMU, ...).
+
+It reads only `/proc` and the mapped ELF, so it **never calls ptrace and never
+attaches** — safe to run against anything you can read, and safe to run
+repeatedly (it is what the desktop GUI's Process details pane re-runs on every
+selection change). `--json` emits it as a valid **one-event** `.asmtrace`
+recording — a header, one `procinfo` event, an `end` footer — the exact same
+contract every other mode's `--json`/`--record=<f>` carries, so
+`asmspy --info <pid> --json > x.asmtrace` IS a recording and the desktop reads
+it with the ordinary loader. The two output channels are independent, exactly
+like every other mode: `--json` alone streams NDJSON to stdout, `--record=<f>`
+alone writes the file, both together do both, and `--record=<f>` **without**
+`--json` still prints the human text — gating the recording on `--json` would
+silently drop a recording you asked for.
+
+```text
+$ asmspy --info $$
+pid 8842  bash  [native]  S
+  cmd      -bash
+  exe      /usr/bin/bash
+  user     will (uid 1000)   ppid 8801   threads 1
+  rss      3496 KB   fds 3   cpu 0 jiffies @ 100 Hz
+  attach   MAYBE — yama ptrace_scope=1 — only a descendant, or a target that called PR_SET_PTRACER
+           -> sudo sysctl kernel.yama.ptrace_scope=0, or launch the target from asmspy
+  modes    log ok  stream ok  trace ok  dataflow ok  tree ok  graph ok  procs ok  sample ok  watch ok
+  names    9389 symbols · 4 modules · 0 JIT methods
+  threads
+    8842     bash             S  do_wait                  needs ptrace permission (Yama ptrace_scope / uid)
+```
+
+A shell's own `$$` is a convenient target that always exists, and it doubles as
+a demonstration of the **"MAYBE"** verdict: `asmspy --info` runs as a *new*
+process, so it is never an ancestor of the shell that launched it, and under a
+restrictive `ptrace_scope` that is exactly the case Yama does not trust by
+default — the same honest "it depends" `--info` is built to surface, rather
+than asserting a YES or NO it cannot back up.
 
 ## How it works
 
