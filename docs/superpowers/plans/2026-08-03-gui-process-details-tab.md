@@ -935,11 +935,32 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
             snprintf(m->path, sizeof m->path, "%.255s", mods[i].path);
             m->base = mods[i].load_start;
             m->exec = 1;
-            for (size_t k = 0; k < syms.n; k++)
-                if (syms.v[k].module && !strcmp(syms.v[k].module, b))
-                    m->syms++;
         }
         free(mods);
+
+        /* Per-module counts in ONE pass over the symbols, not a scan per
+         * module. The nested form is 64 modules x 60k symbols on a real
+         * target — ~4M string compares against a 250 ms whole-gather budget
+         * whose justification is a measured 20 ms. The symbols are sorted by
+         * address and so cluster by module, which makes the last-hit memo
+         * hit almost always; the linear fallback is bounded by the 64-module
+         * cap, never by the symbol count. */
+        int last = -1;
+        for (size_t k = 0; k < syms.n; k++) {
+            const char *mn = syms.v[k].module;
+            if (!mn)
+                continue;
+            if (last >= 0 && !strcmp(out->modules[last].name, mn)) {
+                out->modules[last].syms++;
+                continue;
+            }
+            for (int i = 0; i < out->n_modules; i++)
+                if (!strcmp(out->modules[i].name, mn)) {
+                    out->modules[i].syms++;
+                    last = i;
+                    break;
+                }
+        }
         qsort(out->modules, (size_t)out->n_modules, sizeof out->modules[0],
               pi_mod_cmp);
 
@@ -1826,9 +1847,10 @@ struct ProcInfo {
     uint64_t rss_kb = 0, vsize_kb = 0, peak_rss_kb = 0;
     uint64_t io_read_bytes = 0, io_write_bytes = 0;
     bool io_readable = false, fds_readable = false;
-    int fds = 0, oom_score = 0, nice = 0, threads = 0;
+    int fds = 0, oom_score = 0, nice = 0;
+    int n_threads = 0; // the KERNEL's count; `threads` below is the rows we got
 
-    std::vector<PiThread> threads_v;
+    std::vector<PiThread> threads; // capped at 64; n_threads may exceed it
     bool threads_truncated = false;
 
     uint64_t syms_total = 0, jit_methods = 0, anon_exec_bytes = 0;
@@ -1850,9 +1872,6 @@ struct ProcInfo {
     bool children_truncated = false;
     bool budget_exceeded = false;
 };
-
-// `threads` is the alias the tests and the pane read; keep ONE name.
-// (threads_v above is the vector; `threads` the int is the kernel's count.)
 
 // Decode the single `procinfo` event of `r`. A recording without one yields
 // valid=false and a stated parse_error — never a blank ProcInfo, which would
@@ -1884,7 +1903,7 @@ std::string procinfo_names_verdict(const ProcInfo &p);
 #endif // ASMDESK_LIVE_PROCINFO_H
 ```
 
-Rename the kernel thread count to `n_threads` and the vector to `threads` if that reads better — but pick ONE spelling and use it in the test, the pane and here. The test above uses `p.threads` for the vector, so name the vector `threads` and the kernel count `n_threads`, and update the struct comment accordingly.
+Note the two thread fields are deliberately distinct and must not be merged: `n_threads` is the **kernel's** count from `/proc/<pid>/status`, and `threads` is the vector of rows actually gathered — capped at 64. When they disagree, `threads_truncated` is true and the pane says "capped at N of M". Collapsing them into one field is what makes a 200-thread process silently claim it has 64.
 
 - [ ] **Step 5: Write `desktop/src/live/procinfo.cpp`**
 
