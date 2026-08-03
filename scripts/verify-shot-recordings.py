@@ -45,16 +45,25 @@ def need(name, kinds, kind, atleast, why):
         failures.append(f"{name}: {kind} count {got} < {atleast} — {why}")
 
 
+# Every recording needs `codeimage`, and this is the check that would have caught
+# the original blank-screenshot run. The desktop's 3D pane is present ONLY when
+# regions_from_codeimage() is non-empty, so a recording without it renders no 3D
+# scene at all — the tab is simply absent, and the shot silently photographs
+# whatever else was on screen.
 k, _ = load("tree.asmtrace")
+need("tree.asmtrace", k, "codeimage", 1, "the 3D pane is absent without codeimage")
 need("tree.asmtrace", k, "call", 50, "ModuleRibbon has no call tree")
 
 k, _ = load("trace-blend.asmtrace")
+need("trace-blend.asmtrace", k, "codeimage", 1,
+     "the 3D pane is absent without codeimage")
 need("trace-blend.asmtrace", k, "trace", 100, "Invocation has no instructions")
 need("trace-blend.asmtrace", k, "coverage", 4,
      "a coverage event CLOSES an invocation; <4 gives too few slabs")
 
 for side in ("df-a.asmtrace", "df-b.asmtrace"):
     k, wide = load(side)
+    need(side, k, "codeimage", 1, "the 3D pane is absent without codeimage")
     need(side, k, "df_step", 20, "Plane/LanePrism have no dataflow")
     need(side, k, "mem", 10, "the data-cell layers have no addresses")
     need(side, k, "statediff", 1, "Divergence cannot diff without statediff")

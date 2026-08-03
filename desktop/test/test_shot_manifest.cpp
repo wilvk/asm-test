@@ -120,6 +120,25 @@ int main() {
                   err.find("no-such-layer") != std::string::npos,
               "an unknown layer id was ignored instead of reported");
     }
+    {
+        // SceneLayers defaults every flag TRUE, so "only these" needs a clear
+        // first. Without it a two-layer shot is identical to any other, which
+        // is exactly what happened before this was added.
+        scene3d::SceneLayers L;
+        check("layers: SceneLayers really does default everything on",
+              L.terrain && L.exact && L.weather,
+              "the premise of shot_clear_layers no longer holds");
+        shot_clear_layers(L);
+        check("layers: clear turns every registry layer off",
+              !L.terrain && !L.exact && !L.weather && !L.zoning && !L.contours,
+              "a layer survived shot_clear_layers");
+        std::string err;
+        shot_apply_layers({"terrain", "exact"}, L, err);
+        check("layers: clear-then-apply leaves ONLY the named layers",
+              L.terrain && L.exact && !L.weather && !L.zoning,
+              "an unnamed layer is still lit, so shots of different layer sets "
+              "would render identically");
+    }
 
     // --- the committed manifest --------------------------------------------
     {

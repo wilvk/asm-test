@@ -1,47 +1,222 @@
 [
-  { "name": "01-summary",       "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "summary",  "size": [1600, 1000], "warmup": 30 },
-  { "name": "02-timeline",      "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "timeline", "size": [1600, 1000], "warmup": 30 },
-  { "name": "03-scrubber",      "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scrubber", "size": [1600, 1000], "warmup": 30 },
-  { "name": "04-canvas",        "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "canvas",   "size": [1600, 1000], "warmup": 30 },
-  { "name": "05-loom",          "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "loom",     "size": [1600, 1000], "warmup": 30 },
-
-  { "name": "10-plane-bare",    "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "Plane",
-    "layers": ["terrain", "exact"],
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "11-plane-zoning",  "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "Plane",
-    "layers": ["terrain", "exact", "zoning", "contours"],
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "12-plane-canopy",  "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "Plane",
-    "layers": ["terrain", "exact", "canopy", "opcode"],
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "13-plane-access",  "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "Plane",
-    "layers": ["terrain", "exact", "access", "relief"],
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "14-plane-weather", "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "Plane",
-    "layers": ["terrain", "exact", "weather", "ghost fog"],
-    "size": [1600, 1000], "warmup": 30 },
-
-  { "name": "20-invocation",    "open": ["build/shots/rec/trace-blend.asmtrace"],
-    "view": "scene3d",  "scene": "Invocation",
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "21-module-ribbon", "open": ["build/shots/rec/tree.asmtrace"],
-    "view": "scene3d",  "scene": "ModuleRibbon",
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "22-lane-prism",    "open": ["build/shots/rec/df-a.asmtrace"],
-    "view": "scene3d",  "scene": "LanePrism",
-    "size": [1600, 1000], "warmup": 30 },
-  { "name": "23-divergence",
-    "open": ["build/shots/rec/df-a.asmtrace", "build/shots/rec/df-b.asmtrace"],
-    "view": "scene3d",  "scene": "Divergence",
-    "size": [1600, 1000], "warmup": 30 }
+  {
+    "name": "01-summary",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "summary",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "02-timeline",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "timeline",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "03-scrubber",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scrubber",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "04-canvas",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "canvas",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "05-loom",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "loom",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "09-scene-hud",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "hud": true,
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "10-plane-bare",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "layers": [
+      "terrain",
+      "exact"
+    ],
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "11-plane-zoning",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "layers": [
+      "terrain",
+      "exact",
+      "zoning",
+      "contours"
+    ],
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "12-plane-canopy",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "layers": [
+      "terrain",
+      "exact",
+      "canopy",
+      "opcode"
+    ],
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "13-plane-access",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "layers": [
+      "terrain",
+      "exact",
+      "access",
+      "relief"
+    ],
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "14-plane-weather",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Plane",
+    "layers": [
+      "terrain",
+      "exact",
+      "weather",
+      "ghost fog"
+    ],
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "20-invocation",
+    "open": [
+      "build/shots/rec/trace-blend.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Invocation",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "21-module-ribbon",
+    "open": [
+      "build/shots/rec/tree.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "ModuleRibbon",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "22-lane-prism",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "LanePrism",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
+    "name": "23-divergence",
+    "open": [
+      "build/shots/rec/df-a.asmtrace",
+      "build/shots/rec/df-b.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "Divergence",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  }
 ]

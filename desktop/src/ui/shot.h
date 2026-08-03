@@ -30,6 +30,14 @@ struct ShotSpec {
     std::vector<std::string> layers; // LayerDesc::id keys; empty => defaults
     int width = 1600;
     int height = 1000;
+    // Show the "3D overview" HUD window expanded. It is a SEPARATE dockable
+    // window rather than a child of the scene pane, and it is long enough
+    // (every layer toggle, every encoding legend) to cover the viewport
+    // completely — so a scene shot with the HUD up photographs the text and
+    // none of the geometry. Default false: collapse it, and let the guide page
+    // carry the axis wording, which it quotes verbatim anyway. Set true for the
+    // one shot that documents the HUD itself.
+    bool hud = false;
     // Frames rendered before the capture. ImGui's docking and layout settle over
     // several frames, and the terrain weave lands over a few more; capturing
     // frame 0 photographs a half-built UI.
@@ -51,9 +59,19 @@ bool shot_view_from_name(const std::string &name, ViewId &out);
 bool shot_scene_from_name(const std::string &name, scene3d::SceneKind &out);
 
 // Turn ON each named layer, by the stable LayerDesc::id key. Returns false with
-// `err` naming the first unknown id.
+// `err` naming the first unknown id. Does NOT touch layers it was not given.
 bool shot_apply_layers(const std::vector<std::string> &ids,
                        scene3d::SceneLayers &out, std::string &err);
+
+// Turn every layer OFF, via the registry (which test_layers pins as exhaustive
+// over SceneLayers' members).
+//
+// This exists because SceneLayers defaults every flag to TRUE. A shot that only
+// switched its named layers on would therefore be identical to one that named
+// nothing — every layer would be lit in both. Documenting what one layer
+// contributes needs the others off, so a manifest `layers` list means ONLY
+// these, and that requires clearing first.
+void shot_clear_layers(scene3d::SceneLayers &out);
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_SHOT_H

@@ -30,6 +30,11 @@ bool shot_scene_from_name(const std::string &n, scene3d::SceneKind &out) {
     return false;
 }
 
+void shot_clear_layers(scene3d::SceneLayers &out) {
+    for (const scene3d::LayerDesc &d : scene3d::scene_layers_all())
+        out.*(d.flag) = false;
+}
+
 bool shot_apply_layers(const std::vector<std::string> &ids,
                        scene3d::SceneLayers &out, std::string &err) {
     err.clear();
@@ -106,6 +111,8 @@ bool shot_manifest_parse(const std::string &text, std::vector<ShotSpec> &out,
         }
         if (e.contains("warmup") && e["warmup"].is_number_integer())
             s.warmup = e["warmup"].get<int>();
+        if (e.contains("hud") && e["hud"].is_boolean())
+            s.hud = e["hud"].get<bool>();
 
         if (s.width <= 0 || s.height <= 0) {
             err = "shot manifest: non-positive size in \"" + s.name + "\"";

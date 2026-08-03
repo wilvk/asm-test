@@ -25,6 +25,7 @@
 #include "ui/fonts.h"
 #include "ui/gl_scene_host.h"
 #include "ui/png_write.h"
+#include "ui/primer.h"
 #include "ui/shell.h"
 #include "ui/shot.h"
 #include "ui/theme.h"
@@ -193,14 +194,36 @@ bool render_one(const ShotSpec &s, const std::string &out_dir) {
             // default Plane — a silent wrong-substrate bug, not a visible one.
             sv.hud.req_kind = s.scene;
             sv.hud.req_kind_change = true;
+            // A fresh ShellState has never seen the first-open primer, so it
+            // covers the viewport on every shot. Dismissing it is what a
+            // returning user's persisted state would already have done — the
+            // screenshot should show the view, not its onboarding card.
+            dt_primer_dismiss(sv.primer);
+            // Frame the geometry once the scene has been built. Without this
+            // the camera keeps its initial pose and the subject renders as a
+            // few pixels in the corner.
+            if (frame == s.warmup / 2)
+                sv.hud.req_default_view = true;
             if (!s.layers.empty()) {
-                sv.hud.layers = scene3d::SceneLayers{};
+                // CLEAR then set: a manifest layer list means ONLY these.
+                // SceneLayers defaults every flag to true, so merely switching
+                // the named ones on leaves every other layer lit too, and a
+                // "terrain + exact" shot comes out byte-identical to a
+                // "terrain + weather" one. Measured: three identical PNGs.
+                shot_clear_layers(sv.hud.layers);
                 std::string lerr;
                 shot_apply_layers(s.layers, sv.hud.layers, lerr);
             }
         }
 
         draw_shell(st);
+
+        // The "3D overview" HUD is its own dockable window, long enough to
+        // cover the whole viewport. Collapsing it AFTER draw_shell (which is
+        // what creates the window) makes the geometry the subject of the shot.
+        // By name, because the shot driver never sees the window's Begin.
+        if (s.view == ViewId::Scene3D && !s.hud)
+            ImGui::SetWindowCollapsed("3D overview", true);
 
         ImGui::Render();
         glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo);
