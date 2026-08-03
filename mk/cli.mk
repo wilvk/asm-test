@@ -460,6 +460,16 @@ $(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
 	$(CC) $(CFLAGS) -Icli -pthread cli/test_symtab.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
+# test_procinfo — the attach-free process snapshot (asmspy_procinfo). Its key
+# assertion is NEGATIVE: the snapshot must succeed against a target we hold no
+# ptrace permission for (our own parent, under Yama ptrace_scope=1), which a
+# gatherer that quietly attached could not do. Links the resolver TU directly,
+# like test_symtab.
+$(BUILD)/test_procinfo: cli/test_procinfo.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
+                        | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -pthread cli/test_procinfo.c $(BUILD)/asmspy_proc.o \
+	  -lstdc++ -o $@
+
 # test_libasmspy — the standalone proof that libasmspy is a LIBRARY (07 T0).
 # Its LINK LINE is the test: libasmspy.a + the tier objects the engine calls
 # into, and NOT $(BUILD)/asmspy.o, and NOT $(NCURSES_LIBS). A hidden dependency
@@ -647,6 +657,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
+           $(BUILD)/test_procinfo \
            $(BUILD)/test_ghash $(BUILD)/test_sha256 $(BUILD)/test_asmtrace \
            $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
@@ -669,6 +680,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	@echo "--- reweave (30 R3: emu_t-hosted run == standalone; checkpoint/resume tail identity) ---"
 	@if [ -x "$(BUILD)/test_reweave" ]; then $(BUILD)/test_reweave; \
 	 else echo "# SKIP reweave: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
+	@echo "--- procinfo (the attach-free process snapshot) ---"
+	@$(BUILD)/test_procinfo
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

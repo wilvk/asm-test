@@ -121,6 +121,150 @@ typedef struct {
 int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out);
 
 /* ------------------------------------------------------------------ */
+/* Process snapshot (asmspy_proc.c) — the desktop's Process details    */
+/* pane, and `asmspy --info`.                                          */
+/*                                                                     */
+/* HARD RULE: this gatherer NEVER calls ptrace. Not "attaches          */
+/* briefly" — never. It reads /proc and the mapped ELF, which is what  */
+/* makes it safe to fire automatically as an operator browses a        */
+/* process list, and safe to poll on a timer. A field that would need  */
+/* an attach belongs to a different entry point, not this one.         */
+/*                                                                     */
+/* Note /proc/<pid>/syscall is NOT an exception: it needs ptrace       */
+/* PERMISSION but performs no attach, and is reported as absent (with  */
+/* its reason) where the permission is missing.                        */
+/*                                                                     */
+/* Counters are RAW — jiffies and bytes with a CLOCK_MONOTONIC stamp,  */
+/* never a pre-computed rate. The gatherer therefore never sleeps, and */
+/* a client derives %CPU / IO rates from two consecutive snapshots.    */
+/* ------------------------------------------------------------------ */
+enum {
+    ASMSPY_PI_THREADS_CAP = 64,
+    ASMSPY_PI_MODULES_CAP = 64,
+    ASMSPY_PI_CHILDREN_CAP = 32,
+    ASMSPY_PI_ARGV_CAP = 64,
+    ASMSPY_PI_ARGV_BYTES = 4096
+};
+
+/* The engines `asmspy --info` can report on. Order is the display order. */
+typedef enum {
+    ASMSPY_MODE_LOG = 0,
+    ASMSPY_MODE_STREAM,
+    ASMSPY_MODE_TRACE,
+    ASMSPY_MODE_DATAFLOW,
+    ASMSPY_MODE_TREE,
+    ASMSPY_MODE_GRAPH,
+    ASMSPY_MODE_PROCS,
+    ASMSPY_MODE_SAMPLE,
+    ASMSPY_MODE_WATCH,
+    ASMSPY_MODE__COUNT
+} asmspy_mode_t;
+
+/* "log", "stream", ... — the same spelling the CLI flag and the serve
+ * protocol's `mode` use, so a UI never invents a third name. */
+const char *asmspy_mode_name(asmspy_mode_t m);
+
+typedef struct {
+    long tid;
+    char comm[20];
+    char state; /* R S D Z T t X from /proc/<tid>/stat                 */
+    char wchan[48];                 /* kernel symbol it sleeps in; "" if none */
+    unsigned long long cpu_jiffies; /* utime+stime of THIS task            */
+    /* /proc/<tid>/syscall: needs ptrace permission, performs no attach.  */
+    int have_syscall;    /* 0 -> `syscall_why` says why, and is non-empty */
+    long syscall_nr;     /* -1 = running in user mode                     */
+    char syscall_name[32];
+    unsigned long long syscall_args[6];
+    unsigned long long pc, sp;
+    char pc_sym[96];     /* pc resolved via the symtab; "" if unresolved  */
+    char syscall_why[80];
+} asmspy_pi_thread_t;
+
+typedef struct {
+    char name[64]; /* basename                                          */
+    char path[256];
+    unsigned long long base, size;
+    int exec;
+    unsigned long syms; /* STT_FUNC symbols resolved from this module    */
+    int has_symtab;     /* 1 = .symtab present; 0 = .dynsym only         */
+    char build_id[41];  /* lowercase hex, "" if absent                   */
+} asmspy_pi_module_t;
+
+typedef struct {
+    long pid;
+    char comm[20];
+} asmspy_pi_child_t;
+
+typedef struct {
+    /* --- identity --- */
+    long pid, ppid, pgid, sid;
+    long uid, euid, gid, egid;
+    char user[24], euser[24];
+    char comm[20];
+    char argv[ASMSPY_PI_ARGV_BYTES]; /* NUL-separated, `argc` entries     */
+    int argc;
+    int argv_truncated;
+    char exe[256];
+    int exe_deleted; /* /proc/<pid>/exe target ends in " (deleted)"       */
+    char cwd[256];
+    char state;
+    unsigned long long start_ticks; /* /proc/<pid>/stat field 22          */
+    double elapsed_s;
+
+    /* --- runtime (asmspy_fingerprint, verbatim) --- */
+    asmspy_fingerprint_t fp;
+
+    /* --- counters: RAW. The client derives rates. --- */
+    unsigned long long ts_ns;        /* CLOCK_MONOTONIC at gather time     */
+    unsigned long long utime, stime; /* jiffies, whole process             */
+    unsigned long clk_tck;           /* sysconf(_SC_CLK_TCK)               */
+    unsigned long rss_kb, vsize_kb, peak_rss_kb;
+    unsigned long long io_read_bytes, io_write_bytes;
+    int io_readable; /* /proc/<pid>/io needs matching creds               */
+    int n_fds, fds_readable;
+    int oom_score, nice, threads;
+
+    /* --- threads (Task 2) --- */
+    asmspy_pi_thread_t threads_v[ASMSPY_PI_THREADS_CAP];
+    int n_threads_v, threads_truncated;
+
+    /* --- code surface (Task 3) --- */
+    unsigned long syms_total, jit_methods;
+    char jit_source[16]; /* "jitdump"|"perf-map"|"both"|""                */
+    unsigned long long anon_exec_bytes;
+
+    /* --- modules (Task 3) --- */
+    asmspy_pi_module_t modules[ASMSPY_PI_MODULES_CAP];
+    int n_modules, modules_truncated;
+
+    /* --- traceability (Task 3) --- */
+    int attachable; /* 1 yes, 0 no, -1 unknown                           */
+    char attach_why[128], attach_remedy[176];
+    int mode_ok[ASMSPY_MODE__COUNT];
+    char mode_why[ASMSPY_MODE__COUNT][96];
+
+    /* --- containment --- */
+    unsigned long long ns_pid, ns_net, ns_mnt, ns_user; /* inode ids      */
+    int ns_differs; /* any of the four differs from OUR own              */
+    char cgroup[192];
+    int seccomp, no_new_privs, dumpable;
+
+    /* --- children --- */
+    asmspy_pi_child_t children[ASMSPY_PI_CHILDREN_CAP];
+    int n_children, children_truncated;
+
+    /* Sticky: the 250 ms gather budget ran out and later sections carry
+     * only what they had. Stated, never silently short. */
+    int budget_exceeded;
+} asmspy_procinfo_t;
+
+/* Fill *out for `pid`. Returns 0, or -1 when the process does not exist
+ * (an unreadable /proc/<pid>/stat) — a nonexistent pid must FAIL rather
+ * than yield a plausible empty snapshot. Individual unreadable fields
+ * keep their zero/"" defaults and set their own *_readable flag. */
+int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out);
+
+/* ------------------------------------------------------------------ */
 /* Function-symbol resolver (asmspy_proc.c)                            */
 /*                                                                     */
 /* No ELF symbol reader exists in the library, so this parses the      */

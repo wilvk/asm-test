@@ -1354,6 +1354,272 @@ int asmspy_fingerprint(pid_t pid, asmspy_fingerprint_t *out) {
     return 0;
 }
 
+/* ================================================================== */
+/* Process snapshot — `asmspy --info` / the desktop's details pane.    */
+/* NEVER ptrace. See the contract in libasmspy.h.                      */
+/* ================================================================== */
+
+static unsigned long long pi_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long)ts.tv_sec * 1000000000ull +
+           (unsigned long long)ts.tv_nsec;
+}
+
+/* The 250 ms budget. Sections check it and stop filling rather than run
+ * long on a pathological target; the flag is sticky and always reported. */
+static int pi_over_budget(const asmspy_procinfo_t *pi) {
+    return (pi_now_ns() - pi->ts_ns) > 250000000ull;
+}
+
+/* /proc/<pid>/ns/<what> -> the inode id, or 0 when unreadable. */
+static unsigned long long pi_ns_id(pid_t pid, const char *what) {
+    char p[80], buf[64];
+    snprintf(p, sizeof p, "/proc/%d/ns/%.8s", (int)pid, what);
+    ssize_t n = readlink(p, buf, sizeof buf - 1);
+    if (n <= 0)
+        return 0;
+    buf[n] = '\0';
+    const char *b = strchr(buf, '[');
+    return b ? strtoull(b + 1, NULL, 10) : 0;
+}
+
+/* uid -> username, falling back to the decimal uid (never blank). */
+static void pi_user(long uid, char *out, size_t cap) {
+    struct passwd *pw = getpwuid((uid_t)uid);
+    if (pw && pw->pw_name)
+        snprintf(out, cap, "%.*s", (int)cap - 1, pw->pw_name);
+    else
+        snprintf(out, cap, "%ld", uid);
+}
+
+int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
+    char p[80], line[512];
+    FILE *f;
+
+    memset(out, 0, sizeof *out);
+    out->seccomp = -1;
+    out->attachable = -1;
+    out->ts_ns = pi_now_ns();
+    out->clk_tck = (unsigned long)sysconf(_SC_CLK_TCK);
+    out->pid = (long)pid;
+
+    /* /proc/<pid>/stat is the existence test: no stat, no process. Parse
+     * from the LAST ')' so a comm containing ") (" cannot shift fields. */
+    snprintf(p, sizeof p, "/proc/%d/stat", (int)pid);
+    f = fopen(p, "r");
+    if (!f)
+        return -1;
+    size_t n = fread(line, 1, sizeof line - 1, f);
+    fclose(f);
+    line[n] = '\0';
+    char *rp = strrchr(line, ')');
+    if (!rp)
+        return -1;
+    {
+        char *lp = strchr(line, '(');
+        if (lp && rp > lp + 1)
+            snprintf(out->comm, sizeof out->comm, "%.*s", (int)(rp - lp - 1),
+                     lp + 1);
+        /* fields from 3 (state) on, space separated */
+        char st = 0;
+        long ppid = 0, pgid = 0, sid = 0, nice = 0, threads = 0;
+        unsigned long long ut = 0, stm = 0, start = 0, vsz = 0;
+        sscanf(rp + 2,
+               "%c %ld %ld %ld %*d %*d %*u %*u %*u %*u %*u %llu %llu %*d %*d "
+               "%*d %ld %ld %*d %llu %llu",
+               &st, &ppid, &pgid, &sid, &ut, &stm, &nice, &threads, &start,
+               &vsz);
+        out->state = st;
+        out->ppid = ppid;
+        out->pgid = pgid;
+        out->sid = sid;
+        out->utime = ut;
+        out->stime = stm;
+        out->nice = nice;
+        out->threads = (int)threads;
+        out->start_ticks = start;
+        out->vsize_kb = (unsigned long)(vsz / 1024);
+    }
+
+    /* elapsed = uptime - start/clk_tck */
+    if ((f = fopen("/proc/uptime", "r"))) {
+        double up = 0;
+        if (fscanf(f, "%lf", &up) == 1 && out->clk_tck)
+            out->elapsed_s = up - (double)out->start_ticks / out->clk_tck;
+        fclose(f);
+    }
+
+    /* status: uids/gids, VmRSS, VmPeak, Seccomp, NoNewPrivs — one pass. */
+    snprintf(p, sizeof p, "/proc/%d/status", (int)pid);
+    if ((f = fopen(p, "r"))) {
+        while (fgets(line, sizeof line, f)) {
+            if (!strncmp(line, "Uid:", 4))
+                sscanf(line + 4, "%ld %ld", &out->uid, &out->euid);
+            else if (!strncmp(line, "Gid:", 4))
+                sscanf(line + 4, "%ld %ld", &out->gid, &out->egid);
+            else if (!strncmp(line, "VmRSS:", 6))
+                sscanf(line + 6, "%lu", &out->rss_kb);
+            else if (!strncmp(line, "VmHWM:", 6))
+                sscanf(line + 6, "%lu", &out->peak_rss_kb);
+            else if (!strncmp(line, "Seccomp:", 8))
+                sscanf(line + 8, "%d", &out->seccomp);
+            else if (!strncmp(line, "NoNewPrivs:", 11))
+                sscanf(line + 11, "%d", &out->no_new_privs);
+        }
+        fclose(f);
+    }
+    pi_user(out->uid, out->user, sizeof out->user);
+    pi_user(out->euid, out->euser, sizeof out->euser);
+
+    /* argv: /proc/<pid>/cmdline is already NUL-separated — keep it that
+     * way (out->argv mirrors it) and just count and cap. */
+    snprintf(p, sizeof p, "/proc/%d/cmdline", (int)pid);
+    if ((f = fopen(p, "r"))) {
+        size_t got = fread(out->argv, 1, sizeof out->argv - 1, f);
+        int c = (int)fread(line, 1, 1, f); /* anything left = truncated */
+        fclose(f);
+        out->argv[got] = '\0';
+        out->argv_truncated = (c > 0);
+        for (size_t i = 0; i < got; i++)
+            if (out->argv[i] == '\0') {
+                if (out->argc < ASMSPY_PI_ARGV_CAP)
+                    out->argc++;
+                else {
+                    out->argv[i] = '\0';
+                    out->argv_truncated = 1;
+                    break;
+                }
+            }
+        if (!out->argc && got)
+            out->argc = 1; /* a cmdline with no trailing NUL */
+    }
+
+    /* exe (with the kernel's " (deleted)" suffix split off) and cwd. */
+    snprintf(p, sizeof p, "/proc/%d/exe", (int)pid);
+    {
+        ssize_t r = readlink(p, out->exe, sizeof out->exe - 1);
+        out->exe[r > 0 ? r : 0] = '\0';
+        char *d = strstr(out->exe, " (deleted)");
+        if (d) {
+            *d = '\0';
+            out->exe_deleted = 1;
+        }
+    }
+    snprintf(p, sizeof p, "/proc/%d/cwd", (int)pid);
+    {
+        ssize_t r = readlink(p, out->cwd, sizeof out->cwd - 1);
+        out->cwd[r > 0 ? r : 0] = '\0';
+    }
+
+    /* io — same-creds only; an absence is flagged, never rendered as 0. */
+    snprintf(p, sizeof p, "/proc/%d/io", (int)pid);
+    if ((f = fopen(p, "r"))) {
+        out->io_readable = 1;
+        while (fgets(line, sizeof line, f)) {
+            if (!strncmp(line, "read_bytes:", 11))
+                sscanf(line + 11, "%llu", &out->io_read_bytes);
+            else if (!strncmp(line, "write_bytes:", 12))
+                sscanf(line + 12, "%llu", &out->io_write_bytes);
+        }
+        fclose(f);
+    }
+
+    /* fd count */
+    snprintf(p, sizeof p, "/proc/%d/fd", (int)pid);
+    {
+        DIR *d = opendir(p);
+        if (d) {
+            struct dirent *e;
+            out->fds_readable = 1;
+            while ((e = readdir(d)))
+                if (is_all_digits(e->d_name))
+                    out->n_fds++;
+            closedir(d);
+        }
+    }
+
+    snprintf(p, sizeof p, "/proc/%d/oom_score", (int)pid);
+    read_first_line(p, line, sizeof line);
+    if (line[0])
+        out->oom_score = atoi(line);
+
+    /* containment */
+    out->ns_pid = pi_ns_id(pid, "pid");
+    out->ns_net = pi_ns_id(pid, "net");
+    out->ns_mnt = pi_ns_id(pid, "mnt");
+    out->ns_user = pi_ns_id(pid, "user");
+    {
+        pid_t me = getpid();
+        out->ns_differs = (out->ns_pid && out->ns_pid != pi_ns_id(me, "pid")) ||
+                          (out->ns_net && out->ns_net != pi_ns_id(me, "net")) ||
+                          (out->ns_mnt && out->ns_mnt != pi_ns_id(me, "mnt")) ||
+                          (out->ns_user && out->ns_user != pi_ns_id(me, "user"));
+    }
+    snprintf(p, sizeof p, "/proc/%d/cgroup", (int)pid);
+    read_first_line(p, line, sizeof line);
+    if (line[0]) {
+        const char *c = strrchr(line, ':');
+        snprintf(out->cgroup, sizeof out->cgroup, "%.191s", c ? c + 1 : line);
+    }
+    out->dumpable = -1; /* only readable via prctl on self; unknown here  */
+
+    /* children: one /proc walk, ppid == pid. Cheap, and never the --procs
+     * engine, which SEIZEs the whole descendant tree. */
+    {
+        DIR *d = opendir("/proc");
+        struct dirent *e;
+        if (d) {
+            while ((e = readdir(d)) && !pi_over_budget(out)) {
+                if (!is_all_digits(e->d_name))
+                    continue;
+                long cand = atol(e->d_name);
+                if (cand == (long)pid)
+                    continue;
+                snprintf(p, sizeof p, "/proc/%.15s/stat", e->d_name);
+                read_first_line(p, line, sizeof line);
+                if (!line[0])
+                    continue;
+                char *r2 = strrchr(line, ')');
+                long cpp = 0;
+                if (!r2 || sscanf(r2 + 2, "%*c %ld", &cpp) != 1 ||
+                    cpp != (long)pid)
+                    continue;
+                if (out->n_children >= ASMSPY_PI_CHILDREN_CAP) {
+                    out->children_truncated = 1;
+                    break;
+                }
+                out->children[out->n_children].pid = cand;
+                snprintf(p, sizeof p, "/proc/%.15s/comm", e->d_name);
+                read_first_line(p, out->children[out->n_children].comm,
+                                sizeof out->children[0].comm);
+                out->n_children++;
+            }
+            closedir(d);
+        }
+    }
+
+    asmspy_fingerprint(pid, &out->fp);
+    if (pi_over_budget(out))
+        out->budget_exceeded = 1;
+    return 0;
+}
+
+const char *asmspy_mode_name(asmspy_mode_t m) {
+    switch (m) {
+    case ASMSPY_MODE_LOG:      return "log";
+    case ASMSPY_MODE_STREAM:   return "stream";
+    case ASMSPY_MODE_TRACE:    return "trace";
+    case ASMSPY_MODE_DATAFLOW: return "dataflow";
+    case ASMSPY_MODE_TREE:     return "tree";
+    case ASMSPY_MODE_GRAPH:    return "graph";
+    case ASMSPY_MODE_PROCS:    return "procs";
+    case ASMSPY_MODE_SAMPLE:   return "sample";
+    case ASMSPY_MODE_WATCH:    return "watch";
+    default:                   return "?";
+    }
+}
+
 const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
                                           const char *name) {
     for (size_t i = 0; i < t->n; i++)
