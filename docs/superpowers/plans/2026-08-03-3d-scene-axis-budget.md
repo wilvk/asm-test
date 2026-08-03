@@ -234,7 +234,20 @@ const float scale = scene_traj_scale(nsteps, max_t, time_scale);
 Run: `make build/desktop_test_scene_traj && ./build/desktop_test_scene_traj`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Run the whole suite before committing — this task can churn goldens**
+
+Run: `make desktop-test`
+
+`traj_scale_` feeds the rendered frame, and this task **changes** it for exactly
+the recordings where `max_t + 1 > nsteps`. The ordinary case is bit-identical
+(`max(nsteps, max_t + 1) == nsteps` whenever the trace covers its own steps, so
+the scale is the same `0.6f / nsteps` it was), which is why no churn is
+*expected* — but "expected" is not "verified", and a golden that does carry a
+`mem` step past `nsteps` is precisely the recording this task exists for. If an
+image golden moves here, that is the defect being fixed becoming visible, not a
+regression: regenerate it in the same commit and say so in the message.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add desktop/src/scene3d/trajscale.h desktop/src/scene3d/scene.cpp desktop/test/test_scene_traj.cpp mk/desktop.mk
@@ -460,7 +473,21 @@ static Projection atlas_of(const std::vector<Ref> &refs) {
 }
 ```
 
-**First, scope the existing byte-exact round-trip loop.** The 10 000-address check at [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). Leave the loop exactly as it is and give it a comment saying so — it already runs on a default-constructed (`Hilbert`) projection, so no code changes, but the reason must be recorded or a later reader will "fix" the atlas to satisfy a promise it never made.
+**First, scope the existing byte-exact round-trip loop — and pin it, do not merely comment it.** The 10 000-address check at [test_projection.cpp:110-120](../../../desktop/test/test_projection.cpp#L110) is a Hilbert-layout property (see "the one decision" above). It runs on `main()`'s `p`, which is default-constructed today — but **Task 9 flips that default to `Atlas`**, so "it already runs on a Hilbert projection" stops being true the moment the last task lands. Make the layout explicit rather than inherited:
+
+```cpp
+// This loop asserts the BYTE-EXACT round trip, which is a Hilbert-layout
+// promise and not an atlas one (the plan's contract table says so: an atlas
+// cell covers bytes_per_cell bytes and unproject returns the first of them).
+// Pinned to Hilbert EXPLICITLY rather than relying on the struct default,
+// because Task 9 changes that default. The atlas's own contract — the
+// REGION-level round trip — is asserted in the atlas blocks below.
+Projection h = p;
+h.layout = Projection::Layout::Hilbert;
+rebuild_layout(h);
+```
+
+and run the existing loop against `h` instead of `p`. (It happens to survive the flip unpinned, because this fixture's plane exceeds its domain so every region gets `bytes_per_cell == 1` — but that is an accident of three fixture lengths, not a property, and a later fixture edit would turn it into a mystery failure in an unrelated-looking test.)
 
 Then, inside `main()`:
 
@@ -861,7 +888,7 @@ git commit -m "space: add the region-atlas projection layout, tiling the cell gr
 
 - [ ] **Step 1: Write the test**
 
-Add to `desktop/test/test_stepplace.cpp`, reusing its helpers. `place_address` is the right probe — it takes `(Projection, addr)` and needs no `Recording`:
+Add to `desktop/test/test_stepplace.cpp`, reusing its helpers. `place_address` is the right probe — it takes `(Projection, addr)` and needs no `Recording`. **Add `#include <cmath>`** to that file first: it includes `<cstdio>`, `<sstream>` and `<string>` but no `<cmath>`, and the block below uses `std::fabs`.
 
 ```cpp
 // The shared plane arithmetic must agree with the projection under BOTH
@@ -916,7 +943,23 @@ Add to `desktop/test/test_stepplace.cpp`, reusing its helpers. `place_address` i
 }
 ```
 
-Then add the same two-layout sweep around `test_focus.cpp`'s existing `region_cells` membership checks (`:242`, `:269`, `:284`, `:299`) — that file already asserts the containment and disjointness contract, so running it under `Atlas` too is a small loop change and it is the strongest single guard on Task 2's `region_cells` branch.
+Then add the same two-layout sweep around `test_focus.cpp`'s existing `region_cells` membership checks (`:242`, `:269`, `:284`, `:299`) — that file already asserts the containment and disjointness contract, so running it under `Atlas` too is the strongest single guard on Task 2's `region_cells` branch.
+
+**One mechanical obstacle to expect:** `test_focus.cpp:130` is `const space::Projection proj = fixture_proj();`, so you cannot flip its layout in place. Take a copy at the top of the T2 block and sweep over the two:
+
+```cpp
+space::Projection hil = proj, atl = proj;
+hil.layout = space::Projection::Layout::Hilbert;
+atl.layout = space::Projection::Layout::Atlas;
+space::rebuild_layout(hil);
+space::rebuild_layout(atl);
+for (const space::Projection &pj : {std::cref(hil), std::cref(atl)}) {
+    // ...the existing :242-:299 bodies, reading `pj` where they read `proj`,
+    // and naming the layout in each check string so a failure says which one.
+}
+```
+
+All four contracts hold under the atlas by construction — a rect is non-empty, its cells are distinct, `project` places inside the region's own rect, and the rects tile without overlap — so this should pass on the first run. If it does not, the bug is in Task 2's `region_cells` branch, not here.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -939,8 +982,10 @@ git commit -m "desktop(test): pin the shared address funnel as layout-agnostic"
 ### Task 4: Camera fit-to-content
 
 **Files:**
-- Modify: `desktop/src/scene3d/camera.h` (`reset()`/`top_down()` at `:99-107`)
+- Modify: `desktop/src/scene3d/camera.h` — `reset()` is the one-liner at [`:81`](../../../desktop/src/scene3d/camera.h#L81), `top_down()` is [`:84-88`](../../../desktop/src/scene3d/camera.h#L84). (An earlier draft said `:99-107`; that is `eye()`/`view()`.)
 - Test: `desktop/test/test_camera.cpp`
+
+**Reuse `frame()`, do not re-derive it.** [`camera.h:75`](../../../desktop/src/scene3d/camera.h#L75) already has `void frame(float u, float v, float new_radius)`, which clamps the target into `[0,1]²` and the radius through `kMinRadius`/`kMaxRadius` — exactly `fit()`'s body minus the extent arithmetic, and its comment already states the non-reorienting rule this task depends on. `fit()` is therefore a two-liner over it (see Step 3), not a second copy of the same clamps.
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks — takes plain floats so `camera.h` stays linmath-only.
@@ -1055,11 +1100,15 @@ float fit_radius(float u0, float v0, float u1, float v1, float whole) const {
 }
 
 // Frame a region: centre the target on it and pull the radius back to hold it.
+// Routed through frame() (:75) rather than re-clamping, because frame() IS
+// "recentre without reorienting" and already owns both clamps — a second copy
+// of them here is how the two drift.
 void fit(float u0, float v0, float u1, float v1, float whole) {
-    target[0] = clampf(0.5f * (u0 + u1), 0.0f, 1.0f);
-    target[1] = 0.0f; // the plane's height is not a camera axis (see pan())
-    target[2] = clampf(0.5f * (v0 + v1), 0.0f, 1.0f);
-    radius = fit_radius(u0, v0, u1, v1, whole);
+    frame(0.5f * (u0 + u1), 0.5f * (v0 + v1), fit_radius(u0, v0, u1, v1, whole));
+    target[1] = 0.0f; // the plane's height is not a camera axis (see pan()).
+                      // Already 0 on every path today; stated so the test's
+                      // "never lifts the target off the ground plane" check is
+                      // guaranteed by this function rather than by its callers.
 }
 ```
 
@@ -1112,7 +1161,7 @@ git commit -m "scene3d: give the camera a fit-to-bounds preset, calibrated to th
 >
 > **The spurs survive flattening**, which is why they can go in the ON group without loss: `rail_lift` is already a constant that [encodes nothing](../../../desktop/src/scene3d/causal.cpp#L247), so a flattened spur is still a tent — out of the floor, across, back down. It loses only the anchor-vs-resume height difference, an *incidental* dwell cue the layer already refuses to claim (`rail_span() == 0`, pinned by `test_crossing.cpp`).
 >
-> **One residual to look at in the container render, not a blocker:** with the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it. That is a legibility question for Task 8 Step 4, not a correctness one.
+> **One residual to look at in the container render, not a blocker:** with the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it. That is a legibility question for Task 9 Step 4, not a correctness one.
 
 **Files:**
 - Modify: `desktop/src/scene3d/trajscale.h` — add `traj_vertex_y` and `comet_window` (Task 1 created this header)
@@ -1363,11 +1412,13 @@ git commit -m "desktop(test): pin the two motif channels to their existing layer
   - `struct Image { int w, h; std::vector<uint8_t> px; }` — RGBA8, `glReadPixels` row order
   - `bool gl_context_available(std::string *why)` — idempotent, brings the context up once
   - `struct ColorFbo` with `bool create(int w, int h)`
-  - `Image capture_image(Scene &, const Camera &, const ColorFbo &, const SceneLayers &)`
-  - `Image render_plane_scene(Scene &, const ColorFbo &, const Camera &, const Recording &, const SceneLayers &, space::Projection::Layout)`
+  - `Image capture_image(scene3d::Scene &, const scene3d::Camera &, const ColorFbo &, const scene3d::SceneLayers &)`
+  - `Image render_plane_scene(scene3d::Scene &, const ColorFbo &, const scene3d::Camera &, const Recording &, const scene3d::SceneLayers &, space::Projection::Layout)`
   - `float image_ink_fraction(const Image &)` and `bool image_blank(const Image &)`
   - `bool scene_exists(const char *dir, const char *name)`
 - Produces, in `mk/desktop.mk`: `DESKTOP_GL_TEST_OBJS`.
+
+**Qualify the `scene3d` types; the header cannot borrow a `using`.** `Scene`, `Camera` and `SceneLayers` live in **`asmdesk::scene3d`**, not `asmdesk` ([scene.h:41](../../../desktop/src/scene3d/scene.h#L41), [camera.h:23](../../../desktop/src/scene3d/camera.h#L23)); only `Recording` is in `asmdesk` ([recording.h:24](../../../desktop/src/doc/recording.h#L24)) and so resolves unqualified from inside `asmdesk::testing`. `test_scene_fbo.cpp` names them bare only because it carries a file-scope `using namespace asmdesk::scene3d;` at `:67` — a header must not depend on that, and 7b's `using` lines come *after* its `#include` anyway. So every signature below says `scene3d::`, and an earlier draft of this header that dropped the qualifier would not have compiled. Do **not** "fix" it by putting a `using namespace` inside the header.
 
 **`image_floor_fraction` is deliberately NOT produced.** The earlier draft asserted `image_floor_fraction(bare) >= 0.5f` — "the atlas should claim all of it". That is unsound twice over: what fraction of the *viewport* the floor covers is a camera-framing artefact (at the default `radius` 2.2 the plane does not fill the frame, so the threshold measures the camera, not the layout), and per the honesty note in "the one decision", the atlas does not increase the number of cells that carry data anyway. The packing claim is a cell-space property and Task 2 proves it in integers with no epsilon. What the screen can honestly gate is *non-blankness* and *pairwise distinctness*, which is what 7b does.
 
@@ -1486,8 +1537,9 @@ inline bool gl_context_available(std::string *why) {
 // --- the framebuffer and the readback ---------------------------------------
 struct ColorFbo { /* ...test_scene_fbo.cpp:545 verbatim... */ };
 
-inline Image capture_image(Scene &scene, const Camera &cam, const ColorFbo &cf,
-                           const SceneLayers &layers) {
+inline Image capture_image(scene3d::Scene &scene, const scene3d::Camera &cam,
+                           const ColorFbo &cf,
+                           const scene3d::SceneLayers &layers) {
     glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
     glViewport(0, 0, cf.w, cf.h);
     glClearColor(0.02f, 0.02f, 0.03f, 1.0f); // == kClearRGB
@@ -1509,9 +1561,10 @@ inline Image capture_image(Scene &scene, const Camera &cam, const ColorFbo &cf,
 // terrain's cells are keyed on the projection's mapping, so switching layout
 // afterwards would paint an atlas floor with Hilbert heights and the picture
 // would be a composite of two coordinate systems.
-inline Image render_plane_scene(Scene &scene, const ColorFbo &cf,
-                                const Camera &cam, const Recording &rec,
-                                const SceneLayers &layers,
+inline Image render_plane_scene(scene3d::Scene &scene, const ColorFbo &cf,
+                                const scene3d::Camera &cam,
+                                const Recording &rec,
+                                const scene3d::SceneLayers &layers,
                                 space::Projection::Layout layout) {
     space::Projection proj =
         space::build_projection(space::regions_from_codeimage(rec));
@@ -1583,7 +1636,7 @@ The gate that decides whether the encoding actually builds intuition. A principl
 - Create: `desktop/test/image_distinct.h` — the comparator
 - Create: `desktop/test/test_motif_distinctness.cpp`
 - Modify: `mk/desktop.mk` — four additions, listed in Step 3; a test that is not in a `*_TESTS` list never runs in CI
-- Modify: `tools/asmtrace_record.c` — three new `ROUTINES[]` entries (Step 0's decision), which `make asmtrace-golden` then writes into `tests/golden-asmtrace/` (where `test_scene_fbo` already loads its scenes from — **not** `desktop/test/fixtures/`, which holds the hand-committed inputs)
+- Modify: `tools/asmtrace_record.c` — three new `SCENE_*`-style byte arrays and three `record_scene_abs()` calls (Step 5 has the mechanism and why it is **not** `ROUTINES[]`), which `make asmtrace-golden` then writes into `tests/golden-asmtrace/` (where `test_scene_fbo` already loads its scenes from — **not** `desktop/test/fixtures/`, which holds the hand-committed inputs)
 - **Not created:** any hand-authored `.asmtrace` under `tests/golden-asmtrace/scenes/`. Step 0 rules it out for this gate.
 
 **Interfaces:**
@@ -1596,14 +1649,14 @@ The earlier draft left this open and mis-stated the constraint. Both halves are 
 
 **What the earlier draft got wrong.** It claimed the `simd` and `syscalls` cases could both come from `make asmtrace-golden` and that "**only** the memcpy case is at risk". The tree says otherwise, in both directions:
 
-- **`tools/asmtrace_record.c` emits no `syscall` events at all** — zero occurrences in 2511 lines. It is a Unicorn emulator over hand-assembled byte arrays (`ROUTINES[]`, `SCENE_HOT_LOOP[]`); `syscall` rows come from [cli/asmspy.c:997](../../../cli/asmspy.c#L997), the live ptrace tracer. The *preferred* path could never have produced the syscalls fixture.
+- **`tools/asmtrace_record.c` emits no `syscall` events at all** — zero occurrences in 2511 lines. It is a Unicorn emulator over code it never enters the kernel from: either a compiled corpus symbol looked up by name (`ROUTINES[]` → `asmtest_corpus_routine`) or a hand-assembled byte array (`SCENE_HOT_LOOP[]` → `record_scene_abs`, which is the path Step 5 uses). `syscall` rows come from [cli/asmspy.c:997](../../../cli/asmspy.c#L997), the live ptrace tracer. The *preferred* path could never have produced the syscalls fixture.
 - **The memcpy case does not need a `mem` stream.** Terrain height is driven by the trace canvas (`m.height_source = "trace"`, [terrain.cpp:287](../../../desktop/src/space/terrain.cpp#L287)); `mem` is a separate rung gated on `mem_present`. This gate renders the terrain and the `opcode` tint, neither of which reads `mem`. So `test_scene_fbo.cpp:20-23`'s "`mem` has no producer" does not reach this task at all — and its hand-authored rich-`mem` scene is a *warning*, not a template: that file records the scene as **INERT**, rendering "pixel-identically to its coarse twin".
 
 **The resolution: generate the image fixtures, freeze a real capture for crossings, and scope the image gate to what the frame can honestly carry.**
 
 | | Decision | Why |
 |---|---|---|
-| the three image fixtures | **generated** — three new `ROUTINES[]` entries through `make asmtrace-golden` | real Capstone-recorded disasm drives `OpClass`, and [asmtrace-golden-check](../../../mk/cli.mk#L534) then holds them byte-stable under a CI gate. The bytes are author-chosen, so this buys honest *classification*, not an honest *program* — say so in the header rather than overclaiming |
+| the three image fixtures | **generated** — three new byte arrays emitted through `record_scene_abs`, per Step 5 (**not** `ROUTINES[]`, which holds no bytes) | real Capstone-recorded disasm drives `OpClass`, and [asmtrace-golden-check](../../../mk/cli.mk#L534) then holds them byte-stable under a CI gate. The bytes are author-chosen, so this buys honest *classification*, not an honest *program* — say so in the header rather than overclaiming |
 | the crossings fixture | **a frozen live `asmspy` capture**, committed under `desktop/test/fixtures/` | the only producer of real `syscall` rows. Recorded ONCE and committed: `desktop/test/fixtures/` has no regeneration or byte-check gate (it appears in `mk/desktop.mk` only as a `-DASMTEST_FIXTURE_DIR` define), so "an `asmspy` run is not byte-reproducible" bears on regenerating it, never on using it. This is the precedent `test_scene_fbo` already set by reusing `obs-survey-ibs.asmtrace` |
 | the crossings assertion | **not an image check** — Task 7c pins it in the pure `test_crossing.cpp` | see Task 7c |
 | the image gate's layers | **`opcode` only** | `crossings` geometry cannot be uploaded here: `build_crossing_layer` lives in `views/`, and its data is unrelated to the axis budget this plan is gating |
@@ -1661,8 +1714,9 @@ Note the render call must enable the `opcode` channel explicitly, since it defau
 //
 // STEP 0 DECISION (do not re-open; the plan's Task 7b Step 0 has the argument):
 //   All three recordings are GENERATED by `make asmtrace-golden` from
-//   tools/asmtrace_record.c's ROUTINES[] — a scalar integer loop, a SIMD
-//   routine and a store-heavy routine — so the OpClass each cell reports comes
+//   tools/asmtrace_record.c's record_scene_abs() byte arrays — a scalar
+//   integer loop, a SIMD routine and a store-heavy routine — so the OpClass
+//   each cell reports comes
 //   from the recording's own Capstone-recorded disasm, not from a fixture
 //   author. The byte arrays are still author-chosen: this buys honest
 //   CLASSIFICATION, not an honest program, and the claim below is scoped to
@@ -1833,7 +1887,41 @@ Expected: FAIL — recordings absent.
 
 - [ ] **Step 5: Generate the three recordings**
 
-Add three `ROUTINES[]` entries to [tools/asmtrace_record.c:219](../../../tools/asmtrace_record.c#L219), following the byte-literal pattern the file already uses for `SCENE_HOT_LOOP` (`:311`) — a listing in the comment beside the bytes, as that file requires. They must differ in the quantity the gate reads, which is **dominant `OpClass` per cell**, so pick instruction mixes that classify apart under [space/mnemonic.h](../../../desktop/src/space/mnemonic.h):
+**Not `ROUTINES[]` — that table cannot carry bytes.** An earlier draft said "add three `ROUTINES[]` entries … following the byte-literal pattern the file already uses for `SCENE_HOT_LOOP`", and those two halves are mutually exclusive. `ROUTINES[]` is `rec_routine_t` = `{name, args[3], nargs, steps_cap}` ([:219](../../../tools/asmtrace_record.c#L219)) — **no bytes field** — and `record_one` resolves each entry through `asmtest_corpus_routine(r->name)` ([:1416](../../../tools/asmtrace_record.c#L1416)), a lookup of a **compiled symbol's address** in the linked corpus objects (`$(ASMTRACE_ROUTINE_OBJS)` = `fp.o simd.o structs.o fault.o corpus_routines.o`, [mk/cli.mk:505](../../../mk/cli.mk#L505)). A new entry would therefore need new corpus assembly, not a byte array; and `record_one` names its output after the routine, so it could not produce a `motif-*.asmtrace` either. Following the draft literally, `make asmtrace-golden` fails with `asmtrace_record: no corpus routine 'motif-scalar-loop'`.
+
+**The byte-literal path is `record_scene_abs`**, which is what `SCENE_HOT_LOOP` actually feeds:
+
+```c
+static int record_scene_abs(const char *dir, const char *out, const char *label,
+                            const uint8_t *code, size_t code_len,
+                            const long *args, int nargs, size_t trace_cap);
+```
+
+It takes an **explicit output name** (`"%s/%s.asmtrace"`) and a **raw byte array**, and it emits exactly the two kinds this gate consumes — `codeimage` and absolute-basis `trace` — *including the per-instruction Capstone disasm text*, which is the field `build_opcode_terrain` reads ([opcode_terrain.cpp:59-63](../../../desktop/src/space/opcode_terrain.cpp#L59), `s.trace.disasm`). That last point is why this path is not merely the convenient one but the correct one: a producer that emitted no disasm text would classify every cell `Unknown` and the distinctness gate would fail for a reason having nothing to do with the encoding.
+
+So: add three `static const uint8_t` arrays beside [`SCENE_HOT_LOOP` (:311)](../../../tools/asmtrace_record.c#L311), each with the instruction listing in the comment above the bytes as that file requires, and three calls in the scene block at [:2374](../../../tools/asmtrace_record.c#L2374), following its shape exactly:
+
+```c
+/* 3D-axis-budget T7b: three scenes whose DOMINANT OpClass differs, so the
+ * opcode motif channel has something to distinguish. Same emitter as the
+ * scene-abs goldens above — codeimage + absolute trace, with the recorded
+ * disasm text build_opcode_terrain classifies from. */
+{
+    static const long motif_args[1] = {3};
+    if (record_scene_abs(dir, "motif-scalar-loop", "motif_scalar_loop",
+                         MOTIF_SCALAR_LOOP, sizeof MOTIF_SCALAR_LOOP,
+                         motif_args, 1, 0) != 0)
+        failed++;
+    if (record_scene_abs(dir, "motif-simd", "motif_simd", MOTIF_SIMD,
+                         sizeof MOTIF_SIMD, motif_args, 1, 0) != 0)
+        failed++;
+    if (record_scene_abs(dir, "motif-stores", "motif_stores", MOTIF_STORES,
+                         sizeof MOTIF_STORES, motif_args, 1, 0) != 0)
+        failed++;
+}
+```
+
+The three byte arrays must differ in the quantity the gate reads, which is **dominant `OpClass` per cell**, so pick instruction mixes that classify apart under [space/mnemonic.h](../../../desktop/src/space/mnemonic.h):
 
 | recording | mix | dominant class |
 |---|---|---|
@@ -1841,7 +1929,13 @@ Add three `ROUTINES[]` entries to [tools/asmtrace_record.c:219](../../../tools/a
 | `motif-simd` | packed XMM ops | `VectorSIMD` |
 | `motif-stores` | a `mov`-to-memory run | `Move` |
 
-Keep each small enough to hold the test under a second. Then:
+Keep each small enough to hold the test under a second. Three constraints the emitter imposes, all of which fail loudly rather than silently:
+
+- **The bytes must run to a `ret` under Unicorn**, because `record_scene_abs` drives the same emulator L0 producer the other scene goldens use; a routine that faults produces `emulator producer failed for <out>` and a non-zero exit, not a truncated file.
+- **The window is bounded** — the emitter refuses with `scene %s exceeds the %d-byte window` past `REC_WINDOW`.
+- **`motif-simd` needs real packed XMM instructions**, not merely SIMD-looking ones, since `OpClass` is decided by the recorded mnemonic. Verify the classification landed rather than assuming it: after regenerating, `grep -o '"[a-z]*"' tests/golden-asmtrace/motif-simd.asmtrace | sort -u | head` should show the packed mnemonics you wrote. If all three scenes classify the same way, the gate in Step 6 will fail and it will be *this* that is wrong, not the encoding.
+
+Then:
 
 ```
 make docker-cli && make asmtrace-golden
@@ -1901,10 +1995,13 @@ Add to `desktop/test/test_crossing.cpp`, reusing its helpers. Two blocks — the
 // time even though the capture that produced it was not.
 {
     std::string err;
-    auto rec = load_recording_file(
+    // load_recording_file returns std::optional<Recording> (recording.h:134),
+    // NOT a pointer — `rec != nullptr` does not compile against an optional.
+    // Test it as a bool, exactly as test_scene_fbo.cpp:92 does.
+    std::optional<Recording> rec = load_recording_file(
         std::string(ASMTEST_FIXTURE_DIR) + "/motif-crossings.asmtrace", err);
-    check("the real-capture fixture loads", rec != nullptr, err);
-    if (rec != nullptr) {
+    check("the real-capture fixture loads", rec.has_value(), err);
+    if (rec.has_value()) {
         // The shape check that stands in for the byte-stability gate the
         // GENERATED corpus gets. This is a has-it-rotted precondition, not an
         // approximation of any result — if it trips, the fixture is wrong, and
@@ -1956,7 +2053,7 @@ Add to `desktop/test/test_crossing.cpp`, reusing its helpers. Two blocks — the
 $(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 ```
 
-The link rule ([mk/desktop.mk:1397](../../../mk/desktop.mk#L1397)) and the `DESKTOP_TESTS` entry (`:1277`) already exist. Confirm the recording loader's object is in that link line; if it is not, add it rather than dropping the fixture.
+The link rule ([mk/desktop.mk:1397](../../../mk/desktop.mk#L1397)) and the `DESKTOP_TESTS` entry (`:1277`) already exist, and the loader is already linked: that rule ends in `$(DESKTOP_TEST_DOC)`, which is `doc/recording.o` and four siblings ([mk/desktop.mk:721](../../../mk/desktop.mk#L721)). So the define is the only makefile change this task needs. The test file also gains `#include <optional>` for the declaration above.
 
 - [ ] **Step 4: Run**
 
@@ -1974,7 +2071,233 @@ git commit -m "desktop(test): pin the crossing class channel against a real capt
 
 ---
 
-### Task 8: Flip the default, regenerate goldens, document
+### Task 8: Label the rectangles in place — Component 1's actual deliverable
+
+**This task exists because a readiness review found it missing.** Component 1's deliverable bullet is *"an address atlas … region-major, 100 % packed, **labelled in place**"*, and the spec is explicit that this — not locality — is the payoff: *"region boundaries become visible rectangles, so the floor can be **labelled in place** from `Region::label`. A Hilbert region is a blobby snake with nowhere to put a label. **This — not locality — is the real win.**"* Tasks 2, 3 and 9 build the rectangles, prove the funnel and flip the default; none of them draws a label. Without this task the plan ships the substrate and drops the reason given for wanting it.
+
+What exists today is a **side-panel legend** — [hud.cpp:1176-1187](../../../desktop/src/scene3d/hud.cpp#L1176) lists every region with a kind swatch. That stays: it is the complete list, and it is what keeps this task honest, because the in-place labels are necessarily *partial* (see the threshold below).
+
+**Files:**
+- Modify: `desktop/src/space/projection.h` — declare `AtlasLabel` + `atlas_labels()`
+- Modify: `desktop/src/space/projection.cpp` — implement, beside `region_cells()`
+- Modify: `desktop/src/scene3d/hud.h`, `desktop/src/scene3d/hud.cpp` — `draw_atlas_labels()`, a sibling of `draw_trajectory_ruler`
+- Modify: `desktop/src/ui/shell.cpp` — call it beside the ruler call
+- Test: `desktop/test/test_projection.cpp` (already registered — no `mk/desktop.mk` change)
+
+**Interfaces:**
+- Consumes: `Projection::rects` and `Projection::layout` (Task 2); `region_style()` ([projection.h:108](../../../desktop/src/space/projection.h#L108)) for the fallback name.
+- Produces:
+  - `struct space::AtlasLabel { float u, v; uint32_t cells; size_t region; std::string text; }`
+  - `std::vector<space::AtlasLabel> space::atlas_labels(const Projection &proj, uint32_t min_cells = 64);`
+  - `void scene3d::draw_atlas_labels(ImDrawList *, const Camera &, ImVec2 origin, ImVec2 size, const space::Projection &);`
+
+**Why the placement rule is pure `space/` code and not a lambda in the draw call.** Which rects get a label, where its anchor sits, and what it says are all decidable from the `Projection` alone — no GL, no ImGui, no camera. Putting them in `space/` puts them in the null harness, on the same terms as `region_cells()` next door, so the rule is checkable with no context at all. `hud.cpp` is then only the world→screen projection it already does for the ruler. This is the same split `trajectory_axis_ticks()` ([hud.h:148](../../../desktop/src/scene3d/hud.h#L148)) already uses — a pure tick-selection function tested in `test_shell.cpp:976-992`, with the drawing untested — and it is why that ruler's *rule* has a test at all.
+
+**Three rules, each of which is a judgement the spec constrains:**
+
+1. **Under `Hilbert`, return nothing.** Not a degraded label, not a centroid of a snake — nothing. The spec's own words are that a Hilbert region has "nowhere to put a label"; fabricating an anchor on a space-filling curve would be exactly the invented structure D7 forbids. This is also what makes the function safe to call unconditionally from `shell.cpp`.
+2. **Skip rects too small to carry text.** Below the threshold the labels overlap into an unreadable pile, which is strictly worse than the legend that is already on screen. `min_cells = 64` (an 8×8 rect) is the default, and it is a *legibility* threshold, not a fidelity one — say so, because a reader who sees three of nine regions labelled must not conclude the other six are unnamed. The side-panel legend remains complete, which is the disclosure.
+3. **Empty `Region::label` falls back to the kind name**, `region_style(kind).name` — reusing [hud.cpp:1185](../../../desktop/src/scene3d/hud.cpp#L1185)'s existing `r.label.empty() ? st.name : r.label` rule rather than inventing a second naming convention.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `desktop/test/test_projection.cpp`, after Task 2's atlas blocks, reusing `atlas_of()`:
+
+```cpp
+// --- Component 1's deliverable: the floor names its own rectangles ----------
+{
+    // Task 2's first fixture, so the rects are the ones already pinned above:
+    // code owns (0,0)-(16,256) = 4096 cells, mmap owns (16,0)-(256,256).
+    static const Ref kSmall = {0x0000000000400000ull, 4096, Region::Code};
+    static const Ref kBig = {0x0000000001000000ull, 61440, Region::Mmap};
+    const Projection p = atlas_of({kSmall, kBig});
+    const std::vector<AtlasLabel> labels = atlas_labels(p);
+    check("every rect big enough to read gets a label", labels.size() == 2,
+          "got " + std::to_string(labels.size()) + " labels for 2 regions");
+
+    const uint32_t n = 1u << p.order;
+    for (const AtlasLabel &l : labels) {
+        // The anchor is the rect's GEOMETRIC centre, so the label sits on the
+        // thing it names rather than beside it.
+        const AtlasRect &r = p.rects[l.region];
+        const uint32_t cx = uint32_t(l.u * n), cy = uint32_t(l.v * n);
+        check("the label anchor lies inside the rect it names",
+              cx >= r.x0 && cx < r.x1 && cy >= r.y0 && cy < r.y1,
+              "anchor (" + std::to_string(l.u) + "," + std::to_string(l.v) +
+                  ") fell outside region " + std::to_string(l.region) +
+                  "'s rect");
+        // And it points at that region under the layout's own inverse — the
+        // label is not merely near the rect, it decodes to it.
+        uint64_t back = 0;
+        const Region *got = nullptr;
+        check("the anchor unprojects to the region it names",
+              p.unproject(l.u, l.v, &back, &got) && got != nullptr &&
+                  got->base == p.regions[l.region].base,
+              "a label anchored on a cell belonging to a different region");
+        check("a label always says something", !l.text.empty(),
+              "an unnamed rectangle is an unlabelled floor");
+    }
+    // The fallback: these fixture Regions carry no `label`, so each must fall
+    // back to its KIND name rather than to an empty string. Reuses the rule
+    // hud.cpp:1185 already applies in the side-panel legend. Guarded on the
+    // size, because indexing a short vector to report a failure would turn a
+    // clean FAIL into a crash that says nothing.
+    if (labels.size() == 2)
+        check("an unlabelled region falls back to its kind name",
+              labels[0].text == std::string(region_style(Region::Code).name) &&
+                  labels[1].text == std::string(region_style(Region::Mmap).name),
+              "got \"" + labels[0].text + "\" and \"" + labels[1].text + "\"");
+}
+{
+    // Hilbert has nowhere to put a label and must say so by refusing, not by
+    // anchoring on a snake's centroid — that would be fabricated structure.
+    std::vector<Region> in;
+    Region reg;
+    reg.base = 0x400000ull;
+    reg.len = 4096;
+    reg.kind = Region::Code;
+    in.push_back(reg);
+    const Projection h = build_projection(std::move(in));
+    check("the Hilbert layout labels nothing", atlas_labels(h).empty(),
+          "a space-filling curve was given a label anchor it cannot support");
+}
+{
+    // The legibility threshold, on the saturated plane Task 2 already builds:
+    // 4000 regions on a 4096-cell grid, so the LARGEST rect is 2 cells. Every
+    // one is dropped — 4000 strings over 4096 cells is not a labelled floor.
+    // The side-panel legend still lists all 4000, which is the disclosure.
+    std::vector<Ref> many;
+    for (uint64_t i = 0; i < 4000; i++)
+        many.push_back({0x1000ull + i * 0x10000ull, 1, Region::Code});
+    const Projection sat = atlas_of(many);
+    check("rects too small to read are dropped, not piled up",
+          atlas_labels(sat).empty(),
+          "a 1-cell rectangle was given a text label");
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
+Expected: FAIL — `atlas_labels` not declared.
+
+- [ ] **Step 3: Implement the placement rule**
+
+In `projection.h`, above `region_cells`'s declaration:
+
+```cpp
+// One region's in-place label on the atlas floor. `u`/`v` are the rect's
+// GEOMETRIC centre (not a cell centre — the anchor names a rectangle, not a
+// cell), `cells` is its area for a caller's own LOD, `region` indexes
+// Projection::regions, and `text` is Region::label or, when that is empty,
+// the kind name — the SAME fallback the HUD's side-panel legend already
+// applies (scene3d/hud.cpp:1185), never a second naming convention.
+struct AtlasLabel {
+    float u = 0, v = 0;
+    uint32_t cells = 0;
+    size_t region = 0;
+    std::string text;
+};
+
+// The labels for an ATLAS projection's rectangles. Empty under Hilbert, and
+// that refusal is the honest answer rather than a missing feature: a Hilbert
+// region is a connected snake through the plane with no rectangle and so no
+// anchor, and inventing one would be fabricated structure (D7).
+//
+// PARTIAL BY DESIGN. A rect smaller than `min_cells` is skipped, because below
+// roughly 8x8 the labels overlap into a pile that reads worse than the empty
+// floor did. That is a LEGIBILITY threshold, not a fidelity one — every
+// region, labelled or not, is still listed in the HUD's region legend, which
+// is what keeps a partially-labelled floor from implying the unlabelled rects
+// are unnamed. Callers must not present these as the complete set.
+std::vector<AtlasLabel> atlas_labels(const Projection &proj,
+                                     uint32_t min_cells = 64);
+```
+
+In `projection.cpp`, beside `region_cells`:
+
+```cpp
+std::vector<AtlasLabel> atlas_labels(const Projection &proj,
+                                     uint32_t min_cells) {
+    std::vector<AtlasLabel> out;
+    // rects is empty under Hilbert AND after a rebuild_layout fallback; the
+    // size equality covers a half-built projection a caller assembled by hand.
+    if (proj.layout != Projection::Layout::Atlas ||
+        proj.rects.size() != proj.regions.size())
+        return out;
+    const uint32_t n = uint32_t(1) << proj.order;
+    out.reserve(proj.rects.size());
+    for (size_t i = 0; i < proj.rects.size(); i++) {
+        const AtlasRect &r = proj.rects[i];
+        const uint64_t cells =
+            uint64_t(r.x1 - r.x0) * uint64_t(r.y1 - r.y0);
+        if (cells < min_cells)
+            continue; // too small to read — see the header's note
+        AtlasLabel l;
+        l.u = 0.5f * static_cast<float>(r.x0 + r.x1) / static_cast<float>(n);
+        l.v = 0.5f * static_cast<float>(r.y0 + r.y1) / static_cast<float>(n);
+        l.cells = static_cast<uint32_t>(
+            cells > UINT32_MAX ? UINT32_MAX : cells);
+        l.region = i;
+        const Region &reg = proj.regions[i];
+        l.text = reg.label.empty() ? region_style(reg.kind).name : reg.label;
+        out.push_back(std::move(l));
+    }
+    return out;
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `make build/desktop_test_projection && ./build/desktop_test_projection`
+Expected: PASS. On the first fixture the two anchors are `(0.031250, 0.500000)` and `(0.531250, 0.500000)`; on `kRefs` all three regions label and all three anchors unproject home. On the saturated plane the largest rect is **2 cells**, so the list is empty.
+
+- [ ] **Step 5: Draw them**
+
+In `hud.h`, declare beside `draw_trajectory_ruler` ([:178](../../../desktop/src/scene3d/hud.h#L178)):
+
+```cpp
+// Draw the atlas's region labels into the 3D VIEWPORT (not the HUD window),
+// each at its rectangle's centre on the ground plane, projected through `cam`
+// into `origin`/`size`'s screen rect — the same world->clip transform
+// draw_trajectory_ruler uses. A no-op for a Hilbert projection, because
+// space::atlas_labels refuses one (see projection.h). Partial by design: the
+// HUD's region legend remains the complete list.
+void draw_atlas_labels(ImDrawList *draw_list, const Camera &cam, ImVec2 origin,
+                       ImVec2 size, const space::Projection &proj);
+```
+
+In `hud.cpp`, beside `draw_trajectory_ruler` ([:383](../../../desktop/src/scene3d/hud.cpp#L383)), reusing its transform verbatim — one `cam.mvp` + `mat4x4_mul_vec4`, the behind-the-camera `clip[3] <= 0.0f` skip, and the same NDC→screen mapping. The world point is `{l.u, 0.0f, l.v}` (the ground plane) rather than the ruler's `{0, t*scale, 0}`. Colour each label with `region_style(kind)`'s swatch so the floor label and the legend row agree by construction, and centre the text on the anchor with `ImGui::CalcTextSize(...).x * 0.5f`.
+
+- [ ] **Step 6: Call it**
+
+In `shell.cpp`, immediately after the `draw_trajectory_ruler` call at [:1828](../../../desktop/src/ui/shell.cpp#L1828), under the same `SceneKind::Plane` gate:
+
+```cpp
+if (sv.kind == scene3d::SceneKind::Plane)
+    scene3d::draw_atlas_labels(
+        ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+        ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+        sv.terr.proj);
+```
+
+No layout gate is needed here — `atlas_labels` returns empty under Hilbert, which is exactly why the refusal lives in the pure function rather than at the call site.
+
+- [ ] **Step 7: Run the suite**
+
+Run: `make desktop-test`, then `make docker-desktop`.
+Expected: PASS. Nothing renders differently yet — `Projection::layout` still defaults to `Hilbert` until Task 9 — so any golden movement here is a real defect, not churn. That ordering is deliberate: it lets this task's drawing land while the picture is still frozen, so Task 9's regeneration has exactly one cause.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add desktop/src/space/projection.h desktop/src/space/projection.cpp desktop/src/scene3d/hud.h desktop/src/scene3d/hud.cpp desktop/src/ui/shell.cpp desktop/test/test_projection.cpp
+git commit -m "space: label the atlas rectangles in place, from the regions themselves"
+```
+
+---
+
+### Task 9: Flip the default, regenerate goldens, document
 
 **Files:**
 - Modify: `desktop/src/space/types.h` — default `Projection::layout` to `Atlas` (the member default lives on the struct, in `types.h`)
@@ -2003,13 +2326,21 @@ Expected: golden-image failures across the suite — that is the point of this s
 
 Run the `--serve` screenshot flow (headless `--record` never emits `codeimage`, and `codeimage` gates every 3D scene). Regenerate **after** the last recorder edit, never per-agent; two agents regenerating one golden must regenerate from the merged tree rather than picking a side.
 
-- [ ] **Step 4: Verify the screenshots are pairwise distinct**
+- [ ] **Step 4: Verify the screenshots are pairwise distinct — and that the labels actually landed**
 
 Gate on distinctness, not just non-blankness — the same rule Task 7b encodes.
 
+Then look at the floor, because this is the first render where Task 8's labels are live and three of this plan's five open risks can only be settled by eye:
+
+- **the labels read** — right rectangle, not overlapping, legible at the default `radius`. If they pile up, raise `min_cells`; that is a threshold, not a redesign.
+- **no sliver rects** (open risk 5) — the binary split never backtracks, so a pathological length distribution can still produce one. A labelled floor is where it becomes visible.
+- **the flat worldline is not swallowed by the terrain** (open risk 2), and **the sediment strata do not read as rising from a path that no longer rises** (open risk 4). Both are the same lift constant.
+
+Record what you saw in the brief either way — "looked at, nothing to fix" is a result, and these risks are marked unresolvable on paper precisely so this step is where they close.
+
 - [ ] **Step 5: Write the brief**
 
-Add `docs/internal/gui/61-scene-axis-budget.md` following `_conventions.md`, cross-referencing [53](../../internal/gui/53-3d-catalog-build-roadmap.md) to record that the depiction catalog now composes onto the atlas substrate. State plainly that `order` survived as the cell quantisation and that the byte-exact round trip is a Hilbert-only promise — those are the two facts a later reader is most likely to get wrong.
+Add `docs/internal/gui/61-scene-axis-budget.md` following `_conventions.md`, cross-referencing [53](../../internal/gui/53-3d-catalog-build-roadmap.md) to record that the depiction catalog now composes onto the atlas substrate. State plainly that `order` survived as the cell quantisation and that the byte-exact round trip is a Hilbert-only promise — those are the two facts a later reader is most likely to get wrong. Record the third alongside them: the in-place labels are **partial by design** (a legibility threshold, with the HUD's region legend as the complete list), so a later reader does not take an unlabelled rectangle for an unnamed region.
 
 - [ ] **Step 6: Commit**
 
@@ -2022,11 +2353,11 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 ## Self-review
 
-**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, 8. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only), Tasks 7a/7b (the harness and the opcode-channel image gate) and Task 7c (the crossings channel, in a pure test). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
+**Spec coverage.** Component 1 (atlas) → Tasks 2, 3, **8 (the in-place labels — its stated payoff)** and 9. Component 2 (time as animation) → Tasks 1, 5. Component 3 (optional motifs) → Task 6 (already shipped — verify only), Tasks 7a/7b (the harness and the opcode-channel image gate) and Task 7c (the crossings channel, in a pure test). Component 4 (camera fit) → Task 4. The spec's interim-guard requirement — that the clamp land first, on its own — is Task 1, ordered first deliberately.
 
 **Why the motif gate is split across 7b and 7c.** The two channels are not testable by the same instrument, and pretending otherwise was the earlier draft's mistake. `opcode` is a terrain tint, so it is only visible in a rendered frame and its data comes from `space/` — 7b. `crossings` is geometry built by `views/build_crossing_layer`, which a GL test would have to link `views/` to produce, and whose real fixture can only come from a live tracer — 7c, in the pure test that already owns the contract. Gating both from one frame would have meant either dragging `views/` into the GL closure or, as written, asserting on a layer with no data uploaded.
 
-**Type consistency.** `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `split_rect` returns `bool` and takes an `int32_t *out` — it is the one helper here whose signature is not obvious from its job, because it can refuse. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
+**Type consistency.** `AtlasLabel` and `atlas_labels(const Projection &, uint32_t)` are defined once, in Task 8, and live in `projection.h`/`projection.cpp` beside `region_cells`; `draw_atlas_labels` is declared once, in `hud.h`, beside `draw_trajectory_ruler`. `load_recording_file` returns **`std::optional<Recording>`** — Tasks 7b and 7c both test it as a bool (`!rec` / `rec.has_value()`), never against `nullptr`. `Scene`, `Camera` and `SceneLayers` are **`asmdesk::scene3d::`** and are written qualified everywhere in 7a's header, because `asmdesk::testing` does not enclose `asmdesk::scene3d`. `scene_traj_scale(uint32_t, uint64_t, float)` is defined in Task 1 and reused in Task 5. `Projection::Layout` / `rebuild_layout` are defined in Task 2 and consumed in Tasks 3 and 8. `AtlasRect` and `AtlasNode` are defined once, in Task 2, in cell coordinates, above `struct Projection` in `types.h`. `plane_boundary` / `split_rect` / `atlas_bytes_per_cell` / `atlas_cell` / `atlas_ordinal` are defined once, in Task 2's Interfaces block, and live in `projection.cpp`'s anonymous namespace beside `d2xy`/`domain_shift`. `split_rect` returns `bool` and takes an `int32_t *out` — it is the one helper here whose signature is not obvious from its job, because it can refuse. `Camera::fit` and its two pad constants are defined once, in Task 4. `Image` / `gl_context_available` / `render_plane_scene` / `image_ink_fraction` / `image_blank` / `scene_exists` are defined once, in Task 7a's `gl_offscreen.h`; `images_distinct` once, in Task 7b's `image_distinct.h`; and `test_scene_fbo.cpp` is re-pointed at the harness rather than keeping a second copy.
 
 **Where the spec is superseded.** Two of the spec's statements did not survive verification and this plan overrides them; both should be read as corrected here rather than followed as written:
 
@@ -2037,8 +2368,8 @@ git commit -m "scene3d: make the region atlas the default floor layout"
 
 | Assumption | Verdict |
 |---|---|
-| `Projection` lives in `projection.h` | **false** — it is in `space/types.h:30-55`. Tasks 2 and 8 corrected |
-| `atlas_cells_per_side()` is a needed new concept | **false** — `1 << order` already is the grid side, read in 13 sources and 10 tests. Dropped; the decision to keep `order` is now stated up front instead of deferred to Task 8 |
+| `Projection` lives in `projection.h` | **false** — it is in `space/types.h:30-55`. Tasks 2 and 9 corrected |
+| `atlas_cells_per_side()` is a needed new concept | **false** — `1 << order` already is the grid side, read in 13 sources and 10 tests. Dropped; the decision to keep `order` is now stated up front instead of deferred to Task 9 |
 | `scene_locate_off(p, region, off, &u, &v) -> bool` | **false** — `Located scene_locate_off(const Projection&, const Recording&, uint64_t)`. Task 3 now probes through `place_address(proj, addr)`, which needs no `Recording` |
 | `locate.cpp`/`stepplace.cpp` re-derive Hilbert arithmetic | **false** — both already call `proj.project()`. Task 3 is a regression gate, not a refactor, and says so |
 | `region_cells()` is layout-neutral | **false** — it walks `d2xy` directly (`projection.cpp:426`). Task 2 gives it an atlas branch; `test_focus.cpp` guards it |
@@ -2106,10 +2437,29 @@ The decisive fact is geometric, not aesthetic: the lifetime pillars and the sedi
 - *"`scene_traj_scale` has no surviving consumer once Task 5 lands."* False — the three opt-in layers ride the scale it computes. Task 1 is load-bearing permanently, not interim, and Task 1 and Task 5 both now say so.
 - *"`draw_trajectory_ruler` becomes dead code, so delete the call."* Half right: it is the function's only caller and it is Plane-gated, but the axis it labels stays alive for those three layers. Deleting it would strand them on an unlabelled axis, and leaving it unconditional would label an axis the *default* scene no longer has. It is gated on the effective (post-`lod_apply`) layer set and re-captioned, not removed.
 
+**Seventh pass — executing the algorithm independently, and asking what the SPEC promised rather than what the plan wrote.** The sixth pass claimed to have run Task 2's helpers; this pass re-ran them from scratch (verbatim transcription, ASan + UBSan) and **confirmed every number**: orders 8/8/12/9, code-rect fraction exactly 0.062500, row-break distance 1.0 cells, `bytes_per_cell == 4`, exact tiling, no overlap, clean region round trip — plus **0 fallbacks, 0 degenerate rects, 0 non-tiling** over every `nreg` in [2, 4096] on the order-6 plane and 3000 randomised skewed length distributions. The feasibility-scan rewrite is sound. What this pass found instead was three compile-blockers in the *newest* material (7a/7b/7c, added after the previous readiness review) and one deliverable the plan had silently dropped.
+
+| Defect | Fix in this revision |
+|---|---|
+| **Task 7b Step 5 named a mechanism that cannot do the job.** "Add three `ROUTINES[]` entries … following the byte-literal pattern the file already uses for `SCENE_HOT_LOOP`" is two mutually exclusive instructions. `ROUTINES[]` is `{name, args[3], nargs, steps_cap}` — no bytes — and `record_one` resolves it through `asmtest_corpus_routine(name)`, a lookup of a **compiled symbol** in the linked corpus objects. Followed literally, `make asmtrace-golden` fails with `no corpus routine`; the fixtures the whole gate stands on would never exist | Step 5 rewritten around `record_scene_abs(dir, out, label, bytes, len, args, nargs, cap)` — the emitter `SCENE_HOT_LOOP` actually feeds, which takes an explicit output name and a raw byte array, with the call block written out. Confirmed it emits the per-instruction disasm text `build_opcode_terrain` reads, so the opcode channel has real data. Three emitter constraints (runs to `ret` under Unicorn, `REC_WINDOW` bound, verify the SIMD mnemonics classified) added |
+| **Task 7c could not compile.** `load_recording_file` returns `std::optional<Recording>` (`recording.h:134`) and the test wrote `rec != nullptr` twice. 7b used `if (!rec)` correctly — the two halves disagreed | `std::optional<Recording>` + `rec.has_value()`, with the reason in a comment so it does not regress. `<optional>` added to the includes |
+| **Task 7a's header could not compile.** It declared everything in `namespace asmdesk::testing` while naming `Scene`, `Camera` and `SceneLayers` unqualified — those are `asmdesk::scene3d`, and only `Recording` is `asmdesk`. `test_scene_fbo.cpp` gets away with it via a file-scope `using namespace asmdesk::scene3d;`; a header cannot, and 7b's `using` lines come after its `#include` | Every signature qualified `scene3d::`, in both the Interfaces block and the header body, with an explicit "do not fix this with a `using namespace` in a header" note |
+| **Component 1's stated payoff had no task.** The spec's deliverable is "region-major, 100 % packed, **labelled in place**" and it says outright *"This — not locality — is the real win."* Tasks 2/3/9 build the rects, prove the funnel and flip the default; **none of them drew a label.** Today's region names exist only as a side-panel legend (`hud.cpp:1176-1187`) | **New Task 8**, ordered before the default flip so the labels are live when the screenshots regenerate. Pure placement rule in `space/` (`atlas_labels`, tested in the null harness beside `region_cells`), thin `draw_atlas_labels` in `hud.cpp` reusing `draw_trajectory_ruler`'s world→screen transform. Refuses under Hilbert rather than fabricating an anchor on a snake, and is partial by design above a legibility threshold — with the legend as the disclosure |
+
+Four smaller corrections in the same pass:
+
+| Defect | Fix |
+|---|---|
+| Task 2 said to leave the 10 000-address byte-exact loop alone "because it already runs on a default-constructed (`Hilbert`) projection" — **Task 9 flips that default to `Atlas`**, falsifying the sentence and leaving a Hilbert-only assertion running under the atlas. It happens to survive (that fixture's plane exceeds its domain, so every region gets `bytes_per_cell == 1`), but by accident of three fixture lengths, not by contract | The loop is now **pinned** to `Layout::Hilbert` on an explicit copy, with the accident recorded so nobody restores the reliance on it |
+| Task 4's file reference `camera.h:99-107` is `eye()`/`view()`; `reset()` is `:81` and `top_down()` is `:84-88`. And `frame(u, v, radius)` at `:75` already owns both of `fit()`'s clamps plus the non-reorienting rule the task depends on | References corrected; `fit()` now routes through `frame()` instead of re-deriving the clamps |
+| Task 3 called the `test_focus.cpp` sweep "a small loop change", but `:130` is `const space::Projection proj` — it cannot be flipped in place. `test_stepplace.cpp` also has no `<cmath>` for the `std::fabs` the new block uses | Both stated, with the two-copy sweep written out |
+| Task 1 committed after running only its own binary, yet it changes `traj_scale_` — a rendered-frame input — for exactly the recordings this plan exists to fix | A full-suite step added before the commit, with the "ordinary case is bit-identical, so churn means the defect became visible" reasoning |
+
 **Remaining known risks, not resolvable on paper.**
 
 1. ~~Task 7b's memcpy recording may have to be hand-authored~~ — **resolved, see Task 7b Step 0.** The premise was wrong twice: the opcode channel never reads `mem`, so nothing about that gate is at risk from `mem` having no producer; and the *syscalls* case, which the draft called safe, was the one the generated corpus could never produce — `asmtrace_record.c` emits no `syscall` events at all. Nothing is hand-authored now: the three image fixtures are generated, and the crossings fixture is a frozen real capture. What remains is a bounded, stated limit rather than a risk: the generated routines are author-chosen byte arrays, so 7b's claim is about honest *classification* of real disasm, not about real programs, and the test header says so.
 2. Task 5's flat worldline is coplanar with the terrain floor. The lift constant is an eyeball judgement that only the container render can settle — a path that vanishes under a tall cell is the failure mode, and it will not show up in any pure test.
 3. Task 2's cell budgets can give a region fewer cells than it has bytes (quantised away, `bytes_per_cell > 1`) **or more** (`bytes_per_cell == 1`, the rect's tail decoding to nothing). Both are honest and both are tested; the plan asserts only the region-level round trip, which is what the atlas can promise. If a caller is later found to depend on byte-exactness under `Atlas`, that is a design finding, not a rounding bug to paper over.
-4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 8 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
-5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 8 Step 4 is where it would show up.
+4. With the path flat and `sediment` switched on, the worldline runs *underneath* strata that still rise from it — the two layers now read at different scales on the same axis. Legibility, not correctness; Task 9 Step 4 is where it shows up, and the fix if needed is the same lift constant risk 2 already covers.
+5. The binary split's aspect ratios are *reasonable*, not *optimal* — it always cuts the longer side, but it does not backtrack the way squarify does. A pathological length distribution could still produce a sliver. That is a legibility question only a rendered floor can answer, and Task 9 Step 4 is where it would show up.
+6. **The spec's live-capture reflow mitigation is half-implemented, deliberately.** Its risk table asks for two things — *"recompute only when [the region set] changes"* and *"record the reflow in the HUD"*. The first falls out for free: `rebuild_layout()` runs inside `build_projection()`, which a growing capture only calls when it rebuilds the terrain, so the layout is already keyed to the weave rather than recomputed per frame. The second is **not** in any task here. It needs somewhere to hold the previous region set to compare against, which `Projection` does not have and which this plan has no other reason to add. It is recorded here rather than bolted onto Task 9 because a reflow notice invented without a live growing capture to watch would be untestable by anything in this plan — the honest place for it is a follow-up brief alongside the live-capture work, and a reader of a *replayed* recording never sees a reflow at all.
