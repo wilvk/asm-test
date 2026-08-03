@@ -87,7 +87,13 @@ struct Projection {
     // more than `total` cells (there are only `total` bytes); what changes is
     // whether the slack has an owner. `order` means the same thing under both.
     enum class Layout { Hilbert, Atlas };
-    Layout layout = Layout::Hilbert;
+    // 61 T10: ATLAS is the default floor. Every region is a rectangle of the
+    // same n = 1<<order grid with area proportional to its length, so the floor
+    // is decodable — point at a rectangle and it names a region — and
+    // labellable in place, which is the payoff Component 1 was actually for.
+    // Hilbert remains selectable and remains the layout whose byte-exact round
+    // trip holds; see projection.h's rebuild_layout for what each promises.
+    Layout layout = Layout::Atlas;
     // The per-region rectangles, index-parallel to `regions`, and the split
     // tree they were cut from. Both empty under Hilbert.
     std::vector<AtlasRect> rects;

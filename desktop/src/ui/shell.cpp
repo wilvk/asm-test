@@ -279,17 +279,34 @@ void shell_sync_live_tab(ShellState &s) {
         scene3d::Camera cam = s.scenes[i].cam;
         scene3d::HudState hud = s.scenes[i].hud;
         dt_primer_state primer = s.scenes[i].primer;
-        // 61 T9: and the layout digest. THIS LINE IS THE WHOLE NOTICE'S HINGE —
-        // drop it and the fingerprint resets with everything else, prev.valid is
-        // false on every batch, and the reflow notice can never fire. A silent
-        // failure no pure test can catch, because the RULE stays correct; the
-        // wiring test in test_shell.cpp is what guards it.
-        space::LayoutFingerprint layout_fp = s.scenes[i].layout_fp;
+        // 61 T9: and the layout digest. CARRYING IT IS THE NOTICE'S HINGE —
+        // drop it and the fingerprint resets with everything else, prev.valid
+        // is false on every batch, and the reflow notice can never fire. A
+        // silent failure no pure test can catch, because the RULE stays
+        // correct; the wiring test in test_shell.cpp is what guards it.
+        //
+        // But carry it ONLY WITHIN ONE CAPTURE. This same reset also runs when
+        // a continuous re-arm opens a NEW recording into this slot, and the
+        // digest is per-RECORDING state: comparing capture B's first floor
+        // against capture A's would fire a reflow note on a FIRST weave, naming
+        // a region count ("5 regions became 1") that no single recording ever
+        // had. The camera/HUD/primer above are per-VIEW and are right to cross
+        // that boundary; this is not.
+        const long cap_ord =
+            static_cast<long>(sess.recordings().size()) +
+            (sess.growing() != nullptr ? 1 : 0);
+        space::LayoutFingerprint layout_fp;
+        long layout_fp_capture = -1;
+        if (s.scenes[i].layout_fp_capture == cap_ord) {
+            layout_fp = s.scenes[i].layout_fp;
+            layout_fp_capture = s.scenes[i].layout_fp_capture;
+        }
         s.scenes[i] = SceneView{};
         s.scenes[i].cam = cam;
         s.scenes[i].hud = hud;
         s.scenes[i].primer = primer;
         s.scenes[i].layout_fp = layout_fp;
+        s.scenes[i].layout_fp_capture = layout_fp_capture;
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
@@ -1210,6 +1227,18 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         const space::LayoutFingerprint layout_fp = space::layout_fingerprint(proj);
         proj.layout_note = space::layout_reflow_note(sv.layout_fp, layout_fp);
         sv.layout_fp = layout_fp;
+        // Stamp which capture this digest describes, so shell_sync_live_tab's
+        // preserve-list can tell "the same floor grew" from "a different
+        // capture took this slot". A non-live recording keeps -1 and simply
+        // never matches, which is correct: a file does not re-weave.
+        {
+            const LiveSession &lsess = s.inspect.session;
+            sv.layout_fp_capture =
+                (s.live_tab >= 0 && static_cast<size_t>(s.live_tab) == i)
+                    ? static_cast<long>(lsess.recordings().size()) +
+                          (lsess.growing() != nullptr ? 1 : 0)
+                    : -1;
+        }
         sv.terr = space::build_terrain(std::move(proj), r);
         // 36 T2: the terrain's Projection anchors a rel PC path onto the plane
         // (build_terrain moved it into sv.terr.proj above; the terrain is built

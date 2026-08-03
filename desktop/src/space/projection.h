@@ -179,14 +179,27 @@ struct AtlasLabel {
 // would be fabricated structure (D7). It is also what lets a caller invoke this
 // unconditionally, with no layout test at the call site.
 //
-// PARTIAL BY DESIGN. A rect smaller than `min_cells` is skipped, because below
-// roughly 8x8 the labels overlap into a pile that reads worse than the empty
-// floor did. That is a LEGIBILITY threshold, not a fidelity one — every region,
-// labelled or not, is still listed in the HUD's region legend, which is what
-// keeps a partially-labelled floor from implying the unlabelled rects are
-// unnamed. Callers must not present these as the complete set.
+// PARTIAL BY DESIGN, and the threshold is a FRACTION OF THE PLANE rather than
+// an absolute count. `min_side_frac` is the smallest share of the plane's side
+// a rect's SHORTER side may occupy and still carry text: 1/16 by default.
+//
+// Both halves of that are measured rather than guessed (61 T10 Step 4):
+//
+//   - Relative, because a rect's cell count scales with `order`. An absolute
+//     "64 cells" filters everything at order 6 and NOTHING at order 12, where
+//     the plane has 16.7 M cells — on a realistic 12-region /proc/maps every
+//     region cleared it and the labels landed 6 px apart at 1600 px wide, which
+//     is the unreadable pile this threshold exists to prevent.
+//   - The MINOR SIDE, not the area, because the atlas produces slivers: a 5x205
+//     rect has 1025 cells and cannot hold a word. Measured worst aspect ratios
+//     are 13:1 on a realistic map, 41:1 with one huge mapping beside tiny ones,
+//     and up to 4096:1 on randomised skew.
+//
+// Every region, labelled or not, is still listed in the HUD's region legend,
+// which is what keeps a partially-labelled floor from implying the unlabelled
+// rects are unnamed. Callers must not present these as the complete set.
 std::vector<AtlasLabel> atlas_labels(const Projection &proj,
-                                     uint32_t min_cells = 64);
+                                     float min_side_frac = 1.0f / 16.0f);
 
 // 51 T2 (scene-focus-and-scale.md): the plane cells one region occupies —
 // row-major indices `y * n + x` over the n = 2^order plane, ascending, no

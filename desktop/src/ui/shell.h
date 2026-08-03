@@ -70,7 +70,16 @@ struct SceneView {
     // the reader its floor was re-laid out. Survives the live-growth SceneView
     // reset on the same terms as the camera — it is the only thing that
     // remembers the layout the reader was actually looking at.
+    //
+    // Unlike the camera, the HUD and the primer beside it on that preserve
+    // list, this is per-RECORDING state, not per-VIEW: it means nothing about
+    // a DIFFERENT capture's floor. `layout_fp_capture` records which capture
+    // it belongs to (the shell's per-capture ordinal), so a continuous re-arm
+    // that swaps a new recording into this slot drops it instead of comparing
+    // the new floor against the old one's — which would fire a reflow note on
+    // a first weave, naming a region count no single recording ever had.
     space::LayoutFingerprint layout_fp;
+    long layout_fp_capture = -1;
     bool has_regions = false; // codeimage/maps placed at least one region
     space::TerrainModel terr;
     space::TrajectorySet traj;

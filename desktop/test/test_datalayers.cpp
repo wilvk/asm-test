@@ -678,7 +678,7 @@ static uint32_t max_hop(const DataRibbon &R, uint32_t w) {
 }
 
 static void t5_access_ribbon() {
-    uint32_t seq_max_hop = 0;
+    uint32_t seq_max_hop = 0, seq_max_hop_hilbert = 0;
     // A SEQUENTIAL scan: eight consecutive 8-byte reads over one span. The
     // cells must be adjacent-or-equal in the compacted domain, which is the
     // locality property the Hilbert projection exists to preserve.
@@ -714,6 +714,13 @@ static void t5_access_ribbon() {
               R.cross_region == 0,
               "a scan within one object was reported as non-locality");
         seq_max_hop = max_hop(R, m.w);
+        // 61 T10: and the same scan under a HILBERT-pinned copy, so the
+        // historical "a stride travels further" claim keeps its coverage after
+        // the default flip instead of being traded away.
+        space::Projection hp = m.proj;
+        hp.layout = space::Projection::Layout::Hilbert;
+        space::rebuild_layout(hp);
+        seq_max_hop_hilbert = max_hop(build_data_ribbon(r, hp), m.w);
     }
 
     // A STRIDED pattern alternates: the documented zig-zag. Assert the shape
@@ -739,10 +746,38 @@ static void t5_access_ribbon() {
         // than a scan" is THIS layer's claim and is what makes the pattern
         // legible as a shape at all.
         const uint32_t stride_max_hop = max_hop(R, m.w);
-        check("T5: a strided pattern travels FURTHER per step than a scan",
-              stride_max_hop > seq_max_hop,
+        space::Projection hp = m.proj;
+        hp.layout = space::Projection::Layout::Hilbert;
+        space::rebuild_layout(hp);
+        const uint32_t stride_max_hop_hilbert =
+            max_hop(build_data_ribbon(r, hp), m.w);
+
+        // Under HILBERT, "a stride travels further than a scan" holds, and that
+        // is pinned here rather than lost to the 61 T10 default flip.
+        check("T5: under Hilbert a strided pattern travels FURTHER than a scan",
+              stride_max_hop_hilbert > seq_max_hop_hilbert,
               "a 256-byte stride hopped no further than a sequential scan (" +
-                  std::to_string(stride_max_hop) + " vs " +
+                  std::to_string(stride_max_hop_hilbert) + " vs " +
+                  std::to_string(seq_max_hop_hilbert) + ")");
+
+        // Under the ATLAS it does NOT, and that is a real property of the
+        // encoding rather than a defect to assert away. A serpentine lays a
+        // region's bytes into rows of a fixed width, so an access stride that
+        // is near a MULTIPLE OF THAT WIDTH lands the next access almost
+        // directly above or below the last — a 256-byte stride here hops ~2
+        // cells while an 8-byte scan runs ~8 along its row, inverting the
+        // comparison. Hilbert has no fixed row width, which is exactly what it
+        // was bought for; the atlas trades that away for a decodable,
+        // labellable, region-major floor (61 Component 1).
+        //
+        // So what this layer actually claims — and what stays true under both —
+        // is that the two patterns read as DIFFERENT SHAPES: the scan draws a
+        // run along a row, the stride a column stepping across rows. That is
+        // what the block's own comment said it meant to assert all along.
+        check("T5: under the atlas a stride still reads as a DIFFERENT shape",
+              stride_max_hop != seq_max_hop,
+              "a 256-byte stride and a sequential scan produced the SAME hop "
+              "signature (" + std::to_string(stride_max_hop) + " vs " +
                   std::to_string(seq_max_hop) +
                   ") — the layer would show no shape at all");
     }

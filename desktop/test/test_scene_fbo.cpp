@@ -563,6 +563,29 @@ static void upload(Scene &scene, const SceneModel &m, const space::Terrain &t) {
 }
 
 // The first screen pixel carrying `id` in the pick buffer, or -1.
+// 61 T10: the MEAN luminance over every pixel carrying `id`, and how many
+// there were. pixel_of_id below returns the FIRST such pixel, which for a cell
+// at a grazing angle can be a one-pixel sliver of a side face — a measurement
+// of the rasteriser as much as of the cell. Averaging the whole footprint
+// measures what the cell actually looks like, and does not depend on where a
+// layout happens to put it.
+static float cell_mean_lum(Scene &scene, const Camera &cam, int W, int H,
+                           uint32_t id, const std::vector<unsigned char> &px,
+                           int *out_n) {
+    std::vector<uint32_t> ids;
+    scene.render_pick_buffer(cam, W, H, ids);
+    double sum = 0.0;
+    int n = 0;
+    for (size_t i = 0; i < ids.size() && i * 4 + 2 < px.size(); i++)
+        if (ids[i] == id) {
+            sum += lum(&px[i * 4]);
+            n++;
+        }
+    if (out_n)
+        *out_n = n;
+    return n ? static_cast<float>(sum / n) : -1.0f;
+}
+
 static int pixel_of_id(Scene &scene, const Camera &cam, int W, int H,
                        uint32_t id) {
     std::vector<uint32_t> ids;
@@ -1307,9 +1330,31 @@ int main() {
             surface_only.mispred = false;
             std::vector<unsigned char> surf =
                 capture(scene, gcam, gcf, surface_only);
+            // 61 T10: measured over each cell's WHOLE footprint, not from
+            // pixel_of_id's first matching pixel. The margin is unchanged at
+            // 8.0 — this is a better measurement, not a lowered bar. Under the
+            // atlas this fixture's 18-byte program occupies ordinals 0..17 of
+            // its rect, i.e. row 0, where the first pixel of a cell is often a
+            // one-pixel sliver of a foreshortened side face: it read 30.4 vs
+            // 27.1 (a 3.3 margin, failing) while the cells' actual means are
+            // 75.8 vs 44.2 (31.6, passing comfortably). The heat encoding was
+            // never in question; the sampling was.
+            int hot_n = 0, cold_n = 0;
+            const float hot_lum = cell_mean_lum(scene, gcam, GW, GH,
+                                                pick_id_cell(hot), surf, &hot_n);
+            const float cold_lum = cell_mean_lum(
+                scene, gcam, GW, GH, pick_id_cell(cold), surf, &cold_n);
+            check("golden abs scene: both cells have a real footprint to read",
+                  hot_n > 0 && cold_n > 0,
+                  "a cell covered no pixels, so the brightness below would "
+                  "compare nothing");
+            char why[192];
+            std::snprintf(why, sizeof why,
+                          "hot cell mean %.1f over %dpx vs cold %.1f over "
+                          "%dpx — the terrain is not encoding recorded heat",
+                          hot_lum, hot_n, cold_lum, cold_n);
             check("golden abs scene: the loop body renders brighter",
-                  lum(&surf[hot_px * 4]) > lum(&surf[cold_px * 4]) + 8.0f,
-                  "hot not brighter");
+                  hot_lum > cold_lum + 8.0f, why);
         }
 
         // The exact trajectory draws: switching its layer off changes pixels.
@@ -1601,10 +1646,35 @@ int main() {
     // --- (k) T3 (55): contour band width stays roughly constant in SCREEN
     //     pixels across a large change in camera distance ---------------------
     {
+        // 61 T10: this block needs a real 2D HEIGHT GRADIENT in view, and
+        // ndjson_hotcold does not provide one — it heats exactly TWO cells of
+        // 4096. Under Hilbert those two happened to land within a few cells of
+        // each other (that is the curve's locality), so they read as one blob
+        // with a gradient around it. Under the atlas they do not: byte offsets
+        // 0 and 64 become serpentine ordinals 0 and 64, and with a 64-wide rect
+        // that is exactly one row apart — which the odd-row reversal puts at
+        // (0,0) and (63,1), i.e. OPPOSITE ENDS of the plane. Two isolated
+        // one-cell bumps are sub-pixel at the far camera and produced no
+        // contour-affected run at all.
+        //
+        // That is a genuine property of the encoding (see the 61 brief: the
+        // serpentine buys adjacency for consecutive cells and pays for it at a
+        // stride of one row width), NOT a fault in the contour shader this
+        // block exists to test. So the fixture now heats a broad run of
+        // offsets, giving a gradient under ANY layout, and the block goes back
+        // to measuring what it is named for: that a contour band's width is
+        // constant in SCREEN space across a camera dolly.
+        std::string cnd = kHdrExact;
+        cnd += "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,"
+               "\"version\":0}\n";
+        for (int off = 0; off < 512; off += 4)
+            for (int rep = 0; rep <= (off / 4) % 6; rep++)
+                cnd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":" +
+                       std::to_string(4194304 + off) + "}\n";
+        cnd += "{\"k\":\"end\",\"events\":9,\"truncated\":false}\n";
         space::TerrainModel terr = space::build_terrain(
-            space::build_projection(
-                space::regions_from_codeimage(load(ndjson_hotcold()))),
-            load(ndjson_hotcold()));
+            space::build_projection(space::regions_from_codeimage(load(cnd))),
+            load(cnd));
         scene.nsteps = static_cast<uint32_t>(terr.nsteps);
         scene.set_terrain(terr.full());
         scene.set_trajectories(space::TrajectorySet{}, terr.proj);
@@ -1673,6 +1743,7 @@ int main() {
 
         std::vector<int> near_runs = band_run_lengths(0.8f);
         std::vector<int> far_runs = band_run_lengths(6.0f);
+
         check("T3 GL: contour bands are visible at both a close and a far "
               "camera distance",
               !near_runs.empty() && !far_runs.empty(),

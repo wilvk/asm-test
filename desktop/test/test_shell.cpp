@@ -1874,9 +1874,13 @@ int main() {
         // reaches), so the sentinel is still the value that was PRESERVED
         // rather than a freshly computed digest. That ordering is what makes
         // this check specific to the preserve-list.
+        const long cap_ord =
+            static_cast<long>(sess.recordings().size()) +
+            (sess.growing() != nullptr ? 1 : 0);
         ls.scenes[i].layout_fp.valid = true;
         ls.scenes[i].layout_fp.digest = 0xD00Dull;
         ls.scenes[i].layout_fp.regions = 7;
+        ls.scenes[i].layout_fp_capture = cap_ord;
         sess.feed_line(
             R"({"k":"df_step","step":1,"off":0,"disasm":"nop","ops":[]})");
         shell_sync_live_tab(ls);
@@ -1886,6 +1890,28 @@ int main() {
                   ls.scenes[i].layout_fp.regions == 7,
               "a live re-weave dropped the previous layout digest, so the "
               "reflow notice can never fire");
+        // 61 T10: and the other half of that contract, which an adversarial
+        // review found missing. The digest is per-RECORDING state on a
+        // per-VIEW preserve-list, so it must NOT cross a capture boundary: a
+        // continuous re-arm swaps a new recording into this slot, and carrying
+        // the old capture's digest would fire a reflow note on the new
+        // recording's FIRST weave, naming a region count ("7 regions became
+        // N") that no single recording ever had. Simulated by stamping a stale
+        // capture ordinal, which is exactly what the previous capture leaves
+        // behind.
+        ls.scenes[i].layout_fp.valid = true;
+        ls.scenes[i].layout_fp.digest = 0xBEEFull;
+        ls.scenes[i].layout_fp.regions = 7;
+        ls.scenes[i].layout_fp_capture = cap_ord - 1; // a PREVIOUS capture
+        sess.feed_line(
+            R"({"k":"df_step","step":2,"off":0,"disasm":"nop","ops":[]})");
+        shell_sync_live_tab(ls);
+        check("25t6/a previous capture's layout digest is DROPPED",
+              !ls.scenes[i].layout_fp.valid &&
+                  ls.scenes[i].layout_fp_capture == -1,
+              "the digest of a DIFFERENT capture survived into this one, so "
+              "the new recording's first weave would report a reflow the "
+              "reader never saw");
     }
 
     // --- fix 6: the syscall-filter undo is recording-SCOPED ------------------

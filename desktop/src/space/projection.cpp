@@ -702,7 +702,7 @@ std::string layout_reflow_note(const LayoutFingerprint &prev,
 // camera — so the placement rule is checkable in the null harness beside
 // region_cells rather than only through a rendered frame.
 std::vector<AtlasLabel> atlas_labels(const Projection &proj,
-                                     uint32_t min_cells) {
+                                     float min_side_frac) {
     std::vector<AtlasLabel> out;
     // rects is empty under Hilbert AND after a rebuild_layout fallback; the
     // size equality also covers a half-built projection a caller assembled by
@@ -714,10 +714,15 @@ std::vector<AtlasLabel> atlas_labels(const Projection &proj,
     out.reserve(proj.rects.size());
     for (size_t i = 0; i < proj.rects.size(); i++) {
         const AtlasRect &r = proj.rects[i];
-        const uint64_t cells =
-            uint64_t(r.x1 - r.x0) * uint64_t(r.y1 - r.y0);
-        if (cells < min_cells)
-            continue; // too small to read — see the header's note
+        const uint32_t rw = r.x1 - r.x0, rh = r.y1 - r.y0;
+        const uint64_t cells = uint64_t(rw) * uint64_t(rh);
+        // The SHORTER side against a fraction of the plane's side: a sliver has
+        // area to spare and nowhere to put a word. See the header for the
+        // measurements behind both choices.
+        const uint32_t min_side = static_cast<uint32_t>(
+            static_cast<float>(n) * (min_side_frac > 0.0f ? min_side_frac : 0.0f));
+        if (rw < min_side || rh < min_side)
+            continue; // too thin to read — see the header's note
         AtlasLabel l;
         l.u = 0.5f * static_cast<float>(r.x0 + r.x1) / static_cast<float>(n);
         l.v = 0.5f * static_cast<float>(r.y0 + r.y1) / static_cast<float>(n);
