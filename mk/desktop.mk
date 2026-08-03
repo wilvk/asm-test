@@ -1806,7 +1806,17 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # GL/EGL headers (DESKTOP_GL_MISSING) — built and run under docker-desktop (which
 # installs software Mesa + EGL), skipped-with-a-reason on a bare host. Nothing in
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
-$(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
+# 61 T7a: the object closure a GL test links, factored so the FBO smoke and the
+# motif gate cannot drift apart.
+#
+# sp/opcode_terrain.o is ADDED here, not merely lifted: this list never carried
+# it, because nothing in test_scene_fbo.cpp called into that TU. gl_offscreen.h's
+# render_plane_scene does — build_opcode_terrain and opcode_guest_from_arch are
+# both out-of-line — and WITHOUT it the motif gate fails to link on two
+# undefined references. test_scene_fbo alone would not have caught that:
+# render_plane_scene is an inline in a header, so a translation unit that never
+# CALLS it emits no reference at all and links green regardless.
+DESKTOP_GL_TEST_OBJS := \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/s3/focus.o \
     $(BUILD)/desktop/test/s3/data_layers_gl.o \
@@ -1824,8 +1834,12 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/sp/dataribbon.o $(BUILD)/desktop/test/sp/sediment.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
+
+$(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
+    $(DESKTOP_GL_TEST_OBJS)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
 
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \

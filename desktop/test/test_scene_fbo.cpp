@@ -470,11 +470,12 @@ static void pure_line_width_checks() {
 }
 
 // ---- the GL half ------------------------------------------------------------
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#define GL_GLEXT_PROTOTYPES 1
-#include <GL/gl.h>
-#include <GL/glext.h>
+// 61 T7a: the EGL bring-up, the colour FBO and the readback now live in the
+// SHARED harness, so this smoke and the motif gate cannot drift apart on the
+// context path. It pulls EGL/GL in for us.
+#include "gl_offscreen.h"
+
+using asmdesk::testing::ColorFbo;
 
 static void skip(const char *why) {
     std::printf("test_scene_fbo: SKIP GL smoke — %s (pure checks ran)\n", why);
@@ -482,110 +483,24 @@ static void skip(const char *why) {
 
 // Bring up a surfaceless EGL + desktop-GL context. Returns false (and prints a
 // reason) on any failure, so a host with no GL device self-skips.
-static bool egl_up(EGLDisplay *out_dpy, EGLContext *out_ctx, std::string *why) {
-    EGLDisplay dpy = EGL_NO_DISPLAY;
-    auto getPD = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress(
-        "eglGetPlatformDisplayEXT");
-    if (getPD)
-        dpy =
-            getPD(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
-    if (dpy == EGL_NO_DISPLAY)
-        dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (dpy == EGL_NO_DISPLAY) {
-        *why = "no EGL display";
-        return false;
-    }
-    EGLint major = 0, minor = 0;
-    if (!eglInitialize(dpy, &major, &minor)) {
-        *why = "eglInitialize failed";
-        return false;
-    }
-    if (!eglBindAPI(EGL_OPENGL_API)) {
-        *why = "no desktop-GL EGL API";
-        return false;
-    }
-    const EGLint cfg_attr[] = {EGL_SURFACE_TYPE,
-                               EGL_PBUFFER_BIT,
-                               EGL_RENDERABLE_TYPE,
-                               EGL_OPENGL_BIT,
-                               EGL_RED_SIZE,
-                               8,
-                               EGL_GREEN_SIZE,
-                               8,
-                               EGL_BLUE_SIZE,
-                               8,
-                               EGL_ALPHA_SIZE,
-                               8,
-                               EGL_DEPTH_SIZE,
-                               24,
-                               EGL_NONE};
-    EGLConfig cfg;
-    EGLint num = 0;
-    if (!eglChooseConfig(dpy, cfg_attr, &cfg, 1, &num) || num < 1) {
-        *why = "no usable EGL config";
-        return false;
-    }
-    const EGLint ctx_attr[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
-                               EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
-    EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
-    if (ctx == EGL_NO_CONTEXT) {
-        *why = "eglCreateContext failed";
-        return false;
-    }
-    if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
-        *why = "surfaceless make-current failed";
-        return false;
-    }
-    *out_dpy = dpy;
-    *out_ctx = ctx;
-    return true;
-}
+// egl_up now lives in gl_offscreen.h (61 T7a), byte-for-byte.
+using asmdesk::testing::egl_up;
 
-// A simple RGBA8 + depth24 colour framebuffer for reading terrain colour back.
-struct ColorFbo {
-    GLuint fbo = 0, tex = 0, rbo = 0;
-    int w = 0, h = 0;
-    bool create(int width, int height) {
-        w = width;
-        h = height;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, nullptr);
-        glGenRenderbuffers(1, &rbo);
-        glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, tex, 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                  GL_RENDERBUFFER, rbo);
-        return glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
-               GL_FRAMEBUFFER_COMPLETE;
-    }
-};
+// ColorFbo now lives in gl_offscreen.h (61 T7a), byte-for-byte.
+
 
 static float lum(const unsigned char *p) {
     return 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2];
 }
 
 // Render one frame of the currently-uploaded scene into `cf` and read it back.
+// 61 T7a: the BODY is gl_offscreen.h's capture_image — this stays as a thin
+// alias so the dozens of existing call sites keep their vector<unsigned char>
+// shape while the context/FBO/readback path is the shared one.
 static std::vector<unsigned char> capture(Scene &scene, const Camera &cam,
                                           const ColorFbo &cf,
                                           const SceneLayers &layers) {
-    glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
-    glViewport(0, 0, cf.w, cf.h);
-    glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    scene.render(cam, cf.w, cf.h, layers);
-    std::vector<unsigned char> px(static_cast<size_t>(cf.w) * cf.h * 4);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glReadPixels(0, 0, cf.w, cf.h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return px;
+    return asmdesk::testing::capture_image(scene, cam, cf, layers).px;
 }
 
 // How many pixels two frames disagree on — the layer-toggle metric: a layer that
