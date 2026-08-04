@@ -148,6 +148,25 @@ std::string procinfo_names_verdict(const ProcInfo &p);
 //  - a cache keyed on (pid, start_ticks) — the second half is the pid-reuse
 //    guard, without which a recycled pid serves another process's card;
 //  - a 2 s DEADLINE, after which the child is killed and the pane says so.
+//
+// A fourth rule, added on review (gui-process-details Task 6, round 2): a
+// FAILURE BACKOFF. Only a successful read used to reset the refresh clock, so
+// a target that fails every time (a bad path, a mismatch, a hang) was
+// retried at frame rate forever — a fork+exec per frame is not "cheap" by
+// any definition. `next_retry_at`/`fail_count` below track that separately
+// from `last_ok_at`, which stays reserved for "when did the shown data last
+// come from a REAL success."
+struct ProcInfoCacheEntry {
+    ProcInfo info;
+    // procinfo_tick's `now_s` at the moment THIS entry's probe completed.
+    // Freshness for a cache HIT is computed from this, never from the
+    // runner's global `last_ok_at` — that field is the CURRENT target's own
+    // last success, a different process's timestamp for anything just
+    // switched to, and using it here is exactly the "measured zero" lie the
+    // rest of this model refuses to tell.
+    double read_at = -1;
+};
+
 struct ProcInfoRunner {
     std::string asmspy_path; // "" -> resolve_asmspy_path()
     bool visible = true;     // the pane is shown AND the window is focused
@@ -156,6 +175,11 @@ struct ProcInfoRunner {
     double debounce_s = 0.25;
     double refresh_s = 2.0;
     double deadline_s = 2.0;
+    // Bytes buffered from one child before the pane gives up on it and says
+    // so, rather than growing unboundedly against a runaway/wrong binary
+    // (Connect lets asmspy_path be pointed at anything). Small in tests, on
+    // the order of MB in the pane.
+    size_t max_buf_bytes = 4 * 1024 * 1024;
 
     int spawns = 0; // lifetime count — the test's evidence of a fork
 
@@ -163,6 +187,11 @@ struct ProcInfoRunner {
     // accessors, never directly.
     long want_pid = 0, in_flight_pid = 0;
     double want_since = -1, spawned_at = -1, last_ok_at = -1;
+    // Failure backoff, tracked SEPARATELY from last_ok_at (which only ever
+    // moves on a real success). A tick may spawn only once now_s >=
+    // next_retry_at; each failure pushes next_retry_at further out.
+    int fail_count = 0;
+    double next_retry_at = -1;
     // The last clock value procinfo_tick saw. procinfo_status is const and
     // takes no clock, so freshness ("read 0.4s ago") is computed against
     // this rather than against a wall-clock read inside the getter — which
@@ -172,7 +201,10 @@ struct ProcInfoRunner {
     std::string buf, status;
     ProcInfo shown, prev;
     ProcRates rates;
-    std::vector<std::pair<std::pair<long, uint64_t>, ProcInfo>> cache;
+    // Bounded LRU, true LRU (touching an existing key moves it to the back;
+    // eviction always drops the front) — a re-probed pid must count as
+    // recently used, not sit at its original insertion position forever.
+    std::vector<std::pair<std::pair<long, uint64_t>, ProcInfoCacheEntry>> cache;
     static constexpr size_t kCacheCap = 32;
 
     ~ProcInfoRunner();

@@ -276,9 +276,30 @@ std::string procinfo_names_verdict(const ProcInfo &p) {
 // --- the runner: debounce, spawn, drain, cache, deadline ------------------
 namespace {
 
+// waitpid(2) can return early with EINTR (any signal handler installed
+// without SA_RESTART, e.g. the GUI's own SIGALRM plumbing elsewhere in the
+// app, does exactly this). A caller that treats that as "reaped" zeros
+// child_pid while the kernel still holds a zombie under it — nothing ever
+// retries, and the zombie is permanent. Every blocking wait in this file
+// goes through here instead of a bare ::waitpid.
+pid_t waitpid_retry(pid_t pid, int *status) {
+    for (;;) {
+        pid_t r = ::waitpid(pid, status, 0);
+        if (r >= 0 || errno != EINTR)
+            return r;
+    }
+}
+
 // Kill and reap, unconditionally. Called on every path that abandons a child
-// — a new selection, a timeout, the pane closing, destruction — because the
-// alternative is a probe that outlives the reason it was started.
+// — a new selection, a timeout, destruction — because the alternative is a
+// probe that outlives the reason it was started. Hiding the pane is NOT one
+// of these paths: `visible` only gates a NEW spawn (procinfo_tick's gate,
+// below); an in-flight probe keeps draining normally, to EOF or the
+// deadline, even while hidden. That is safe only because the pane's owner
+// keeps calling procinfo_tick once per frame regardless of draw outcome
+// (Task 7's shell does this deliberately) — if ticking ever stopped while
+// hidden, the child would simply be waiting, bounded by its own 2s deadline
+// once ticking resumed, not left to run forever.
 void reap(ProcInfoRunner &r) {
     if (r.child_fd >= 0) {
         ::close(r.child_fd);
@@ -287,7 +308,7 @@ void reap(ProcInfoRunner &r) {
     if (r.child_pid > 0) {
         ::kill(r.child_pid, SIGKILL);
         int st = 0;
-        ::waitpid(r.child_pid, &st, 0);
+        waitpid_retry(r.child_pid, &st);
         r.child_pid = 0;
     }
     r.buf.clear();
@@ -301,19 +322,46 @@ std::string fmt_secs(double s) {
     return b;
 }
 
+// "16 B" / "4.0 MiB" — likewise for the over-cap message; tests pin
+// max_buf_bytes small (bytes), the pane's default is MB-scale.
+std::string fmt_bytes(size_t n) {
+    char b[48];
+    if (n >= 1024 * 1024)
+        std::snprintf(b, sizeof b, "%.1f MiB", double(n) / (1024.0 * 1024.0));
+    else if (n >= 1024)
+        std::snprintf(b, sizeof b, "%.1f KiB", double(n) / 1024.0);
+    else
+        std::snprintf(b, sizeof b, "%zu B", n);
+    return b;
+}
+
+// How long to wait before retrying a target that just failed, given how many
+// times in a row it has now failed: 0.5s, 1s, 2s, 4s, 8s, capped at 10s.
+// Without this, `due` (gated only on the SUCCESS clock, last_ok_at) stays
+// true forever after any failure, and a target that never succeeds — a bad
+// path, a permanent mismatch, a hang — gets a fork+exec every single frame.
+double backoff_s(int fail_count) {
+    double b = 0.5;
+    for (int i = 0; i < fail_count && b < 10.0; i++)
+        b *= 2.0;
+    return b > 10.0 ? 10.0 : b;
+}
+
 // Cache under (pid, start_ticks). The second half is the pid-REUSE guard:
 // without it a recycled pid serves the previous process's card, which is a
-// wrong answer that looks entirely plausible. Bounded LRU — oldest out first.
-void cache_put(ProcInfoRunner &r, const ProcInfo &p) {
+// wrong answer that looks entirely plausible. True LRU: touching an existing
+// key erases and re-appends it (so a re-probed pid moves to the back, not
+// just its original insertion point), and eviction always drops the front.
+void cache_put(ProcInfoRunner &r, const ProcInfo &p, double now_s) {
     const auto key = std::make_pair(p.pid, p.start_ticks);
-    for (auto &e : r.cache)
-        if (e.first == key) {
-            e.second = p;
-            return;
+    for (auto it = r.cache.begin(); it != r.cache.end(); ++it)
+        if (it->first == key) {
+            r.cache.erase(it);
+            break;
         }
     if (r.cache.size() >= ProcInfoRunner::kCacheCap)
         r.cache.erase(r.cache.begin());
-    r.cache.emplace_back(key, p);
+    r.cache.emplace_back(key, ProcInfoCacheEntry{p, now_s});
 }
 
 // fork/exec `asmspy --info <pid> --json`, stdout on a NON-BLOCKING pipe: the
@@ -389,12 +437,37 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
         r.want_since = now_s;
         reap(r); // abandon the in-flight probe for a target nobody is viewing
         r.shown = ProcInfo{};
+        r.prev = ProcInfo{};
         r.rates = ProcRates{};
         r.status = selected_pid > 0 ? "reading…" : "no process selected";
-        // A cache hit renders immediately; a refresh may still follow.
-        for (auto &e : r.cache)
-            if (e.first.first == selected_pid) {
-                r.shown = e.second;
+        // last_ok_at is the CURRENT target's own last success. A new
+        // selection has none yet, so this resets to "never" rather than
+        // inheriting the PREVIOUS target's timestamp — without this reset,
+        // `due` below (gated on last_ok_at) stays false for up to a full
+        // refresh_s after landing on a brand-new pid, so the first probe of
+        // it waits behind someone else's refresh clock instead of the 250ms
+        // debounce the whole design is built around.
+        r.last_ok_at = -1;
+        // Likewise the failure backoff is per-TARGET, not global: a run of
+        // failures against the previous pid must not throttle the first
+        // attempt at a freshly-selected one.
+        r.fail_count = 0;
+        r.next_retry_at = -1;
+        // A cache hit renders immediately; a refresh may still follow. This
+        // scans NEWEST-first (cache_put appends, so the back is the most
+        // recently completed probe): a pid can legitimately carry TWO
+        // entries across a reuse (old process, new process, different
+        // start_ticks, same pid number), and the front-to-back scan this
+        // used to be would always resolve to the OLDER — i.e. dead — one,
+        // which is exactly the rendering bug the compound cache key exists
+        // to prevent.
+        for (auto it = r.cache.rbegin(); it != r.cache.rend(); ++it)
+            if (it->first.first == selected_pid) {
+                r.shown = it->second.info;
+                // Freshness must reflect THIS entry's own read time, not
+                // whatever last_ok_at was reset to above — see
+                // ProcInfoCacheEntry::read_at's comment.
+                r.last_ok_at = it->second.read_at;
                 r.status = "cached";
                 break;
             }
@@ -404,7 +477,7 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
 
     // --- drain / reap / parse the in-flight child -----------------------
     //
-    // Three distinctions here are easy to collapse and each collapse is a bug:
+    // Four distinctions here are easy to collapse and each collapse is a bug:
     //
     //  - read() < 0 with EAGAIN/EWOULDBLOCK means "nothing YET", not failure.
     //    Treating it as EOF parses a half-written body every frame.
@@ -415,13 +488,20 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
     //    body. That is a missing-binary error, not a parse error, and saying
     //    "no procinfo event" there would send the operator hunting the wrong
     //    problem.
+    //  - a child that never stops writing (asmspy_path pointed at the wrong
+    //    binary in Connect) must not grow r.buf without bound: max_buf_bytes
+    //    caps it and the child is killed rather than kept draining forever.
     if (r.child_fd >= 0) {
         char chunk[8192];
-        bool eof = false, ioerr = false;
+        bool eof = false, ioerr = false, over_cap = false;
         for (;;) {
             ssize_t n = ::read(r.child_fd, chunk, sizeof chunk);
             if (n > 0) {
                 r.buf.append(chunk, static_cast<size_t>(n));
+                if (r.buf.size() >= r.max_buf_bytes) {
+                    over_cap = true;
+                    break;
+                }
                 continue; // drain everything available this frame
             }
             if (n == 0) {
@@ -437,21 +517,33 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
         }
 
         const bool overdue = now_s - r.spawned_at >= r.deadline_s;
-        if (eof || ioerr || overdue) {
+        if (eof || ioerr || overdue || over_cap) {
             // Close the pipe first, then reap, so waitpid cannot block on a
             // child still holding the write end open.
             ::close(r.child_fd);
             r.child_fd = -1;
             int wstatus = 0;
-            if (overdue && !eof)
-                ::kill(r.child_pid, SIGKILL); // it never finished; stop it
-            ::waitpid(r.child_pid, &wstatus, 0);
+            if ((overdue && !eof) || over_cap)
+                ::kill(r.child_pid, SIGKILL); // never finished, or flooding
+            waitpid_retry(r.child_pid, &wstatus);
             const int exited = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
             r.child_pid = 0;
             const long probed = r.in_flight_pid;
             r.in_flight_pid = 0;
 
-            if (overdue && !eof) {
+            // Tracked once for the whole branch below, rather than in each
+            // arm, so nothing can fall through this chain without either
+            // resetting or growing the failure backoff (C2): a target that
+            // fails every time must be retried with growing delay, never at
+            // frame rate.
+            bool succeeded = false;
+
+            if (over_cap) {
+                r.status = "asmspy produced more than " +
+                           fmt_bytes(r.max_buf_bytes) +
+                           " without finishing — refusing to buffer more; "
+                           "check the path in Connect";
+            } else if (overdue && !eof) {
                 r.status = "timed out after " + fmt_secs(r.deadline_s) +
                            " — the probe was killed";
             } else if (ioerr) {
@@ -484,11 +576,23 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
                     r.shown = got;
                     r.rates = procinfo_rates(r.prev, r.shown);
                     r.last_ok_at = now_s;
-                    cache_put(r, got);
+                    cache_put(r, got, now_s);
                     r.status = "attach-free (no ptrace)";
+                    succeeded = true;
                 }
             }
             r.buf.clear();
+
+            if (succeeded) {
+                r.fail_count = 0;
+                r.next_retry_at = -1;
+            } else {
+                // Backoff, not a flat retry-after: a target that keeps
+                // failing must be asked about LESS often over time, not
+                // re-forked every single frame it stays broken.
+                r.fail_count++;
+                r.next_retry_at = now_s + backoff_s(r.fail_count);
+            }
         }
     }
 
@@ -496,7 +600,8 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
     const bool debounced =
         r.want_since >= 0 && now_s - r.want_since >= r.debounce_s;
     const bool due = r.last_ok_at < 0 || now_s - r.last_ok_at >= r.refresh_s;
-    if (idle && debounced && r.visible && due)
+    const bool retry_ok = r.next_retry_at < 0 || now_s >= r.next_retry_at;
+    if (idle && debounced && r.visible && due && retry_ok)
         spawn(r, selected_pid, now_s);
 }
 

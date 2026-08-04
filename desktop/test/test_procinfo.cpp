@@ -17,11 +17,14 @@
 //    passes every small-value test and corrupts every real address.
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <vector>
 
-#include <csignal> // ::kill(pid, 0) — liveness probe below
+#include <csignal> // ::kill(pid, 0), SIGALRM pressure below
+#include <sys/time.h> // setitimer — SIGALRM pressure below
 #include <unistd.h> // usleep — see the drain loop below
 
 #include "doc/recording.h"
@@ -34,6 +37,14 @@
 using namespace asmdesk;
 
 static int failures;
+
+// EINTR pressure for the I3 test below: a signal handler installed WITHOUT
+// SA_RESTART interrupts a blocking waitpid() mid-syscall, exactly as a real
+// GUI process's own signal plumbing (e.g. a SIGALRM-based timer elsewhere in
+// the app) can. A waitpid that does not retry on EINTR loses the handle and
+// leaves the zombie behind permanently — this is what proves it does.
+static volatile std::sig_atomic_t g_alarm_hits = 0;
+static void alarm_noop(int) { g_alarm_hits++; }
 
 static void check(const char *what, bool cond, const std::string &why) {
     if (!cond) {
@@ -457,6 +468,27 @@ int main() {
               "cache.size()=" + std::to_string(run.cache.size()) +
                   " — a key that ignores start_ticks collapses a reused pid "
                   "into the previous process's slot");
+        const uint64_t second_start_ticks = procinfo_current(run).start_ticks;
+
+        // I1 (behaviour, not storage): the cache now holds BOTH the dead
+        // process's entry (first_start_ticks) and the live one
+        // (second_start_ticks). Switching away and back is a cache HIT — no
+        // time is given for a fresh probe to complete — so whichever entry
+        // the lookup resolves to IS what the pane renders. A lookup that
+        // scans front-to-back and stops at the first pid match would always
+        // resolve to the OLDER entry (inserted first), rendering the dead
+        // process's card under a "cached" label: exactly the bug the
+        // compound key exists to prevent, restored by the lookup.
+        procinfo_tick(run, 777, 5.0);  // switch away (a miss; cache is pid=100-only)
+        procinfo_tick(run, 100, 5.01); // and back — a cache hit
+        check("cache lookup on re-selection resolves to the NEWEST matching "
+              "entry, not the oldest",
+              procinfo_current(run).valid &&
+                  procinfo_current(run).start_ticks == second_start_ticks,
+              "start_ticks=" + std::to_string(procinfo_current(run).start_ticks) +
+                  " — expected the live process's " +
+                  std::to_string(second_start_ticks) + ", not the dead " +
+                  std::to_string(first_start_ticks));
     }
 
     // --- the in-flight child is killed on EVERY selection change, not only
@@ -488,6 +520,242 @@ int main() {
               "kill(old_child_pid, 0) = " + std::to_string(rc) +
                   " errno=" + std::to_string(errno) +
                   " — the process (or its zombie) is still around");
+    }
+
+    // --- C1: a brand-new selection must not wait behind a DIFFERENT pid's
+    // refresh clock. last_ok_at is per-target now (reset to -1 on every
+    // selection change); before that fix, a fresh pid's own first probe
+    // waited up to refresh_s (2s) rather than just the 250ms debounce,
+    // because `due` was measured against whichever OTHER pid last
+    // succeeded — a fork+exec that should follow arrowing to a new row
+    // within 250ms instead silently waited up to 2 full seconds.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        procinfo_tick(run, 100, 0.0);
+        double t = 0.30;
+        procinfo_tick(run, 100, t); // spawn
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t = 0.30 + 0.01 * i;
+            procinfo_tick(run, 100, t);
+            ::usleep(1000);
+        }
+        check("C1 setup: pid 100 succeeded", procinfo_current(run).valid,
+              "setup for the C1 test never got a successful read");
+
+        const int after = run.spawns;
+        // Switch to a NEVER-before-seen pid shortly (well under refresh_s)
+        // after the pid above succeeded, and give it only its own debounce.
+        procinfo_tick(run, 555, t + 0.10);
+        procinfo_tick(run, 555, t + 0.40); // +0.30s -> past the 250ms debounce
+        check("a fresh pid is probed on ITS OWN debounce, not blocked behind "
+              "another pid's refresh timer",
+              run.spawns == after + 1,
+              "spawns=" + std::to_string(run.spawns) + " (expected " +
+                  std::to_string(after + 1) +
+                  ") — a fresh selection waited on someone else's last_ok_at");
+    }
+
+    // --- I2: a cache HIT's freshness must reflect THAT ENTRY's own read
+    // time, not the runner's global last_ok_at — which, right after a
+    // selection change lands on a cache hit, is whatever OTHER pid most
+    // recently succeeded. Before the fix, a 5-second-stale cached card could
+    // report "read 0.0s ago" simply because some unrelated pid happened to
+    // have just succeeded — "measured zero" and "not yet measurable" are
+    // different claims, and this was the model saying the wrong one.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        procinfo_tick(run, 100, 0.0);
+        double t = 0.30;
+        procinfo_tick(run, 100, t); // spawn
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t = 0.30 + 0.01 * i;
+            procinfo_tick(run, 100, t);
+            ::usleep(1000);
+        }
+        check("I2 setup: pid 100 cached", procinfo_current(run).valid,
+              "setup for the I2 test never got a successful read");
+        const double cached_at = t; // pid 100's OWN read time
+
+        // A DIFFERENT pid succeeds much later, moving the GLOBAL last_ok_at
+        // far forward — the exact scenario the bug conflated.
+        const long real_pid = load("procinfo_full.asmtrace").pid;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_info.sh";
+        double t2 = cached_at + 5.30;
+        procinfo_tick(run, real_pid, cached_at + 5.0);
+        procinfo_tick(run, real_pid, t2); // spawn
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t2 = cached_at + 5.30 + 0.01 * i;
+            procinfo_tick(run, real_pid, t2);
+            ::usleep(1000);
+        }
+        check("I2 setup: a different pid succeeded later",
+              procinfo_current(run).valid,
+              "setup for the I2 test's second success never landed");
+
+        // Switch BACK to the cached pid 100 immediately — a cache hit; no
+        // time is given for a fresh probe of it to complete.
+        const double back_at = t2 + 0.05;
+        procinfo_tick(run, 100, back_at);
+        const double expected_age = back_at - cached_at;
+        const double bug_age = back_at - t2; // what the OLD code would show
+
+        const std::string st = procinfo_status(run);
+        const double shown_age =
+            st.rfind("read ", 0) == 0 ? std::atof(st.c_str() + 5) : -1.0;
+        check("cache-hit freshness reflects the ENTRY's own read time, not a "
+              "different pid's",
+              shown_age > expected_age - 0.5 && shown_age < expected_age + 0.5,
+              "status='" + st + "' shown_age=" + std::to_string(shown_age) +
+                  " expected~" + std::to_string(expected_age) +
+                  " (the bug would show ~" + std::to_string(bug_age) + ")");
+    }
+
+    // --- C2: a target that fails EVERY time must back off, not respawn at
+    // frame rate forever. fake_asmspy_mismatch.sh always "fails" (a pid
+    // mismatch) from this runner's perspective, so every attempt is a
+    // failure and, before the fix, `due` (gated only on the success clock)
+    // stayed true forever — a fork+exec every single idle frame.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_mismatch.sh";
+        procinfo_tick(run, 999, 0.0);
+        double t = 0.30;
+        procinfo_tick(run, 999, t); // first spawn attempt
+        for (int i = 0; i < 300; i++) {
+            t += 0.05;
+            procinfo_tick(run, 999, t);
+            ::usleep(1000);
+        }
+        // 300 * 0.05s = 15s of simulated failures. Without backoff, every
+        // idle tick refires (measured elsewhere: ~281 spawns in 300 frames
+        // on this exact scenario); with backoff (0.5s/1s/2s/4s/8s/10s...,
+        // capped) at most a handful of retries fit in 15s.
+        check("repeated failures back off instead of respawning every frame",
+              run.spawns <= 8,
+              "spawns=" + std::to_string(run.spawns) +
+                  " over ~15s of simulated failures — expected a handful, "
+                  "not one per frame");
+    }
+
+    // --- I5: r.buf must not grow without bound against a flooding or
+    // wrong-binary child (asmspy_path is user-settable in Connect). Pin
+    // max_buf_bytes tiny so the cap trips on the very first read rather than
+    // needing a real multi-MB payload to prove the mechanism exists.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_info.sh";
+        run.max_buf_bytes = 32; // the real fixture is several KB
+        procinfo_tick(run, 100, 0.0);
+        procinfo_tick(run, 100, 0.30); // spawn
+        for (int i = 0; i < 200 && run.child_pid != 0; i++) {
+            procinfo_tick(run, 100, 0.30 + 0.01 * i);
+            ::usleep(1000);
+        }
+        check("over-cap output never becomes a shown snapshot",
+              !procinfo_current(run).valid,
+              "a snapshot arrived despite exceeding max_buf_bytes");
+        check("the over-cap status names the cap, not a generic parse error",
+              procinfo_status(run).find("without finishing") !=
+                  std::string::npos,
+              "status: " + procinfo_status(run));
+        check("the over-cap child is killed and reaped, not left running",
+              run.child_pid == 0 && run.child_fd == -1,
+              "child_pid=" + std::to_string(run.child_pid) +
+                  " child_fd=" + std::to_string(run.child_fd));
+    }
+
+    // --- I3: waitpid must retry across EINTR, or a zombie is left behind
+    // permanently. Installs a real SIGALRM handler WITHOUT SA_RESTART and
+    // fires it aggressively across many real kill+reap cycles, so any
+    // blocking ::waitpid in this file has a genuine chance of being
+    // interrupted mid-syscall — exactly what a GUI process's own signal
+    // plumbing elsewhere (this app's own SIGALRM-based teardown included)
+    // can do to it for real.
+    //
+    // The reap TARGET matters: draining to EOF before waitpid (the normal
+    // completion path) means the child is usually ALREADY a zombie by the
+    // time waitpid is called, so there is barely any window to interrupt.
+    // SIGKILL-then-waitpid is different — the kernel needs real (if brief)
+    // time after the signal to actually tear the process down — so this
+    // drives reap()'s kill+wait specifically, by spawning a GENUINELY
+    // hanging child (fake_asmspy_hang.sh) and switching selection away
+    // before it could ever finish on its own, every single cycle.
+    {
+        struct sigaction sa {};
+        sa.sa_handler = alarm_noop;
+        sa.sa_flags = 0; // deliberately NOT SA_RESTART
+        sigemptyset(&sa.sa_mask);
+        struct sigaction old_sa {};
+        ::sigaction(SIGALRM, &sa, &old_sa);
+
+        itimerval it{};
+        it.it_interval.tv_usec = 200; // ~5 kHz — aggressive on purpose
+        it.it_value.tv_usec = 200;
+        itimerval old_it{};
+        ::setitimer(ITIMER_REAL, &it, &old_it);
+
+        std::vector<int> spawned;
+        {
+            // (a) reap()'s kill+wait, via rapid selection switches away from
+            // a still-hanging child.
+            ProcInfoRunner run;
+            run.asmspy_path =
+                std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+            double t = 0.0;
+            long pid = 100;
+            procinfo_tick(run, pid, t);
+            for (int cycle = 0; cycle < 200; cycle++) {
+                t += 0.30; // past debounce -> spawn a real, hanging child
+                procinfo_tick(run, pid, t);
+                if (run.child_pid != 0)
+                    spawned.push_back(run.child_pid);
+                // Alternate the selected pid every cycle: switching away
+                // from a still-hanging child is what calls reap()'s
+                // kill+waitpid on a process that is DEFINITELY still alive.
+                pid = (pid == 100) ? 200 : 100;
+                t += 0.001;
+                procinfo_tick(run, pid, t);
+            }
+        } // ~ProcInfoRunner's own reap() also runs under this pressure here
+        {
+            // (b) the DRAIN block's OWN kill+wait (a different call site
+            // than reap()'s), via the deadline firing while the selection
+            // stays put — no switch involved, so reap() is never entered.
+            ProcInfoRunner run2;
+            run2.asmspy_path =
+                std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+            run2.deadline_s = 0.01; // fire on the very next tick after spawn
+            double t = 0.0;
+            procinfo_tick(run2, 100, t);
+            for (int cycle = 0; cycle < 200; cycle++) {
+                t += 0.30; // past debounce -> spawn
+                procinfo_tick(run2, 100, t);
+                if (run2.child_pid != 0)
+                    spawned.push_back(run2.child_pid);
+                t += 0.02; // now overdue: the SAME tick's drain block kills
+                procinfo_tick(run2, 100, t); // and waits, still selected
+            }
+        }
+
+        ::setitimer(ITIMER_REAL, &old_it, nullptr);
+        ::sigaction(SIGALRM, &old_sa, nullptr);
+
+        check("SIGALRM pressure actually applied (sanity)", g_alarm_hits > 0,
+              "no SIGALRM fired — this test did not actually apply pressure");
+        int leaked = 0;
+        for (int pid : spawned)
+            if (::kill(pid, 0) == 0)
+                leaked++;
+        check("no zombies survive waitpid under EINTR pressure", leaked == 0,
+              std::to_string(leaked) + "/" + std::to_string(spawned.size()) +
+                  " spawned children are still present after the run");
     }
 
     if (failures) {
