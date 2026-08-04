@@ -2907,7 +2907,14 @@ Three rules the body above encodes, none of them cosmetic:
 
 - [ ] **Step 7: Wire the build**
 
-Add `details_pane` to the `DESKTOP_UI` source list (grep `inspect_door` in `mk/desktop.mk` to find every list it appears in — app, render, test and uitest variants). Add the draw-test rule beside `desktop_test_loom_draw`:
+Build wiring, resolved against the tree so you do not have to hunt:
+
+- The shared per-variant object list is `desktop_app_objs = \` at [`mk/desktop.mk:592`](../../../mk/desktop.mk#L592) — a `$(1)`-parameterized list, so adding `$(BUILD)/desktop/$(1)/ui/details_pane.o` beside `inspect_door.o` (line 629) covers the **app, render, test and uitest variants in one edit**, not four.
+- `mk/desktop.mk:2089` separately names `$(BUILD)/desktop/test/ui/inspect_door.o` in one specific test link rule; check whether the pane belongs there too.
+- `DESKTOP_TEST_UI := legend terms filter timepos primer` (line 748) is a **different, narrower** list — the pure-UI TUs the tests compile standalone. `details_pane` belongs there only if a test links it without the rest of the shell.
+- `DESKTOP_TEST_IG` (line 720) and `DESKTOP_TEST_DOC` (line 721) both exist as used below.
+
+Add the draw-test rule beside `desktop_test_loom_draw`:
 
 ```make
 $(BUILD)/desktop/test/t/test_details_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
