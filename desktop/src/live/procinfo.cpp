@@ -311,7 +311,10 @@ void reap(ProcInfoRunner &r) {
         waitpid_retry(r.child_pid, &st);
         r.child_pid = 0;
     }
-    r.buf.clear();
+    // clear() alone does not release the allocation; a single flood (I5)
+    // would otherwise permanently pin max_buf_bytes of heap even after the
+    // child is gone. Swap-with-empty actually frees it.
+    std::string().swap(r.buf);
     r.in_flight_pid = 0;
 }
 
@@ -336,7 +339,9 @@ std::string fmt_bytes(size_t n) {
 }
 
 // How long to wait before retrying a target that just failed, given how many
-// times in a row it has now failed: 0.5s, 1s, 2s, 4s, 8s, capped at 10s.
+// times in a row it has now failed. fail_count is incremented BEFORE this is
+// called, so backoff_s(1) is the FIRST real delay: 1s, 2s, 4s, 8s, capped at
+// 10s — not 0.5s first, despite the internal starting value below.
 // Without this, `due` (gated only on the SUCCESS clock, last_ok_at) stays
 // true forever after any failure, and a target that never succeeds — a bad
 // path, a permanent mismatch, a hang — gets a fork+exec every single frame.
@@ -432,6 +437,13 @@ bool spawn(ProcInfoRunner &r, long pid, double now_s) {
 
 void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
     r.last_tick_s = now_s;
+    // A path fix in Connect is an operator saying "try again now" — waiting
+    // out the OLD path's backoff on the SAME pid would silently ignore that.
+    if (r.asmspy_path != r.last_asmspy_path_seen) {
+        r.last_asmspy_path_seen = r.asmspy_path;
+        r.fail_count = 0;
+        r.next_retry_at = -1;
+    }
     if (selected_pid != r.want_pid) {
         r.want_pid = selected_pid;
         r.want_since = now_s;
@@ -523,8 +535,12 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
             ::close(r.child_fd);
             r.child_fd = -1;
             int wstatus = 0;
-            if ((overdue && !eof) || over_cap)
-                ::kill(r.child_pid, SIGKILL); // never finished, or flooding
+            // Unconditional: eof/ioerr do NOT mean the child exited, only
+            // that its copy of the pipe's write end closed (e.g. it closed
+            // stdout and kept running) -- waiting on a still-alive child here
+            // would block procinfo_tick, the one thing this whole design
+            // exists to never do, for as long as that child keeps running.
+            ::kill(r.child_pid, SIGKILL);
             waitpid_retry(r.child_pid, &wstatus);
             const int exited = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
             r.child_pid = 0;
@@ -581,7 +597,9 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
                     succeeded = true;
                 }
             }
-            r.buf.clear();
+            // See reap()'s comment: clear() alone would not release the
+            // allocation a flood (I5) grew.
+            std::string().swap(r.buf);
 
             if (succeeded) {
                 r.fail_count = 0;

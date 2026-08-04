@@ -146,7 +146,15 @@ std::string procinfo_names_verdict(const ProcInfo &p);
 //  - a 250 ms DEBOUNCE, so arrowing down a table probes the row you stop on,
 //    not every row you pass;
 //  - a cache keyed on (pid, start_ticks) — the second half is the pid-reuse
-//    guard, without which a recycled pid serves another process's card;
+//    guard: without it, two cache entries for a recycled pid collapse into
+//    one and the newest-first lookup (procinfo_tick's switch block) has
+//    nothing left to prefer, so it silently falls back to whichever is
+//    left — usually the dead process. The key does NOT by itself guarantee
+//    a reused pid never renders the dead process's card: in the
+//    SINGLE-entry case (the dead process is the only one ever cached),
+//    re-selecting that pid still renders it, labelled "cached", until a
+//    fresh probe corrects it — a real residual, not fixable at the lookup
+//    without changing what a bare pid selection is allowed to assume;
 //  - a 2 s DEADLINE, after which the child is killed and the pane says so.
 //
 // A fourth rule, added on review (gui-process-details Task 6, round 2): a
@@ -192,6 +200,12 @@ struct ProcInfoRunner {
     // next_retry_at; each failure pushes next_retry_at further out.
     int fail_count = 0;
     double next_retry_at = -1;
+    // The path last seen when the backoff above was (re)computed. An
+    // operator who fixes asmspy_path in Connect after a run of failures
+    // should not still wait out the OLD path's backoff — a path change is
+    // detected at the top of procinfo_tick and clears fail_count/
+    // next_retry_at, same as a selection change does.
+    std::string last_asmspy_path_seen;
     // The last clock value procinfo_tick saw. procinfo_status is const and
     // takes no clock, so freshness ("read 0.4s ago") is computed against
     // this rather than against a wall-clock read inside the getter — which

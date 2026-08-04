@@ -16,6 +16,7 @@
 //    64-bit pointer is not rounded through a double. Parsing them as numbers
 //    passes every small-value test and corrupts every real address.
 #include <cerrno>
+#include <chrono> // procinfo_tick timing — see the "must never block" test
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -369,6 +370,24 @@ int main() {
         check("cache avoids a respawn", run.spawns <= after + 1,
               "a cached selection respawned");
 
+        // Settle any straggling in-flight child from the cache-hit section
+        // above (a refresh may legitimately have just spawned one) before
+        // testing the visible gate in isolation — otherwise a residual
+        // idle==false could mask THIS gate regardless of whether `visible`
+        // is even checked, and the mutation this guards (dropping `visible`
+        // from the spawn condition) would silently survive.
+        double settle_t = 3.90;
+        for (int i = 0; i < 300 && run.child_pid != 0; i++) {
+            settle_t += 0.01;
+            procinfo_tick(run, real_pid, settle_t);
+            ::usleep(1000);
+        }
+        check("settle: no child left in flight before the visible-gate test",
+              run.child_pid == 0,
+              "child_pid=" + std::to_string(run.child_pid) +
+                  " still in flight — the visible-gate check below cannot "
+                  "isolate its own condition");
+
         // The refresh timer only fires while visible.
         run.visible = false;
         const int before_hidden = run.spawns;
@@ -669,6 +688,201 @@ int main() {
               run.child_pid == 0 && run.child_fd == -1,
               "child_pid=" + std::to_string(run.child_pid) +
                   " child_fd=" + std::to_string(run.child_fd));
+        // clear() alone does not release a string's allocation -- a single
+        // flood would otherwise permanently pin max_buf_bytes of heap even
+        // after the child is long gone. capacity() is the observable proxy:
+        // it should be nowhere near what a 32-byte-triggered flood grew to.
+        check("the buffer's capacity is released after an over-cap trip, "
+              "not just its logical size",
+              run.buf.capacity() < 4096,
+              "buf.capacity()=" + std::to_string(run.buf.capacity()) +
+                  " -- clear() without releasing the allocation pins it");
+    }
+
+    // --- true LRU: touching an existing cache key moves it to the back,
+    // not just updating it in place. cache_put has internal linkage, so
+    // this drives it through TWO real successful parses of the SAME key
+    // (a re-probe of an already-cached pid) and inspects the runner's
+    // public `cache` vector's ORDER directly -- no eviction (kCacheCap
+    // entries) needed to observe reordering.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        procinfo_tick(run, 100, 0.0);
+        double t = 0.30;
+        procinfo_tick(run, 100, t);
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t = 0.30 + 0.01 * i;
+            procinfo_tick(run, 100, t);
+            ::usleep(1000);
+        }
+        check("LRU setup: pid 100 cached first", run.cache.size() == 1,
+              "cache.size()=" + std::to_string(run.cache.size()));
+
+        const long real_pid = load("procinfo_full.asmtrace").pid;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_info.sh";
+        procinfo_tick(run, real_pid, t + 0.10);
+        t += 0.40;
+        procinfo_tick(run, real_pid, t);
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t += 0.01;
+            procinfo_tick(run, real_pid, t);
+            ::usleep(1000);
+        }
+        check("LRU setup: a second, distinct entry cached",
+              run.cache.size() == 2,
+              "cache.size()=" + std::to_string(run.cache.size()));
+        check("LRU setup: insertion order is oldest-first",
+              run.cache[0].first.first == 100 &&
+                  run.cache[1].first.first == real_pid,
+              "cache[0].pid=" + std::to_string(run.cache[0].first.first) +
+                  " cache[1].pid=" + std::to_string(run.cache[1].first.first));
+
+        // Re-probe pid 100 (the SAME key: pid AND start_ticks) again — true
+        // LRU must move it to the BACK, not merely update it where it sits.
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        procinfo_tick(run, 100, t + 0.10);
+        t += 0.40;
+        run.last_ok_at = -1; // force due without waiting refresh_s
+        procinfo_tick(run, 100, t);
+        for (int i = 0; i < 200 && run.cache.size() == 2 &&
+                        run.cache[1].first.first == real_pid;
+             i++) {
+            t += 0.01;
+            procinfo_tick(run, 100, t);
+            ::usleep(1000);
+        }
+        check("LRU touch: still exactly two entries (updated, not appended)",
+              run.cache.size() == 2,
+              "cache.size()=" + std::to_string(run.cache.size()));
+        check("LRU touch: the re-probed key moved to the BACK (true LRU, "
+              "not FIFO)",
+              run.cache[0].first.first == real_pid &&
+                  run.cache[1].first.first == 100,
+              "cache[0].pid=" + std::to_string(run.cache[0].first.first) +
+                  " cache[1].pid=" + std::to_string(run.cache[1].first.first) +
+                  " — expected the touched pid=100 entry at the back");
+    }
+
+    // --- cache eviction at kCacheCap: the 33rd distinct entry must evict
+    // the OLDEST (front). Nothing else in this suite ever creates a 33rd
+    // entry, so the "Bounded LRU" claim was otherwise unverified.
+    // fake_asmspy_cache_fill.sh keeps pid fixed at 100 and reads its
+    // start_ticks from FAKE_START_TICKS, synthesizing 33 distinct keys
+    // without 33 fixture files.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path = std::string(ASMTEST_FIXTURE_DIR) +
+                          "/fake_asmspy_cache_fill.sh";
+        double t = 0.0;
+        procinfo_tick(run, 100, t);
+        for (int n = 1; n <= 33; n++) {
+            ::setenv("FAKE_START_TICKS", std::to_string(n).c_str(), 1);
+            t += 0.30;
+            run.last_ok_at = -1;    // force due
+            run.next_retry_at = -1; // and bypass any backoff, every cycle
+            procinfo_tick(run, 100, t);
+            const uint64_t before = procinfo_current(run).start_ticks;
+            for (int i = 0;
+                 i < 200 && procinfo_current(run).start_ticks == before; i++) {
+                t += 0.01;
+                procinfo_tick(run, 100, t);
+                ::usleep(1000);
+            }
+        }
+        ::unsetenv("FAKE_START_TICKS");
+
+        check("cache stays bounded at kCacheCap after 33 distinct entries",
+              run.cache.size() == 32,
+              "cache.size()=" + std::to_string(run.cache.size()));
+        bool has_first = false, has_last = false;
+        for (auto &e : run.cache) {
+            if (e.first.second == 1)
+                has_first = true; // the very FIRST (oldest) entry
+            if (e.first.second == 33)
+                has_last = true; // the 33rd (newest) entry
+        }
+        check("the oldest entry (start_ticks=1) was evicted", !has_first,
+              "start_ticks=1 is still present — eviction did not drop the "
+              "front");
+        check("the newest entry (start_ticks=33) is present", has_last,
+              "start_ticks=33 is missing — the 33rd probe did not land in "
+              "the cache");
+    }
+
+    // --- a path fix in Connect must not still wait out the OLD path's
+    // backoff: an operator who corrects asmspy_path after a run of
+    // failures is saying "try again now."
+    {
+        ProcInfoRunner run;
+        // fake_asmspy_mismatch.sh always reports pid 42, so selecting pid
+        // 100 (NOT 42) makes every attempt a mismatch failure — and pid 100
+        // is deliberately never changed below, so the ONLY way the backoff
+        // could reset is the path-change detection itself, not the
+        // pre-existing (and separately tested) selection-change reset.
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_mismatch.sh";
+        double t = 0.0;
+        procinfo_tick(run, 100, t);
+        t = 0.30;
+        procinfo_tick(run, 100, t); // first failure
+        for (int i = 0; i < 100 && run.fail_count < 3; i++) {
+            t += 0.05;
+            procinfo_tick(run, 100, t); // SAME pid=100 throughout
+            ::usleep(1000);
+        }
+        check("path-fix setup: a real run of failures accumulated",
+              run.fail_count >= 3,
+              "fail_count=" + std::to_string(run.fail_count) +
+                  " — setup never accumulated enough failures");
+        const double backoff_next_retry = run.next_retry_at;
+        check("path-fix setup: a real backoff is pending",
+              backoff_next_retry > t,
+              "next_retry_at=" + std::to_string(backoff_next_retry) +
+                  " is not in the future at t=" + std::to_string(t));
+
+        // Fix the path WITHOUT touching the selection (still pid 100) — this
+        // must reset the backoff on its own; fake_asmspy_pidreuse_a.sh
+        // reports pid 100 for real, so a probe now succeeds instead of
+        // mismatching.
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            t += 0.01;
+            procinfo_tick(run, 100, t); // still pid 100, no switch
+            ::usleep(1000);
+        }
+        check("a path fix in Connect resets the backoff instead of waiting "
+              "out the old one",
+              procinfo_current(run).valid,
+              "no successful read arrived promptly after the path fix — "
+              "status: " + procinfo_status(run));
+    }
+
+    // --- reap() must ALSO release r.buf's capacity, not just its logical
+    // size — the drain-completion site's own release has its own test
+    // above; this is the OTHER call site (a selection change away from a
+    // partially-buffered child, or destruction).
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+        procinfo_tick(run, 100, 0.0);
+        procinfo_tick(run, 100, 0.30); // spawn; genuinely hangs
+        check("reap-capacity setup: a child is in flight", run.child_pid != 0,
+              "no child was spawned to test reap()'s buffer release");
+        run.buf.assign(8192, 'x'); // simulate a partially-buffered read
+        check("reap-capacity setup: the buffer actually grew",
+              run.buf.capacity() >= 8192,
+              "buf.capacity()=" + std::to_string(run.buf.capacity()));
+        procinfo_tick(run, 200, 0.31); // switch away -> reap()
+        check("reap() releases r.buf's capacity, not just its logical size",
+              run.buf.capacity() < 4096,
+              "buf.capacity()=" + std::to_string(run.buf.capacity()) +
+                  " — clear() without releasing the allocation pins it");
     }
 
     // --- I3: waitpid must retry across EINTR, or a zombie is left behind
@@ -728,6 +942,16 @@ int main() {
             // (b) the DRAIN block's OWN kill+wait (a different call site
             // than reap()'s), via the deadline firing while the selection
             // stays put — no switch involved, so reap() is never entered.
+            //
+            // Every timeout here is a FAILURE (C2), which backs off the next
+            // spawn attempt (1s/2s/4s/8s/10s, capped) — left alone, that
+            // throttles this loop from 200 real exercises of this call site
+            // down to about 8 over its ~64s of simulated time (confirmed by
+            // review measurement), silently gutting the pressure this test
+            // exists to apply. Resetting next_retry_at before each cycle's
+            // spawn keeps this loop's 200 a real count, not a nominal one —
+            // the backoff timer itself already has its own dedicated,
+            // unpressured test elsewhere.
             ProcInfoRunner run2;
             run2.asmspy_path =
                 std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
@@ -735,6 +959,7 @@ int main() {
             double t = 0.0;
             procinfo_tick(run2, 100, t);
             for (int cycle = 0; cycle < 200; cycle++) {
+                run2.next_retry_at = -1; // bypass C2's backoff for this cycle
                 t += 0.30; // past debounce -> spawn
                 procinfo_tick(run2, 100, t);
                 if (run2.child_pid != 0)
@@ -756,6 +981,119 @@ int main() {
         check("no zombies survive waitpid under EINTR pressure", leaked == 0,
               std::to_string(leaked) + "/" + std::to_string(spawned.size()) +
                   " spawned children are still present after the run");
+    }
+
+    // --- timing: procinfo_tick must never block the frame loop, across
+    // every adversarial path that can complete/abandon a child. The round-3
+    // review's sharpest finding: nothing in this suite measured tick
+    // duration at all, so "non-blocking" — the runner's whole reason for
+    // existing — was asserted in comments and nowhere else. It also found
+    // that the drain-completion site's waitpid, left unkilled on eof/ioerr,
+    // could block a tick for a still-alive child's entire remaining life
+    // (measured at 4000.4ms against a `sleep 4` fixture) — this is the
+    // direct regression test for that fix (procinfo.cpp's kill is now
+    // unconditional before waitpid_retry there).
+    {
+        // Generous on purpose: real syscalls under a loaded shared host can
+        // jitter a few ms, but the failure mode this guards is measured in
+        // SECONDS (4000ms), three orders of magnitude above this bound.
+        constexpr double kTickBoundMs = 50.0;
+        auto time_tick = [](ProcInfoRunner &r, long pid, double now_s) {
+            auto t0 = std::chrono::steady_clock::now();
+            procinfo_tick(r, pid, now_s);
+            auto t1 = std::chrono::steady_clock::now();
+            return std::chrono::duration<double, std::milli>(t1 - t0).count();
+        };
+
+        // (a) a hung child hitting ITS OWN deadline — the drain-completion
+        // block's kill+wait call site.
+        {
+            ProcInfoRunner run;
+            run.asmspy_path =
+                std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+            run.deadline_s = 0.01;
+            double t = 0.0;
+            procinfo_tick(run, 100, t);
+            t += 0.30;
+            procinfo_tick(run, 100, t); // spawn
+            t += 0.02;                 // now overdue
+            double ms = time_tick(run, 100, t); // the kill+wait tick itself
+            check("hung-child deadline tick stays fast", ms < kTickBoundMs,
+                  "took " + std::to_string(ms) + "ms");
+        }
+
+        // (b) a selection change away from an in-flight, genuinely hanging
+        // child — reap()'s kill+wait call site.
+        {
+            ProcInfoRunner run;
+            run.asmspy_path =
+                std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+            double t = 0.0;
+            procinfo_tick(run, 100, t);
+            t += 0.30;
+            procinfo_tick(run, 100, t); // spawn
+            t += 0.01;
+            double ms = time_tick(run, 200, t); // the switch -> reap() tick
+            check("selection-change-away-from-hang tick stays fast",
+                  ms < kTickBoundMs, "took " + std::to_string(ms) + "ms");
+        }
+
+        // (c) an over-cap flood — already killed unconditionally before this
+        // review round; confirming it stays fast under a real timer too.
+        {
+            ProcInfoRunner run;
+            run.asmspy_path =
+                std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_info.sh";
+            run.max_buf_bytes = 32;
+            double t = 0.0;
+            procinfo_tick(run, 100, t);
+            t += 0.30;
+            procinfo_tick(run, 100, t); // spawn
+            double worst = 0.0;
+            for (int i = 0; i < 200 && run.child_pid != 0; i++) {
+                t += 0.01;
+                double ms = time_tick(run, 100, t);
+                if (ms > worst)
+                    worst = ms;
+                ::usleep(1000);
+            }
+            check("over-cap flood ticks stay fast", worst < kTickBoundMs,
+                  "worst tick took " + std::to_string(worst) + "ms");
+        }
+
+        // (d) THE CRITICAL CASE: a child that closes stdout (a real EOF) but
+        // keeps running for seconds afterward. Before the fix, the
+        // drain-completion block sent no kill on eof, so waitpid blocked
+        // this tick until the child exited on its own — measured at
+        // 4000.4ms against this exact fixture's `sleep 4`.
+        {
+            ProcInfoRunner run;
+            run.asmspy_path = std::string(ASMTEST_FIXTURE_DIR) +
+                              "/fake_asmspy_closes_stdout.sh";
+            double t = 0.0;
+            procinfo_tick(run, 100, t);
+            t += 0.30;
+            procinfo_tick(run, 100, t); // spawn
+            double worst = 0.0;
+            for (int i = 0; i < 300 && run.child_pid != 0; i++) {
+                t += 0.01;
+                double ms = time_tick(run, 100, t);
+                if (ms > worst)
+                    worst = ms;
+                ::usleep(1000);
+            }
+            check("closes-stdout-but-lingers: the child is eventually reaped",
+                  run.child_pid == 0,
+                  "child_pid=" + std::to_string(run.child_pid) +
+                      " still set after the loop — the fixture never got "
+                      "cleaned up");
+            check("closes-stdout-but-lingers tick stays fast (the round-3 "
+                  "critical fix: kill is unconditional before waitpid)",
+                  worst < kTickBoundMs,
+                  "worst tick took " + std::to_string(worst) +
+                      "ms — this is the exact scenario measured at ~4000ms "
+                      "before the fix");
+        }
     }
 
     if (failures) {
