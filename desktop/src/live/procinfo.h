@@ -136,5 +136,61 @@ ProcRates procinfo_rates(const ProcInfo &prev, const ProcInfo &cur);
 // numbers exist to support.
 std::string procinfo_names_verdict(const ProcInfo &p);
 
+// --- the runner: automatic on selection, without a fork per row ----------
+//
+// The pane probes AUTOMATICALLY as the selection moves, which is only safe
+// because `asmspy --info` never attaches. Three rules keep it cheap as well
+// as safe, and all three are timing, so the clock is a PARAMETER rather than
+// read internally — that is what makes them assertable with no sleeping:
+//
+//  - a 250 ms DEBOUNCE, so arrowing down a table probes the row you stop on,
+//    not every row you pass;
+//  - a cache keyed on (pid, start_ticks) — the second half is the pid-reuse
+//    guard, without which a recycled pid serves another process's card;
+//  - a 2 s DEADLINE, after which the child is killed and the pane says so.
+struct ProcInfoRunner {
+    std::string asmspy_path; // "" -> resolve_asmspy_path()
+    bool visible = true;     // the pane is shown AND the window is focused
+
+    // Tunables, named so the test can pin them rather than guess.
+    double debounce_s = 0.25;
+    double refresh_s = 2.0;
+    double deadline_s = 2.0;
+
+    int spawns = 0; // lifetime count — the test's evidence of a fork
+
+    // Everything below is internal state; the pane reads it through the
+    // accessors, never directly.
+    long want_pid = 0, in_flight_pid = 0;
+    double want_since = -1, spawned_at = -1, last_ok_at = -1;
+    // The last clock value procinfo_tick saw. procinfo_status is const and
+    // takes no clock, so freshness ("read 0.4s ago") is computed against
+    // this rather than against a wall-clock read inside the getter — which
+    // would make the status drift from the frame that produced it.
+    double last_tick_s = 0;
+    int child_pid = 0, child_fd = -1;
+    std::string buf, status;
+    ProcInfo shown, prev;
+    ProcRates rates;
+    std::vector<std::pair<std::pair<long, uint64_t>, ProcInfo>> cache;
+    static constexpr size_t kCacheCap = 32;
+
+    ~ProcInfoRunner();
+};
+
+// Advance one frame. `selected_pid` is InspectState::selected_pid; `now_s` is
+// a monotonic seconds clock (ImGui::GetTime() in the pane, a literal in the
+// tests). Spawns, reads, reaps, expires and caches — the pane calls only this.
+void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s);
+
+// The snapshot to draw (valid=false while nothing has arrived yet).
+const ProcInfo &procinfo_current(const ProcInfoRunner &r);
+// Rates against the previous snapshot of the SAME process (have=false until a
+// second one lands).
+const ProcRates &procinfo_current_rates(const ProcInfoRunner &r);
+// A human line for the pane's header: how fresh, or what went wrong. Never
+// empty — "nothing yet" is itself a state worth naming.
+std::string procinfo_status(const ProcInfoRunner &r);
+
 } // namespace asmdesk
 #endif // ASMDESK_LIVE_PROCINFO_H

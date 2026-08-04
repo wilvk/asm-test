@@ -1485,12 +1485,16 @@ $(BUILD)/desktop_test_inspect: $(BUILD)/desktop/test/t/test_inspect.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# The Process details model. Links procinfo.o + the doc model — no ImGui, no
-# GL, no engines, and no subprocess: the whole model is driven from checked-in
-# fixtures, which is why the pane's facts are testable with nothing running.
+# The Process details model, plus its runner (gui-process-details Task 6).
+# The model half needs no ImGui, no GL, no engine, and no subprocess — it is
+# driven from checked-in fixtures. The runner half DOES fork (a fake
+# `asmspy --info` script standing in for the real subprocess, same idiom as
+# fake_serve.sh), which is why session.o is linked here too: resolve_asmspy_path()
+# is the runner's fallback when no explicit path is set.
 $(BUILD)/desktop/test/t/test_procinfo.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop_test_procinfo: $(BUILD)/desktop/test/t/test_procinfo.o \
-    $(BUILD)/desktop/test/lv/procinfo.o $(DESKTOP_TEST_DOC)
+    $(BUILD)/desktop/test/lv/procinfo.o $(BUILD)/desktop/test/lv/session.o \
+    $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \

@@ -19,7 +19,17 @@
 // field would also produce.
 #include "live/procinfo.h"
 
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <sstream>
+
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "live/session.h" // resolve_asmspy_path()
 
 namespace asmdesk {
 
@@ -262,5 +272,254 @@ std::string procinfo_names_verdict(const ProcInfo &p) {
              " KB of anonymous executable memory no symtab covers";
     return s;
 }
+
+// --- the runner: debounce, spawn, drain, cache, deadline ------------------
+namespace {
+
+// Kill and reap, unconditionally. Called on every path that abandons a child
+// — a new selection, a timeout, the pane closing, destruction — because the
+// alternative is a probe that outlives the reason it was started.
+void reap(ProcInfoRunner &r) {
+    if (r.child_fd >= 0) {
+        ::close(r.child_fd);
+        r.child_fd = -1;
+    }
+    if (r.child_pid > 0) {
+        ::kill(r.child_pid, SIGKILL);
+        int st = 0;
+        ::waitpid(r.child_pid, &st, 0);
+        r.child_pid = 0;
+    }
+    r.buf.clear();
+    r.in_flight_pid = 0;
+}
+
+// "2.0s" — a bare number in a timeout message reads as a bug report.
+std::string fmt_secs(double s) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%.1fs", s);
+    return b;
+}
+
+// Cache under (pid, start_ticks). The second half is the pid-REUSE guard:
+// without it a recycled pid serves the previous process's card, which is a
+// wrong answer that looks entirely plausible. Bounded LRU — oldest out first.
+void cache_put(ProcInfoRunner &r, const ProcInfo &p) {
+    const auto key = std::make_pair(p.pid, p.start_ticks);
+    for (auto &e : r.cache)
+        if (e.first == key) {
+            e.second = p;
+            return;
+        }
+    if (r.cache.size() >= ProcInfoRunner::kCacheCap)
+        r.cache.erase(r.cache.begin());
+    r.cache.emplace_back(key, p);
+}
+
+// fork/exec `asmspy --info <pid> --json`, stdout on a NON-BLOCKING pipe: the
+// UI thread polls it from the frame loop and never waits on the child.
+//
+// Three details here are load-bearing rather than incidental:
+//
+//  - O_CLOEXEC on the pipe (pipe2, not pipe). A GUI process holds a lot of
+//    descriptors — GL, X11/Wayland, fontconfig, the serve host's own pipes —
+//    and a child that inherited them would keep them alive past its parent's
+//    intent. The write end is dup2'd (which clears CLOEXEC on the copy), so
+//    the child still gets its stdout.
+//  - The child's stderr goes to /dev/null. asmspy writes refusal prose there
+//    and a windowed app has no terminal for it; inheriting would scribble
+//    over whatever launched the GUI.
+//  - The read end is NON-BLOCKING. procinfo_tick runs in the frame loop, so a
+//    blocking read would freeze the UI for as long as the child took — the
+//    exact failure this one-shot design exists to avoid.
+bool spawn(ProcInfoRunner &r, long pid, double now_s) {
+    std::string exe =
+        r.asmspy_path.empty() ? resolve_asmspy_path() : r.asmspy_path;
+    if (exe.empty()) {
+        r.status = "no asmspy found on $PATH or at ./build/asmspy — build it "
+                   "with `make cli`, or set the path in Connect";
+        return false;
+    }
+    int fds[2];
+    if (::pipe2(fds, O_CLOEXEC) != 0) {
+        r.status = std::string("pipe: ") + std::strerror(errno);
+        return false;
+    }
+    pid_t child = ::fork();
+    if (child < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        r.status = std::string("fork: ") + std::strerror(errno);
+        return false;
+    }
+    if (child == 0) {
+        ::dup2(fds[1], STDOUT_FILENO); // the dup CLEARS O_CLOEXEC
+        int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0)
+            ::dup2(devnull, STDERR_FILENO);
+        char pidbuf[32];
+        std::snprintf(pidbuf, sizeof pidbuf, "%ld", pid);
+        // v1 probes LOCALLY even when an ssh host is configured: the Processes
+        // table lists local /proc, so an ssh-prefixed probe would render an
+        // unrelated remote pid's details. The pane states that mismatch.
+        char *argv[] = {const_cast<char *>(exe.c_str()),
+                        const_cast<char *>("--info"), pidbuf,
+                        const_cast<char *>("--json"), nullptr};
+        ::execvp(argv[0], argv);
+        ::_exit(127); // exec failed; the empty read reports it as a failure
+    }
+    ::close(fds[1]);
+    int fl = ::fcntl(fds[0], F_GETFL, 0);
+    ::fcntl(fds[0], F_SETFL, (fl < 0 ? 0 : fl) | O_NONBLOCK);
+    r.child_pid = child;
+    r.child_fd = fds[0];
+    r.in_flight_pid = pid;
+    r.spawned_at = now_s;
+    r.buf.clear();
+    r.spawns++;
+    return true;
+}
+
+} // namespace
+
+void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
+    r.last_tick_s = now_s;
+    if (selected_pid != r.want_pid) {
+        r.want_pid = selected_pid;
+        r.want_since = now_s;
+        reap(r); // abandon the in-flight probe for a target nobody is viewing
+        r.shown = ProcInfo{};
+        r.rates = ProcRates{};
+        r.status = selected_pid > 0 ? "reading…" : "no process selected";
+        // A cache hit renders immediately; a refresh may still follow.
+        for (auto &e : r.cache)
+            if (e.first.first == selected_pid) {
+                r.shown = e.second;
+                r.status = "cached";
+                break;
+            }
+    }
+    if (selected_pid <= 0)
+        return;
+
+    // --- drain / reap / parse the in-flight child -----------------------
+    //
+    // Three distinctions here are easy to collapse and each collapse is a bug:
+    //
+    //  - read() < 0 with EAGAIN/EWOULDBLOCK means "nothing YET", not failure.
+    //    Treating it as EOF parses a half-written body every frame.
+    //  - read() == 0 is real EOF, and only then is the body complete. The
+    //    child may still be a zombie at that point, so the status comes from
+    //    waitpid AFTER the EOF, not before.
+    //  - An exec that failed (_exit(127)) produces a clean EOF with an EMPTY
+    //    body. That is a missing-binary error, not a parse error, and saying
+    //    "no procinfo event" there would send the operator hunting the wrong
+    //    problem.
+    if (r.child_fd >= 0) {
+        char chunk[8192];
+        bool eof = false, ioerr = false;
+        for (;;) {
+            ssize_t n = ::read(r.child_fd, chunk, sizeof chunk);
+            if (n > 0) {
+                r.buf.append(chunk, static_cast<size_t>(n));
+                continue; // drain everything available this frame
+            }
+            if (n == 0) {
+                eof = true;
+                break;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break; // nothing more yet; try again next frame
+            if (errno == EINTR)
+                continue;
+            ioerr = true;
+            break;
+        }
+
+        const bool overdue = now_s - r.spawned_at >= r.deadline_s;
+        if (eof || ioerr || overdue) {
+            // Close the pipe first, then reap, so waitpid cannot block on a
+            // child still holding the write end open.
+            ::close(r.child_fd);
+            r.child_fd = -1;
+            int wstatus = 0;
+            if (overdue && !eof)
+                ::kill(r.child_pid, SIGKILL); // it never finished; stop it
+            ::waitpid(r.child_pid, &wstatus, 0);
+            const int exited = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+            r.child_pid = 0;
+            const long probed = r.in_flight_pid;
+            r.in_flight_pid = 0;
+
+            if (overdue && !eof) {
+                r.status = "timed out after " + fmt_secs(r.deadline_s) +
+                           " — the probe was killed";
+            } else if (ioerr) {
+                r.status = std::string("read failed: ") + std::strerror(errno);
+            } else if (r.buf.empty()) {
+                r.status = exited == 127
+                               ? "could not run asmspy — check the path in "
+                                 "Connect, or build it with `make cli`"
+                               : "asmspy produced no output (exit " +
+                                     std::to_string(exited) + ")";
+            } else {
+                std::istringstream in(r.buf);
+                std::string err;
+                std::optional<Recording> rec = load_recording(in, err);
+                ProcInfo got = rec ? procinfo_parse(*rec) : ProcInfo{};
+                if (!rec)
+                    got.parse_error = "load_recording failed: " + err;
+                if (!got.valid) {
+                    r.status = got.parse_error;
+                } else if (got.pid != probed) {
+                    // The snapshot must be OF the process we asked about. A
+                    // mismatch means a stale child's output arrived after a
+                    // selection change; showing it under the new pid would be
+                    // the worst kind of wrong — plausible and attributed.
+                    r.status = "ignored a snapshot for pid " +
+                               std::to_string(got.pid) + " while viewing " +
+                               std::to_string(probed);
+                } else {
+                    r.prev = r.shown;
+                    r.shown = got;
+                    r.rates = procinfo_rates(r.prev, r.shown);
+                    r.last_ok_at = now_s;
+                    cache_put(r, got);
+                    r.status = "attach-free (no ptrace)";
+                }
+            }
+            r.buf.clear();
+        }
+    }
+
+    const bool idle = r.child_pid == 0;
+    const bool debounced =
+        r.want_since >= 0 && now_s - r.want_since >= r.debounce_s;
+    const bool due = r.last_ok_at < 0 || now_s - r.last_ok_at >= r.refresh_s;
+    if (idle && debounced && r.visible && due)
+        spawn(r, selected_pid, now_s);
+}
+
+const ProcInfo &procinfo_current(const ProcInfoRunner &r) { return r.shown; }
+
+const ProcRates &procinfo_current_rates(const ProcInfoRunner &r) {
+    return r.rates;
+}
+
+std::string procinfo_status(const ProcInfoRunner &r) {
+    // The freshness clause reads against last_tick_s (the clock the runner
+    // itself last saw), never a wall-clock read taken here: this function is
+    // const and takes no `now_s`, so a live clock read here would drift from
+    // the frame that actually produced the shown snapshot.
+    if (r.shown.valid && r.last_ok_at >= 0) {
+        double age = r.last_tick_s - r.last_ok_at;
+        if (age < 0)
+            age = 0;
+        return "read " + fmt_secs(age) + " ago · " + r.status;
+    }
+    return r.status.empty() ? "nothing yet" : r.status;
+}
+
+ProcInfoRunner::~ProcInfoRunner() { reap(*this); }
 
 } // namespace asmdesk

@@ -15,10 +15,14 @@
 //  - HEX STRINGS. pc/sp/base/args cross the wire as strings precisely so a
 //    64-bit pointer is not rounded through a double. Parsing them as numbers
 //    passes every small-value test and corrupts every real address.
+#include <cerrno>
 #include <cstdio>
 #include <fstream>
 #include <optional>
 #include <string>
+
+#include <csignal> // ::kill(pid, 0) — liveness probe below
+#include <unistd.h> // usleep — see the drain loop below
 
 #include "doc/recording.h"
 #include "live/procinfo.h"
@@ -281,6 +285,210 @@ int main() {
     check("empty is invalid", !none.valid, "an empty recording parsed as valid");
     check("empty says why", !none.parse_error.empty(),
           "invalid without a reason");
+
+    // --- the runner: a pure state machine over an injected clock ------
+    // Every timing rule here is a real hazard: without the debounce, arrowing
+    // down a process table spawns one subprocess PER ROW; without the cache
+    // key including start_ticks, a reused pid serves another process's card.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path = std::string(ASMTEST_FIXTURE_DIR) +
+                          "/fake_asmspy_info.sh";
+        // fake_asmspy_info.sh always echoes procinfo_full.asmtrace regardless
+        // of the pid argument, and the pid-mismatch guard below discards any
+        // parse whose identity.pid disagrees with the pid we asked about — so
+        // the "stable" target this test settles on and probes has to BE that
+        // fixture's own real pid, not an arbitrary constant, or every parse
+        // would be discarded as a mismatch and nothing would ever arrive.
+        const long real_pid = load("procinfo_full.asmtrace").pid;
+
+        // Selecting arms the debounce; it must NOT spawn on the same tick.
+        procinfo_tick(run, 100, 0.0);
+        check("no spawn on select", run.spawns == 0,
+              "spawned immediately — arrowing a table would fork per row");
+        procinfo_tick(run, 100, 0.10);
+        check("no spawn before 250ms", run.spawns == 0, "debounce too short");
+
+        // Moving the selection before expiry re-arms rather than spawning.
+        procinfo_tick(run, real_pid, 0.20);
+        procinfo_tick(run, real_pid, 0.40);
+        check("re-armed by a new selection", run.spawns == 0,
+              "a moving selection must re-arm, not spawn");
+
+        // Stable past 250ms -> exactly one spawn.
+        procinfo_tick(run, real_pid, 0.46);
+        check("spawned after the debounce", run.spawns == 1,
+              "no spawn after 250ms of a stable selection");
+        procinfo_tick(run, real_pid, 0.50);
+        check("no double spawn", run.spawns == 1, "spawned twice");
+
+        // Drain the child, then the result is current. `now_s` here is
+        // simulated and advances instantly; the fork/exec/read path underneath
+        // is REAL and needs actual wall-clock ticks to be scheduled and run.
+        // With no delay at all, this loop can spin through all 200 simulated
+        // iterations (2s of simulated time) in far under a millisecond of
+        // real time — faster than the kernel can even schedule the forked
+        // child — so every read() sees EAGAIN forever and the loop times out
+        // having never seen a byte. This one-line real sleep is test
+        // scaffolding only: procinfo_tick itself still never sleeps or blocks.
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            procinfo_tick(run, real_pid, 0.50 + 0.01 * i);
+            ::usleep(1000);
+        }
+        check("result arrived", procinfo_current(run).valid,
+              procinfo_current(run).parse_error);
+
+        // A cached pid re-renders with NO new spawn. The dwell on pid=100
+        // stays UNDER the 250ms debounce on purpose: pid=100 was never
+        // successfully probed (we moved off it before its own debounce fired,
+        // back at the top of this test), so if this dwell crossed debounce it
+        // would trigger its OWN legitimate first-time probe attempt — a real,
+        // separate spawn this section isn't testing for. The one spawn this
+        // cap does tolerate is the OTHER legitimate case, spelled out in
+        // procinfo_tick's switch block: "a cache hit renders immediately; a
+        // refresh may still follow" — real_pid's own last success is long
+        // enough ago by 3.90 that its refresh timer is due.
+        const int after = run.spawns;
+        procinfo_tick(run, 100, 3.0);
+        procinfo_tick(run, 100, 3.10);
+        procinfo_tick(run, real_pid, 3.60);
+        procinfo_tick(run, real_pid, 3.90);
+        check("cache hit is instant", procinfo_current(run).valid,
+              "a cached pid did not render");
+        check("cache avoids a respawn", run.spawns <= after + 1,
+              "a cached selection respawned");
+
+        // The refresh timer only fires while visible.
+        run.visible = false;
+        const int before_hidden = run.spawns;
+        procinfo_tick(run, real_pid, 10.0);
+        check("hidden pane does not poll", run.spawns == before_hidden,
+              "a hidden pane kept spawning");
+    }
+
+    // A child that never exits is killed and SAYS it timed out.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path = "/bin/sleep"; // never emits, never exits in time
+        procinfo_tick(run, 100, 0.0);
+        procinfo_tick(run, 100, 0.30); // spawn
+        procinfo_tick(run, 100, 3.00); // past the 2s deadline
+        check("timeout is stated", procinfo_status(run).find("timed out") !=
+                                       std::string::npos,
+              "a hung probe must say so: " + procinfo_status(run));
+    }
+
+    // --- the pid-mismatch guard: a snapshot for a DIFFERENT pid than the one
+    // probed must be discarded, never rendered as if it belonged to the pid
+    // actually selected. fake_asmspy_mismatch.sh always reports pid 42 no
+    // matter what --info argument it is given (mirroring how a stale child's
+    // leftover output could, in principle, still be sitting in the pipe under
+    // a pid that no longer matches what the runner asked about).
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_mismatch.sh";
+        procinfo_tick(run, 999, 0.0);
+        procinfo_tick(run, 999, 0.30); // spawn
+
+        bool ever_valid = false;
+        for (int i = 0; i < 200; i++) {
+            procinfo_tick(run, 999, 0.30 + 0.01 * i);
+            ::usleep(1000);
+            if (procinfo_current(run).valid) {
+                ever_valid = true;
+                break;
+            }
+            if (procinfo_status(run).find("ignored a snapshot") !=
+                std::string::npos)
+                break;
+        }
+        check("a pid-mismatched snapshot is never shown", !ever_valid,
+              "a snapshot for pid 42 was rendered while viewing pid 999");
+        check("the mismatch names both pids in the status",
+              procinfo_status(run).find("ignored a snapshot") !=
+                  std::string::npos,
+              "status did not name the mismatch: " + procinfo_status(run));
+    }
+
+    // --- the cache key is (pid, start_ticks), not pid alone: a pid REUSE
+    // must land in its OWN cache slot rather than overwrite the previous
+    // process's entry. cache_put() has internal linkage (it is not part of
+    // the public API), so this drives it through two REAL successful parses
+    // of the same pid at two different start_ticks and inspects the runner's
+    // public `cache` vector directly.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_a.sh";
+        procinfo_tick(run, 100, 0.0);
+        procinfo_tick(run, 100, 0.30); // spawn
+        for (int i = 0; i < 200 && !procinfo_current(run).valid; i++) {
+            procinfo_tick(run, 100, 0.30 + 0.01 * i);
+            ::usleep(1000);
+        }
+        check("pid-reuse setup: the first process parsed and cached",
+              procinfo_current(run).valid && run.cache.size() == 1,
+              "first probe did not land in the cache — valid=" +
+                  std::to_string(procinfo_current(run).valid) +
+                  " cache.size()=" + std::to_string(run.cache.size()));
+        const uint64_t first_start_ticks = procinfo_current(run).start_ticks;
+
+        // The SAME pid is probed again, but the process behind it is now a
+        // DIFFERENT one (a different start_ticks) — a pid reuse. Poking
+        // last_ok_at directly forces the refresh due on the next tick without
+        // waiting out a real refresh_s of simulated time; that timer is
+        // already covered elsewhere, this test is only about the cache key.
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_pidreuse_b.sh";
+        run.last_ok_at = -1;
+        for (int i = 0;
+             i < 200 && procinfo_current(run).start_ticks == first_start_ticks;
+             i++) {
+            procinfo_tick(run, 100, 1.0 + 0.01 * i);
+            ::usleep(1000);
+        }
+        check("pid reuse: the shown snapshot moved to the new process",
+              procinfo_current(run).start_ticks != first_start_ticks,
+              "start_ticks stayed " + std::to_string(first_start_ticks) +
+                  " after a pid reuse");
+        check("pid reuse: a SECOND, distinct cache entry — not an overwrite",
+              run.cache.size() == 2,
+              "cache.size()=" + std::to_string(run.cache.size()) +
+                  " — a key that ignores start_ticks collapses a reused pid "
+                  "into the previous process's slot");
+    }
+
+    // --- the in-flight child is killed on EVERY selection change, not only
+    // at the deadline. fake_asmspy_hang.sh genuinely sleeps regardless of its
+    // arguments (invoking /bin/sleep directly with the runner's fixed argv
+    // does NOT hang — GNU coreutils rejects "--info" and exits in about a
+    // millisecond, too fast to tell "killed by the switch" apart from
+    // "exited on its own"), so this proves the switch itself reaped it.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_hang.sh";
+        procinfo_tick(run, 100, 0.0);
+        procinfo_tick(run, 100, 0.30); // past debounce -> spawn
+        check("child spawned for the switch-kill test", run.child_pid != 0,
+              "no child was spawned to test the switch-kill against");
+        const int old_child_pid = run.child_pid;
+
+        procinfo_tick(run, 200, 0.31); // switch away, well before any deadline
+        check("in-flight child is reaped synchronously on selection change",
+              run.child_pid == 0 && run.child_fd == -1,
+              "child_pid=" + std::to_string(run.child_pid) +
+                  " child_fd=" + std::to_string(run.child_fd) +
+                  " right after switching selection — the old probe was not "
+                  "reaped");
+        int rc = ::kill(old_child_pid, 0);
+        check("the killed child is actually gone at the OS level",
+              rc != 0 && errno == ESRCH,
+              "kill(old_child_pid, 0) = " + std::to_string(rc) +
+                  " errno=" + std::to_string(errno) +
+                  " — the process (or its zombie) is still around");
+    }
 
     if (failures) {
         std::fprintf(stderr, "test_procinfo: %d FAILURE(S)\n", failures);
