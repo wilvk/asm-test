@@ -2709,7 +2709,7 @@ void draw_details_pane(InspectState &s) {
         const char *word = p.attachable == 1   ? "YES"
                            : p.attachable == 0 ? "NO"
                                                : "MAYBE";
-        ImGui::TextColored(dt_verdict_col(p.attachable), "attach   %s", word);
+        ImGui::TextColored(pi_verdict_col(p.attachable), "attach   %s", word);
         ImGui::SameLine();
         ImGui::TextUnformatted(p.attach_why.c_str());
         if (!p.attach_remedy.empty())
@@ -2727,7 +2727,7 @@ void draw_details_pane(InspectState &s) {
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(m.mode.c_str());
                 ImGui::TableNextColumn();
-                ImGui::TextColored(m.ok ? dt_ok_col() : dt_no_col(), "%s",
+                ImGui::TextColored(m.ok ? dt_good_col() : dt_bad_col(), "%s",
                                    m.ok ? "yes" : "no");
                 ImGui::TableNextColumn();
                 // A refusal without its reason is the failure this pane exists
@@ -2880,7 +2880,24 @@ void draw_details_pane(InspectState &s) {
 } // namespace asmdesk
 ```
 
-The colour helpers (`dt_warn_col`, `dt_verdict_col`, `dt_ok_col`, `dt_no_col`) are the one thing above that may not exist under those names — check [`ui/theme.h`](../../../desktop/src/ui/theme.h) and [`ui/palette.h`](../../../desktop/src/ui/palette.h) for the tree's existing verdict/warning colours (the Processes table already colours an `Attach` verdict via `verdict_colour` in `inspect_door.cpp` — reuse that rather than inventing a second palette). `dt_cell_magnitude_bar` / `dt_magnitude_frac` / `dt_dim_u32` are confirmed present in `ui/theme.h`.
+The colour helpers are now RESOLVED against the tree, so use exactly these:
+
+- `dt_warn_col()` — **exists**, [`ui/theme.h:33`](../../../desktop/src/ui/theme.h#L33).
+- `dt_good_col()` / `dt_bad_col()` / `dt_maybe_col()` — **exist**, `theme.h:57/62/65`. There is no `dt_ok_col`/`dt_no_col`; the body above uses the real names.
+- There is no `dt_verdict_col`. `inspect_door.cpp:394` has `verdict_colour(Attach)`, but it is file-local and takes the `Attach` ENUM, whereas `ProcInfo::attachable` is an int tri-state off the wire. Add a small local helper that maps to the SAME three colours, so the Processes table and this pane cannot disagree about what "attachable" looks like:
+
+```cpp
+// 1 = yes, 0 = no, -1 = unknown. Same three colours inspect_door.cpp's
+// verdict_colour uses, deliberately: two panes showing the same verdict in
+// different colours is a UI that argues with itself.
+ImVec4 pi_verdict_col(int attachable) {
+    return attachable == 1 ? dt_good_col()
+           : attachable == 0 ? dt_bad_col()
+                             : dt_maybe_col();
+}
+```
+
+Formerly this section said to check [`ui/theme.h`](../../../desktop/src/ui/theme.h) and [`ui/palette.h`](../../../desktop/src/ui/palette.h) for the tree's existing verdict/warning colours (the Processes table already colours an `Attach` verdict via `verdict_colour` in `inspect_door.cpp` — reuse that rather than inventing a second palette). `dt_cell_magnitude_bar` / `dt_magnitude_frac` / `dt_dim_u32` are confirmed present in `ui/theme.h`.
 
 Three rules the body above encodes, none of them cosmetic:
 
