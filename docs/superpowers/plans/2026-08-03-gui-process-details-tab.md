@@ -2184,6 +2184,11 @@ struct ProcInfoRunner {
     // accessors, never directly.
     long want_pid = 0, in_flight_pid = 0;
     double want_since = -1, spawned_at = -1, last_ok_at = -1;
+    // The last clock value procinfo_tick saw. procinfo_status is const and
+    // takes no clock, so freshness ("read 0.4s ago") is computed against
+    // this rather than against a wall-clock read inside the getter — which
+    // would make the status drift from the frame that produced it.
+    double last_tick_s = 0;
     int child_pid = 0, child_fd = -1;
     std::string buf, status;
     ProcInfo shown, prev;
@@ -2319,9 +2324,95 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
     if (selected_pid <= 0)
         return;
 
-    // read / reap / parse the in-flight child ...
-    // (non-blocking read into r.buf; on EOF parse and cache; on deadline
-    //  reap and set status to "timed out after 2.0s — the probe was killed")
+    // --- drain / reap / parse the in-flight child -----------------------
+    //
+    // Three distinctions here are easy to collapse and each collapse is a bug:
+    //
+    //  - read() < 0 with EAGAIN/EWOULDBLOCK means "nothing YET", not failure.
+    //    Treating it as EOF parses a half-written body every frame.
+    //  - read() == 0 is real EOF, and only then is the body complete. The
+    //    child may still be a zombie at that point, so the status comes from
+    //    waitpid AFTER the EOF, not before.
+    //  - An exec that failed (_exit(127)) produces a clean EOF with an EMPTY
+    //    body. That is a missing-binary error, not a parse error, and saying
+    //    "no procinfo event" there would send the operator hunting the wrong
+    //    problem.
+    if (r.child_fd >= 0) {
+        char chunk[8192];
+        bool eof = false, ioerr = false;
+        for (;;) {
+            ssize_t n = ::read(r.child_fd, chunk, sizeof chunk);
+            if (n > 0) {
+                r.buf.append(chunk, static_cast<size_t>(n));
+                continue; // drain everything available this frame
+            }
+            if (n == 0) {
+                eof = true;
+                break;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                break; // nothing more yet; try again next frame
+            if (errno == EINTR)
+                continue;
+            ioerr = true;
+            break;
+        }
+
+        const bool overdue = now_s - r.spawned_at >= r.deadline_s;
+        if (eof || ioerr || overdue) {
+            // Close the pipe first, then reap, so waitpid cannot block on a
+            // child still holding the write end open.
+            ::close(r.child_fd);
+            r.child_fd = -1;
+            int wstatus = 0;
+            if (overdue && !eof)
+                ::kill(r.child_pid, SIGKILL); // it never finished; stop it
+            ::waitpid(r.child_pid, &wstatus, 0);
+            const int exited = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+            r.child_pid = 0;
+            const long probed = r.in_flight_pid;
+            r.in_flight_pid = 0;
+
+            if (overdue && !eof) {
+                r.status = "timed out after " + fmt_secs(r.deadline_s) +
+                           " — the probe was killed";
+            } else if (ioerr) {
+                r.status = std::string("read failed: ") + std::strerror(errno);
+            } else if (r.buf.empty()) {
+                r.status = exited == 127
+                               ? "could not run asmspy — check the path in "
+                                 "Connect, or build it with `make cli`"
+                               : "asmspy produced no output (exit " +
+                                     std::to_string(exited) + ")";
+            } else {
+                std::istringstream in(r.buf);
+                std::string err;
+                std::optional<Recording> rec = load_recording(in, err);
+                ProcInfo got = rec ? procinfo_parse(*rec) : ProcInfo{};
+                if (!rec)
+                    got.parse_error = "load_recording failed: " + err;
+                if (!got.valid) {
+                    r.status = got.parse_error;
+                } else if (got.pid != probed) {
+                    // The snapshot must be OF the process we asked about. A
+                    // mismatch means a stale child's output arrived after a
+                    // selection change; showing it under the new pid would be
+                    // the worst kind of wrong — plausible and attributed.
+                    r.status = "ignored a snapshot for pid " +
+                               std::to_string(got.pid) + " while viewing " +
+                               std::to_string(probed);
+                } else {
+                    r.prev = r.shown;
+                    r.shown = got;
+                    r.rates = procinfo_rates(r.prev, r.shown);
+                    r.last_ok_at = now_s;
+                    cache_put(r, got);
+                    r.status = "attach-free (no ptrace)";
+                }
+            }
+            r.buf.clear();
+        }
+    }
 
     const bool idle = r.child_pid == 0;
     const bool debounced = r.want_since >= 0 &&
@@ -2332,7 +2423,33 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
 }
 ```
 
-On a successful parse: set `r.prev = r.shown` first, then `r.shown = parsed`, then `r.rates = procinfo_rates(r.prev, r.shown)`, `r.last_ok_at = now_s`, cache under `{pid, shown.start_ticks}` evicting the oldest past `kCacheCap`, and set `status` to `"read <n.n>s ago · attach-free (no ptrace)"`.
+Two small helpers the block above calls, so neither becomes a new placeholder:
+
+```cpp
+// "2.0s" — a bare number in a timeout message reads as a bug report.
+std::string fmt_secs(double s) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%.1fs", s);
+    return b;
+}
+
+// Cache under (pid, start_ticks). The second half is the pid-REUSE guard:
+// without it a recycled pid serves the previous process's card, which is a
+// wrong answer that looks entirely plausible. Bounded LRU — oldest out first.
+void cache_put(ProcInfoRunner &r, const ProcInfo &p) {
+    const auto key = std::make_pair(p.pid, p.start_ticks);
+    for (auto &e : r.cache)
+        if (e.first == key) {
+            e.second = p;
+            return;
+        }
+    if (r.cache.size() >= ProcInfoRunner::kCacheCap)
+        r.cache.erase(r.cache.begin());
+    r.cache.emplace_back(key, p);
+}
+```
+
+On a successful parse the block above sets `r.prev = r.shown` first, then `r.shown = parsed`, then `r.rates = procinfo_rates(r.prev, r.shown)`, `r.last_ok_at = now_s`, cache under `{pid, shown.start_ticks}` evicting the oldest past `kCacheCap`, and set `status` to `"read <n.n>s ago · attach-free (no ptrace)"`.
 
 `~ProcInfoRunner()` calls `reap`.
 
