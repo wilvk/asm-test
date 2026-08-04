@@ -21,6 +21,7 @@ const char *const kPaneLaunch = "Launch";
 const char *const kPaneLog = "Log";
 const char *const kPaneSave = "Save capture";
 const char *const kPanePtSlice = "PT slice";
+const char *const kPaneDetails = "Process details";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -109,6 +110,11 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     // arrive at a target, same left-rail home, same on-demand visibility.
     ImGui::DockBuilderDockWindow(kPaneLaunch, L.left);
     ImGui::DockBuilderDockWindow(kPaneCapture, L.right);
+    // Process details tabs in beside Live-capture: it is a per-target panel
+    // like Capture (both need only a selection to mean something; Details
+    // needs even less, since asmspy --info never attaches), and Processes
+    // already lives on the opposite (left) rail as the target picker.
+    ImGui::DockBuilderDockWindow(kPaneDetails, L.right);
     // The split-out capture panes: the session Log tabs into the bottom row (the
     // "bottom pane" beside the timeline); Save capture tabs beside the Live-capture
     // controls on the right. Docked the same across presets — a workflow, not a

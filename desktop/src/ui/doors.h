@@ -15,6 +15,7 @@
 #include "doc/recording.h"
 #include "live/budget.h"
 #include "live/inspect.h"
+#include "live/procinfo.h"
 #include "live/ptslice.h"
 #include "live/session.h"
 #include "ui/filter.h"   // dt_filter_state — the shared type-to-narrow filter (24 T4)
@@ -158,6 +159,11 @@ struct InspectState {
     // The Processes pane's type-to-narrow filter (24 T4's shared idiom) over
     // pid / comm / cmdline.
     dt_filter_state proc_filter;
+
+    // The Process details pane's probe runner. It spawns `asmspy --info` —
+    // which never attaches — so it needs no host, no budget and no jack, and
+    // is driven purely by selected_pid.
+    ProcInfoRunner details;
 
     // Hide the rows whose verdict is a definite Attach::No — a target the picker
     // could only refuse. ON by default: the useful list is the one you can act
@@ -457,6 +463,11 @@ void draw_connect_pane(InspectState &s);
 void draw_processes_pane(InspectState &s);
 void draw_launch_pane(InspectState &s);
 void draw_capture_pane(InspectState &s);
+// Process details (gui-process-details): a probe-only pane over `asmspy
+// --info`, driven purely by InspectState::selected_pid and gated on the
+// selection alone (its context gate is NOT pctx_capture's host_started —
+// see pctx_details in shell.cpp).
+void draw_details_pane(InspectState &s);
 
 // The Log pane's session half (the colored session/refusal/skip/torn/end-cause
 // log that used to sit inside the capture pane), the Save pane (save the session's

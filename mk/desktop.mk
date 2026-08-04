@@ -627,6 +627,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/addon/imsearch.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
+  $(BUILD)/desktop/$(1)/ui/details_pane.o \
   $(BUILD)/desktop/$(1)/ui/legend.o \
   $(BUILD)/desktop/$(1)/ui/cvd.o \
   $(BUILD)/desktop/$(1)/ui/terms.o \
@@ -1274,6 +1275,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_budget \
                  $(BUILD)/desktop_test_inspect \
                  $(BUILD)/desktop_test_procinfo \
+                 $(BUILD)/desktop_test_details_draw \
                  $(BUILD)/desktop_test_obs_syscalls \
                  $(BUILD)/desktop_test_crossing \
                  $(BUILD)/desktop_test_obs_watch \
@@ -2091,6 +2093,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
+    $(BUILD)/desktop/test/ui/details_pane.o \
     $(BUILD)/desktop/test/ui/view_presence.o \
     $(BUILD)/desktop/test/ui/settings.o \
     $(BUILD)/desktop/test/ui/perspectives.o \
@@ -2140,6 +2143,20 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/pf/window_picker.o
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
+    $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
+
+# The Process details PANE (gui-process-details Task 7): the draw half over a
+# null backend. It constructs a real InspectState (doors.h), so it links the
+# full shell-test object set — the same reasoning as test_shell/test_palette/
+# test_wayfinding just above/below: InspectState embeds LiveSession/
+# ObserverState/PtSliceResult/LongOp/etc., and even a test that never touches
+# those fields still needs their (possibly out-of-line) constructors/
+# destructors resolvable at link time. procinfo.o + session.o ride in via
+# DESKTOP_TEST_LIVE, already part of DESKTOP_TEST_SHELL_OBJ.
+$(BUILD)/desktop/test/t/test_details_draw.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop_test_details_draw: $(BUILD)/desktop/test/t/test_details_draw.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 

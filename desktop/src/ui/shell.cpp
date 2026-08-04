@@ -3156,6 +3156,14 @@ static bool pctx_recording(const ShellState &s) {
 static bool pctx_capture(const ShellState &s) {
     return s.inspect.host_started && s.inspect.selected_pid > 0;
 }
+// Process details needs ONLY a selection — deliberately not pctx_capture's
+// host_started, because `asmspy --info` is a one-shot spawn rather than a
+// serve session. The tab therefore works before a host is ever connected,
+// which is exactly when the operator is deciding whether this is the right
+// process.
+static bool pctx_details(const ShellState &s) {
+    return s.inspect.selected_pid > 0;
+}
 // The Save pane only means anything once there is a capture to write (R3): a
 // growing recording, or a completed one this session.
 static bool pctx_save(const ShellState &s) {
@@ -3171,6 +3179,8 @@ static const PaneDef kManagedPanes[] = {
     {kPaneHome, true, pctx_always, ""},
     {kPaneConnect, false, pctx_always, ""},
     {kPaneProcesses, false, pctx_always, ""},
+    {kPaneDetails, false, pctx_details,
+     "pick a process in the Processes pane first"},
     // doc 45 T4: no prior selection needed (pctx_always, like Connect/
     // Processes) — the form is fillable with no host up and no target picked;
     // "Launch & trace" connects and forks in one action (inspect_door.cpp).
@@ -3244,6 +3254,7 @@ static bool mode_wants_pane(Mode m, const char *name) {
         // alongside the others; its context gate (pctx_pt) keeps it hidden off a
         // PT host even though this opens it.
         return std::strcmp(name, kPaneProcesses) == 0 ||
+               std::strcmp(name, kPaneDetails) == 0 ||
                std::strcmp(name, kPaneCapture) == 0 ||
                std::strcmp(name, kPaneSave) == 0 ||
                std::strcmp(name, kPanePtSlice) == 0;
@@ -3681,6 +3692,47 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGui::End();
         if (!open)
             s.pane_open[kPaneProcesses] = false;
+    }
+    // Process details (gui-process-details Task 7): gated on the selection
+    // alone (pctx_details), not on a live host.
+    //
+    // Task 6's review (I4) found that the runner's reap() only runs from
+    // inside procinfo_tick, and procinfo_tick only ran from inside
+    // draw_details_pane — so a pane that stopped being DRAWN (closed,
+    // undocked, or simply not the active tab in its dock node, which makes
+    // ImGui::Begin return false without running its body) stranded any
+    // in-flight `asmspy --info` child with nothing left to drain, reap, or
+    // deadline-expire it. `s.pane_open[...] = false` alone does not fix this:
+    // that bool only gates whether this block's Begin/End runs at all, and a
+    // pane can be "shown" yet still not the frontmost tab.
+    //
+    // The fix kept here (not in procinfo.{h,cpp}, which another task is
+    // mid-edit on for an unrelated pair of bugs): tick the runner EXACTLY
+    // ONCE this frame regardless of outcome. When the pane actually draws,
+    // draw_details_pane's own tick call (focus-gated, per the brief) is that
+    // one tick. Whenever it does not draw — closed, context-gated, or
+    // Begin() returned false because it is a backgrounded dock tab — this
+    // `else` ticks it instead with visible forced false, so an in-flight
+    // probe still drains/reaps/times-out on schedule; visible=false just
+    // blocks a NEW spawn while nobody is looking at it.
+    {
+        bool shown = pane_shown(s, kPaneDetails);
+        bool open = true;
+        bool drew = false;
+        if (shown) {
+            if (ImGui::Begin(kPaneDetails, &open)) {
+                draw_details_pane(s.inspect);
+                drew = true;
+            }
+            ImGui::End();
+            if (!open)
+                s.pane_open[kPaneDetails] = false;
+        }
+        if (!drew) {
+            s.inspect.details.visible = false;
+            procinfo_tick(s.inspect.details, s.inspect.selected_pid,
+                          ImGui::GetTime());
+        }
     }
     // doc 45 T4: the Launch pane — a fourth way to arrive at a target,
     // alongside Connect/Processes/Live-capture. Same want_focus_* idiom as

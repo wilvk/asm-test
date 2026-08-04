@@ -99,6 +99,10 @@ extern const char *const kPaneLaunch;
 extern const char *const kPaneLog;
 extern const char *const kPaneSave;
 extern const char *const kPanePtSlice;
+// Process details: the attach-free `asmspy --info` probe pane (gui-
+// process-details), gated on a Processes selection alone (its own
+// context gate, pctx_details, is NOT pctx_capture's host_started).
+extern const char *const kPaneDetails;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H
