@@ -580,7 +580,7 @@ DESKTOP_LOOM_APP  := forks reweave_apply
 # live/ — the capture host (07-serve-live-host.md T3/T4). It spawns
 # `asmspy --serve` and speaks its protocol; it links NO engine, which is what
 # lets asmtest-viewer host live sessions while staying engine-free (D4/D9).
-DESKTOP_LIVE := session budget inspect ptslice
+DESKTOP_LIVE := session budget inspect ptslice procinfo
 
 # The Learn door's bundled walkthroughs (06-doors-and-learning.md T2-T4).
 WALKTHROUGH_DIR := tests/golden-asmtrace/walkthroughs
@@ -1273,6 +1273,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_live_session \
                  $(BUILD)/desktop_test_budget \
                  $(BUILD)/desktop_test_inspect \
+                 $(BUILD)/desktop_test_procinfo \
                  $(BUILD)/desktop_test_obs_syscalls \
                  $(BUILD)/desktop_test_crossing \
                  $(BUILD)/desktop_test_obs_watch \
@@ -1482,6 +1483,14 @@ $(BUILD)/desktop_test_obs_ptslice: $(BUILD)/desktop/test/t/test_obs_ptslice.o \
 $(BUILD)/desktop_test_inspect: $(BUILD)/desktop/test/t/test_inspect.o \
     $(BUILD)/desktop/test/lv/inspect.o $(BUILD)/desktop/test/lv/session.o \
     $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The Process details model. Links procinfo.o + the doc model — no ImGui, no
+# GL, no engines, and no subprocess: the whole model is driven from checked-in
+# fixtures, which is why the pane's facts are testable with nothing running.
+$(BUILD)/desktop/test/t/test_procinfo.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop_test_procinfo: $(BUILD)/desktop/test/t/test_procinfo.o \
+    $(BUILD)/desktop/test/lv/procinfo.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
