@@ -8130,7 +8130,15 @@ static int info_emit_json(const asmspy_procinfo_t *pi, const char *record,
     char *b = malloc(256 * 1024); /* the body; bounded by the struct's caps */
     size_t cap = 256 * 1024, n = 0;
     int overflow = 0; /* sticky: the body did not fit */
-    char e1[512], e2[512];
+    /* The widest source these two scratch buffers ever escape is a 256-byte
+     * field (exe/cwd/module path) -- asmtrace_escape's worst case is every
+     * byte expanding to "\u00xx" (6 chars, not 3: a 1:3 assumption still
+     * under-sizes this), so 256*6+16 is the real bound, matching `ea`
+     * below. A fixed 512-byte cap silently clipped such a field partway
+     * through its escaped form with no truncation flag; not a regression
+     * (pre-fix such a recording didn't load at all), but worth closing now
+     * that it can. */
+    char e1[256 * 6 + 16], e2[256 * 6 + 16];
     if (!b)
         return -1;
 

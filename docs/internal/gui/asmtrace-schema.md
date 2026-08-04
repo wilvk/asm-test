@@ -614,8 +614,11 @@ nicety:
    are `true`/`false`, never `1`/`0` (the numeric `is_write` tri-state is an
    `int` *by design* and is documented as such).
 4. **Strings are escaped minimally and identically**: `"` and `\` as `\"` `\\`,
-   bytes `< 0x20` as `\u00XX` (lowercase hex), everything else verbatim. The
-   escaper is shared with the writer, so two writers cannot disagree.
+   bytes `< 0x20` as `\u00XX` (lowercase hex), a well-formed UTF-8 sequence
+   verbatim, and an invalid byte (kernel-sourced fields — `comm`/`argv`/`exe`/
+   `cwd`/a module `path`/the header's `cmd` carry no encoding guarantee) as
+   U+FFFD (`\xef\xbf\xbd`), never passed through raw. The escaper is shared
+   with the writer, so two writers cannot disagree.
 5. **Regenerating a golden file must be byte-identical.** The authoritative lane
    is the `docker-cli` image: golden bytes include Capstone disassembly text and
    the pinned Capstone 5.0.1 renders differently from a host's apt 4.x.

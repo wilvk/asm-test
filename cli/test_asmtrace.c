@@ -718,6 +718,38 @@ static void test_escape_edges(void) {
      * invalid and equally substituted. */
     asmtrace_escape(out, sizeof out, "a\x80z");
     check_str("writer.escape_lone_continuation_byte", out, "a\xef\xbf\xbdz");
+    /* Each RFC 3629 strictness clause in asmtrace_utf8_len() is individually
+     * deletable and test_asmtrace still links and mostly passes unless it is
+     * pinned here -- these five sequences (plus one more below) each trip
+     * exactly one clause. Every byte of an invalid sequence is replaced
+     * 1-for-1 with its own U+FFFD (never one U+FFFD for the whole run). */
+    /* overlong 2-byte ('/' as C0 AF) */
+    asmtrace_escape(out, sizeof out, "\xc0\xaf");
+    check_str("writer.escape_overlong_2byte", out, "\xef\xbf\xbd\xef\xbf\xbd");
+    /* overlong 3-byte */
+    asmtrace_escape(out, sizeof out, "\xe0\x80\xaf");
+    check_str("writer.escape_overlong_3byte", out,
+              "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd");
+    /* overlong 4-byte */
+    asmtrace_escape(out, sizeof out, "\xf0\x80\x80\xaf");
+    check_str("writer.escape_overlong_4byte", out,
+              "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd");
+    /* UTF-16 surrogate U+D800 */
+    asmtrace_escape(out, sizeof out, "\xed\xa0\x80");
+    check_str("writer.escape_utf16_surrogate", out,
+              "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd");
+    /* one past U+10FFFF */
+    asmtrace_escape(out, sizeof out, "\xf4\x90\x80\x80");
+    check_str("writer.escape_past_max_codepoint", out,
+              "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd");
+    /* A lead byte of 0xf5 or higher would always encode past U+10FFFF even
+     * before a single continuation byte is inspected -- the c0 < 0xF5 upper
+     * bound guards that without ever needing s[1]. Not one of the review's
+     * five named sequences exercises it (all use lead bytes <= 0xf4), so it
+     * gets a sequence of its own. */
+    asmtrace_escape(out, sizeof out, "\xf5\x80\x80\x80");
+    check_str("writer.escape_lead_byte_too_high", out,
+              "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd");
     /* Truncation must not overflow or emit a half escape. */
     {
         char tiny[10];

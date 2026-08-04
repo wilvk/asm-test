@@ -3727,6 +3727,26 @@ fi
 # comparison: the fixture's VALUES (pid, timestamps, addresses) are host-
 # and run-specific and will never match; its STRUCTURE (which keys exist,
 # at every nesting level, unioned across array elements) should.
+#
+# Two normalizations are load-bearing, not cosmetic (review found this
+# check hard-failed a CORRECT tree on both counts):
+#  1. threads[].syscall / threads[].syscall_why is a DELIBERATE, already-
+#     asserted dichotomy (the XOR check just above) driven by ptrace
+#     PERMISSION, not by the producer's schema -- under --cap-add=SYS_PTRACE
+#     or ptrace_scope=0 (which docs/getting-started/host-setup.md tells
+#     operators to set, and Yama is not namespaced, so make docker-cli
+#     inherits whatever the host has), a live thread reports `syscall`
+#     where the fixture (captured under denial) reports `syscall_why`,
+#     and neither "renamed/removed" nor "fixture is stale" is true. Both
+#     keys, and everything nested under `syscall` (nr/name/args/pc/sp/
+#     pc_sym -- equally permission-gated), collapse to one synthetic key
+#     before differencing.
+#  2. An array that is empty on EITHER side contributes no per-element
+#     keys there BY CONSTRUCTION (there is nothing to derive them from) --
+#     `children[]` on a childless target is the routine case, not an edge
+#     case. Keys derived from an array empty on either side are excluded
+#     from the diff entirely; the array's own key (present either way,
+#     even as `[]`) is still compared normally.
 if command -v python3 >/dev/null 2>&1 && [ -f desktop/test/fixtures/procinfo_full.asmtrace ]; then
     printf '%s' "$info_json" | python3 -c 'import json,sys
 
@@ -3734,6 +3754,9 @@ def keyset(obj, prefix=""):
     keys = set()
     if isinstance(obj, dict):
         for k, v in obj.items():
+            if prefix == "threads" and k in ("syscall", "syscall_why"):
+                keys.add("threads.syscall_or_why")
+                continue
             path = prefix + "." + k if prefix else k
             keys.add(path)
             keys |= keyset(v, path)
@@ -3741,6 +3764,24 @@ def keyset(obj, prefix=""):
         for item in obj:
             keys |= keyset(item, prefix)
     return keys
+
+def empty_array_prefixes(obj, prefix=""):
+    empties = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            path = prefix + "." + k if prefix else k
+            if isinstance(v, list):
+                if len(v) == 0:
+                    empties.add(path)
+                else:
+                    for item in v:
+                        empties |= empty_array_prefixes(item, path)
+            elif isinstance(v, dict):
+                empties |= empty_array_prefixes(v, path)
+    return empties
+
+def under_empty_array(key, prefixes):
+    return any(key.startswith(p + ".") for p in prefixes)
 
 live_lines = [l for l in sys.stdin if l.strip()]
 live_evt = next(json.loads(l) for l in live_lines if json.loads(l).get("k") == "procinfo")
@@ -3751,8 +3792,9 @@ fixture_evt = next(json.loads(l) for l in fixture_lines if json.loads(l).get("k"
 
 fk = keyset(fixture_evt)
 lk = keyset(live_evt)
-missing = fk - lk
-extra = lk - fk
+empties = empty_array_prefixes(fixture_evt) | empty_array_prefixes(live_evt)
+missing = {k for k in (fk - lk) if not under_empty_array(k, empties)}
+extra = {k for k in (lk - fk) if not under_empty_array(k, empties)}
 assert not missing, "keys the fixture has but --info --json no longer emits (renamed/removed?): %s" % sorted(missing)
 assert not extra, "keys --info --json emits that the fixture does not (fixture is stale?): %s" % sorted(extra)
 print("  desktop/test/fixtures/procinfo_full.asmtrace key set matches live --info --json output (%d keys)" % len(fk))' \
