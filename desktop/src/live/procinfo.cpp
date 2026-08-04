@@ -3,11 +3,20 @@
 //
 // The decode is mechanical `json` field reads with `.value(key, default)`;
 // pc/sp/base/args are the one exception — each crosses procinfo_parse_hex,
-// never json's number path, because a JSON number is a double in this
-// library and would silently round a real 64-bit pointer. Every "absence"
-// section (a thread's syscall_why, a refused mode's why, the attach_why) is
-// read as the alternative branch of an if/else, never coerced into the same
-// empty default a present-but-blank field would also produce.
+// never json's number path. NOT because nlohmann itself would round them:
+// it stores an unsigned JSON number as number_unsigned_t, a real uint64_t,
+// and this file decodes ts_ns/io_read_bytes/io_write_bytes/peak_rss_kb
+// exactly that way a few lines below, verified exact. The reason is the
+// SCHEMA CONTRACT (docs/internal/gui/asmtrace-schema.md): pc/sp/base/args
+// cross the wire as hex STRINGS specifically because a JSON number is a
+// double in MANY OTHER readers, which would silently round a real 64-bit
+// pointer — asmspy holds every consumer to that contract, this one
+// included, so a bare number showing up in one of these four here would
+// mean the WIRE broke its own promise, not that this reader could safely
+// relax it. Every "absence" section (a thread's syscall_why, a refused
+// mode's why, the attach_why) is read as the alternative branch of an
+// if/else, never coerced into the same empty default a present-but-blank
+// field would also produce.
 #include "live/procinfo.h"
 
 #include <cstdlib>

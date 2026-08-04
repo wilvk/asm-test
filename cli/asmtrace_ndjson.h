@@ -126,8 +126,14 @@ int asmtrace_emitf(asmtrace_writer_t *w, const char *kind, const char *fmt, ...)
 
 /* Escape `src` into `dst` as the BODY of a JSON double-quoted string (no
  * surrounding quotes): " and \ backslash-escaped, bytes < 0x20 as \u00xx
- * (lowercase hex), everything else verbatim. Truncates rather than overflows;
- * always NUL-terminates. A NULL `src` yields "". */
+ * (lowercase hex), valid UTF-8 (including multi-byte sequences) verbatim.
+ * `src` is arbitrary kernel bytes with no encoding guarantee (comm/argv/exe/
+ * cwd/module path/the header's cmd), so an INVALID UTF-8 sequence is
+ * substituted with U+FFFD (the replacement character) rather than passed
+ * through raw -- a raw invalid byte would make a conformant JSON parser
+ * (nlohmann included) reject the whole recording, not just this field.
+ * Truncates rather than overflows; always NUL-terminates. A NULL `src`
+ * yields "". */
 void asmtrace_escape(char *dst, size_t cap, const char *src);
 
 /* ------------------------------------------------------------------ */

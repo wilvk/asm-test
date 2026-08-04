@@ -692,6 +692,32 @@ static void test_escape_edges(void) {
     check_str("writer.escape_ctrl", out, "a\\u0001k");
     asmtrace_escape(out, sizeof out, NULL);
     check_str("writer.escape_null", out, "");
+    /* UTF-8 sanitization (finding, gui-process-details Task 4b): comm/argv/
+     * exe/cwd/module path/the header's cmd are arbitrary KERNEL bytes with
+     * no encoding guarantee -- a raw invalid byte makes nlohmann (and every
+     * conformant JSON parser) reject the WHOLE recording, not just this
+     * field. Valid multi-byte UTF-8 (a name legitimately containing an
+     * accented letter, or a CJK path) must survive byte-for-byte --
+     * blanket-\u00xx-escaping every high byte was rejected because it would
+     * mojibake every legitimately multibyte name. */
+    asmtrace_escape(out, sizeof out, "caf\xc3\xa9");
+    check_str("writer.escape_valid_utf8_2byte_passthrough", out, "caf\xc3\xa9");
+    asmtrace_escape(out, sizeof out, "\xe6\x97\xa5\xe6\x9c\xac");
+    check_str("writer.escape_valid_utf8_3byte_passthrough", out,
+              "\xe6\x97\xa5\xe6\x9c\xac");
+    asmtrace_escape(out, sizeof out, "\xf0\x9f\x98\x80");
+    check_str("writer.escape_valid_utf8_4byte_passthrough", out,
+              "\xf0\x9f\x98\x80");
+    /* An invalid byte (a raw latin-1 0xe9, standalone -- not a valid UTF-8
+     * lead byte with the continuation bytes it would need) is substituted
+     * with U+FFFD (0xef 0xbf 0xbd), never passed through raw. */
+    asmtrace_escape(out, sizeof out, "dir_\xe9_name");
+    check_str("writer.escape_invalid_byte_becomes_replacement_char", out,
+              "dir_\xef\xbf\xbd_name");
+    /* A lone continuation byte (0x80, no lead byte before it) is equally
+     * invalid and equally substituted. */
+    asmtrace_escape(out, sizeof out, "a\x80z");
+    check_str("writer.escape_lone_continuation_byte", out, "a\xef\xbf\xbdz");
     /* Truncation must not overflow or emit a half escape. */
     {
         char tiny[10];

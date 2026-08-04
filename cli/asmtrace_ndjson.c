@@ -28,20 +28,91 @@
 #define ASMTRACE_ARCH "unknown"
 #endif
 
+/* Length (1-4) of the well-formed UTF-8 sequence starting at s[0], given
+ * `avail` bytes remain (never reads past that bound) -- or 0 if s[0] begins
+ * an invalid sequence. Follows RFC 3629 exactly: no overlong encodings, no
+ * surrogate code points (U+D800-U+DFFF), nothing past U+10FFFF. This is
+ * deliberately as strict as a conformant JSON parser (nlohmann included) --
+ * anything looser here would let through a sequence nlohmann itself
+ * rejects, which is exactly the bug asmtrace_escape exists to close. */
+static int asmtrace_utf8_len(const unsigned char *s, size_t avail) {
+    if (avail == 0)
+        return 0;
+    unsigned char c0 = s[0];
+    if (c0 < 0x80)
+        return 1;
+    if (c0 < 0xC2)
+        return 0; /* bare continuation byte, or an overlong C0/C1 lead */
+    if (c0 < 0xE0) {
+        if (avail < 2 || (s[1] & 0xC0) != 0x80)
+            return 0;
+        return 2;
+    }
+    if (c0 < 0xF0) {
+        if (avail < 3 || (s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80)
+            return 0;
+        if (c0 == 0xE0 && s[1] < 0xA0)
+            return 0; /* overlong */
+        if (c0 == 0xED && s[1] >= 0xA0)
+            return 0; /* UTF-16 surrogate range, invalid as a code point */
+        return 3;
+    }
+    if (c0 < 0xF5) {
+        if (avail < 4 || (s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 ||
+            (s[3] & 0xC0) != 0x80)
+            return 0;
+        if (c0 == 0xF0 && s[1] < 0x90)
+            return 0; /* overlong */
+        if (c0 == 0xF4 && s[1] >= 0x90)
+            return 0; /* > U+10FFFF */
+        return 4;
+    }
+    return 0; /* F5-FF: would always encode past U+10FFFF */
+}
+
 void asmtrace_escape(char *dst, size_t cap, const char *src) {
     size_t o = 0;
+    size_t len = src ? strlen(src) : 0;
     if (!dst || cap == 0)
         return;
     /* Reserve room for the widest single expansion (\u00xx = 6) + NUL. */
-    for (; src && *src && o + 7 < cap; src++) {
-        unsigned char c = (unsigned char)*src;
+    for (size_t i = 0; i < len && o + 7 < cap;) {
+        unsigned char c = (unsigned char)src[i];
         if (c == '"' || c == '\\') {
             dst[o++] = '\\';
             dst[o++] = (char)c;
+            i++;
         } else if (c < 0x20) {
             o += (size_t)snprintf(dst + o, cap - o, "\\u%04x", c);
-        } else {
+            i++;
+        } else if (c < 0x80) {
             dst[o++] = (char)c;
+            i++;
+        } else {
+            /* comm/argv/exe/cwd/module path/the header's cmd are arbitrary
+             * KERNEL bytes with no encoding guarantee -- a process launched
+             * from a latin-1-named directory is a real, unprivileged case,
+             * not a hostile one. A raw invalid byte passed through here
+             * makes nlohmann (and every conformant JSON parser) reject the
+             * WHOLE recording, not just this field, so an invalid sequence
+             * is substituted with U+FFFD (the replacement character,
+             * encoded 0xEF 0xBF 0xBD) rather than passed through. A VALID
+             * multi-byte sequence -- a name legitimately containing an
+             * accented letter, or a CJK path -- is copied verbatim:
+             * blanket-\u00xx-escaping every high byte was
+             * rejected because it would mojibake every legitimately
+             * multibyte name, trading one corruption for another. */
+            int n = asmtrace_utf8_len((const unsigned char *)src + i, len - i);
+            if (n == 0) {
+                dst[o++] = (char)0xEF;
+                dst[o++] = (char)0xBF;
+                dst[o++] = (char)0xBD;
+                i++; /* resync by exactly one byte */
+            } else {
+                memcpy(dst + o, src + i, (size_t)n);
+                o += (size_t)n;
+                i += (size_t)n;
+            }
         }
     }
     dst[o] = '\0';

@@ -107,7 +107,7 @@ LJPID=""
 SGPID=""
 GSPID=""
 EVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} ${RVPID:+"$RVPID"} ${RWPID:+"$RWPID"} ${SRVPID:+"$SRVPID"} ${NAPID:+"$NAPID"} ${BAPID:+"$BAPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" "$BUILD/watch_rec.log" "$BUILD/info_never_ptrace.strace" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} ${RVPID:+"$RVPID"} ${RWPID:+"$RWPID"} ${SRVPID:+"$SRVPID"} ${NAPID:+"$NAPID"} ${BAPID:+"$BAPID"} ${U8PID:+"$U8PID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" "$BUILD/watch_rec.log" "$BUILD/info_never_ptrace.strace" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" ${U8BASE:+"$U8BASE"} 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -3719,6 +3719,48 @@ else
     echo "  json structural checks skipped (python3 absent)"
 fi
 
+# Couple the checked-in desktop fixture to the LIVE producer (finding: Task
+# 6's runner resolves `asmspy` off $PATH, so the binary parsed at runtime
+# need not be the one desktop/test/fixtures/procinfo_full.asmtrace came
+# from -- nothing before this cross-checked them, so a producer key rename
+# is undetectable by construction). A KEY-SET comparison, not a byte
+# comparison: the fixture's VALUES (pid, timestamps, addresses) are host-
+# and run-specific and will never match; its STRUCTURE (which keys exist,
+# at every nesting level, unioned across array elements) should.
+if command -v python3 >/dev/null 2>&1 && [ -f desktop/test/fixtures/procinfo_full.asmtrace ]; then
+    printf '%s' "$info_json" | python3 -c 'import json,sys
+
+def keyset(obj, prefix=""):
+    keys = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            path = prefix + "." + k if prefix else k
+            keys.add(path)
+            keys |= keyset(v, path)
+    elif isinstance(obj, list):
+        for item in obj:
+            keys |= keyset(item, prefix)
+    return keys
+
+live_lines = [l for l in sys.stdin if l.strip()]
+live_evt = next(json.loads(l) for l in live_lines if json.loads(l).get("k") == "procinfo")
+
+with open("desktop/test/fixtures/procinfo_full.asmtrace") as f:
+    fixture_lines = [l for l in f if l.strip()]
+fixture_evt = next(json.loads(l) for l in fixture_lines if json.loads(l).get("k") == "procinfo")
+
+fk = keyset(fixture_evt)
+lk = keyset(live_evt)
+missing = fk - lk
+extra = lk - fk
+assert not missing, "keys the fixture has but --info --json no longer emits (renamed/removed?): %s" % sorted(missing)
+assert not extra, "keys --info --json emits that the fixture does not (fixture is stale?): %s" % sorted(extra)
+print("  desktop/test/fixtures/procinfo_full.asmtrace key set matches live --info --json output (%d keys)" % len(fk))' \
+        || fail "--info --json: key set diverged from desktop/test/fixtures/procinfo_full.asmtrace"
+else
+    echo "  fixture/producer key-set coupling check skipped (python3 or the fixture absent)"
+fi
+
 # THE premise of --info, actually enforced: every assertion above is a
 # black-box behavioral check that would stay green even if --info attached —
 # a failed attach is not fatal to any of them, and an attach that SUCCEEDED
@@ -3790,6 +3832,43 @@ print("  --info --json: a 2600-char argv entry crosses the wire intact (argv_tru
     BAPID=""
 else
     echo "  argv escape-buffer regression check skipped (python3 absent)"
+fi
+
+# UTF-8 sanitization (finding, deferred twice as "pre-existing" until a later
+# review measured its real impact): comm/argv/exe/cwd/module path/the
+# header's cmd are arbitrary KERNEL bytes with no encoding guarantee. A raw
+# invalid byte used to pass straight through asmtrace_escape, and nlohmann
+# (and every conformant JSON parser) rejects invalid UTF-8 outright -- so the
+# desktop failed to load the WHOLE recording, not just the field carrying
+# the bad byte. Reproduces the exact repro that found this: an ordinary,
+# unprivileged process launched from a latin-1-named directory (a real 0xe9
+# byte, standalone -- not valid UTF-8 on its own) with a matching bad byte
+# in its own argv too.
+if command -v python3 >/dev/null 2>&1; then
+    U8BASE=$(mktemp -d)
+    U8DIR="$U8BASE/lat$(printf '\351')n1"
+    mkdir -p "$U8DIR"
+    ( cd "$U8DIR" && exec sh -c 'sleep 60; :' "$(printf 'arg\345bad')" ) \
+        >/dev/null 2>&1 &
+    U8PID=$!
+    sleep 1
+    kill -0 "$U8PID" 2>/dev/null || fail "the non-UTF-8 cwd/argv victim did not start"
+    u8out=$($BUILD/asmspy --info "$U8PID" --json 2>/dev/null)
+    printf '%s' "$u8out" | python3 -c 'import json,sys
+data = sys.stdin.buffer.read()
+text = data.decode("utf-8")
+lines = [l for l in text.split("\n") if l.strip()]
+assert len(lines) == 3, "expected header + procinfo + end, got %d lines" % len(lines)
+for l in lines:
+    json.loads(l)
+print("  --info --json: a non-UTF-8 cwd/argv still crosses the wire as valid UTF-8 and parses")' \
+        || fail "--info --json: non-UTF-8 cwd/argv broke the recording (invalid UTF-8 passed through raw)"
+    kill "$U8PID" 2>/dev/null || true
+    wait "$U8PID" 2>/dev/null || true
+    U8PID=""
+    rm -rf "$U8BASE"
+else
+    echo "  non-UTF-8 cwd/argv regression check skipped (python3 absent)"
 fi
 
 # It must be FAST — this is fired automatically as an operator browses.

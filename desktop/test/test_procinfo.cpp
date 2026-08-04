@@ -201,6 +201,23 @@ int main() {
           !p.children_truncated && !p.budget_exceeded,
           "both should be false for this small, fast capture");
 
+    // --- the utf-8 sanitization fixture (finding, gui-process-details Task
+    // 4b) ---------------------------------------------------------------
+    // comm/argv/exe/cwd/module path/the header's cmd are arbitrary KERNEL
+    // bytes with no encoding guarantee. Before this fix, a single raw
+    // invalid byte in any of them made nlohmann reject the WHOLE recording
+    // (json::parse's is_discarded()), not just the field carrying it, so
+    // load_recording never got far enough to populate ANY of ProcInfo --
+    // the Process details pane could not render such a process at all.
+    // This fixture's cwd carries the field AS THE PRODUCER NOW EMITS IT:
+    // sanitized to U+FFFD (the replacement character) rather than the raw
+    // invalid byte it replaced.
+    ProcInfo u = load("procinfo_utf8.asmtrace");
+    check("utf8-sanitized fixture parses", u.valid, u.parse_error);
+    check("sanitized cwd carries U+FFFD, not the invalid byte it replaced",
+          u.cwd.find("\xef\xbf\xbd") != std::string::npos,
+          "cwd = " + u.cwd);
+
     // --- the refused fixture ------------------------------------------
     ProcInfo x = load("procinfo_refused.asmtrace");
     check("refused parses", x.valid, x.parse_error);
