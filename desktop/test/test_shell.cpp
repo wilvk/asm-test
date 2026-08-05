@@ -569,6 +569,38 @@ int main() {
             check("here-text/setup: 0x400000 projects",
                   p.project(0x400000, &u, &v), "test address did not project");
             std::string t = scene3d::camera_here_text(p, u, v);
+            // 59 T1: the same target, read through each substrate. Only the
+            // plane has an address under the camera; the other four have axes
+            // that are not addresses, so stating one for them fabricates a
+            // location nobody recorded.
+            {
+                const std::string plane = scene3d::camera_here_line(
+                    scene3d::SceneKind::Plane, p, u, v);
+                check("here-line/plane: unchanged on the address plane",
+                      plane == t,
+                      "the plane substrate must read exactly as it always did");
+                for (scene3d::SceneKind k : scene3d::all_scene_kinds()) {
+                    if (k == scene3d::SceneKind::Plane)
+                        continue;
+                    const std::string o = scene3d::camera_here_line(k, p, u, v);
+                    check("here-line/off-plane: no fabricated address",
+                          o.find("0x400000") == std::string::npos &&
+                              o.find("libfoo .text") == std::string::npos,
+                          "a non-plane substrate must not report an address or "
+                          "a region — its axes are not addresses");
+                    check("here-line/off-plane: still says something",
+                          !o.empty(),
+                          "a blank line is not a refusal; the substrate's own "
+                          "axis is the honest thing to state");
+                    check("here-line/off-plane: plane nav does not apply",
+                          !scene3d::hud_plane_nav_applies(k),
+                          "the address `go to` row moves the camera by PLANE "
+                          "coordinates and must not be offered here");
+                }
+                check("here-line/plane: plane nav applies",
+                      scene3d::hud_plane_nav_applies(scene3d::SceneKind::Plane),
+                      "the address plane keeps its go-to row");
+            }
             check("here-text: names the region label",
                   t.find("libfoo .text") != std::string::npos,
                   ("got: " + t).c_str());

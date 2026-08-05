@@ -305,6 +305,18 @@ const char *vertical_axes_note() {
            "sediment layers do stand trace time on this axis (steps)";
 }
 
+std::string camera_here_line(SceneKind k, const space::Projection &proj,
+                             float u, float v) {
+    if (k == SceneKind::Plane)
+        return camera_here_text(proj, u, v);
+    // No address axis here at all, so there is no "here" to unproject. Name the
+    // substrate's own vertical axis — the load-bearing one — instead of
+    // reporting a plane address the camera target does not mean.
+    return std::string("you are here: \"") + scene_kind_name(k) +
+           "\" has no address axis — its vertical axis is " +
+           std::string(scene_axes(k).y);
+}
+
 std::string camera_here_text(const space::Projection &proj, float u, float v) {
     uint64_t addr = 0;
     const space::Region *r = nullptr;
@@ -829,7 +841,8 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // so the wording is testable with no ImGui frame; drawn every frame here.
     ImGui::TextColored(
         kDim, "%s",
-        camera_here_text(terr.proj, s.cam_target_u, s.cam_target_v).c_str());
+        camera_here_line(s.kind, terr.proj, s.cam_target_u, s.cam_target_v)
+            .c_str());
 
     // 50 T2/T4: the flat views' selection, located onto this plane by its
     // address. Graded, never hidden (D7): active-but-unplaceable states the
@@ -837,7 +850,15 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // offers "frame the selection" (T4) and, when ambiguous (the same
     // address revisited at several steps — a loop), says so rather than
     // implying it is the one true occurrence.
-    if (s.has_highlight) {
+    // 59 T1: also PLANE ONLY. The highlight is a cell located by ADDRESS on
+    // this plane (shell.cpp computes it from terr.proj), so "frame the
+    // selection" on another substrate would fly its camera to a coordinate
+    // pair that means nothing there.
+    if (!hud_plane_nav_applies(s.kind)) {
+        ImGui::TextColored(kDim,
+                           "selection: located by address on the address "
+                           "plane — switch to it to frame the selection");
+    } else if (s.has_highlight) {
         if (ImGui::Button("frame the selection"))
             s.req_frame_highlight = true;
         if (s.highlight_ambiguous) {
@@ -854,6 +875,17 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::Separator();
 
     // --- go to (48 T3): name a destination instead of only hunting for it ---
+    // 59 T1: PLANE ONLY. Both this row and the region jump below move the
+    // camera by plane coordinates (frame(goto_u, goto_v, ...)), which is
+    // meaningless on a substrate whose extents were never chosen for them —
+    // typing an address would teleport the lane prism's camera by a u/v pair
+    // that means nothing there. Say what the substrate reads by instead.
+    if (!hud_plane_nav_applies(s.kind)) {
+        ImGui::TextColored(kDim,
+                           "go to: addresses locate on the address plane; "
+                           "\"%s\" is read along %s",
+                           scene_kind_name(s.kind), scene_axes(s.kind).x);
+    } else {
     ImGui::TextUnformatted("go to:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
@@ -932,6 +964,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     }
     if (!s.nav_note.empty())
         ImGui::TextColored(kWarn, "%s", s.nav_note.c_str());
+    } // end of the plane-only "go to" block (59 T1)
 
     ImGui::Separator();
 

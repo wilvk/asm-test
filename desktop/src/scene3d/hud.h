@@ -160,6 +160,24 @@ const char *vertical_axes_note();
 // line: an oriented-but-unmapped camera is still a fact worth stating, D7).
 std::string camera_here_text(const space::Projection &proj, float u, float v);
 
+// 59 T1: the SAME line, but for whichever substrate the pane is showing. Only
+// the address plane has an address under the camera; the other four have axes
+// that are not addresses at all (a byte index inside a register, a call
+// ordinal, a recording side), so unprojecting their camera target through the
+// plane's Projection states an address nobody recorded — the exact D7
+// fabrication this family exists to remove. For those, name the kind's own
+// vertical axis instead of inventing a location. Pure, like its sibling.
+std::string camera_here_line(SceneKind k, const space::Projection &proj,
+                             float u, float v);
+
+// 59 T1: do the PLANE-COORDINATE affordances belong on this substrate? The
+// "go to <address>" row and the "frame the selection" button both move the
+// camera by plane coordinates, which is meaningless on a substrate whose
+// extents were never chosen for them.
+inline bool hud_plane_nav_applies(SceneKind k) {
+    return k == SceneKind::Plane;
+}
+
 // 48 T5: the FULL advertised control list, generated from the CamKey enum
 // (never a hand-written string — the review's own finding is precisely that
 // hand-written key lists drift from the bindings) plus the mouse gestures
