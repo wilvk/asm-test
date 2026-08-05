@@ -110,21 +110,38 @@ std::vector<const char *> mode_visualizations(LiveMode m) {
     case LiveMode::Dataflow:
         return {"Slice", "Loom", "Scrubber", "Timeline", "3D overview"};
     case LiveMode::Trace:
-        return {"Timeline", "3D overview", "Observer (codeimage)"};
+        // `trace`/`coverage` fill the Canvas (dt_canvas_build reads the region
+        // snapshot) and — via the serve host's code image — the 3D overview's
+        // address plane and invocation stack. They carry no df_step, so the
+        // OPERAND Timeline is not among them: that tab is always present and
+        // would simply render zero rows.
+        return {"Canvas", "3D overview", "Observer (codeimage)"};
     case LiveMode::Log:
-        return {"Observer (syscalls)", "Timeline"};
+        return {"Observer (syscalls)"};
     case LiveMode::Stream:
-        return {"Timeline", "Slice"};
+        // Deliberately EMPTY, and the one mode allowed to be (test_budget pins
+        // which). A `stream` capture records `stream` events, and nothing in
+        // this build reads them: there is no by_kind("stream") consumer in
+        // desktop/src, and observer_has_any does not count them. Naming a view
+        // here would be the same promise-what-you-cannot-fill defect the other
+        // rows just lost.
+        return {};
     case LiveMode::Tree:
-        return {"Observer (call tree)"};
+        // A tree session has no region of its own, but the serve host arms a
+        // code image over the executable's text precisely so this pane can host
+        // the module-excursion ribbon (cli/asmspy.c:4031-4040). Saying only
+        // "Observer" here is what closed that pane.
+        return {"Observer (call tree)", "3D overview"};
     case LiveMode::Graph:
         return {"Observer (call graph)"};
     case LiveMode::Procs:
         return {"Observer (process tree)"};
     case LiveMode::Sample:
-        // Out-of-band statistical: hot-edges + the address-space plane, but NEVER
-        // an exact Loom / Scrubber (it does not single-step).
-        return {"Observer (hot edges)", "3D overview"};
+        // Out-of-band statistical: hot edges, and NEVER an exact Loom /
+        // Scrubber (it does not single-step). Nor the 3D overview: the
+        // SM_SAMPLE serve branch arms no code image, so that tab — presence-
+        // gated on codeimage regions — never appears for a sample capture.
+        return {"Observer (hot edges)"};
     case LiveMode::Watch:
         return {"Observer (watchpoints)"};
     }

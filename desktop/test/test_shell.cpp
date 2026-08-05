@@ -2680,9 +2680,11 @@ int main() {
         ls.live_tab = 0;
         ls.inspect.want = LiveMode::Log;
         shell_apply_live_panes(ls);
-        check("live-panes/log-fills-observer-timeline",
-              ls.pane_open[kPaneObserver] && ls.pane_open[kPaneTimeline],
-              "a log capture opens the Observer + Timeline it fills");
+        check("live-panes/log-fills-observer-only",
+              ls.pane_open[kPaneObserver] && !ls.pane_open[kPaneTimeline],
+              "a log capture opens the Observer it fills — and NOT the "
+              "Timeline, which is the OPERAND timeline (one row per df_step) "
+              "and would render zero rows for a syscall-only capture");
         check("live-panes/log-no-loom-scrubber",
               !ls.pane_open[kPaneLoom] && !ls.pane_open[kPaneScrubber] &&
                   !ls.pane_open[kPaneRecording],
@@ -2729,10 +2731,26 @@ int main() {
         ts.inspect.want = LiveMode::Trace;
         shell_apply_live_panes(ts);
         check("live-panes/trace",
-              ts.pane_open[kPaneTimeline] && ts.pane_open[kPaneRecording] &&
-                  ts.pane_open[kPaneObserver] && !ts.pane_open[kPaneLoom] &&
+              ts.pane_open[kPaneRecording] && ts.pane_open[kPaneObserver] &&
+                  !ts.pane_open[kPaneTimeline] && !ts.pane_open[kPaneLoom] &&
                   !ts.pane_open[kPaneScrubber],
-              "a trace capture opens Timeline/Recording/Observer, not Loom/Scrubber");
+              "a trace capture opens Recording (its Canvas + 3D overview) and "
+              "Observer (codeimage) — not the operand Timeline, which needs "
+              "df_step, and not the exact Loom/Scrubber");
+
+        // A `tree` capture fills the 3D overview's module-excursion ribbon: the
+        // serve host arms a code image over the executable's text precisely so
+        // it can (cli/asmspy.c:4031-4040). Omitting kPaneRecording here is what
+        // CLOSED that pane on every tree capture.
+        ShellState tr;
+        tr.mode = Mode::Capture;
+        tr.live_tab = 0;
+        tr.inspect.want = LiveMode::Tree;
+        shell_apply_live_panes(tr);
+        check("live-panes/tree-opens-3d-host",
+              tr.pane_open[kPaneObserver] && tr.pane_open[kPaneRecording],
+              "a tree capture opens the Observer (call tree) AND the Recording "
+              "pane that hosts the 3D overview its ribbon lives in");
 
         // A statistical `sample` capture never single-steps: Observer (hot edges) +
         // the 3D plane, and DEFINITELY not the exact Loom/Scrubber.
@@ -2769,9 +2787,10 @@ int main() {
             R"({"k":"session","state":"started","mode":"log","pid":1,"params":{}})");
         shell_apply_live_panes(ms);
         check("live-panes/uses-session-mode",
-              ms.pane_open[kPaneObserver] && ms.pane_open[kPaneTimeline] &&
+              ms.pane_open[kPaneObserver] && !ms.pane_open[kPaneTimeline] &&
                   !ms.pane_open[kPaneLoom] && !ms.pane_open[kPaneScrubber],
-              "the running mode is the session's started echo (log), not want (auto)");
+              "the running mode is the session's started echo (log -> Observer "
+              "alone), not want (auto -> the whole exact deck)");
     }
 
     // ---- R2: the Log is a bounded, colored scrollback -----------------------

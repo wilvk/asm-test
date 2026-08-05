@@ -527,6 +527,11 @@ static std::string viz_line(LiveMode m) {
     std::string o;
     for (const char *v : mode_visualizations(m))
         o += (o.empty() ? "" : ", ") + std::string(v);
+    // An empty list is a FACT about the mode, not a missing string: `stream`
+    // records events no view in this build reads. Say that, rather than trail
+    // off after "shows:" — a blank there reads as a bug in the picker.
+    if (o.empty())
+        o = "nothing — this capture records events no view in this build reads";
     return o;
 }
 

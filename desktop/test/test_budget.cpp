@@ -313,11 +313,24 @@ int main(void) {
                               "` must appear exactly once in the picker order");
         }
 
-        // Every mode advertises at least one visualization.
-        for (LiveMode m : modes)
-            check("viz/non-empty", !mode_visualizations(m).empty(),
-                  std::string("mode `") + mode_name(m) +
-                      "` must name at least one visualization");
+        // Every mode advertises at least one visualization — EXCEPT `stream`,
+        // whose `stream` events no view in this build reads (there is no
+        // by_kind("stream") consumer anywhere in desktop/src, and
+        // observer_has_any does not count them). An empty list is that fact
+        // stated, and the picker renders it as a sentence. Pinning WHICH mode
+        // may be empty is a stronger contract than "all non-empty": it fails
+        // both if stream grows a phantom entry and if any other mode loses its
+        // real ones.
+        for (LiveMode m : modes) {
+            const bool empty = mode_visualizations(m).empty();
+            const bool is_stream = mode_name(m) == std::string("stream");
+            check("viz/empty-only-stream", empty == is_stream,
+                  std::string("mode `") + mode_name(m) + "` " +
+                      (empty ? "names no visualization, but only `stream` may "
+                               "— every other mode fills something"
+                             : "names a visualization, but `stream` events "
+                               "have no reader in this build"));
+        }
 
         // A statistical sampler cannot offer an EXACT Loom or Scrubber (it never
         // single-steps) — the one mapping that would be a lie if it drifted.
@@ -341,6 +354,77 @@ int main(void) {
         }
         check("viz/auto-has-loom-and-scrubber", auto_loom && auto_scrub,
               "auto captures exact per-step values — it offers Loom + Scrubber");
+    }
+
+    // ---- the advertise-vs-fill contract -------------------------------------
+    //
+    // mode_visualizations is a CLAIM about what another TU records. Nothing
+    // links it to the producer, so it drifts silently and a tooltip promises a
+    // tab that never appears. These checks pin each row against the event kinds
+    // the mode actually emits (cli/asmspy.c's serve_* sinks), naming the
+    // producer site in the failure text so a future edit knows where to look.
+    {
+        auto viz_has = [](LiveMode m, const char *want) {
+            for (const char *v : mode_visualizations(m))
+                if (std::string(v) == want)
+                    return true;
+            return false;
+        };
+
+        // A mode fills the 3D overview iff the serve host arms a codeimage for
+        // it — ViewId::Scene3D presence is !regions_from_codeimage(r).empty()
+        // (ui/view_presence.cpp). asmspy.c arms it for tree/trace/dataflow/auto
+        // only (asmspy.c:4039, :4062, :4067, :4155).
+        const struct {
+            const char *name;
+            bool codeimage;
+        } kCodeimage[] = {
+            {"tree", true},   {"trace", true},  {"dataflow", true},
+            {"auto", true},   {"log", false},   {"stream", false},
+            {"graph", false}, {"procs", false}, {"sample", false},
+            {"watch", false},
+        };
+        for (const auto &row : kCodeimage) {
+            LiveMode m;
+            check("viz/3d/mode-name", mode_from_name(row.name, &m),
+                  std::string("unknown mode name in this test: ") + row.name);
+            if (!mode_from_name(row.name, &m))
+                continue;
+            check("viz/3d-vs-codeimage",
+                  viz_has(m, "3D overview") == row.codeimage,
+                  std::string(row.name) +
+                      (row.codeimage
+                           ? " arms a codeimage (asmspy.c serve_codeimage_arm)"
+                             " so it fills the 3D overview, but its row does"
+                             " not say so"
+                           : " arms no codeimage, so the 3D overview tab can"
+                             " never appear — its row must not promise it"));
+        }
+
+        // The Slice and the Timeline are both built from df_step (doc/streams.cpp
+        // decodes Streams::df from df_step/df_edge only), so only the two
+        // dataflow-bearing modes may name them.
+        const char *kDfOnly[] = {"Slice", "Timeline"};
+        const struct {
+            const char *name;
+            bool df;
+        } kDataflow[] = {
+            {"dataflow", true}, {"auto", true},   {"log", false},
+            {"stream", false},  {"trace", false}, {"tree", false},
+            {"graph", false},   {"procs", false}, {"sample", false},
+            {"watch", false},
+        };
+        for (const auto &row : kDataflow) {
+            LiveMode m;
+            if (!mode_from_name(row.name, &m))
+                continue;
+            for (const char *v : kDfOnly)
+                check("viz/df-vs-dfstep", viz_has(m, v) == row.df,
+                      std::string(row.name) + "/" + v + ": emits " +
+                          (row.df ? "" : "no ") +
+                          "df_step, so it must " + (row.df ? "" : "not ") +
+                          "advertise \"" + v + "\"");
+        }
     }
 
     if (failures) {

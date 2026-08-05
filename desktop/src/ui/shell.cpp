@@ -3380,6 +3380,10 @@ void shell_apply_mode_panes(ShellState &s, Mode m) {
 static const char *const kAllVizPanes[] = {kPaneRecording, kPaneLoom,
                                            kPaneObserver, kPaneTimeline,
                                            kPaneScrubber};
+// KEEP IN SYNC with live/budget.cpp's mode_visualizations(): that names what a
+// mode fills, this opens the panes those views live in, and the two drifting
+// apart is how a capture came to close the very pane hosting its own scene.
+// test_budget pins the visualization half against the producer's event kinds.
 static std::vector<const char *> mode_viz_panes(LiveMode m) {
     switch (m) {
     case LiveMode::Auto:
@@ -3388,14 +3392,25 @@ static std::vector<const char *> mode_viz_panes(LiveMode m) {
     case LiveMode::Dataflow:
         return {kPaneRecording, kPaneLoom, kPaneScrubber, kPaneTimeline};
     case LiveMode::Trace:
-        return {kPaneRecording, kPaneTimeline, kPaneObserver};
+        // No kPaneTimeline: that pane is the OPERAND timeline, one row per
+        // df_step, and a trace capture emits none. Its Canvas and 3D overview
+        // both live in kPaneRecording.
+        return {kPaneRecording, kPaneObserver};
     case LiveMode::Log:
-        return {kPaneObserver, kPaneTimeline};
+        return {kPaneObserver};
     case LiveMode::Stream:
-        return {kPaneRecording, kPaneTimeline};
+        // kPaneRecording for the Summary's provenance chrome only — a `stream`
+        // capture's own events have no reader in this build (see
+        // mode_visualizations, which returns {} for exactly this reason).
+        return {kPaneRecording};
     case LiveMode::Sample:
         return {kPaneObserver, kPaneRecording};
     case LiveMode::Tree:
+        // kPaneRecording hosts the 3D overview, and a tree capture fills its
+        // module-excursion ribbon — the serve host arms a code image over the
+        // executable's text precisely so it can (cli/asmspy.c:4031-4040).
+        // Omitting it here is what CLOSED that pane on every tree capture.
+        return {kPaneObserver, kPaneRecording};
     case LiveMode::Graph:
     case LiveMode::Procs:
     case LiveMode::Watch:
