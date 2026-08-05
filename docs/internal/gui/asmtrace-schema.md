@@ -986,7 +986,7 @@ falls back to the recorded `disasm` strings (D10) or to bare offsets.
    "cpu_jiffies":12,"syscall_why":"needs ptrace permission (Yama ptrace_scope / uid)"}],
  "threads_truncated":false,
  "code":{"syms_total":61530,"jit_methods":1402,"jit_source":"perf-map",
-   "anon_exec_bytes":12582912},
+   "anon_exec_bytes":12582912,"maps_readable":true},
  "modules":[{"name":"libnode.so","path":"/usr/lib/libnode.so","base":"0x7f0000",
    "size":2117632,"exec":true,"syms":50123}],
  "modules_truncated":false,
@@ -1021,7 +1021,7 @@ nine named top-level members — six objects (`identity`, `runtime`,
 struct). Read the JSON shape above as the contract; use the struct link for
 field-level intent, not for the wire layout.
 
-Four encoding rules carry weight beyond "whatever the struct happens to hold":
+Five encoding rules carry weight beyond "whatever the struct happens to hold":
 
 - **A thread with no readable syscall OMITS the `syscall` object and carries
   `syscall_why` instead.** Absent-with-a-reason, never a blank `syscall`
@@ -1037,7 +1037,21 @@ Four encoding rules carry weight beyond "whatever the struct happens to hold":
   `syms`, and everything else that is a magnitude rather than a location.
 - **`why` and `remedy` are `""` when there is nothing to say, never absent.**
   A consumer may always read `trace.why`, `trace.remedy`, and each mode's
-  `why` without a presence check.
+  `why` without a presence check. (The one case where a `why` is non-empty
+  under `ok:true` is `attachable:-1` — see *trace.modes* below.)
+- **`code.maps_readable` gates the whole `code` object and the `modules`
+  array.** `syms_total`, `jit_methods`, `anon_exec_bytes` and every module row
+  are derived from `/proc/<pid>/maps` — directly, or via the symbol loader
+  that reads it first — so when that file could not be opened they are all
+  zero *because nothing was read*, which is byte-for-byte the body a
+  genuinely code-free process produces. `false` therefore means **absent
+  measurement**, never measured zero, and a reader must withhold any
+  conclusion drawn from those numbers ("a trace of this process will show raw
+  addresses" is the one that matters) rather than state it. This is not a
+  rare path: it is the state of **every process the running user does not
+  own**. A recording written before this field existed omits it; treat an
+  absent key as `true`, since stamping "unreadable" on a snapshot that
+  expressed no opinion would manufacture the opposite error.
 
 `trace.attachable` is `1` yes / `0` no / `-1` unknown — the third value is a
 real measurement outcome (Yama `ptrace_scope` restricts attach to descendants
@@ -1053,13 +1067,87 @@ flags, by [`asmspy_mode_name`](../../../cli/libasmspy.h#L165) — `"log"`,
 `"sample"`, `"watch"` — so a consumer never needs its own copy of that list to
 render "which modes will work here."
 
+**A mode's `ok` is two-valued; `trace.attachable` is three.** When
+`attachable` is `-1`, a mode whose own gates are clear carries `ok:true`
+**and a non-empty `why`** — the undetermined attach it still depends on. This
+is the one case where `why` is non-empty under `ok:true`, and it is not an
+exception bolted on: `ok` alone cannot express the third state, so the reason
+is what makes it legible. **A reader must render such a mode as "maybe", not
+"yes"** — and since `-1` is the default on any host with `ptrace_scope=1`,
+that is the common rendering, not a corner. Under `attachable:1` a clear mode
+carries `ok:true` with `why:""` as before.
+
+### Caps, and what truncation can and cannot tell you
+
+Every list in this body is bounded, so a consumer never has to defend against
+an unbounded one — and every bound has a flag beside it, because a short list
+with nothing said about it is indistinguishable from a short process:
+
+| Array | Cap | Truncation flag | Total also on the wire? |
+|---|---|---|---|
+| `threads` | 64 ([`ASMSPY_PI_THREADS_CAP`](../../../cli/libasmspy.h#L142)) | `threads_truncated` | **yes** — `counters.threads` is the kernel's own count |
+| `modules` | 64 (`ASMSPY_PI_MODULES_CAP`) | `modules_truncated` | **no** — see below |
+| `children` | 32 (`ASMSPY_PI_CHILDREN_CAP`) | `children_truncated` | **no** |
+| `identity.argv` | 64 entries / 4096 bytes (`ASMSPY_PI_ARGV_CAP`, `ASMSPY_PI_ARGV_BYTES`) | `argv_truncated` | **no** |
+
+**`modules` carries no total, so its truncation MAGNITUDE is unrecoverable.**
+`threads_truncated` can be rendered as "showing 64 of 312" because
+`counters.threads` states the real number; `modules_truncated:true` can only
+be rendered as "there were more". This is a **stated v1 gap**, not an
+oversight to be papered over: a reader must not infer a magnitude, and must
+not render `modules.length` as the module count of the process. The same
+holds for `children` and `argv`. (A future `code.modules_total` would close
+it additively, under the same append-only rule this section was added by.)
+
+**Which 64 modules survive is a ranking, and the flag alone does not say
+whether that ranking ran.** The producer builds an **unbounded,
+basename-deduplicated** table first, ranks it by `syms` **descending**, and
+only then applies the 64-row cap — so a capped list really is the 64 modules
+a trace is most likely to resolve names against. Two consequences a reader
+must not get backwards:
+
+- **The dedupe is by BASENAME, not by path.** Two distinct files sharing a
+  name (two Firefox `omni.ja`, the same `.so` bind-mounted at two paths)
+  become ONE row whose `syms` and `size` are their sum, and whose `path`/
+  `base` are the first one seen. The symbol table's own per-symbol module
+  tag is just the basename, so nothing downstream could tell them apart
+  anyway; two rows would present a distinction nothing can measure and hand
+  one of them a false `"syms":0`.
+- **`budget_exceeded:true` invalidates the ranking.** A budget abort cuts the
+  merge loop mid-scan, before any symbol is attributed: the survivors are
+  whatever `/proc/<pid>/maps` listed first (address order), every one of them
+  reads `"syms":0`, and the sort then leaves them in NAME order. A reader
+  that says "the N highest-symbol modules" whenever `modules_truncated` is
+  set describes a ranking that never ran. Key that wording off
+  `modules_truncated && !budget_exceeded`.
+
+`children_truncated` likewise means **either** cause: the 32-row cap, **or**
+a `/proc` walk the budget stopped. Because that walk visits `/proc` in inode
+order, an abort can land before the first child is found — so
+`children:[]` with `children_truncated:true` is reachable and means "the scan
+stopped looking", which is **not** the same claim as `children:[]` with the
+flag false ("this process has no children"). `counters.fds` is short in the
+same way for the same reason, and `budget_exceeded` is the only thing that
+says so.
+
 **Producer.** `asmspy --info <pid>` is the sole producer: it calls
 `asmspy_procinfo()` once, then emits the result as human text (default),
 `--json` on stdout, a `--record=<f>` file, or both — the two channels are
 independent, exactly like every other headless mode's `--json`/`--record`. A
-nonexistent pid is refused (nonzero exit) rather than rendered as an empty
-snapshot; a budget-exceeded gather still emits everything it collected before
-the cutoff, with `budget_exceeded:true` stating the gap plainly.
+budget-exceeded gather still emits everything it collected before the cutoff,
+with `budget_exceeded:true` stating the gap plainly.
+
+**Exit codes.** `0` success; `1` the output you asked for did not happen (a
+`--record` path that could not be opened, a body that overflowed the 256 KB
+cap and was refused rather than truncated); `2` usage / bad argument; **`3`
+the pid does not exist**
+([`ASMSPY_INFO_EXIT_NO_SUCH_PID`](../../../cli/libasmspy.h#L298)). `3` has a
+code of its own because a target that exits between a process list naming it
+and the probe firing is the **routine** outcome of browsing a live list — the
+desktop's Process details pane fires a probe on every selection change — and
+a caller that cannot tell that race from a broken `asmspy` reports normal
+behaviour as a failure. A nonexistent pid is never rendered as an empty
+snapshot.
 
 ## `regstate` descriptor — `emu_x86_regs_t@x86_64/sysv`
 
