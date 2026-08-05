@@ -1,5 +1,6 @@
 // primer.cpp — the first-open primer (see primer.h). Draw + pure predicates.
 #include "ui/primer.h"
+#include "ui/flow.h"
 
 #include "ui/theme.h"
 
@@ -34,7 +35,8 @@ bool dt_primer(const char *id, const char *title, const char *body,
     ImGui::Spacing();
     if (ImGui::Button("Got it"))
         dt_primer_dismiss(st);
-    ImGui::SameLine();
+    flow_same_line(
+        flow_text_w("(re-open any time from the \"?\" in this view's header)"));
     ImGui::TextColored(dt_dim_col(),
                        "(re-open any time from the \"?\" in this view's header)");
     ImGui::Separator();

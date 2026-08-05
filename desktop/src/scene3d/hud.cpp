@@ -12,6 +12,7 @@
 #include "scene3d/goto.h"
 #include "scene3d/layers.h" // 56 T1: the layer registry
 #include "space/projection.h"
+#include "ui/flow.h" // narrow-pane wrap: the HUD is the densest control surface
 #include "ui/theme.h"
 #include "ui/timepos.h" // one time-position widget, continuous scrub (24 T4)
 
@@ -27,10 +28,26 @@ const ImVec4 kWarn = dt_warn_col();
 const ImVec4 kBad = dt_refuse_col();
 const ImVec4 kDim = dt_dim_col();
 
-// A small pill of coloured text; chips sit on one line separated by a bullet.
+// A small pill of coloured text; chips flow along a line separated by a bar,
+// and WRAP as a run — separator and chip move to the next line together, so a
+// wrapped provenance strip never opens with a dangling "|". Each chip issues
+// its own same-line join (including the first, which joins the "provenance:"
+// label), so the caller never has to.
 void chip(const ImVec4 &col, const char *text, bool &first) {
-    if (!first)
-        ImGui::SameLine(0, 8), ImGui::TextDisabled("|"), ImGui::SameLine(0, 8);
+    const float text_w = flow_text_w(text);
+    if (first) {
+        flow_same_line(text_w);
+    } else {
+        // Measured as the whole run — bar, gap, chip — so the bar is never the
+        // thing that just fits and strands its chip. When it does not fit the
+        // line break IS the separation, so the bar is dropped rather than left
+        // dangling at the head of the next line.
+        const float bar_w = flow_text_w("|");
+        if (!flow_same_line(bar_w + 8.0f + text_w, 8.0f)) {
+            ImGui::TextDisabled("|");
+            ImGui::SameLine(0, 8);
+        }
+    }
     ImGui::TextColored(col, "%s", text);
     first = false;
 }
@@ -510,7 +527,7 @@ void draw_scene_axes(SceneKind k) {
 static void draw_scene_kind_selector(HudState &s) {
     const std::vector<SceneKind> &kinds = all_scene_kinds();
     ImGui::TextUnformatted("scene:");
-    ImGui::SameLine();
+    flow_same_line(240.0f);
     ImGui::SetNextItemWidth(240.0f);
     if (ImGui::BeginCombo("##scene-kind", scene_kind_name(s.kind))) {
         for (SceneKind k : kinds) {
@@ -528,7 +545,7 @@ static void draw_scene_kind_selector(HudState &s) {
             }
             ImGui::EndDisabled();
             if (!ok) {
-                ImGui::SameLine();
+                flow_same_line(flow_textf_w("— %s", why.c_str()));
                 ImGui::TextColored(kDim, "— %s", why.c_str());
             }
         }
@@ -560,7 +577,6 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
 
     // --- provenance chips: coarse-vs-rich, exact-vs-statistical, truncation ----
     ImGui::TextUnformatted("provenance:");
-    ImGui::SameLine();
     bool first = true;
     // The basis chip is now PURE (basis_chip), so its defect-1 traj.basis fallback
     // is testable — reverting it fails a named check.
@@ -629,7 +645,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // by its axis so it never reads as the flat views' execution-step playhead.
     if (ImGui::Button(s.playing ? "Pause##scene" : "Play##scene"))
         s.req_play_toggle = true;
-    ImGui::SameLine();
+    flow_same_line(flow_text_w("play — step (trace time)"));
     ImGui::TextColored(kDim, "play — step (trace time)");
 
     // --- layer toggles (56 T1): generated from the registry, never hand-listed
@@ -651,7 +667,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                 ImGui::TextColored(kDim, "%s", group_label(row.group));
                 last_group = row.group;
             }
-            ImGui::SameLine();
+            flow_same_line(flow_checkbox_w(row.label));
             ImGui::Checkbox(row.label, &(s.layers.*row.flag));
             // The registry's own "question" (T1's stated goal: no layer
             // ships without one) — a hover tooltip, so the toggle row stays
@@ -659,7 +675,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", row.question);
             if (row.grade == LayerGrade::Statistical) {
-                ImGui::SameLine();
+                flow_same_line(flow_text_w("STATISTICAL — survey"));
                 ImGui::TextColored(kWarn, "STATISTICAL — survey");
             }
         }
@@ -717,7 +733,6 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                    ImGuiColorEditFlags_NoTooltip |
                                        ImGuiColorEditFlags_NoPicker,
                                    ImVec2(12, 12));
-                ImGui::SameLine();
                 char label[96];
                 if (row.statistical)
                     std::snprintf(label, sizeof label,
@@ -728,6 +743,9 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                 else
                     std::snprintf(label, sizeof label, "tid %d##r%zu",
                                   static_cast<int>(row.tid), i);
+                // Measured after the label is built, so the swatch keeps its
+                // row's name beside it or gives it a line of its own.
+                flow_same_line(flow_text_w(label));
                 if (row.focusable) {
                     const bool sel = s.focus.tid >= 0 && s.focus.tid == row.tid;
                     if (ImGui::Selectable(label, sel))
@@ -744,12 +762,14 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                             "thread — it is never focusable, and keeps its "
                             "normal weight while a thread is focused");
                 }
-                ImGui::SameLine();
+                flow_same_line(flow_textf_w("%llu of %llu vertices placed",
+                                            (unsigned long long)row.placed,
+                                            (unsigned long long)row.vertices));
                 ImGui::TextColored(kDim, "%llu of %llu vertices placed",
                                    (unsigned long long)row.placed,
                                    (unsigned long long)row.vertices);
                 if (!row.note.empty()) {
-                    ImGui::SameLine();
+                    flow_same_line(flow_text_w(row.note.c_str()));
                     ImGui::TextColored(kWarn, "%s", row.note.c_str());
                 }
             }
@@ -766,8 +786,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         for (space::Region::Kind k : kKinds) {
             const uint32_t bit = 1u << static_cast<uint32_t>(k);
             bool on = (s.focus.kind_mask & bit) != 0;
-            ImGui::SameLine();
             space::RegionStyle st = space::region_style(k);
+            // Measured as a PAIR: a swatch that wrapped without its checkbox
+            // would be a colour with nothing to say what it means.
+            flow_same_line(10.0f + ImGui::GetStyle().ItemSpacing.x +
+                           flow_checkbox_w(kind_label(k)));
             ImGui::ColorButton(
                 (std::string("##kc") + st.name).c_str(),
                 ImVec4(st.r, st.g, st.b, 1.0f),
@@ -791,7 +814,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         ImGui::TextDisabled("region filter: no regions in this recording");
     } else {
         ImGui::TextUnformatted("region:");
-        ImGui::SameLine();
+        flow_same_line(220.0f);
         ImGui::SetNextItemWidth(220.0f);
         std::string preview =
             s.focus.region >= 0 && static_cast<size_t>(s.focus.region) <
@@ -828,13 +851,13 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("no code region placed — nothing to land on");
     }
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("default view"));
     if (ImGui::Button("default view"))
         s.req_default_view = true;
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("top-down (2D-ish)"));
     if (ImGui::Button("top-down (2D-ish)"))
         s.req_top_down = true;
-    ImGui::SameLine();
+    flow_same_line(flow_text_w("3D to find, 2D to read"));
     ImGui::TextColored(kDim, "3D to find, 2D to read");
 
     // 48 T4: "you are here" — a pure function of (terr.proj, camera target),
@@ -862,7 +885,8 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         if (ImGui::Button("frame the selection"))
             s.req_frame_highlight = true;
         if (s.highlight_ambiguous) {
-            ImGui::SameLine();
+            flow_same_line(
+                flow_text_w("(this address recurs — cell is where, not when)"));
             ImGui::TextColored(
                 kDim, "(this address recurs — cell is where, not when)");
         }
@@ -887,12 +911,12 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                            scene_kind_name(s.kind), scene_axes(s.kind).x);
     } else {
     ImGui::TextUnformatted("go to:");
-    ImGui::SameLine();
+    flow_same_line(160.0f);
     ImGui::SetNextItemWidth(160.0f);
     const bool addr_enter = ImGui::InputTextWithHint(
         "##goto_addr", "0x... address", s.goto_addr_buf, sizeof s.goto_addr_buf,
         ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("go##addr"));
     if (ImGui::Button("go##addr") || addr_enter) {
         char *end = nullptr;
         uint64_t addr =
@@ -917,10 +941,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     if (terr.proj.regions.empty()) {
         // T5's own rule (48 T3 too): a control the current state cannot serve
         // says why rather than vanishing.
-        ImGui::SameLine();
+        flow_same_line(
+            flow_text_w("(region goto: no regions in this recording)"));
         ImGui::TextDisabled("(region goto: no regions in this recording)");
     } else {
-        ImGui::SameLine();
+        flow_same_line(220.0f);
         ImGui::SetNextItemWidth(220.0f);
         std::string preview =
             s.goto_region_sel >= 0 && static_cast<size_t>(s.goto_region_sel) <
@@ -946,7 +971,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
             }
             ImGui::EndCombo();
         }
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("go##region"));
         if (ImGui::Button("go##region") && s.goto_region_sel >= 0) {
             float gu = 0.0f, gv = 0.0f, grad = 0.0f;
             if (scene_goto_region(terr.proj,
@@ -987,7 +1012,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                            ImGuiColorEditFlags_NoTooltip |
                                ImGuiColorEditFlags_NoPicker,
                            ImVec2(12, 12));
-        ImGui::SameLine();
+        flow_same_line(flow_text_w(sw.label.c_str()));
         ImGui::TextUnformatted(sw.label.c_str());
     }
     // T2 (56): the confidence layer's own idiom, shown only while it is on —
@@ -1004,7 +1029,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                ImGuiColorEditFlags_NoTooltip |
                                    ImGuiColorEditFlags_NoPicker,
                                ImVec2(12, 12));
-            ImGui::SameLine();
+            flow_same_line(flow_text_w(sw.label.c_str()));
             ImGui::TextUnformatted(sw.label.c_str());
         }
     }
@@ -1031,7 +1056,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                                ImGuiColorEditFlags_NoTooltip |
                                    ImGuiColorEditFlags_NoPicker,
                                ImVec2(12, 12));
-            ImGui::SameLine();
+            flow_same_line(flow_text_w(sw.label.c_str()));
             ImGui::TextUnformatted(sw.label.c_str());
         }
         if (s.relief_undirected_cells > 0)
@@ -1248,7 +1273,7 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                            ImGuiColorEditFlags_NoTooltip |
                                ImGuiColorEditFlags_NoPicker,
                            ImVec2(12, 12));
-        ImGui::SameLine();
+        flow_same_line(flow_text_w(sw.label.c_str()));
         ImGui::TextUnformatted(sw.label.c_str());
     }
     ImGui::TextColored(kDim, "%s", vertical_axes_note());
@@ -1267,7 +1292,8 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                            ImGuiColorEditFlags_NoTooltip |
                                ImGuiColorEditFlags_NoPicker,
                            ImVec2(12, 12));
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w(
+            "%s  (%s)", r.label.empty() ? st.name : r.label.c_str(), st.name));
         ImGui::Text("%s  (%s)", r.label.empty() ? st.name : r.label.c_str(),
                     st.name);
     }

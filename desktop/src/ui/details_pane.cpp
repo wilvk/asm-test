@@ -13,6 +13,7 @@
 #include "imgui.h"
 #include "live/procinfo.h"
 #include "ui/doors.h"
+#include "ui/flow.h"
 #include "ui/theme.h"
 
 namespace asmdesk {
@@ -73,9 +74,9 @@ void draw_details_pane(InspectState &s) {
     }
     // --- header ---------------------------------------------------------
     ImGui::Text("pid %ld  %s", p.pid, p.comm.c_str());
-    ImGui::SameLine();
-    ImGui::TextDisabled("[%s]  %c",
-                        p.runtime.empty() ? "?" : p.runtime.c_str(), p.state);
+    const char *rt = p.runtime.empty() ? "?" : p.runtime.c_str();
+    flow_same_line(flow_textf_w("[%s]  %c", rt, p.state));
+    ImGui::TextDisabled("[%s]  %c", rt, p.state);
     if (!p.argv.empty()) {
         std::string cmd;
         for (size_t i = 0; i < p.argv.size(); ++i)
@@ -104,7 +105,7 @@ void draw_details_pane(InspectState &s) {
                            : p.attachable == 0 ? "NO"
                                                : "MAYBE";
         ImGui::TextColored(pi_verdict_col(p.attachable), "attach   %s", word);
-        ImGui::SameLine();
+        flow_same_line(flow_text_w(p.attach_why.c_str()));
         ImGui::TextUnformatted(p.attach_why.c_str());
         if (!p.attach_remedy.empty())
             ImGui::TextDisabled("-> %s", p.attach_remedy.c_str());
@@ -191,7 +192,7 @@ void draw_details_pane(InspectState &s) {
                 if (t.have_syscall && !t.name.empty()) {
                     ImGui::TextUnformatted(t.name.c_str());
                     if (!t.pc_sym.empty()) {
-                        ImGui::SameLine();
+                        flow_same_line(flow_textf_w("(%s)", t.pc_sym.c_str()));
                         ImGui::TextDisabled("(%s)", t.pc_sym.c_str());
                     }
                 } else if (!t.wchan.empty()) {

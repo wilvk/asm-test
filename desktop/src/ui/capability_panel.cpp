@@ -13,6 +13,7 @@
 
 #include "capview.h"
 #include "ui/doors.h"
+#include "ui/flow.h"
 #include "views/views_draw.h"
 
 // The probe compiles only where the capability objects are on the link line.
@@ -77,10 +78,11 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
 
     if (ImGui::Checkbox("native only", &s.native_only))
         cap_probe(s); // re-resolve under ASMTEST_TRACE_NATIVE_ONLY
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("refresh"));
     if (ImGui::SmallButton("refresh"))
         cap_probe(s);
-    ImGui::SameLine();
+    flow_same_line(
+        flow_text_w("probed once at open; the GUI never re-derives these"));
     ImGui::TextDisabled("probed once at open; the GUI never re-derives these");
 
     // Lead with the POSITIVES (T4, F19): a one-line summary of what the host CAN
@@ -124,7 +126,7 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
         }
         ImGui::Text("[ok]   %s", r.label.c_str());
         if (!r.chip.empty()) {
-            ImGui::SameLine();
+            flow_same_line(flow_textf_w("(%s)", r.chip.c_str()));
             ImGui::TextDisabled("(%s)", r.chip.c_str());
         }
     }
@@ -141,7 +143,7 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
             ImGui::Text("[grey] %s", r.label.c_str());
             ImGui::PopStyleColor();
             if (!r.chip.empty()) {
-                ImGui::SameLine();
+                flow_same_line(flow_textf_w("(%s)", r.chip.c_str()));
                 ImGui::TextDisabled("(%s)", r.chip.c_str());
             }
             if (!r.reason.empty()) {

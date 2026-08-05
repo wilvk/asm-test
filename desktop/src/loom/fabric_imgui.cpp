@@ -10,6 +10,7 @@
 
 #include "loom/loom_draw.h"
 #include "nav.h"             // dt_link — the minimap click routes through it (21 T3)
+#include "ui/flow.h"
 #include "ui/legend.h"
 #include "ui/primer.h"
 #include "ui/terms.h"
@@ -215,16 +216,21 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
     const loom_fabric_t &f = L.fabric;
 
     // --- the deck, and the lane whose annex is open ------------------------
-    ImGui::BeginChild("loom-deck", ImVec2(200, 0), true);
+    // The lane deck stacks above the fabric once the pane is too narrow to seat
+    // both — the fabric is the wider half, and it was the one that used to be
+    // pushed past the right edge entirely (ui/flow.h).
+    const FlowRail rail = flow_rail(200.0f, 280.0f);
+    ImGui::BeginChild("loom-deck", rail.rail, true);
     for (size_t i = 0; i < f.lanes.size(); i++) {
         bool sel = static_cast<int>(i) == L.lane;
         if (ImGui::Selectable(f.lanes[i].name.c_str(), sel))
             L.lane = sel ? -1 : static_cast<int>(i);
     }
     ImGui::EndChild();
-    ImGui::SameLine();
+    if (!rail.stacked)
+        ImGui::SameLine();
 
-    ImGui::BeginChild("loom-fabric", ImVec2(0, 0), false);
+    ImGui::BeginChild("loom-fabric", rail.main, false);
 
     // Whole-fabric overview/minimap (21-spine-navigation.md T3): a compressed
     // projection of the fabric's OWN steps (overview_from_fabric — no new
@@ -305,7 +311,7 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
     if (dt_timepos_scrub("playhead", &ph, f.steps ? static_cast<int>(f.steps) - 1
                                                   : 0))
         L.playhead = static_cast<uint32_t>(ph);
-    ImGui::SameLine();
+    flow_same_line(flow_checkbox_w(kLoomAuditTitle));
     ImGui::Checkbox(kLoomAuditTitle, &L.audit);
     if (L.audit && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", kLoomAuditHover);

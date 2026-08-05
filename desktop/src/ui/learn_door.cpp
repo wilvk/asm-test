@@ -8,6 +8,7 @@
 #include <filesystem>
 
 #include "ui/doors.h"
+#include "ui/flow.h"
 #include "views/views_draw.h"
 
 namespace fs = std::filesystem;
@@ -76,7 +77,7 @@ void draw_learn_door(LearnState &s,
 
     ImGui::TextUnformatted("Learn — bundled walkthroughs");
     ImGui::TextDisabled("%s", s.dir.c_str());
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("rescan"));
     if (ImGui::SmallButton("rescan"))
         learn_scan(s, learn_dir());
     ImGui::Separator();
@@ -86,7 +87,11 @@ void draw_learn_door(LearnState &s,
         return;
     }
 
-    ImGui::BeginChild("learn-cards", ImVec2(300, 0), true);
+    // The catalog beside the player only while both fit; below that the catalog
+    // stacks ABOVE the player rather than pushing it off the right edge, where
+    // nothing could scroll it back into view (ui/flow.h).
+    const FlowRail rail = flow_rail(300.0f, 280.0f);
+    ImGui::BeginChild("learn-cards", rail.rail, true);
     // One card's draw, factored so the ImSearch-filtered path and the plain
     // fallback share it (16 T2).
     auto draw_card = [&](size_t i) {
@@ -127,9 +132,10 @@ void draw_learn_door(LearnState &s,
             draw_card(i);
     }
     ImGui::EndChild();
-    ImGui::SameLine();
+    if (!rail.stacked)
+        ImGui::SameLine();
 
-    ImGui::BeginChild("learn-player", ImVec2(0, 0), false);
+    ImGui::BeginChild("learn-player", rail.main, false);
     if (s.open_card < 0) {
         ImGui::TextDisabled("pick a walkthrough");
         ImGui::EndChild();
@@ -157,10 +163,10 @@ void draw_learn_door(LearnState &s,
     }
 
     ImGui::Text("stop %d of %d", stop->ordinal, (int)m.stops.size());
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("prev"));
     if (ImGui::SmallButton("prev"))
         m.prev();
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("next"));
     if (ImGui::SmallButton("next"))
         m.next();
     ImGui::Separator();

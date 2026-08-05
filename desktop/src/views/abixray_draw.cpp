@@ -5,6 +5,7 @@
 // move it, and the register deltas do the animation.
 #include "imgui.h"
 
+#include "ui/flow.h"
 #include "ui/theme.h"
 #include "views/abixray.h"
 #include "views/views_draw.h"
@@ -26,8 +27,8 @@ const ImVec4 kDiffer = dt_selected_col();
 // One locked pane: the register deck of ONE convention, read from the built
 // cross-pane rows so the DIFF tint and the per-pane highlight stay in sync.
 void draw_pane(const char *id, const char *label, const dt_abixray &x,
-               bool sysv, float width) {
-    ImGui::BeginChild(id, ImVec2(width, 0), true);
+               bool sysv, ImVec2 size) {
+    ImGui::BeginChild(id, size, true);
     ImGui::TextUnformatted(label);
     ImGui::Separator();
 
@@ -96,13 +97,13 @@ void draw_abixray(const StepIndex &sysv_idx, const StepIndex &win64_idx,
     // locked playhead to that stop's anchor, seeking both panes together.
     if (x.has_stop) {
         ImGui::Text("stop %d of %d", x.stop_ordinal, x.stop_count);
-        ImGui::SameLine();
+        flow_same_line(flow_small_button_w("prev stop"));
         bool moved = false;
         if (ImGui::SmallButton("prev stop")) {
             walk.prev();
             moved = true;
         }
-        ImGui::SameLine();
+        flow_same_line(flow_small_button_w("next stop"));
         if (ImGui::SmallButton("next stop")) {
             walk.next();
             moved = true;
@@ -142,15 +143,24 @@ void draw_abixray(const StepIndex &sysv_idx, const StepIndex &win64_idx,
         x = dt_abixray_seek(sysv_idx, win64_idx, walk, playhead);
     }
 
-    // The two LOCKED panes, side by side.
+    // The two LOCKED panes. Side by side while each half can still seat a
+    // two-column register table; below that they stack, one above the other, at
+    // full width. Halving was never a fit test — it only guaranteed neither pane
+    // left the window, not that either stayed READABLE, and a 60px-wide register
+    // deck clips every value it exists to show (ui/flow.h).
     ImGuiStyle &style = ImGui::GetStyle();
     float half =
         (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) * 0.5f;
     if (half < 1.0f)
         half = 1.0f;
-    draw_pane("abixray-sysv", x.sysv_label.c_str(), x, true, half);
-    ImGui::SameLine();
-    draw_pane("abixray-win64", x.win64_label.c_str(), x, false, 0.0f);
+    // An equal split, so the second pane's minimum IS the first pane's width:
+    // `half >= kMinPane` is exactly "both halves are wide enough".
+    const float kMinPane = 220.0f;
+    const FlowRail rail = flow_rail(half, kMinPane, 0.50f, 160.0f);
+    draw_pane("abixray-sysv", x.sysv_label.c_str(), x, true, rail.rail);
+    if (!rail.stacked)
+        ImGui::SameLine();
+    draw_pane("abixray-win64", x.win64_label.c_str(), x, false, rail.main);
 }
 
 } // namespace asmdesk

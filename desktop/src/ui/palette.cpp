@@ -1,6 +1,7 @@
 // palette.cpp — the command palette (see palette.h). The table is pure; the draw
 // is backend-free ImGui with an app-only ImSearch relevance path (doc 16 T2).
 #include "ui/palette.h"
+#include "ui/flow.h"
 
 #include <algorithm>
 #include <cctype>
@@ -255,7 +256,7 @@ void draw_palette(ShellState &s) {
                             if (ImGui::Selectable(e.label.c_str()) && e.action)
                                 run(e);
                             if (!e.detail.empty()) {
-                                ImGui::SameLine();
+                                flow_same_line(flow_text_w(e.detail.c_str()));
                                 ImGui::TextDisabled("%s", e.detail.c_str());
                             }
                         });
@@ -272,7 +273,7 @@ void draw_palette(ShellState &s) {
                     break;
                 }
                 if (!e->detail.empty()) {
-                    ImGui::SameLine();
+                    flow_same_line(flow_text_w(e->detail.c_str()));
                     ImGui::TextDisabled("%s", e->detail.c_str());
                 }
             }

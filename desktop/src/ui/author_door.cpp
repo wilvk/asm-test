@@ -21,10 +21,11 @@
 #include <utility>
 
 #include "asmtest_valtrace.h" // asmtest_valtrace_t / at_val_rec_t (R5 T3)
-#include "asmtrace_sha256.h" // the routine-identity hash (42 T1/T2), zero-dep
+#include "asmtrace_sha256.h"  // the routine-identity hash (42 T1/T2), zero-dep
 #include "author_vm.h"
 #include "ui/asm_language.h" // per-dialect syntax highlighting (17 T2 follow-on)
 #include "ui/doors.h"
+#include "ui/flow.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -234,7 +235,10 @@ void draw_author_door(AuthorState &s) {
                 s.arch = r.arch;
         ImGui::EndCombo();
     }
-    ImGui::SameLine();
+    // Two combos on one line: the dialect box drops below the arch box rather
+    // than off the pane (a combo starves rather than clips, so measure the
+    // width below which it stops being usable).
+    flow_same_line(kMinComboW);
     const char *sname = "?";
     for (const author_syntax_row &r : author_syntax_table())
         if (r.syntax == s.syntax)
@@ -246,7 +250,7 @@ void draw_author_door(AuthorState &s) {
         ImGui::EndCombo();
     }
     if (arow != nullptr && !arow->can_run) {
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("(%s)", arow->note));
         ImGui::TextDisabled("(%s)", arow->note);
     }
 
@@ -283,14 +287,17 @@ void draw_author_door(AuthorState &s) {
         if (ImGui::InputInt("##arg", &v))
             s.args[i] = v;
         ImGui::PopID();
+        // The argument boxes wrap into a grid rather than a single row that
+        // runs off the pane at six args.
         if (i + 1 < s.nargs)
-            ImGui::SameLine();
+            flow_same_line(ImGui::CalcItemWidth());
     }
 
     if (ImGui::Button("Run"))
         author_run(s);
-    ImGui::SameLine();
-    ImGui::TextDisabled(s.dirty ? "unsaved run *" : "no unsaved output");
+    const char *dirty_note = s.dirty ? "unsaved run *" : "no unsaved output";
+    flow_same_line(flow_text_w(dirty_note));
+    ImGui::TextDisabled("%s", dirty_note);
     ImGui::Separator();
 
     const author_result_t &r = s.result;
@@ -314,7 +321,7 @@ void draw_author_door(AuthorState &s) {
     // flag, so the tab's `*` marker and the close guard both drop.
     ImGui::SeparatorText("save this authored program");
     ImGui::InputText("path##authsave", s.save_path, sizeof s.save_path);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Browse…##authsave"));
     if (ImGui::Button("Browse…##authsave")) {
         IGFD::FileDialogConfig cfg;
         cfg.path = ".";

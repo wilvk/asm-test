@@ -1,5 +1,6 @@
 // legend.cpp — the shared semantic-palette legend (see legend.h). Draws only.
 #include "ui/legend.h"
+#include "ui/flow.h"
 
 #include "ui/theme.h"
 
@@ -12,13 +13,16 @@ void dt_legend_row(ImU32 col, const char *channel, const char *label) {
         sw, // the swatch: a fixed 12px square, no picker, no tooltip on it
         ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker,
         ImVec2(12, 12));
-    ImGui::SameLine();
     // The SECOND CHANNEL token (T2): a monochrome reader reads the distinction
-    // off THIS, not the swatch. Dimmed so it reads as an annotation.
-    if (channel != nullptr && channel[0] != '\0') {
+    // off THIS, not the swatch. Dimmed so it reads as an annotation. The token
+    // and the label are what a monochrome reader reads the entry BY, so they
+    // wrap under the swatch rather than clip off a narrow legend.
+    const bool has_channel = channel != nullptr && channel[0] != '\0';
+    if (has_channel) {
+        flow_same_line(flow_textf_w("[%s]", channel));
         ImGui::TextColored(dt_dim_col(), "[%s]", channel);
-        ImGui::SameLine();
     }
+    flow_same_line(flow_text_w(label));
     ImGui::TextUnformatted(label);
 }
 

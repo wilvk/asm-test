@@ -1,5 +1,6 @@
 // timepos.cpp — the one time-position widget (see timepos.h).
 #include "ui/timepos.h"
+#include "ui/flow.h"
 
 #include <cstring>
 
@@ -31,9 +32,9 @@ bool dt_timepos_step(const char *label, int *idx, int count,
         (*idx)--;
         moved = true;
     }
-    ImGui::SameLine();
+    flow_same_line(flow_textf_w("%s #%d of %d", label, *idx + 1, count));
     ImGui::Text("%s #%d of %d", label, *idx + 1, count);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("next >"));
     if (ImGui::Button("next >") && *idx + 1 < count) {
         (*idx)++;
         moved = true;
@@ -41,7 +42,7 @@ bool dt_timepos_step(const char *label, int *idx, int count,
     // The always-visible "intentional discrete" marker (F16): a step glyph in
     // the caution amber, its verbatim reason on hover — so the discreteness
     // reads as a deliberate fidelity choice, never a missing scrubber.
-    ImGui::SameLine();
+    flow_same_line(flow_text_w("\xE2\x8F\xADstep"));
     ImGui::TextColored(dt_warn_col(), "\xE2\x8F\xADstep");
     if (reason != nullptr && reason[0] != '\0' && ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();

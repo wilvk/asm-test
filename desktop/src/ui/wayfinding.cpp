@@ -1,5 +1,6 @@
 // wayfinding.cpp — the persistent context chrome (see wayfinding.h).
 #include "ui/wayfinding.h"
+#include "ui/flow.h"
 
 #include <cstdio>
 #include <functional>
@@ -176,7 +177,8 @@ void draw_wayfinding_bar(ShellState &s) {
         line += "   \xC2\xB7 " + m.selection;
     ImGui::TextUnformatted(line.c_str());
     if (!m.filter.empty()) {
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w(" \xC2\xB7 filter: %s (scope, not absence)",
+                                    m.filter.c_str()));
         ImGui::TextDisabled(" \xC2\xB7 filter: %s (scope, not absence)",
                             m.filter.c_str());
     }

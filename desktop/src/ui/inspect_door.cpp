@@ -18,8 +18,9 @@
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
 #include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
 #include "ui/doors.h"
-#include "ui/filter.h"   // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
-#include "ui/fidelity.h"  // the graded fidelity vocabulary (23 T1)
+#include "ui/fidelity.h" // the graded fidelity vocabulary (23 T1)
+#include "ui/filter.h" // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
+#include "ui/flow.h"
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -611,7 +612,14 @@ void draw_patch_bay(InspectState &s) {
     ImGui::SeparatorText("patch bay — one ptrace jack per target");
     // `auto` leads the picker (R11): patch_bay_order() is the reading order, with
     // the fullest self-scoping choice first — distinct from the wire order.
+    //
+    // The jacks wrap. This pane is the docked right rail (0.28 of the window by
+    // default), and a bare SameLine() ran the later jacks — `dataflow`, the
+    // widest names — straight off it, where nothing could scroll them back.
+    bool first_jack = true;
     for (LiveMode m : patch_bay_order()) {
+        if (!first_jack)
+            flow_same_line(flow_radio_w(mode_name(m)));
         // arm64 blocking-syscall hazard (T5): a single-stepped thread inside a
         // blocking syscall survives DETACH on arm64 and dies ~300ms later
         // (SPSR.SS), and teardown cannot undo it. Grey (BeginDisabled) the
@@ -636,9 +644,8 @@ void draw_patch_bay(InspectState &s) {
                 ImGui::SetTooltip("%s\n\nshows: %s", mode_jack_reason(m),
                                   viz.c_str());
         }
-        ImGui::SameLine();
+        first_jack = false;
     }
-    ImGui::NewLine();
     // For the SELECTED mode, spell the visualizations inline (R11) — the tooltip is
     // per-mode discovery; this is the standing answer to "what will I get?".
     ImGui::TextDisabled("shows: %s", viz_line(s.want).c_str());
@@ -771,7 +778,6 @@ void draw_patch_bay(InspectState &s) {
         inspect_request_start(s);
     ImGui::EndDisabled();
     if (!ctl.start) {
-        ImGui::SameLine();
         // The tree-filter case sits before the region one: a `tree` needs no
         // region, so has_region is already true — tree_err is the only thing left
         // that can hold Start. The inline red error says WHAT is wrong; this says
@@ -781,9 +787,13 @@ void draw_patch_bay(InspectState &s) {
                           : !tree_err.empty()   ? "fix the tree filter above"
                                                 : "name a region above, or pick "
                                                   "`auto`";
+        // Measured before it is drawn, and wrapped when it will not fit: in the
+        // docked right rail this sentence is wider than the whole pane, let
+        // alone what is left of Start's line.
+        flow_same_line(flow_text_w(why));
         ImGui::TextDisabled("%s", why);
     }
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Stop"));
     ImGui::BeginDisabled(!ctl.stop);
     if (ImGui::Button("Stop")) {
         s.session.send_stop();
@@ -791,7 +801,7 @@ void draw_patch_bay(InspectState &s) {
         s.operator_paused = false;
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Pause"));
     // OPERATOR PAUSE (F23), split from the budget block: this hold's ONLY
     // recovery is Resume, and the state says so — "PAUSED (you)".
     ImGui::BeginDisabled(!ctl.pause);
@@ -800,7 +810,7 @@ void draw_patch_bay(InspectState &s) {
         s.operator_paused = true;
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Resume"));
     ImGui::BeginDisabled(!ctl.resume);
     if (ImGui::Button("Resume")) {
         s.session.send_pause(false);
@@ -822,7 +832,11 @@ void draw_patch_bay(InspectState &s) {
         if (ImGui::Button("Capture every substrate"))
             inspect_sweep_start(s);
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow_same_line(s.sweep_running
+                           ? flow_button_w("Cancel sweep")
+                           : flow_textf_w("tree -> trace -> dataflow, %ld "
+                                          "events each",
+                                          s.sweep_max));
         if (s.sweep_running) {
             if (ImGui::Button("Cancel sweep"))
                 inspect_sweep_cancel(s);
@@ -856,7 +870,7 @@ void draw_patch_bay(InspectState &s) {
         if (ImGui::Button("Start anyway (accept the risk)"))
             inspect_confirm_perturb(s);
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel##perturb"));
         if (ImGui::Button("Cancel##perturb"))
             s.perturb_pending = false;
     }
@@ -878,11 +892,11 @@ void draw_patch_bay(InspectState &s) {
             s.swap_blocker = d.blocker;
             s.swap_reason = d.reason;
         }
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Queue"));
         if (ImGui::Button("Queue"))
             inspect_arm_queue(s);
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel##block"));
         if (ImGui::Button("Cancel##block")) {
             s.swap_pending = false;
             s.has_queued = false;
@@ -902,7 +916,7 @@ void draw_patch_bay(InspectState &s) {
         if (ImGui::Button("Stop it and start this one"))
             inspect_confirm_swap(s);
         ImGui::EndDisabled();
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel##swap"));
         if (ImGui::Button("Cancel##swap"))
             s.swap_pending = false;
     }
@@ -917,7 +931,7 @@ void draw_patch_bay(InspectState &s) {
                       "frees",
                       mode_name(s.queued_want), mode_name(d.blocker));
         draw_fidelity_chip(chip, FidelityTier::Neutral);
-        ImGui::SameLine();
+        flow_same_line(flow_small_button_w("Cancel queue"));
         if (ImGui::SmallButton("Cancel queue"))
             s.has_queued = false;
     }
@@ -985,7 +999,7 @@ void draw_save_capture(InspectState &s) {
         return;
     }
     ImGui::InputText("path##save", s.save_path, sizeof s.save_path);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Browse…##save"));
     // Pure-ImGui save picker (14-quick-wins.md T7): fills the path field, so the
     // manual field stays as a fallback / for scripted paths. Confirm-overwrite is
     // on, and the default name is the stray-safe "capture.asmtrace".
@@ -1204,7 +1218,8 @@ void draw_connect_pane(InspectState &s) {
         // different asmspy, a different ssh host) means relaunching the app.
         if (ImGui::Button("Disconnect"))
             inspect_disconnect(s);
-        ImGui::SameLine();
+        flow_same_line(
+            flow_text_w("stop the serve host and return to Connect"));
         ImGui::TextDisabled("stop the serve host and return to Connect");
     }
 }
@@ -1232,10 +1247,12 @@ void draw_processes_pane(InspectState &s) {
         inspect_scan(s);
     if (ImGui::Button("Rescan"))
         inspect_scan(s);
-    ImGui::SameLine();
-    ImGui::TextDisabled("ptrace_scope=%d", read_yama_scope());
+    const int yama = read_yama_scope();
+    flow_same_line(flow_textf_w("ptrace_scope=%d", yama));
+    ImGui::TextDisabled("ptrace_scope=%d", yama);
     if (s.sample_cpu) {
-        ImGui::SameLine();
+        flow_same_line(
+            flow_text_w("· activity = %CPU/core over a ~150ms sample"));
         ImGui::TextDisabled("· activity = %%CPU/core over a ~150ms sample");
     }
 
@@ -1251,7 +1268,10 @@ void draw_processes_pane(InspectState &s) {
             ++n_hidden;
     ImGui::Checkbox("only attachable", &s.hide_unattachable);
     if (s.hide_unattachable && n_hidden) {
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("· %zu NOT-attachable row(s) hidden — "
+                                    "untick to see them with their why / "
+                                    "remedy",
+                                    n_hidden));
         ImGui::TextDisabled("· %zu NOT-attachable row(s) hidden — untick to see "
                             "them with their why / remedy",
                             n_hidden);
@@ -1492,7 +1512,7 @@ void draw_launch_pane(InspectState &s) {
 
     ImGui::InputTextWithHint("command", "path to the executable", s.launch_cmd,
                              sizeof s.launch_cmd);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Browse…##launch"));
     if (ImGui::Button("Browse…##launch")) {
         IGFD::FileDialogConfig cfg;
         cfg.path = ".";
@@ -1515,14 +1535,16 @@ void draw_launch_pane(InspectState &s) {
 
     ImGui::Spacing();
     ImGui::TextDisabled("trace mode:");
+    bool first_launch_mode = true;
     for (LiveMode m : kLaunchModes) {
+        if (!first_launch_mode)
+            flow_same_line(flow_radio_w(mode_name(m)));
+        first_launch_mode = false;
         if (ImGui::RadioButton(mode_name(m), s.want == m))
             s.want = m;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", mode_jack_reason(m));
-        ImGui::SameLine();
     }
-    ImGui::NewLine();
     if (!is_launch_mode(s.want))
         // The picker defaults to whatever budget_least_perturbing chose
         // (T5), which can be `sample` or `log` — both in kLaunchModes — but
@@ -1542,7 +1564,7 @@ void draw_launch_pane(InspectState &s) {
         ImGui::TextColored(dt_maybe_col(), "%s", s.perturb_reason.c_str());
         if (ImGui::Button("Launch anyway"))
             inspect_confirm_perturb(s);
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel##launch-perturb"));
         if (ImGui::Button("Cancel##launch-perturb"))
             s.perturb_pending = false;
     }
@@ -1553,7 +1575,7 @@ void draw_launch_pane(InspectState &s) {
         inspect_launch_full_detail(s);
     ImGui::EndDisabled();
     if (s.launch_cmd[0] == '\0') {
-        ImGui::SameLine();
+        flow_same_line(flow_text_w("(enter a command first)"));
         ImGui::TextDisabled("(enter a command first)");
     }
 }

@@ -20,6 +20,8 @@
 #include "textselect.hpp"        // select + copy for line panes (14 T6)
 
 #include "ui/filter.h" // free column sort — dt_sorted_order (24 T4)
+#include "ui/flow.h"   // narrow-pane wrap (must stay BELOW the imgui.h
+                       // include fenced by IMGUI_DEFINE_MATH_OPERATORS)
 #include "ui/terms.h"  // domain-term-first heading + "?" caveat (24 T3)
 #include "ui/theme.h"
 #include "ui/timepos.h" // one time-position widget, discrete variant (24 T4)
@@ -62,7 +64,8 @@ void draw_graph_canvas(const char *id, const GraphLayout &g,
     ed::SetCurrentEditor(ctx);
 
     const bool fit = ImGui::SmallButton("Fit graph");
-    ImGui::SameLine();
+    flow_same_line(flow_text_w(
+        "drag to pan · wheel to zoom · double-click a node to open it"));
     ImGui::TextDisabled(
         "drag to pan · wheel to zoom · double-click a node to open it");
 
@@ -231,7 +234,7 @@ void draw_obs_syscalls(SyscallView &v, ObserverState &s) {
                            obs_syscall_reveal_all_prompt(v).c_str());
         if (ImGui::Button("Yes, reveal them"))
             obs_syscall_reveal_all(v);
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel"));
         if (ImGui::Button("Cancel"))
             v.reveal_all_armed = false;
     }
@@ -248,7 +251,8 @@ void draw_obs_syscalls(SyscallView &v, ObserverState &s) {
     const std::vector<size_t> shown =
         obs_syscall_filter_indices(v, s.syscall_filter);
     if (s.syscall_filter[0]) {
-        ImGui::SameLine();
+        flow_same_line(
+            flow_textf_w("showing %zu of %zu", shown.size(), v.rows.size()));
         ImGui::TextDisabled("showing %zu of %zu", shown.size(), v.rows.size());
     }
 
@@ -272,10 +276,12 @@ void draw_obs_syscalls(SyscallView &v, ObserverState &s) {
             v.reveal_all || (i < v.revealed.size() && v.revealed[i] != 0);
         ImGui::TextUnformatted(obs_syscall_payload_cell(v, i).c_str());
         if (row.has_payload && !v.reveal_all) {
-            ImGui::SameLine();
             char id[32];
             std::snprintf(id, sizeof id, "%s##p%zu", shown ? "hide" : "reveal",
                           i);
+            // Inside a table cell ImGui scopes the content region to the COLUMN,
+            // so this wraps within the payload column rather than across it.
+            flow_same_line(flow_small_button_w(id));
             if (ImGui::SmallButton(id))
                 obs_syscall_reveal(v, i, !shown);
         }
@@ -459,7 +465,9 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
                     static_cast<int>(hm.cols.size()), 0.0, maxc, nullptr);
                 ImPlot::EndPlot();
             }
-            ImGui::SameLine();
+            // The scale is the heatmap's only key to what a cell's colour
+            // means — it drops below the plot rather than off the pane.
+            flow_same_line(70.0f);
             ImPlot::ColormapScale("samples", 0.0, maxc, ImVec2(70, 240));
             ImPlot::PopColormap();
         }
@@ -492,7 +500,8 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
         for (const HotEdge &e : v.edges)
             if (he_lower(e.from + " " + e.to).find(he_q) != std::string::npos)
                 shown++;
-        ImGui::SameLine();
+        flow_same_line(
+            flow_textf_w("showing %zu of %zu", shown, v.edges.size()));
         ImGui::TextDisabled("showing %zu of %zu", shown, v.edges.size());
     }
 
@@ -711,7 +720,7 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     // Marked as a DISCRETE logical-time step, not a continuous clock (24 T4):
     // the same intentional-discrete marker + registry reason the invocation
     // pager carries, so the fidelity choice reads the same across the deck.
-    ImGui::SameLine();
+    flow_same_line(flow_text_w("\xE2\x8F\xADlogical step"));
     ImGui::TextColored(kWarn, "\xE2\x8F\xADlogical step");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s",
@@ -747,7 +756,7 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
             if (da_lower(hexs(r.addr) + " " + r.text).find(da_q) !=
                 std::string::npos)
                 shown++;
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("showing %zu of %zu", shown, rows.size()));
         ImGui::TextDisabled("showing %zu of %zu", shown, rows.size());
     }
 
@@ -854,14 +863,16 @@ static void draw_obs_graph(ObserverState &s, const std::string &rec_id,
         return;
     }
     // The selector: only the available kinds, so it never offers an empty canvas.
+    bool first_kind = true;
     for (int i = 0; i < 3; i++) {
         if (!kinds[i].avail)
             continue;
+        if (!first_kind)
+            flow_same_line(flow_radio_w(kinds[i].label));
+        first_kind = false;
         if (ImGui::RadioButton(kinds[i].label, s.graph_sel == i))
             s.graph_sel = i;
-        ImGui::SameLine();
     }
-    ImGui::NewLine();
     // A per-kind persistent editor context — panning one graph must not carry to
     // another. draw_graph_canvas lazily creates each on first use.
     static ed::EditorContext *ctx_topo = nullptr;

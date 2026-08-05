@@ -7,6 +7,7 @@
 
 #include "IconsCodicons.h" // the ONE glyph set per tier (doc 13 F3 Codicons)
 #include "ui/fidelity.h"
+#include "ui/flow.h"
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -61,7 +62,9 @@ void draw_fidelity_banner(const char *text, FidelityTier tier, bool *collapsed) 
         // The collapsed caution form IS the chip — same text, never gone (D7).
         ImGui::Text("%s %s", tier_glyph(tier), text);
         ImGui::PopStyleColor();
-        ImGui::SameLine();
+        // "show" is the ONLY way back out of the collapsed form, so it wraps
+        // rather than clipping off the end of a narrow banner.
+        flow_same_line(flow_small_button_w("show"));
         if (ImGui::SmallButton("show"))
             *collapsed = false;
         return;
@@ -97,7 +100,7 @@ void draw_command_hint(const char *id, const std::string &cmd) {
     // as the nav deep-link copy uses). id keeps the button unique across rows.
     ImGui::PushID(id);
     ImGui::TextDisabled("$ %s", cmd.c_str());
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("Copy"));
     if (ImGui::SmallButton("Copy"))
         ImGui::SetClipboardText(cmd.c_str());
     ImGui::PopID();
@@ -115,7 +118,10 @@ void draw_progress(LongOp &op) {
         return;
     ImGui::PushID(&op);
     ImGui::TextUnformatted(op.label);
-    ImGui::SameLine();
+    // The bar is drawn at -FLT_MIN (fill the rest of the line), so a long label
+    // does not clip it — it starves it. Wrap once what is left would be too
+    // narrow to read a fraction off.
+    flow_same_line(kMinProgressBarW);
     if (op.mode() == ProgressMode::Determinate)
         // A FAITHFUL fraction: only when a real total exists (progress.h's rule).
         ImGui::ProgressBar(op.fraction(), ImVec2(-FLT_MIN, 0));
@@ -124,7 +130,8 @@ void draw_progress(LongOp &op) {
         ImGui::ProgressBar(-1.0f * (float)op.now, ImVec2(-FLT_MIN, 0),
                            "working");
     ImGui::Text("elapsed %.1fs", op.elapsed());
-    ImGui::SameLine();
+    // Cancel is a long op's only escape — never the item that clips away.
+    flow_same_line(flow_small_button_w("Cancel"));
     if (ImGui::SmallButton("Cancel"))
         op.request_cancel();
     ImGui::PopID();
@@ -183,7 +190,7 @@ void draw_canvas(const dt_canvas &c) {
         ImGui::Text("0x%llx", (unsigned long long)r.off);
         if (zero) {
             ImGui::PopStyleColor();
-            ImGui::SameLine();
+            flow_same_line(flow_text_w("<- patient zero"));
             ImGui::TextUnformatted("<- patient zero");
         }
 

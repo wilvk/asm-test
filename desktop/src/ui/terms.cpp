@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstring>
 
+#include "ui/flow.h"
 #include "ui/theme.h"
 
 // The one generated table (k_dt_terms / k_dt_terms_n). Its build rule (mk/
@@ -92,7 +93,7 @@ const dt_view_meta *dt_view_meta_get(const char *key) {
 void dt_view_heading(const char *domain, const char *metaphor) {
     ImGui::TextUnformatted(domain);
     if (metaphor != nullptr && metaphor[0] != '\0') {
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("(%s)", metaphor));
         ImGui::TextColored(dt_dim_col(), "(%s)", metaphor);
     }
 }
@@ -143,7 +144,9 @@ void dt_view_header(const char *key,
     if (m == nullptr)
         return;
     dt_view_heading(m->domain, m->metaphor);
-    ImGui::SameLine();
+    // The help button is the view's only way back to its primer, so it must not
+    // be the thing that falls off a narrow heading line.
+    flow_same_line(flow_small_button_w("?"));
     dt_view_help_button(key, on_reopen_primer);
 }
 

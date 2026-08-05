@@ -10,6 +10,7 @@
 
 #include "imgui.h"
 
+#include "ui/flow.h"
 #include "ui/theme.h"
 #include "views/completeness.h"
 #include "views/views_draw.h"
@@ -31,7 +32,10 @@ void draw_completeness(CompletenessState &s, const std::string &repo_root) {
         s.boxes = data::scan_boxes(repo_root);
         s.error.clear();
     }
-    ImGui::SameLine();
+    // A combo sizes itself from the item width, not from its content, so it
+    // cannot be measured off a label — this is the width below which the box
+    // stops being usable, which is the real wrap threshold.
+    flow_same_line(kMinComboW);
     const char *preview =
         s.selected >= 0 && s.selected < static_cast<int>(s.boxes.size())
             ? s.boxes[s.selected].box_id.c_str()
@@ -57,7 +61,7 @@ void draw_completeness(CompletenessState &s, const std::string &repo_root) {
         ImGui::EndCombo();
     }
     ImGui::InputText("features.json", s.custom_path, sizeof s.custom_path);
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("load"));
     if (ImGui::Button("load")) {
         try {
             s.table =

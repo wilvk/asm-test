@@ -42,6 +42,7 @@
 #include "scene3d/pick.h"
 #include "scene3d/standalone.h" // T1-T5 (59): the non-plane substrates
 #include "space/projection.h"
+#include "ui/flow.h"         // narrow-pane wrap + rail stacking
 #include "ui/legend.h"       // shared semantic legend (24 T1/T2)
 #include "ui/palette.h"      // command palette over the spine (21 T1)
 #include "ui/perspectives.h" // named dock perspectives + filter presets (20 T4)
@@ -701,7 +702,7 @@ void draw_home_rail(ShellState &s) {
             shell_select_mode(s, m);
         if (is_active)
             ImGui::PopStyleColor();
-        ImGui::SameLine();
+        flow_same_line(flow_text_w(caption));
         ImGui::TextDisabled("%s", caption);
     };
 
@@ -767,7 +768,8 @@ void draw_home_rail(ShellState &s) {
                 picked.why_not = "lost the X11 display mid-drag";
             shell_finish_window_pick(s, picked);
         }
-        ImGui::SameLine();
+        flow_same_line(
+            flow_text_w("or drag onto any window to target it by pointing"));
         ImGui::TextDisabled("or drag onto any window to target it by pointing");
     }
     // doc 45 T4: an alternate way into the SAME live workflow — start a fresh
@@ -2314,20 +2316,26 @@ static void shell_df_pass_pager(ShellState &s) {
         // Stepping to the newest re-enables follow-latest; else pin the choice.
         s.df_pass[i] = (cur == latest) ? -1 : cur;
     size_t applied = shell_apply_df_pass(s, i);
-    ImGui::SameLine();
     // 37 T1: the pass's REGION, when the recording spans more than one. The
     // producer arms one region per invocation, so paging here can change which
     // code is on screen — and every offset the dataflow views show is relative
     // to a base that just moved. An ordinal alone would not say so.
     const std::string desc = df_pass_desc(s.seg_df[i], applied);
-    if (i < s.df_pass.size() && s.df_pass[i] < 0)
+    const bool following = i < s.df_pass.size() && s.df_pass[i] < 0;
+    flow_same_line(
+        following ? flow_textf_w("· %s — following the latest", desc.c_str())
+                  : flow_textf_w("· %s — pinned (latest is %d)", desc.c_str(),
+                                 npasses));
+    if (following)
         ImGui::TextDisabled("· %s — following the latest", desc.c_str());
     else
         ImGui::TextDisabled("· %s — pinned (latest is %d)", desc.c_str(),
                             npasses);
     const std::vector<uint64_t> regs = df_pass_regions(s.seg_df[i]);
     if (regs.size() > 1) {
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("· %d passes over %zu regions — paging "
+                                    "changes region",
+                                    npasses, regs.size()));
         ImGui::TextColored(dt_warn_col(),
                            "· %d passes over %zu regions — paging changes "
                            "region",
@@ -2343,7 +2351,7 @@ static void shell_df_pass_pager(ShellState &s) {
         char label[64];
         std::snprintf(label, sizeof label, "0x%llx",
                       (unsigned long long)curreg);
-        ImGui::SameLine();
+        flow_same_line(ImGui::GetFontSize() * 9);
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
         if (ImGui::BeginCombo("region", curreg ? label : "(unknown)")) {
             for (uint64_t rb : regs) {
@@ -2363,7 +2371,8 @@ static void shell_df_pass_pager(ShellState &s) {
                 // A region present in one pass of twelve is a different claim
                 // from one present in eleven, and the count is the only thing
                 // that says which.
-                ImGui::SameLine();
+                flow_same_line(flow_textf_w("(%zu pass%s)", ps.size(),
+                                            ps.size() == 1 ? "" : "es"));
                 ImGui::TextDisabled("(%zu pass%s)", ps.size(),
                                     ps.size() == 1 ? "" : "es");
             }
@@ -2521,7 +2530,7 @@ static void body_scrubber(ShellState &s) {
             }
         }
     }
-    ImGui::SameLine();
+    flow_same_line(flow_text_w("play — step (execution)"));
     ImGui::TextDisabled("play — step (execution)");
     const uint64_t before = s.scrubber_playhead[i];
     s.scrubber_playhead[i] = draw_scrubber(idx, before, rec);
@@ -3144,7 +3153,7 @@ static void draw_goto_modal(ShellState &s) {
                                ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SetItemDefaultFocus();
     go |= ImGui::Button("Go");
-    ImGui::SameLine();
+    flow_same_line(flow_button_w("Cancel"));
     if (ImGui::Button("Cancel")) {
         s.show_goto =
             false; // clear the intent so it does not reopen next frame
@@ -3208,11 +3217,18 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
     // `BeginTabItem` in the `main` strip. In the docked app it is the kPaneHome
     // pane; here (no dockspace) it is a left child pinned beside the recording tab
     // strip, so it is still drawn every frame and cannot be closed.
-    ImGui::BeginChild("homerail", ImVec2(320.0f, 0.0f), true);
+    //
+    // Beside the tab strip only while there is room for BOTH. Below ~320+320 of
+    // content the rail used to push `mainarea` clean off the right edge, taking
+    // the entire tab strip with it — invisible, and unreachable, since no window
+    // here scrolls horizontally. flow_rail stacks the pair instead (ui/flow.h).
+    const FlowRail rail = flow_rail(320.0f, 320.0f);
+    ImGui::BeginChild("homerail", rail.rail, true);
     draw_home_rail(s);
     ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("mainarea");
+    if (!rail.stacked)
+        ImGui::SameLine();
+    ImGui::BeginChild("mainarea", rail.main);
 
     if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
         // The Author door: full app only, and the render-only build says why
@@ -3585,7 +3601,7 @@ void shell_apply_live_panes(ShellState &s) {
 // and the history reads upward from it in the one scroll.
 static void draw_log_pane(ShellState &s) {
     ImGui::TextDisabled("log (%zu)", s.log.size());
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("Clear"));
     if (ImGui::SmallButton("Clear"))
         s.log.clear();
     if (ImGui::BeginChild("logscroll", ImVec2(0, 0), true)) {
@@ -3675,7 +3691,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                 ImGui::Separator();
                 ImGui::InputTextWithHint("##persp", "name…", s.persp_name,
                                          sizeof s.persp_name);
-                ImGui::SameLine();
+                flow_same_line(flow_small_button_w("Save perspective"));
                 if (ImGui::SmallButton("Save perspective") &&
                     s.persp_name[0] != '\0') {
                     s.perspectives[s.persp_name] = perspective_snapshot();
@@ -3819,7 +3835,9 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                 if (ImGui::Selectable(label.c_str(),
                                       s.active_tab == static_cast<int>(i)))
                     s.active_tab = static_cast<int>(i);
-                ImGui::SameLine();
+                // The `x` is this row's only close affordance, so it wraps
+                // under a long label rather than clipping off the rail.
+                flow_same_line(flow_small_button_w("x"));
                 ImGui::PushID(static_cast<int>(i));
                 // The `x` closes this recording (R7) — the dirty-close guard still
                 // stands in front of an unsaved authored one.
@@ -4252,7 +4270,7 @@ static void draw_breadcrumb(ShellState &s) {
     if (ImGui::IsItemHovered() && !s.nav.back.empty())
         ImGui::SetTooltip("Alt+Left — back to %s",
                           dt_nav_format(s.nav.back.back()).c_str());
-    ImGui::SameLine();
+    flow_same_line(flow_small_button_w("forward >"));
     ImGui::BeginDisabled(s.nav.forward.empty());
     if (ImGui::SmallButton("forward >") && !dt_nav_forward(s.nav))
         s.status = s.nav.last_error;
@@ -4304,12 +4322,12 @@ static void draw_close_guards(ShellState &s) {
             }
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Discard"));
         if (ImGui::Button("Discard")) {
             shell_discard_close(s);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Cancel"));
         if (ImGui::Button("Cancel")) {
             shell_cancel_close(s);
             ImGui::CloseCurrentPopup();
@@ -4331,7 +4349,7 @@ static void draw_close_guards(ShellState &s) {
             s.author_close_guard = false;
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Keep editing"));
         if (ImGui::Button("Keep editing")) {
             s.author_close_guard = false;
             ImGui::CloseCurrentPopup();
@@ -4423,13 +4441,14 @@ static void draw_settings(ShellState &s) {
                     sizeof s.observers[static_cast<size_t>(s.active_tab)]
                         .syscall_filter);
             }
-            ImGui::SameLine();
+            flow_same_line(
+                flow_textf_w("%s = \"%s\"", p.name.c_str(), p.query.c_str()));
             ImGui::Text("%s = \"%s\"", p.name.c_str(), p.query.c_str());
             ImGui::PopID();
         }
         ImGui::InputTextWithHint("##presetname", "preset name…", s.preset_name,
                                  sizeof s.preset_name);
-        ImGui::SameLine();
+        flow_same_line(flow_small_button_w("Save syscall filter"));
         if (ImGui::SmallButton("Save syscall filter") &&
             s.preset_name[0] != '\0' && have_active) {
             FilterPreset p;
@@ -4586,13 +4605,16 @@ static void draw_find_bar(ShellState &s) {
         }
         // The measurement, always shown: how many, and at what aggregate cost
         // (summed hot-edge samples + step counts) — a find that MEASURES.
-        ImGui::SameLine();
+        flow_same_line(flow_textf_w("%zu match%s · cost %llu",
+                                    s.find.hits.size(),
+                                    s.find.hits.size() == 1 ? "" : "es",
+                                    (unsigned long long)s.find.total_cost));
         ImGui::TextDisabled("%zu match%s · cost %llu", s.find.hits.size(),
                             s.find.hits.size() == 1 ? "" : "es",
                             (unsigned long long)s.find.total_cost);
         const bool shift = ImGui::GetIO().KeyShift;
         const bool next = ImGui::Button("Next") || (enter && !shift);
-        ImGui::SameLine();
+        flow_same_line(flow_button_w("Prev"));
         const bool prev = ImGui::Button("Prev") || (enter && shift);
         if ((next || prev) && !s.find.hits.empty()) {
             if (const FindHit *h = find_cycle(s.find, next))
@@ -4622,7 +4644,12 @@ static void draw_find_bar(ShellState &s) {
                     have_scene &&
                     s.scenes[static_cast<size_t>(s.active_tab)].traj.basis ==
                         "abs";
-                ImGui::SameLine();
+                flow_same_line(
+                    abs_ok
+                        ? flow_button_w("show in 3D##find")
+                        : flow_textf_w("(show in 3D: %s)",
+                                       have_scene ? "not an abs-basis recording"
+                                                  : "open the 3D pane first"));
                 if (abs_ok) {
                     if (ImGui::Button("show in 3D##find")) {
                         SceneView &sv =

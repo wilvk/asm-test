@@ -623,6 +623,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/asm_language.o \
   $(BUILD)/desktop/$(1)/addon/TextEditor.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
+  $(BUILD)/desktop/$(1)/ui/flow.o \
   $(BUILD)/desktop/$(1)/ui/palette.o $(BUILD)/desktop/$(1)/ui/wayfinding.o \
   $(BUILD)/desktop/$(1)/ui/fonts.o \
   $(BUILD)/desktop/$(1)/ui/learn_door.o \
@@ -748,7 +749,11 @@ DESKTOP_TEST_LIVE := $(DESKTOP_LIVE:%=$(BUILD)/desktop/test/lv/%.o)
 # open primer (T5). Any draw-half binary that hosts a coined surface links these,
 # so they are one list rather than five ad-hoc additions. (legend.o was listed
 # standalone before; it now lives here — never list it twice on a link line.)
-DESKTOP_TEST_UI     := legend terms filter timepos primer
+#
+# flow.o joins them for the same reason: the narrow-pane wrap/stack primitives
+# are called from nearly every coined surface (ui/flow.h), so a draw-half binary
+# that links one of these links it too.
+DESKTOP_TEST_UI     := legend terms filter timepos primer flow
 DESKTOP_TEST_UI_OBJ := $(DESKTOP_TEST_UI:%=$(BUILD)/desktop/test/ui/%.o)
 
 # --- missing-dependency probes (mirror mk/cli.mk:32-38) -----------------------
@@ -1209,6 +1214,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shot_manifest \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
+                 $(BUILD)/desktop_test_flow \
                  $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_palette \
                  $(BUILD)/desktop_test_wayfinding \
@@ -1554,6 +1560,7 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
 # way test_shell already links them — this stays a null-backend binary with no
 # display and no engine (D4).
 $(BUILD)/desktop_test_datalayers: $(BUILD)/desktop/test/t/test_datalayers.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
@@ -1897,6 +1904,12 @@ $(BUILD)/desktop_test_layout: $(BUILD)/desktop/test/t/test_layout.o \
     $(BUILD)/desktop/test/ui/layout.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The narrow-pane wrap/stack primitives: flow.o + imgui core, nothing else —
+# pure measurement over the cursor and content region, public ImGui API only.
+$(BUILD)/desktop_test_flow: $(BUILD)/desktop/test/t/test_flow.o \
+    $(BUILD)/desktop/test/ui/flow.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The font loader (13-foundation-moves.md F3): fonts.o + imgui core. Loads the
 # real TTFs via stb_truetype, so it runs on any lane (freetype is a Docker-only
 # rasteriser gate, not needed here). Carries the TTF-path defines + IconsCodicons.h.
@@ -1950,6 +1963,7 @@ $(BUILD)/desktop_test_loom_gutter: $(BUILD)/desktop/test/t/test_loom_gutter.o
 # The canvas-wrapped slice DRAW (15 T2), null-backend smoke: slice_view_draw.o +
 # canvas_draw.o (draw_banner) + imgui_canvas.o + imgui core.
 $(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_draw.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/canvas_draw.o \
     $(BUILD)/desktop/test/ui/legend.o \
     $(BUILD)/desktop/test/addon/imgui_canvas.o $(DESKTOP_TEST_IG)
@@ -1960,12 +1974,14 @@ $(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_d
 # Links ONLY legend.o + imgui core — theme.h is header-only, engine-free (D4), so
 # this link line is itself the proof the palette carries no engine dependency.
 $(BUILD)/desktop_test_theme: $(BUILD)/desktop/test/t/test_theme.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/ui/legend.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The CVD-safe palette + second-channel gate (24 T2): cvd.o (pure maths) +
 # legend.o (the ONE encoding table the assert reads) + imgui core. Engine-free.
 $(BUILD)/desktop_test_cvd: $(BUILD)/desktop/test/t/test_cvd.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/ui/cvd.o $(BUILD)/desktop/test/ui/legend.o \
     $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -1977,12 +1993,14 @@ $(BUILD)/desktop_test_cvd: $(BUILD)/desktop/test/t/test_cvd.o \
 $(BUILD)/desktop/test/t/test_terms.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_GLOSSARY_MD='"docs/project/glossary.md"'
 $(BUILD)/desktop_test_terms: $(BUILD)/desktop/test/t/test_terms.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/ui/terms.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The one filter + column sort + discrete-time reason (24 T4): filter.o +
 # timepos.o + imgui core. Pure model asserts (N of M, sort order, reasons).
 $(BUILD)/desktop_test_filter: $(BUILD)/desktop/test/t/test_filter.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/ui/filter.o $(BUILD)/desktop/test/ui/timepos.o \
     $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -1990,6 +2008,7 @@ $(BUILD)/desktop_test_filter: $(BUILD)/desktop/test/t/test_filter.o \
 # The first-open primer (24 T5): primer.o + imgui core. State transitions +
 # a null-backend draw smoke.
 $(BUILD)/desktop_test_primer: $(BUILD)/desktop/test/t/test_primer.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/ui/primer.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -2058,6 +2077,7 @@ $(BUILD)/desktop_test_streams: $(BUILD)/desktop/test/t/test_streams.o \
 # banner the torn-edge and producer-absent paths raise); it links here for that
 # one symbol, no canvas model builder needed.
 $(BUILD)/desktop_test_scrubber_draw: \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/t/test_scrubber_draw.o \
     $(BUILD)/desktop/test/vw/scrubber_draw.o \
     $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
@@ -2082,6 +2102,7 @@ $(BUILD)/desktop_test_abixray: $(BUILD)/desktop/test/t/test_abixray.o \
 # panes, a producer-absent pane, a torn pane). canvas_draw.o carries the shared
 # draw_banner placard those paths raise. No GL, no GLFW, no engines.
 $(BUILD)/desktop_test_abixray_draw: \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/t/test_abixray_draw.o \
     $(BUILD)/desktop/test/vw/abixray_draw.o $(BUILD)/desktop/test/vw/abixray.o \
     $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
@@ -2107,6 +2128,7 @@ $(BUILD)/desktop_test_completeness_view: \
 # drawing under the null backend. Links canvas_draw.o (the components), the doc
 # model (to load the fixtures) and imgui — no engine, no GL.
 $(BUILD)/desktop_test_fidelity: $(BUILD)/desktop/test/t/test_fidelity.o \
+    $(BUILD)/desktop/test/ui/flow.o \
     $(BUILD)/desktop/test/vw/canvas_draw.o $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 

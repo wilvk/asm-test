@@ -1,5 +1,6 @@
 // filter.cpp — the one filter affordance + column sort (see filter.h).
 #include "ui/filter.h"
+#include "ui/flow.h"
 
 #include <algorithm>
 #include <cctype>
@@ -59,7 +60,9 @@ std::string dt_filter_bar(dt_filter_state &st,
     std::string query(st.buf);
     int total = 0;
     int n = dt_filter_count(query, items, &total);
-    ImGui::SameLine();
+    // The "showing N of M" count is the filter's whole feedback loop — never
+    // the thing that clips off the end of a narrow pane.
+    flow_same_line(flow_textf_w("showing %d of %d", n, total));
     ImGui::TextColored(dt_dim_col(), "showing %d of %d", n, total);
     return query;
 }

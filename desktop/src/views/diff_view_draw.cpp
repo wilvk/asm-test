@@ -2,6 +2,7 @@
 #include "imgui.h"
 
 #include "nav.h"
+#include "ui/flow.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -30,7 +31,10 @@ void draw_diff_view(const dt_diff_view &v,
             // The provenance chip. A sampled edge count sits beside exact
             // heat counts in this panel and must never be mistaken for one.
             ImGui::TextDisabled("[statistical]");
-            ImGui::SameLine();
+            // What follows is either the `go` button or the row's own wrapped
+            // text; the button is the reachability-critical one, so measure it.
+            flow_same_line(r.link.empty() ? flow_text_w(r.text.c_str())
+                                          : flow_small_button_w("go"));
         }
         if (r.link.empty()) {
             ImGui::TextWrapped("%s", r.text.c_str());
