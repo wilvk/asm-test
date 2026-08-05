@@ -230,11 +230,17 @@ time.
 | `df-b.asmtrace` | the same, against a `--seed 2` process | Divergence B |
 
 They are captured through `asmspy --serve` rather than the headless
-`--record=` path, and that is not a stylistic choice. The 3D overview is present
-only when a recording carries `codeimage` events to place the address plane, and
-`codeimage` is emitted only inside a serve session. Captured the other way, every
-3D scene is simply absent — the tab does not appear, and a screenshot silently
-photographs whatever else was on screen.
+`--record=` path, and that is not a stylistic choice. The **address plane** is
+placed from `codeimage` events, and `codeimage` is emitted only inside a serve
+session. Captured the other way the plane is empty, `address plane` is offered
+disabled with its reason, and a screenshot photographs a placard rather than a
+scene.
+
+The 3D overview *tab* itself is no longer gated on `codeimage`. It opens for any
+substrate the recording can fill — a `coverage` block set, a `call` tree, or wide
+register writes — because the divergence worldline, the module excursion ribbon
+and the SIMD lane prism take no projection and carry no terrain. Only the plane
+needs one.
 
 `--fpregs` appears in the dataflow sessions for the **Scrubber's** wide register
 deck. The lane prism does not need it: the dataflow producer reads XMM operands

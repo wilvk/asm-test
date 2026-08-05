@@ -954,9 +954,13 @@ endef
 # gui-shots so re-rendering the images does not re-attach to a live process:
 # capture single-steps a real target and takes minutes, rendering takes seconds.
 #
-# FOUR recordings is structural, not a convenience — `call` events and `df_*`
-# events come from different engines, and no golden in the corpus carries `call`
-# at all, so the module-ribbon scene cannot be fed from a fixture.
+# FOUR recordings, because `call` events and `df_*` events come from different
+# engines and a serve session runs ONE engine at a time. That is no longer a
+# hard structural limit — `asmspy --serve --record=<f>` tees a whole session
+# into one file, so several modes CAN share a recording — but four separate
+# captures stay the simplest way to frame each shot over its own scene.
+# (Note: desktop/test/fixtures/obs-tree.asmtrace does carry `call`; what it
+# lacks is the `codeimage` these shots need to place the address plane.)
 gui-shot-recordings: $(BUILD)/asmspy $(BUILD)/scenes_victim
 	sh scripts/capture-shot-recordings.sh
 	python3 scripts/verify-shot-recordings.py

@@ -1,9 +1,45 @@
 // view_presence.cpp — see view_presence.h (20-workspace-and-settings.md T1).
 #include "ui/view_presence.h"
 
-#include "space/terrain.h" // space::regions_from_codeimage (the 3D gate)
+#include "scene3d/standalone.h" // scene3d::lane_prism_any (the T5 substrate)
+#include "space/terrain.h"      // space::regions_from_codeimage (the plane)
 
 namespace asmdesk {
+
+// --- the 3D pane's substrates (59-standalone-scenes T1-T5) -------------------
+//
+// Each predicate mirrors ONE builder's own emptiness condition, over inputs
+// this function already holds. None of them BUILDS a scene, and that is
+// structural rather than an optimisation: the scenes are woven inside
+// draw_scene_overview, which only runs once the pane is PRESENT, so a presence
+// rule that read the built models would be circular.
+//
+// `obs` breaks the cycle — observer_build already ran obs_tree_build and
+// obs_region_build, the same two builders 59 T3/T4 consume. NOTE the one real
+// difference: observer_build passes an ObsLifecycle and the scene weave does
+// not, so `tree.effective`, `tree.have_effective` and both views' `.skip`
+// differ between the two copies on the live path. The fields read below --
+// `rows` and `invocations[].blocks` -- are lifecycle-independent. Do not widen
+// these to read `effective` or `skip` without re-deriving them.
+
+// T3 — the invocation stack places one CELL per block of the union block set,
+// so the gate is "some invocation has blocks", never "some invocation exists".
+// This mirrors InvocationScene::drawable(); the two must agree, or the tab
+// opens onto a scene the selector then refuses.
+static bool scene3d_has_invocation(const ObserverState &obs) {
+    if (!obs.region.basis_error.empty())
+        return false; // the builder emits a refusal card, and no slabs
+    for (const RegionInvocation &inv : obs.region.invocations)
+        if (!inv.blocks.empty())
+            return true;
+    return false;
+}
+
+// T4 — build_module_ribbon's own refusal is tv.rows.empty(), and those rows
+// ARE the recording's `call` events.
+static bool scene3d_has_module_ribbon(const ObserverState &obs) {
+    return !obs.tree.rows.empty();
+}
 
 // Is this view even offered in this mode? Author mode leads with the editor and
 // hides the live-only Observer deck; every other view is offered in every mode
@@ -117,16 +153,30 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
 
     // 3D overview — the address-space spacetime surface. Present iff the recording
     // carries codeimage regions to place the plane.
-    bool has_regions = !space::regions_from_codeimage(r).empty();
-    // The reason names the capture modes that record `codeimage`, never "a live
-    // maps snapshot": no regions_from_maps exists anywhere in the tree, so that
-    // phrasing sent the reader looking for a capture option nobody built. (The
-    // producer DOES read /proc/<pid>/maps — serve_exe_text_span — but it emits
-    // a `codeimage` from it; there is no viewer-side maps path.)
-    add(ViewId::Scene3D, "3D overview", has_regions,
-        "no address-space regions in this recording — the 3D overview places "
-        "its plane from `codeimage` events, which the serve host records for "
-        "the tree / trace / dataflow / auto modes",
+    // 59 T1: FIVE substrates, only one of which is the address plane.
+    // Divergence, the module ribbon and the lane prism take no Projection and
+    // carry no terrain, so gating the whole pane on codeimage made a tree-only
+    // or dataflow-only recording unable to reach its own scene.
+    //
+    // Divergence is deliberately NOT a clause here. The only B-side signal in
+    // scope is `b_attachable`, which means "a second recording is OPEN", not
+    // "B is attached" — admitting on it would open the pane onto an empty
+    // divergence scene, the exact defect this family removes. Divergence stays
+    // reachable once another substrate has opened the pane.
+    //
+    // The reason names every substrate that would have opened it, and never "a
+    // live maps snapshot": no regions_from_maps exists anywhere in the tree.
+    // (The producer DOES read /proc/<pid>/maps — serve_exe_text_span — but it
+    // emits a `codeimage` from it; there is no viewer-side maps path.)
+    const bool has_plane = !space::regions_from_codeimage(r).empty();
+    const bool has_substrate = has_plane || scene3d_has_invocation(obs) ||
+                               scene3d_has_module_ribbon(obs) ||
+                               scene3d::lane_prism_any(a.df);
+    add(ViewId::Scene3D, "3D overview", has_substrate,
+        "nothing this pane can show — the address plane needs `codeimage` "
+        "events, the invocation stack needs a `coverage` block set, the module "
+        "excursion ribbon needs `call` events, and the SIMD lane prism needs "
+        "wide register writes. This recording carries none of them",
         std::nullopt);
 
     return v;

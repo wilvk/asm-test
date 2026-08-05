@@ -2887,8 +2887,21 @@ int main() {
         check("evict/plane-is-terminal",
               shell_evict_unavailable_kind(scene3d::SceneKind::Plane, why) ==
                   scene3d::SceneKind::Plane,
-              "Plane is the fallback and has no availability gate here; it must "
-              "never be evicted from");
+              "Plane is the terminal fallback; it must never be evicted from");
+
+        // 59 T1: since the pane now opens for a recording that has a substrate
+        // but NO codeimage, Plane itself can be unavailable. It must STILL be
+        // terminal — there is nowhere further to fall back to, and the pane's
+        // own placard is what explains the empty plane. Evicting here would
+        // loop.
+        why[scene_kind_index(scene3d::SceneKind::Plane)] =
+            "no address-space regions";
+        check("evict/unavailable-plane-still-terminal",
+              shell_evict_unavailable_kind(scene3d::SceneKind::Plane, why) ==
+                  scene3d::SceneKind::Plane,
+              "an unavailable Plane must not be evicted — it is the fallback, "
+              "so leaving it has nowhere to go");
+        why[scene_kind_index(scene3d::SceneKind::Plane)].clear();
 
         // A short/absent availability vector must not index out of range, and
         // must be read as "nothing is known to be unavailable".

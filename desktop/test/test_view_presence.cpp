@@ -120,6 +120,36 @@ int main() {
               "a codeimage recording makes the 3D overview present");
     }
 
+    // 59 T1: three of the five substrates need no address plane, so codeimage
+    // must not gate the whole pane. build_divergence_scene, build_module_ribbon
+    // and build_lane_prism take no space:: parameter, and StandaloneFrame
+    // carries no terrain field — the plane is ONE substrate among five, not a
+    // precondition for the other four. Gating ViewId::Scene3D on
+    // regions_from_codeimage made a tree-only or dataflow-only recording unable
+    // to reach its own scene.
+    {
+        // A call tree and nothing else: no codeimage, so no plane.
+        auto vp = presence_of(fx + "obs-tree.asmtrace", Mode::Open, false);
+        const ViewPresence *e = find(vp, ViewId::Scene3D);
+        check("3d/tree-fixture-present", e && e->present,
+              "a recording with a call tree can fill the module excursion "
+              "ribbon, which needs no plane — the pane must open for it");
+    }
+    {
+        // Nothing at all: no codeimage, no calls, no coverage blocks, no wide
+        // writes. The pane must STILL be absent — widening a gate is not
+        // removing it — and must name what WOULD have opened it.
+        auto vp = presence_of(fx + "min-trace.asmtrace", Mode::Open, false);
+        const ViewPresence *e = find(vp, ViewId::Scene3D);
+        check("3d/min-absent", e && !e->present,
+              "a recording with no substrate at all must not open the pane");
+        check("3d/min-reason-names-all",
+              e && e->reason.find("codeimage") != std::string::npos &&
+                  e->reason.find("call") != std::string::npos,
+              "the reason must name every substrate that would have opened the "
+              "pane, not codeimage alone");
+    }
+
     // Author mode hides the live-only Observer deck, and names WHY.
     {
         auto vp = presence_of(fx + "min-trace.asmtrace", Mode::Author, false);

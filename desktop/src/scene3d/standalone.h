@@ -347,6 +347,16 @@ inline bool is_prism_write(const ValRec &v) {
     return v.wide && v.write && v.space == "reg";
 }
 
+// Does this pass carry ANY prism write? The presence gate's early-exit form:
+// view_presence() runs every frame and must not build the whole option set
+// (and its std::set) to answer a yes/no.
+inline bool lane_prism_any(const DataflowStream &df) {
+    for (const ValRec &v : df.recs)
+        if (is_prism_write(v))
+            return true;
+    return false;
+}
+
 std::vector<uint32_t> lane_prism_registers(const DataflowStream &df);
 // `guest` is the recording's arch ("x86" / "arm64"), passed to
 // space::mnemonic_class for the ambiguity gate. An unknown guest simply never

@@ -60,7 +60,9 @@ struct ViewPresence {
 // The whole hostable view set for one recording, in reading order. `present` is
 // decided from the same fields the body reads: Loom present iff the recording is
 // exact and carries per-step values (loom_fabric_build's own refusal); Scrubber
-// iff `si` holds a regstate ring; 3D iff the recording carries codeimage regions;
+// iff `si` holds a regstate ring; 3D iff the recording can fill ANY of the pane's
+// substrates — a codeimage plane, a coverage block set, a call tree, or wide
+// register writes (59 T1; divergence is excluded, see the .cpp for why);
 // ABI x-ray iff a second recording is attachable; Observer iff the deck has any
 // live events; Slice iff the dataflow stream is present; Diff iff a B is
 // attachable. `mode` scopes the set — the Observer deck is live-capture-only and

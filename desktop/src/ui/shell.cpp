@@ -969,6 +969,15 @@ static void shell_weave_standalone(SceneView &sv, const Recording &r,
 static std::vector<std::string>
 shell_kind_availability(const SceneView &sv, const Streams *b) {
     std::vector<std::string> why(scene3d::all_scene_kinds().size());
+    // 59 T1: the plane needs a slot too, now that the pane opens for a
+    // recording that has a substrate but no codeimage. Without this, `address
+    // plane` is offered as available with no reason on a recording that has no
+    // plane at all — the same defect as every other row here.
+    if (!sv.has_regions)
+        why[scene_kind_index(scene3d::SceneKind::Plane)] =
+            "no address-space regions — the plane is placed from `codeimage` "
+            "events, which the serve host records for the tree / trace / "
+            "dataflow / auto modes";
     if (b == nullptr)
         why[scene_kind_index(scene3d::SceneKind::Divergence)] =
             "needs a second recording (press d to attach one)";
@@ -1714,7 +1723,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.playhead_moved = false;
 
     // No plane to draw without regions — say so, never a blank void.
-    if (!sv.has_regions) {
+    // 59 T1: scoped to the PLANE. The other four substrates are woven above
+    // from region capture, the call tree, wide-register writes and a B-side
+    // recording — none of which needs a `codeimage` — and none of them takes a
+    // Projection or reads the terrain. A missing plane is a reason to refuse
+    // the plane, not to refuse the pane.
+    if (!sv.has_regions && sv.kind == scene3d::SceneKind::Plane) {
         ImGui::TextUnformatted(
             "no address-space regions in this recording — the 3D overview "
             "places its plane from codeimage events, which the serve host "
@@ -1732,7 +1746,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // spans). The HUD is a SEPARATE window, so name the reason in the pane
     // itself, the same rule as the no-regions placard: never an empty plane,
     // unlabelled. The flat plane is still drawn below; this says why it is flat.
-    if (sv.terr.code.empty() && sv.traj.pc_placed == 0 &&
+    // 59 T1: plane vocabulary, so PLANE only. Without this guard it prints
+    // "nothing placed on the plane" over a lane prism — and it is already live
+    // for a recording that HAS a codeimage span but places nothing (the
+    // ambiguous two-span case), not merely latent behind the return above.
+    if (sv.kind == scene3d::SceneKind::Plane && sv.terr.code.empty() &&
+        sv.traj.pc_placed == 0 &&
         (!sv.terr.anchor_error.empty() || !sv.traj.placement_note.empty())) {
         const std::string &why = !sv.terr.anchor_error.empty()
                                      ? sv.terr.anchor_error
@@ -1828,7 +1847,17 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     if (!s.scene_host->ready()) {
         ImGui::TextDisabled("3D scene did not initialise: %s",
                             s.scene_host->error());
-        draw_flat_surface();
+        // 59 T1: the flat surface is the ADDRESS PLANE's 2D form. Offering it
+        // for a standalone substrate would hand a lane prism an unrelated
+        // (and, with no codeimage, empty) plane grid as its "reading surface".
+        if (sv.kind != scene3d::SceneKind::Plane)
+            ImGui::TextDisabled(
+                "\"%s\" has no flat plane form — %s. The model above is "
+                "complete; only its 3D rendering needs GL.",
+                scene3d::scene_kind_name(sv.kind),
+                scene3d::scene_axes(sv.kind).y);
+        else
+            draw_flat_surface();
         sv.viewport_focus =
             scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
@@ -1895,7 +1924,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     ImTextureID tex = s.scene_host->render(f);
     if (!tex) {
         ImGui::TextDisabled("3D scene produced no frame on this driver");
-        draw_flat_surface();
+        // 59 T1: same rule as the !ready() branch above — the flat surface is
+        // the plane's own 2D form and belongs to no other substrate.
+        if (sv.kind != scene3d::SceneKind::Plane)
+            ImGui::TextDisabled(
+                "\"%s\" has no flat plane form — %s.",
+                scene3d::scene_kind_name(sv.kind),
+                scene3d::scene_axes(sv.kind).y);
+        else
+            draw_flat_surface();
         sv.viewport_focus =
             scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
@@ -1980,7 +2017,12 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // (the follow toggle this brief marks optional-off-by-default would do
     // that) or silently absent. Never fires for "behind" (degenerate/no
     // camera set up yet); the ruler's own GL-path gate applies here too.
-    if (sv.highlight.ok && sv.terr.w > 0) {
+    // 59 T1: and PLANE only, the gate its own comment claims to inherit from
+    // the ruler. `sv.highlight` is computed from sv.terr.proj independently of
+    // the displayed kind and survives a kind switch, so without this an orbit
+    // on a standalone substrate fires a plane-cell label over it.
+    if (sv.kind == scene3d::SceneKind::Plane && sv.highlight.ok &&
+        sv.terr.w > 0) {
         float hu = 0.0f, hv = 0.0f;
         cell_center_uv(sv.highlight.cell, sv.terr.w, &hu, &hv);
         const float aspect =
