@@ -319,6 +319,100 @@ static const uint8_t SCENE_HOT_LOOP[] = {
 };
 
 /* ------------------------------------------------------------------ */
+/* 61 T7b: three scenes whose DOMINANT OpClass differs                  */
+/* (docs/superpowers/plans/2026-08-03-3d-scene-axis-budget.md)          */
+/*                                                                      */
+/* The axis budget's acceptance gate renders these three and requires    */
+/* the frames to be pairwise DISTINCT: an encoding that draws every      */
+/* program alike has failed however principled it is. What makes that    */
+/* gate honest is that the OpClass each cell reports comes from the      */
+/* recording's OWN Capstone-recorded disasm text, not from a fixture     */
+/* author — record_scene_abs emits that text, which is the field         */
+/* build_opcode_terrain classifies from.                                 */
+/*                                                                       */
+/* The BYTES are still author-chosen, so this buys honest CLASSIFICATION */
+/* of a real instruction stream, not an honest program, and the test's   */
+/* own header says so rather than overclaiming.                          */
+/*                                                                       */
+/* Each listing is hand-derivable on paper, like every other byte        */
+/* literal in this file, and each runs to a `ret` under Unicorn — a      */
+/* routine that faults fails the generator loudly rather than writing a  */
+/* truncated file. All three are far inside the REC_WINDOW (64) cap.     */
+
+/* Integer arithmetic + a compare-branch loop: IntArith / CompareBranch.
+ *   0x00  mov rax, rdi     ; 48 89 f8
+ *   0x03  xor ecx, ecx     ; 31 c9
+ *   0x05  add rcx, rax     ; 48 01 c1   <- loop body, twice per turn
+ *   0x08  add rcx, rax     ; 48 01 c1
+ *   0x0b  dec rax          ; 48 ff c8
+ *   0x0e  jne 0x05         ; 75 f5      (rel8 = 0x05 - 0x10 = -11)
+ *   0x10  mov rax, rcx     ; 48 89 c8
+ *   0x13  ret              ; c3                                          */
+static const uint8_t MOTIF_SCALAR_LOOP[] = {
+    0x48, 0x89, 0xf8, /* 0x00 mov rax, rdi */
+    0x31, 0xc9,       /* 0x03 xor ecx, ecx */
+    0x48, 0x01, 0xc1, /* 0x05 add rcx, rax */
+    0x48, 0x01, 0xc1, /* 0x08 add rcx, rax */
+    0x48, 0xff, 0xc8, /* 0x0b dec rax      */
+    0x75, 0xf5,       /* 0x0e jne 0x05     */
+    0x48, 0x89, 0xc8, /* 0x10 mov rax, rcx */
+    0xc3,             /* 0x13 ret          */
+};
+
+/* Packed XMM work: VectorSIMD. REAL packed instructions, not merely
+ * SIMD-looking ones — OpClass is decided by the recorded mnemonic, so a
+ * scalar stand-in would classify as something else entirely.
+ *   0x00  pxor xmm0, xmm0    ; 66 0f ef c0
+ *   0x04  pxor xmm1, xmm1    ; 66 0f ef c9
+ *   0x08  paddd xmm0, xmm1   ; 66 0f fe c1
+ *   0x0c  paddd xmm0, xmm1   ; 66 0f fe c1
+ *   0x10  psubd xmm0, xmm1   ; 66 0f fa c1
+ *   0x14  pand xmm0, xmm1    ; 66 0f db c1
+ *   0x18  por xmm0, xmm1     ; 66 0f eb c1
+ *   0x1c  movdqa xmm2, xmm0  ; 66 0f 6f d0
+ *   0x20  xor eax, eax       ; 31 c0
+ *   0x22  ret                ; c3                                        */
+static const uint8_t MOTIF_SIMD[] = {
+    0x66, 0x0f, 0xef, 0xc0, /* 0x00 pxor   xmm0, xmm0 */
+    0x66, 0x0f, 0xef, 0xc9, /* 0x04 pxor   xmm1, xmm1 */
+    0x66, 0x0f, 0xfe, 0xc1, /* 0x08 paddd  xmm0, xmm1 */
+    0x66, 0x0f, 0xfe, 0xc1, /* 0x0c paddd  xmm0, xmm1 */
+    0x66, 0x0f, 0xfa, 0xc1, /* 0x10 psubd  xmm0, xmm1 */
+    0x66, 0x0f, 0xdb, 0xc1, /* 0x14 pand   xmm0, xmm1 */
+    0x66, 0x0f, 0xeb, 0xc1, /* 0x18 por    xmm0, xmm1 */
+    0x66, 0x0f, 0x6f, 0xd0, /* 0x1c movdqa xmm2, xmm0 */
+    0x31, 0xc0,             /* 0x20 xor    eax, eax   */
+    0xc3,                   /* 0x22 ret               */
+};
+
+/* A store-heavy run: Move. Named for the WORK it does, not for a stream it
+ * carries — the opcode channel reads CODE, so this needs no `mem` stream at
+ * all, and a "memcpy" name would invite exactly that confusion. The slots are
+ * below rsp and inside the emulator's own mapped stack.
+ *   0x00  mov rax, rdi        ; 48 89 f8
+ *   0x03  mov [rsp-8], rax    ; 48 89 44 24 f8
+ *   0x08  mov [rsp-16], rax   ; 48 89 44 24 f0
+ *   0x0d  mov [rsp-24], rax   ; 48 89 44 24 e8
+ *   0x12  mov [rsp-32], rax   ; 48 89 44 24 e0
+ *   0x17  mov rcx, [rsp-8]    ; 48 8b 4c 24 f8
+ *   0x1c  mov rdx, [rsp-16]   ; 48 8b 54 24 f0
+ *   0x21  mov rsi, [rsp-24]   ; 48 8b 74 24 e8
+ *   0x26  mov rax, rcx        ; 48 89 c8
+ *   0x29  ret                 ; c3                                       */
+static const uint8_t MOTIF_STORES[] = {
+    0x48, 0x89, 0xf8,             /* 0x00 mov rax, rdi      */
+    0x48, 0x89, 0x44, 0x24, 0xf8, /* 0x03 mov [rsp-8], rax  */
+    0x48, 0x89, 0x44, 0x24, 0xf0, /* 0x08 mov [rsp-16], rax */
+    0x48, 0x89, 0x44, 0x24, 0xe8, /* 0x0d mov [rsp-24], rax */
+    0x48, 0x89, 0x44, 0x24, 0xe0, /* 0x12 mov [rsp-32], rax */
+    0x48, 0x8b, 0x4c, 0x24, 0xf8, /* 0x17 mov rcx, [rsp-8]  */
+    0x48, 0x8b, 0x54, 0x24, 0xf0, /* 0x1c mov rdx, [rsp-16] */
+    0x48, 0x8b, 0x74, 0x24, 0xe8, /* 0x21 mov rsi, [rsp-24] */
+    0x48, 0x89, 0xc8,             /* 0x26 mov rax, rcx      */
+    0xc3,                         /* 0x29 ret               */
+};
+
+/* ------------------------------------------------------------------ */
 /* The AArch64 value-fabric golden                                      */
 /* (docs/internal/archive/gui/32-per-guest-value-producer.md R5 T2)             */
 /*                                                                      */
@@ -2387,6 +2481,19 @@ int main(int argc, char **argv) {
         /* 36 T4: the SAME bytes in the live dataflow shape — absolute codeimage
          * + region-relative df_step, no trace. The one committed golden that
          * exercises 36's anchor + the terrain's df_step residency rung. */
+        /* 61 T7b: the three motif scenes, through the SAME emitter — an
+         * explicit output name, a raw byte array, and the per-instruction
+         * disasm text build_opcode_terrain classifies from. */
+        if (record_scene_abs(dir, "motif-scalar-loop", "motif_scalar_loop",
+                             MOTIF_SCALAR_LOOP, sizeof MOTIF_SCALAR_LOOP,
+                             scene_args, 1, 0) != 0)
+            failed++;
+        if (record_scene_abs(dir, "motif-simd", "motif_simd", MOTIF_SIMD,
+                             sizeof MOTIF_SIMD, scene_args, 1, 0) != 0)
+            failed++;
+        if (record_scene_abs(dir, "motif-stores", "motif_stores", MOTIF_STORES,
+                             sizeof MOTIF_STORES, scene_args, 1, 0) != 0)
+            failed++;
         if (record_scene_df(dir, "scene-df-loop", "scene_hot_loop",
                             SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
                             1) != 0)

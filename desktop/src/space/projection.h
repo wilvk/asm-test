@@ -29,6 +29,21 @@ namespace asmdesk::space {
 // region with the greatest base <= addr; no region is dropped or merged.
 Projection build_projection(std::vector<Region> regions);
 
+// 61 T2: recompute the layout for p.layout. For Atlas this fills p.rects with
+// an order-preserving binary-split treemap whose cell budgets are proportional
+// to Region::len (any other weighting would be a fabricated emphasis — D7) and
+// which tiles the n = 1<<order grid exactly, plus p.nodes, the split tree
+// unproject() descends. Clears both for Hilbert. Idempotent.
+//
+// Falls BACK to Hilbert, silently in code but visibly in p.layout, in two
+// cases: the plane has fewer cells than there are regions, and the split
+// admits no realisable tiling. Both are impossible for a real map — `order` is
+// sized from the domain's byte count, so a plane crowded by regions needs a
+// synthetic domain — and the second has never been observed at all. A caller
+// that cares reads p.layout back; NEVER assume Atlas stayed Atlas just because
+// you set it.
+void rebuild_layout(Projection &p);
+
 // The rel->abs anchor (36 T1). Answers one question: "what absolute span is a
 // routine-relative `df_step.off` (or a rel `trace` offset) relative to, in this
 // recording?" — or refuses with the reason. It derives the answer from a fact the
@@ -107,9 +122,96 @@ struct RegionStyle {
 };
 RegionStyle region_style(Region::Kind kind);
 
+// 61 T9: a digest of the LAYOUT — `order`, the compacted domain boundaries,
+// the layout mode, and (under Atlas) the rectangles. Comparing digests across a
+// weave answers "did the floor move under the reader" without keeping the old
+// projection alive.
+//
+// Scope, stated exactly because the near-miss claim is tempting: this covers
+// what decides WHICH CELL a domain offset lands in. It deliberately does NOT
+// mix Region::base, so two region sets with identical lengths at different
+// bases digest the same — and that is correct for this question, because the
+// PICTURE is identical (the same cells, in the same places, owned by the same
+// regions in the same order); only which address sits under a given cell has
+// changed. Do not read this as "equal digests place every address identically",
+// which is a stronger claim than the digest supports.
+//
+// `valid` is false for a projection with no regions — there is no floor to have
+// moved — and a comparison involving an invalid fingerprint is never a reflow.
+struct LayoutFingerprint {
+    bool valid = false;
+    size_t regions = 0;
+    uint64_t digest = 0;
+};
+LayoutFingerprint layout_fingerprint(const Projection &proj);
+
+// 61 T9: the HUD note for a weave that moved the floor, or "" when it did not.
+// NOT atlas-specific: adding a region shifts every later region's domain
+// offset, so a Hilbert floor re-scrambles too, and a growing capture deserves
+// the same notice under either layout.
+//
+// It reports THAT the floor moved, never how much. Quantifying the disruption
+// would need the previous rects kept alive and a distance metric over two
+// tilings, and no threshold on that metric could be justified from anything
+// measured here — so the note is a fact, and whether a reflow was disruptive
+// stays the reader's judgement.
+std::string layout_reflow_note(const LayoutFingerprint &prev,
+                               const LayoutFingerprint &now);
+
+// 61 T8: one region's in-place label on the atlas floor. `u`/`v` are the
+// rect's GEOMETRIC centre (not a cell centre — the anchor names a rectangle,
+// not a cell), `cells` is its area for a caller's own LOD, `region` indexes
+// Projection::regions, and `text` is Region::label or, when that is empty, the
+// kind name — the SAME fallback the HUD's side-panel legend already applies
+// (scene3d/hud.cpp), never a second naming convention.
+struct AtlasLabel {
+    float u = 0, v = 0;
+    uint32_t cells = 0;
+    size_t region = 0;
+    std::string text;
+};
+
+// 61 T8: the labels for an ATLAS projection's rectangles — Component 1's
+// stated payoff ("region-major, 100 % packed, LABELLED IN PLACE ... this, not
+// locality, is the real win"). Empty under Hilbert, and that refusal is the
+// honest answer rather than a missing feature: a Hilbert region is a connected
+// snake through the plane with no rectangle and so no anchor, and inventing one
+// would be fabricated structure (D7). It is also what lets a caller invoke this
+// unconditionally, with no layout test at the call site.
+//
+// PARTIAL BY DESIGN, and the threshold is a FRACTION OF THE PLANE rather than
+// an absolute count. `min_side_frac` is the smallest share of the plane's side
+// a rect's SHORTER side may occupy and still carry text: 1/16 by default.
+//
+// Both halves of that are measured rather than guessed (61 T10 Step 4):
+//
+//   - Relative, because a rect's cell count scales with `order`. An absolute
+//     "64 cells" filters everything at order 6 and NOTHING at order 12, where
+//     the plane has 16.7 M cells — on a realistic 12-region /proc/maps every
+//     region cleared it and the labels landed 6 px apart at 1600 px wide, which
+//     is the unreadable pile this threshold exists to prevent.
+//   - The MINOR SIDE, not the area, because the atlas produces slivers: a 5x205
+//     rect has 1025 cells and cannot hold a word. Measured worst aspect ratios
+//     are 13:1 on a realistic map, 41:1 with one huge mapping beside tiny ones,
+//     and up to 4096:1 on randomised skew.
+//
+// Every region, labelled or not, is still listed in the HUD's region legend,
+// which is what keeps a partially-labelled floor from implying the unlabelled
+// rects are unnamed. Callers must not present these as the complete set.
+std::vector<AtlasLabel> atlas_labels(const Projection &proj,
+                                     float min_side_frac = 1.0f / 16.0f);
+
 // 51 T2 (scene-focus-and-scale.md): the plane cells one region occupies —
 // row-major indices `y * n + x` over the n = 2^order plane, ascending, no
-// duplicates. THE one rule for "which cells are this region's": it walks the
+// duplicates. THE one rule for "which cells are this region's".
+//
+// 61 T2: BOTH layouts are live here, and they answer slightly different
+// questions. Under `Atlas` the set is the region's RECTANGLE — every cell the
+// region OWNS, which is a SUPERSET of the cells its addresses can reach, since
+// a rect granted more cells than the region has bytes has a rounding tail that
+// is owned but does not decode. Ownership is what zoning and labelling want,
+// and it keeps this function's containment and disjointness contracts true
+// under both layouts. Under `Hilbert`, as before: it walks the
 // region's own compacted-domain range `[domain_off[i], domain_off[i+1])`
 // through the SAME Hilbert index -> cell mapping project() itself uses, so it
 // contains every cell project() can place an address of this region into, by

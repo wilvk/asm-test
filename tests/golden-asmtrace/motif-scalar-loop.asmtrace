@@ -1,0 +1,20 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"motif-scalar-loop","sha256":"d8edde6cddf5068e6922ff8c6ce416eed2b4f4111946688d5b9eac4d65fcf607","len":20}}
+{"k":"note","text":"3D-overview golden scene: motif_scalar_loop(3) under the deterministic emulator L0 producer, written as `codeimage` + ABSOLUTE-basis `trace`. The producer maps the routine window at 0x100000, so each `off` is the address the guest executed; the loop body's repeats are the terrain's heat."}
+{"k":"codeimage","base":1048576,"len":20,"version":0,"when":0,"bytes":"4889f831c94801c14801c148ffc875f54889c8c3"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048579,"disasm":"xor ecx, ecx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048581,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048584,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048587,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048590,"disasm":"jne 0x100005"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048581,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048584,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048587,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048590,"disasm":"jne 0x100005"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048581,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048584,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048587,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048590,"disasm":"jne 0x100005"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048592,"disasm":"mov rax, rcx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048595,"disasm":"ret"}
+{"k":"end","events":18,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":16}

@@ -1,0 +1,14 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"motif-stores","sha256":"7a12cdd5726c19ab4bef353b955309718841b0e29a39782083137ee09ce61a2a","len":42}}
+{"k":"note","text":"3D-overview golden scene: motif_stores(3) under the deterministic emulator L0 producer, written as `codeimage` + ABSOLUTE-basis `trace`. The producer maps the routine window at 0x100000, so each `off` is the address the guest executed; the loop body's repeats are the terrain's heat."}
+{"k":"codeimage","base":1048576,"len":42,"version":0,"when":0,"bytes":"4889f848894424f848894424f048894424e848894424e0488b4c24f8488b5424f0488b7424e84889c8c3"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048579,"disasm":"mov qword ptr [rsp - 8], rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048584,"disasm":"mov qword ptr [rsp - 0x10], rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048589,"disasm":"mov qword ptr [rsp - 0x18], rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048594,"disasm":"mov qword ptr [rsp - 0x20], rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048599,"disasm":"mov rcx, qword ptr [rsp - 8]"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048604,"disasm":"mov rdx, qword ptr [rsp - 0x10]"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048609,"disasm":"mov rsi, qword ptr [rsp - 0x18]"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048614,"disasm":"mov rax, rcx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048617,"disasm":"ret"}
+{"k":"end","events":12,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":10}

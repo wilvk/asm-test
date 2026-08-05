@@ -601,6 +601,76 @@ int main() {
               "a dot");
     }
 
+    // --- 61 T4: fit-to-bounds ----------------------------------------------
+    // reset() framed the whole unit plane unconditionally, so a floor occupying
+    // a fraction of it sat small in a mostly-empty viewport with no way to say
+    // so.
+    {
+        // BIT-IDENTICAL, not merely close: the "reset restores yaw/pitch/radius"
+        // check above compares radius with ==, and every golden image was
+        // rendered at these exact framings. A tolerance here would let a
+        // drifting fit through and churn the goldens.
+        Camera c;
+        c.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadius);
+        check("fitting the whole plane reproduces the default framing exactly",
+              c.radius == Camera{}.radius,
+              "fit gave radius " + std::to_string(c.radius) +
+                  ", the default is " + std::to_string(Camera{}.radius));
+        Camera t;
+        t.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadiusTopDown);
+        check("fitting the whole plane top-down reproduces its framing exactly",
+              t.radius == 1.9f,
+              "fit gave radius " + std::to_string(t.radius) + ", wanted 1.9");
+    }
+    {
+        // top_down() must NOT recentre. It is the "3D to find, 2D to read"
+        // collapse: you look straight down at WHERE YOU ARE. Snapping the
+        // target back to the plane centre would lose the mental map the user
+        // just built — the same reason frame() refuses to reorient. No existing
+        // check catches this, because the top-down block above uses a DEFAULT
+        // camera, where recentring and not recentring are indistinguishable.
+        Camera c;
+        c.pan(0.3f, -0.2f);
+        const float tx = c.target[0], tz = c.target[2];
+        c.top_down();
+        check("top_down keeps the target it was given",
+              c.target[0] == tx && c.target[2] == tz,
+              "top_down moved the target to (" + std::to_string(c.target[0]) +
+                  "," + std::to_string(c.target[2]) +
+                  "), losing the user's place");
+        check("top_down still reframes the whole plane", c.radius == 1.9f,
+              "radius " + std::to_string(c.radius));
+    }
+    {
+        Camera whole;
+        whole.fit(0.0f, 0.0f, 1.0f, 1.0f, Camera::kWholePlaneRadius);
+        Camera quarter;
+        quarter.fit(0.0f, 0.0f, 0.5f, 0.5f, Camera::kWholePlaneRadius);
+        check("fitting a smaller region dollies closer",
+              quarter.radius < whole.radius,
+              "quarter radius " + std::to_string(quarter.radius) +
+                  " was not closer than whole " + std::to_string(whole.radius));
+        check("fit centres the target on the region",
+              std::fabs(quarter.target[0] - 0.25f) < 1e-5f &&
+                  std::fabs(quarter.target[2] - 0.25f) < 1e-5f,
+              "target landed at (" + std::to_string(quarter.target[0]) + "," +
+                  std::to_string(quarter.target[2]) + "), wanted (0.25,0.25)");
+        check("fit never lifts the target off the ground plane",
+              quarter.target[1] == 0.0f,
+              "a camera whose horizon lies about where the ground is");
+    }
+    {
+        // A degenerate region must not produce a camera inside the near plane —
+        // the same clamp-don't-break discipline dolly() already uses.
+        Camera c;
+        c.fit(0.0f, 0.0f, 0.001f, 0.001f, Camera::kWholePlaneRadius);
+        check("fit respects the dolly clamps",
+              c.radius >= Camera::kMinRadius && c.radius <= Camera::kMaxRadius,
+              "radius " + std::to_string(c.radius) + " escaped [" +
+                  std::to_string(Camera::kMinRadius) + "," +
+                  std::to_string(Camera::kMaxRadius) + "]");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d camera check(s) failed\n", failures);
         return 1;

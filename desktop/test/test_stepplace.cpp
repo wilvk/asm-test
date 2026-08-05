@@ -3,6 +3,7 @@
 // Null harness, no display: this binary links stepplace.o + locate.o +
 // projection.o + the doc model and NOTHING else — the same engine-free closure
 // test_locate.cpp makes for the resolver this one adapts.
+#include <cmath> // 61 T3: std::fabs, for the two-layout agreement block
 #include <cstdio>
 #include <sstream>
 #include <string>
@@ -226,6 +227,65 @@ int main() {
         check("place_address: a mapped address places", hit.placed, hit.why);
         check("place_address: names its region",
               hit.region != nullptr && hit.region->base == 4194304, "");
+    }
+
+    // === 61 T3 — the shared plane arithmetic is LAYOUT-AGNOSTIC =============
+    // The shared plane arithmetic must agree with the projection under BOTH
+    // layouts — that agreement is what contains the blast radius of a layout
+    // swap. If it holds, picking, goto, zoning and every (u,v)-keyed layer
+    // follow for free, because all of them read `cell` from this one
+    // derivation. This is a REGRESSION GATE over already-correct code, not a
+    // refactor: locate.cpp and stepplace.cpp already call proj.project(), and
+    // what they open-code is only `cell = y*n + x`, which T2 left valid by
+    // keeping the grid.
+    {
+        std::vector<Region> in;
+        Region reg;
+        reg.base = 0x0000000000400000ull;
+        reg.len = 0x20000;
+        reg.kind = Region::Code;
+        in.push_back(reg);
+        Projection p = build_projection(std::move(in));
+
+        for (const auto layout :
+             {Projection::Layout::Hilbert, Projection::Layout::Atlas}) {
+            p.layout = layout;
+            rebuild_layout(p);
+            const std::string name =
+                layout == Projection::Layout::Atlas ? "atlas" : "hilbert";
+            const uint64_t addr = 0x400040ull;
+
+            const StepPlace sp = place_address(p, addr);
+            check("place_address places an in-domain address (" + name + ")",
+                  sp.placed, sp.why);
+
+            float pu = 0, pv = 0;
+            check("project places the same address (" + name + ")",
+                  p.project(addr, &pu, &pv), "project refused it");
+            check("place_address and project agree (" + name + ")",
+                  std::fabs(sp.u - pu) < 1e-5f && std::fabs(sp.v - pv) < 1e-5f,
+                  "place gave (" + std::to_string(sp.u) + "," +
+                      std::to_string(sp.v) + ") but project gave (" +
+                      std::to_string(pu) + "," + std::to_string(pv) + ")");
+
+            // And the cell derivation itself, which is the thing four call
+            // sites each keep their own copy of.
+            const uint32_t n = uint32_t(1) << p.order;
+            uint32_t x = uint32_t(pu * n), y = uint32_t(pv * n);
+            if (x >= n)
+                x = n - 1;
+            if (y >= n)
+                y = n - 1;
+            check("the cell derivation is layout-independent (" + name + ")",
+                  sp.cell == y * n + x,
+                  "place_address reported cell " + std::to_string(sp.cell) +
+                      ", the shared y*n+x rule gives " +
+                      std::to_string(y * n + x));
+
+            check("the region resolves back (" + name + ")",
+                  sp.region != nullptr && sp.region->base == 0x400000ull,
+                  "an in-region address resolved to the wrong region");
+        }
     }
 
     if (failures) {

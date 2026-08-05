@@ -59,6 +59,9 @@ unsigned gl_link_program(const char *vs, const char *fs, bool has_vid, bool pick
     // needs no second link path.
     glBindAttribLocation(p, kAttrOther, "other");
     glBindAttribLocation(p, kAttrSide, "side");
+    // 61 T5: same reasoning again — the trace step rides the line and point
+    // programs, and binding it where it is not declared costs nothing.
+    glBindAttribLocation(p, kAttrStep, "step");
     if (has_vid)
         glBindAttribLocation(p, kAttrVid, "vid");
     if (has_col)

@@ -470,11 +470,12 @@ static void pure_line_width_checks() {
 }
 
 // ---- the GL half ------------------------------------------------------------
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#define GL_GLEXT_PROTOTYPES 1
-#include <GL/gl.h>
-#include <GL/glext.h>
+// 61 T7a: the EGL bring-up, the colour FBO and the readback now live in the
+// SHARED harness, so this smoke and the motif gate cannot drift apart on the
+// context path. It pulls EGL/GL in for us.
+#include "gl_offscreen.h"
+
+using asmdesk::testing::ColorFbo;
 
 static void skip(const char *why) {
     std::printf("test_scene_fbo: SKIP GL smoke — %s (pure checks ran)\n", why);
@@ -482,110 +483,24 @@ static void skip(const char *why) {
 
 // Bring up a surfaceless EGL + desktop-GL context. Returns false (and prints a
 // reason) on any failure, so a host with no GL device self-skips.
-static bool egl_up(EGLDisplay *out_dpy, EGLContext *out_ctx, std::string *why) {
-    EGLDisplay dpy = EGL_NO_DISPLAY;
-    auto getPD = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress(
-        "eglGetPlatformDisplayEXT");
-    if (getPD)
-        dpy =
-            getPD(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
-    if (dpy == EGL_NO_DISPLAY)
-        dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (dpy == EGL_NO_DISPLAY) {
-        *why = "no EGL display";
-        return false;
-    }
-    EGLint major = 0, minor = 0;
-    if (!eglInitialize(dpy, &major, &minor)) {
-        *why = "eglInitialize failed";
-        return false;
-    }
-    if (!eglBindAPI(EGL_OPENGL_API)) {
-        *why = "no desktop-GL EGL API";
-        return false;
-    }
-    const EGLint cfg_attr[] = {EGL_SURFACE_TYPE,
-                               EGL_PBUFFER_BIT,
-                               EGL_RENDERABLE_TYPE,
-                               EGL_OPENGL_BIT,
-                               EGL_RED_SIZE,
-                               8,
-                               EGL_GREEN_SIZE,
-                               8,
-                               EGL_BLUE_SIZE,
-                               8,
-                               EGL_ALPHA_SIZE,
-                               8,
-                               EGL_DEPTH_SIZE,
-                               24,
-                               EGL_NONE};
-    EGLConfig cfg;
-    EGLint num = 0;
-    if (!eglChooseConfig(dpy, cfg_attr, &cfg, 1, &num) || num < 1) {
-        *why = "no usable EGL config";
-        return false;
-    }
-    const EGLint ctx_attr[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
-                               EGL_CONTEXT_MINOR_VERSION, 0, EGL_NONE};
-    EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, ctx_attr);
-    if (ctx == EGL_NO_CONTEXT) {
-        *why = "eglCreateContext failed";
-        return false;
-    }
-    if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
-        *why = "surfaceless make-current failed";
-        return false;
-    }
-    *out_dpy = dpy;
-    *out_ctx = ctx;
-    return true;
-}
+// egl_up now lives in gl_offscreen.h (61 T7a), byte-for-byte.
+using asmdesk::testing::egl_up;
 
-// A simple RGBA8 + depth24 colour framebuffer for reading terrain colour back.
-struct ColorFbo {
-    GLuint fbo = 0, tex = 0, rbo = 0;
-    int w = 0, h = 0;
-    bool create(int width, int height) {
-        w = width;
-        h = height;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, nullptr);
-        glGenRenderbuffers(1, &rbo);
-        glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, tex, 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                  GL_RENDERBUFFER, rbo);
-        return glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
-               GL_FRAMEBUFFER_COMPLETE;
-    }
-};
+// ColorFbo now lives in gl_offscreen.h (61 T7a), byte-for-byte.
+
 
 static float lum(const unsigned char *p) {
     return 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2];
 }
 
 // Render one frame of the currently-uploaded scene into `cf` and read it back.
+// 61 T7a: the BODY is gl_offscreen.h's capture_image — this stays as a thin
+// alias so the dozens of existing call sites keep their vector<unsigned char>
+// shape while the context/FBO/readback path is the shared one.
 static std::vector<unsigned char> capture(Scene &scene, const Camera &cam,
                                           const ColorFbo &cf,
                                           const SceneLayers &layers) {
-    glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
-    glViewport(0, 0, cf.w, cf.h);
-    glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    scene.render(cam, cf.w, cf.h, layers);
-    std::vector<unsigned char> px(static_cast<size_t>(cf.w) * cf.h * 4);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glReadPixels(0, 0, cf.w, cf.h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return px;
+    return asmdesk::testing::capture_image(scene, cam, cf, layers).px;
 }
 
 // How many pixels two frames disagree on — the layer-toggle metric: a layer that
@@ -648,6 +563,29 @@ static void upload(Scene &scene, const SceneModel &m, const space::Terrain &t) {
 }
 
 // The first screen pixel carrying `id` in the pick buffer, or -1.
+// 61 T10: the MEAN luminance over every pixel carrying `id`, and how many
+// there were. pixel_of_id below returns the FIRST such pixel, which for a cell
+// at a grazing angle can be a one-pixel sliver of a side face — a measurement
+// of the rasteriser as much as of the cell. Averaging the whole footprint
+// measures what the cell actually looks like, and does not depend on where a
+// layout happens to put it.
+static float cell_mean_lum(Scene &scene, const Camera &cam, int W, int H,
+                           uint32_t id, const std::vector<unsigned char> &px,
+                           int *out_n) {
+    std::vector<uint32_t> ids;
+    scene.render_pick_buffer(cam, W, H, ids);
+    double sum = 0.0;
+    int n = 0;
+    for (size_t i = 0; i < ids.size() && i * 4 + 2 < px.size(); i++)
+        if (ids[i] == id) {
+            sum += lum(&px[i * 4]);
+            n++;
+        }
+    if (out_n)
+        *out_n = n;
+    return n ? static_cast<float>(sum / n) : -1.0f;
+}
+
 static int pixel_of_id(Scene &scene, const Camera &cam, int W, int H,
                        uint32_t id) {
     std::vector<uint32_t> ids;
@@ -1156,11 +1094,22 @@ int main() {
 
         const uint64_t kFollow = 2; // t=2: a placed, exact PC vertex
         uint32_t vid = pick_id_vertex(n, kFollow);
+        // 61 T5: follow_step is set BEFORE the pick render, and the order is
+        // now load-bearing rather than incidental. This fixture visits address
+        // 4194304 five times (t=0..4); with trace time off the Y axis those
+        // five visits are ONE POINT IN SPACE, so exactly one of their ids can
+        // own that pixel. Which one is not arbitrary — the scene re-draws the
+        // FOLLOWED vertex so it wins, because doc 44's rule is that the
+        // followed citizen reuses its underlying PC vertex's pick id and the
+        // head glyph sits on exactly this point. Asking for t=2's id while
+        // following t=0 would be asking to distinguish two visits that are no
+        // longer distinguishable in space; the playhead is what selects among
+        // them now. That is the axis budget being spent, not a pick defect.
+        scene.follow_step = kFollow;
         int vpx = pixel_of_id(scene, cam, W, H, vid);
         check("T6 GL: the followed vertex is on screen", vpx >= 0,
               "vertex not rendered");
         if (vpx >= 0) {
-            scene.follow_step = kFollow;
             SceneLayers with_vehicle;              // vehicle = true by default
             capture(scene, cam, cf, with_vehicle); // draws the head glyph
             int px_x = vpx % W, py = vpx / W;      // bottom-left origin
@@ -1170,6 +1119,19 @@ int main() {
                   "vertex's pick id",
                   got == vid,
                   "the head glyph changed the pick id underneath it");
+            // 61 T5: and the follow is what CHOOSES among coincident visits.
+            // Move the playhead to another visit of the SAME address and the
+            // same pixel must now answer with THAT visit — otherwise the
+            // earliest visit would own the point forever and following the
+            // path would stop changing what a click means.
+            scene.follow_step = 4; // another visit to 4194304
+            const uint32_t got4 = scene.pick(cam, W, H, px_x, y_top);
+            check("T6 GL: the followed visit owns the shared pixel",
+                  got4 == pick_id_vertex(n, 4),
+                  "with time off the Y axis several visits to one address "
+                  "share a pixel, so the FOLLOWED one must win it; this pixel "
+                  "still answered with a visit the reader is not on");
+            scene.follow_step = kFollow; // leave the block as it found it
         }
 
         // An absent/unplaced follow_step draws NOTHING — never a mis-snapped
@@ -1368,9 +1330,31 @@ int main() {
             surface_only.mispred = false;
             std::vector<unsigned char> surf =
                 capture(scene, gcam, gcf, surface_only);
+            // 61 T10: measured over each cell's WHOLE footprint, not from
+            // pixel_of_id's first matching pixel. The margin is unchanged at
+            // 8.0 — this is a better measurement, not a lowered bar. Under the
+            // atlas this fixture's 18-byte program occupies ordinals 0..17 of
+            // its rect, i.e. row 0, where the first pixel of a cell is often a
+            // one-pixel sliver of a foreshortened side face: it read 30.4 vs
+            // 27.1 (a 3.3 margin, failing) while the cells' actual means are
+            // 75.8 vs 44.2 (31.6, passing comfortably). The heat encoding was
+            // never in question; the sampling was.
+            int hot_n = 0, cold_n = 0;
+            const float hot_lum = cell_mean_lum(scene, gcam, GW, GH,
+                                                pick_id_cell(hot), surf, &hot_n);
+            const float cold_lum = cell_mean_lum(
+                scene, gcam, GW, GH, pick_id_cell(cold), surf, &cold_n);
+            check("golden abs scene: both cells have a real footprint to read",
+                  hot_n > 0 && cold_n > 0,
+                  "a cell covered no pixels, so the brightness below would "
+                  "compare nothing");
+            char why[192];
+            std::snprintf(why, sizeof why,
+                          "hot cell mean %.1f over %dpx vs cold %.1f over "
+                          "%dpx — the terrain is not encoding recorded heat",
+                          hot_lum, hot_n, cold_lum, cold_n);
             check("golden abs scene: the loop body renders brighter",
-                  lum(&surf[hot_px * 4]) > lum(&surf[cold_px * 4]) + 8.0f,
-                  "hot not brighter");
+                  hot_lum > cold_lum + 8.0f, why);
         }
 
         // The exact trajectory draws: switching its layer off changes pixels.
@@ -1662,10 +1646,35 @@ int main() {
     // --- (k) T3 (55): contour band width stays roughly constant in SCREEN
     //     pixels across a large change in camera distance ---------------------
     {
+        // 61 T10: this block needs a real 2D HEIGHT GRADIENT in view, and
+        // ndjson_hotcold does not provide one — it heats exactly TWO cells of
+        // 4096. Under Hilbert those two happened to land within a few cells of
+        // each other (that is the curve's locality), so they read as one blob
+        // with a gradient around it. Under the atlas they do not: byte offsets
+        // 0 and 64 become serpentine ordinals 0 and 64, and with a 64-wide rect
+        // that is exactly one row apart — which the odd-row reversal puts at
+        // (0,0) and (63,1), i.e. OPPOSITE ENDS of the plane. Two isolated
+        // one-cell bumps are sub-pixel at the far camera and produced no
+        // contour-affected run at all.
+        //
+        // That is a genuine property of the encoding (see the 61 brief: the
+        // serpentine buys adjacency for consecutive cells and pays for it at a
+        // stride of one row width), NOT a fault in the contour shader this
+        // block exists to test. So the fixture now heats a broad run of
+        // offsets, giving a gradient under ANY layout, and the block goes back
+        // to measuring what it is named for: that a contour band's width is
+        // constant in SCREEN space across a camera dolly.
+        std::string cnd = kHdrExact;
+        cnd += "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,"
+               "\"version\":0}\n";
+        for (int off = 0; off < 512; off += 4)
+            for (int rep = 0; rep <= (off / 4) % 6; rep++)
+                cnd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":" +
+                       std::to_string(4194304 + off) + "}\n";
+        cnd += "{\"k\":\"end\",\"events\":9,\"truncated\":false}\n";
         space::TerrainModel terr = space::build_terrain(
-            space::build_projection(
-                space::regions_from_codeimage(load(ndjson_hotcold()))),
-            load(ndjson_hotcold()));
+            space::build_projection(space::regions_from_codeimage(load(cnd))),
+            load(cnd));
         scene.nsteps = static_cast<uint32_t>(terr.nsteps);
         scene.set_terrain(terr.full());
         scene.set_trajectories(space::TrajectorySet{}, terr.proj);
@@ -1734,6 +1743,7 @@ int main() {
 
         std::vector<int> near_runs = band_run_lengths(0.8f);
         std::vector<int> far_runs = band_run_lengths(6.0f);
+
         check("T3 GL: contour bands are visible at both a close and a far "
               "camera distance",
               !near_runs.empty() && !far_runs.empty(),

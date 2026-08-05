@@ -259,6 +259,27 @@ class Scene {
     uint32_t nsteps = 0;
     float y_scale = 0.35f; // terrain height exaggeration (uYScale)
 
+    // 61 T5: trace time is NOT a spatial axis in the default scene. The
+    // worldline and the causal spurs lie on the floor and are read through the
+    // playhead instead, which returns the Y axis to access density — a
+    // pre-drawn future crowding the default view was the whole complaint.
+    //
+    // This needs no setter and no SceneKind test: `Scene` IS the Plane scene's
+    // renderer, exclusively (gl_scene_host.cpp routes every other kind to
+    // standalone_ before Scene is touched, and those four kinds carry their own
+    // vertical quantities). `false` exists to keep the pre-flattening path
+    // testable, NOT for "the other scenes", which never call set_trajectories.
+    //
+    // The three OPT-IN layers — lifetime pillars, sediment strata, access arcs
+    // — deliberately KEEP trace time on Y: a layer you switch on is asking for
+    // it, and two of the three are vertical-only, so flattening them would be a
+    // synonym for deleting them.
+    bool flat_time = true;
+    // 61 T5: the comet trail's length, in TRACE STEPS. It was 3.0f *
+    // traj_scale_ — a ±Y band that approximated about three steps and collapses
+    // to nothing once Y is flat. Steps are what it was always approximating.
+    uint32_t comet_tail = 256;
+
     // T1 (49-one-time-truth): the terrain-residency playhead (SceneFrame::slice_t),
     // set per frame like follow_step already is — a draw-time uniform, no upload.
     // Named for the axis it walks, `slice_step`, never `head`/`step`/`t`, so the
@@ -607,6 +628,20 @@ class Scene {
 
     unsigned vao_grid_ = 0, vbo_cell_ = 0, ibo_grid_ = 0;
     int grid_index_count_ = 0;
+    // 61 T5: the NORMALISED terrain heights set_terrain just uploaded, kept
+    // CPU-side so a FLAT worldline can ride the surface it crosses instead of
+    // drowning under it. The terrain's world Y at a cell is
+    // height_norm_[cell] * y_scale — the same product the terrain vertex
+    // shader forms — so `flat_path_y` below reproduces the skyline rather than
+    // guessing a clearance. Empty until set_terrain runs.
+    std::vector<float> height_norm_;
+    uint32_t terr_w_ = 0, terr_h_ = 0;
+    // The world Y a flat path/spur vertex sits at over plane point (u,v): just
+    // clear of the terrain surface there. Shared by set_trajectories and
+    // causal.cpp's spur feet, because a spur hangs on a worldline vertex and
+    // two copies of this would be two chances for the foot to detach.
+    float flat_path_y(float u, float v) const;
+
     unsigned tex_height_ = 0, tex_flags_ = 0;
     unsigned tex_kind_ = 0; // T1: R8UI region-kind-per-cell texture
     unsigned tex_opclass_ = 0; // T4 (56): R8UI dominant-opcode-class-per-cell
@@ -772,10 +807,15 @@ class Scene {
     // placed vertex with pt_t <= target (slice_step, the terrain-residency
     // playhead) — the execution front. `out_line` is the matching Line's
     // index in traj_lines_ (for the comet-tail uniform / glyph colour).
+    // 61 T5: `out_pick_id`, when given, receives the matched vertex's OWN pick
+    // id — the id the pick pass must let win at that vertex's pixel once flat
+    // time makes several visits to one address share it.
     bool find_vertex(bool exact, uint64_t target, float out_pos[3],
-                     int *out_line) const;
-    bool find_head(float out_pos[3], int *out_line) const {
-        return find_vertex(/*exact=*/true, follow_step, out_pos, out_line);
+                     int *out_line, uint32_t *out_pick_id = nullptr) const;
+    bool find_head(float out_pos[3], int *out_line,
+                   uint32_t *out_pick_id = nullptr) const {
+        return find_vertex(/*exact=*/true, follow_step, out_pos, out_line,
+                           out_pick_id);
     }
     // T2 (49): the execution front — the last placed vertex at-or-before
     // slice_step, i.e. exactly the boundary T1's dim/no-dim cut draws at.

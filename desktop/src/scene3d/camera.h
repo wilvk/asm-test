@@ -78,13 +78,56 @@ struct Camera {
         radius = clampf(new_radius, kMinRadius, kMaxRadius);
     }
 
-    void reset() { *this = Camera{}; }
+    // 61 T4: the radii that frame the WHOLE unit plane — this struct's shipped
+    // defaults, stated once rather than re-derived. Every other framing is
+    // these scaled by the extent being framed, which is the correct geometry at
+    // a fixed fov AND exact by construction: an extent of 1 is a multiply by
+    // one, so fit() over the whole plane reproduces reset()/top_down()
+    // BIT-IDENTICALLY. That matters because test_camera compares radius with ==
+    // and every golden was rendered here. (Deriving these from fovy via
+    // 1/tan(fovy/2) and a calibrated pad does NOT round back to 2.2f —
+    // 1.0f/tanf(0.4f)*0.9301f is 2.19988, and no pad value fixes a two-rounding
+    // float product across libm versions.)
+    static constexpr float kWholePlaneRadius = 2.2f;
+    static constexpr float kWholePlaneRadiusTopDown = 1.9f;
+
+    // 61 T4: the radius that frames an axis-aligned region of the floor.
+    // Clamped through the SAME kMinRadius/kMaxRadius dolly uses, so a
+    // degenerate region cannot produce a camera inside the near plane. const,
+    // and separate from fit(), because top_down() wants the radius WITHOUT the
+    // recentring.
+    float fit_radius(float u0, float v0, float u1, float v1,
+                     float whole) const {
+        const float extent = std::fmax(std::fabs(u1 - u0), std::fabs(v1 - v0));
+        return clampf(extent * whole, kMinRadius, kMaxRadius);
+    }
+
+    // 61 T4: frame a region — centre the target on it and pull the radius back
+    // to hold it. Routed through frame() rather than re-clamping, because
+    // frame() IS "recentre without reorienting" and already owns both clamps; a
+    // second copy of them here is how the two drift.
+    void fit(float u0, float v0, float u1, float v1, float whole) {
+        frame(0.5f * (u0 + u1), 0.5f * (v0 + v1),
+              fit_radius(u0, v0, u1, v1, whole));
+        target[1] = 0.0f; // the plane's height is not a camera axis (see pan()).
+                          // Already 0 on every path today; stated so the "never
+                          // lifts the target off the ground plane" check is
+                          // guaranteed by this function rather than its callers.
+    }
+
+    void reset() {
+        *this = Camera{};
+        fit(0.0f, 0.0f, 1.0f, 1.0f, kWholePlaneRadius);
+    }
     // The 2D-ish preset: look straight down (pitch at the ceiling, so the plane
     // reads as a flat heatmap) from a radius that frames the whole unit plane.
+    // Takes fit_radius and NOT fit: shell.cpp invokes this on a camera the user
+    // may have panned, and recentring would silently teleport them to the plane
+    // centre on a keypress whose whole purpose is "show me THIS, flat".
     void top_down() {
         yaw = 0.0f;
         pitch = kPitchLimit;
-        radius = 1.9f;
+        radius = fit_radius(0.0f, 0.0f, 1.0f, 1.0f, kWholePlaneRadiusTopDown);
     }
 
     // Eye position on the orbit sphere. pitch is elevation, so a higher pitch

@@ -44,6 +44,13 @@ inline constexpr unsigned kAttrCol = 2; // "col"  (per-vertex colour, 59)
 // exactly one place, which is the whole point of this header.
 inline constexpr unsigned kAttrOther = 3; // "other" (the far endpoint)
 inline constexpr unsigned kAttrSide = 4;  // "side"  (-1 / +1 across the line)
+// 61 T5: the vertex's TRACE STEP. Once trace time leaves the Y axis, pos.y is
+// a constant lift and the comet tail and the terrain-playhead cut can no
+// longer be read off it — both are step comparisons, so the step must travel
+// with the vertex. A draw that does not enable this attribute gets GL's
+// default 0, which is why the point glyphs (which set uHasHead/uHasTimeCut to
+// 0) need no buffer of their own.
+inline constexpr unsigned kAttrStep = 5;  // "step"  (trace step, as a float)
 inline constexpr unsigned kFragId = 0;    // "fragid" (integer pick output)
 
 // Compile + link a program from two GLSL sources, binding the attribute names

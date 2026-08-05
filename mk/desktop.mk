@@ -513,6 +513,8 @@ $(BUILD)/desktop/test/t/test_fidelity.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+# 61 T7c: the crossing channel's real-capture fixture (a frozen asmspy run).
+$(BUILD)/desktop/test/t/test_crossing.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_drillin.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 # The 3D-scene FBO smoke reads BOTH trees (10-spacetime-3d-overview.md T7): the
 # two GENERATED golden scenes (and the hand-authored rich-`mem` one under
@@ -1198,6 +1200,7 @@ desktop-setup-render:
 # CLAUDE.md). vm_compat.o compiling in the test tree IS the regression test that
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
+                 $(BUILD)/desktop_test_scene_traj \
                  $(BUILD)/desktop_test_png_write \
                  $(BUILD)/desktop_test_shot_manifest \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
@@ -1701,6 +1704,14 @@ $(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
 $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# 61 T1 (3D-axis-budget): the worldline's world-Y-per-step rule. scene3d/
+# trajscale.h is header-only and dependency-free for exactly the reason
+# camera.h above is — the scale is pure arithmetic, and scene.o links GL, so a
+# test of that arithmetic must not need a GL context. Links nothing but its own
+# object, and includes no linmath.h, so it needs no order-only prereq.
+$(BUILD)/desktop_test_scene_traj: $(BUILD)/desktop/test/t/test_scene_traj.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # 51 T1/T2/T3 (scene-focus-and-scale.md): the SUBJECT filter's pure half —
 # scene3d/focus.o (the ghost-alpha rule, the thread roster, the region mask,
 # the filter wording) + space/projection.o (region_cells / region_style /
@@ -1812,7 +1823,17 @@ $(BUILD)/desktop_test_window_picker: $(BUILD)/desktop/test/t/test_window_picker.
 # GL/EGL headers (DESKTOP_GL_MISSING) — built and run under docker-desktop (which
 # installs software Mesa + EGL), skipped-with-a-reason on a bare host. Nothing in
 # desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
-$(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
+# 61 T7a: the object closure a GL test links, factored so the FBO smoke and the
+# motif gate cannot drift apart.
+#
+# sp/opcode_terrain.o is ADDED here, not merely lifted: this list never carried
+# it, because nothing in test_scene_fbo.cpp called into that TU. gl_offscreen.h's
+# render_plane_scene does — build_opcode_terrain and opcode_guest_from_arch are
+# both out-of-line — and WITHOUT it the motif gate fails to link on two
+# undefined references. test_scene_fbo alone would not have caught that:
+# render_plane_scene is an inline in a header, so a translation unit that never
+# CALLS it emits no reference at all and links green regardless.
+DESKTOP_GL_TEST_OBJS := \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/s3/focus.o \
     $(BUILD)/desktop/test/s3/data_layers_gl.o \
@@ -1830,8 +1851,23 @@ $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/sp/locate.o $(BUILD)/desktop/test/sp/datacell.o \
     $(BUILD)/desktop/test/sp/dataribbon.o $(BUILD)/desktop/test/sp/sediment.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
+
+$(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
+    $(DESKTOP_GL_TEST_OBJS)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
+
+# 61 T7b: the motif-distinctness acceptance gate. Four additions, not one — the
+# object needs the golden-directory define (or its #error fires) and it reaches
+# linmath.h transitively through camera.h, so it needs that order-only prereq
+# too. The DESKTOP_GL_TESTS entry is below, with the FBO smoke.
+$(BUILD)/desktop/test/t/test_motif_distinctness.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop/test/t/test_motif_distinctness.o: | $(LINMATH_HOME)/linmath.h
+$(BUILD)/desktop_test_motif_distinctness: \
+    $(BUILD)/desktop/test/t/test_motif_distinctness.o $(DESKTOP_GL_TEST_OBJS)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
 
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
@@ -2337,7 +2373,8 @@ DESKTOP_GL_SAY     = :
 # renders and reads back real pixels under software Mesa there (CLAUDE.md — a test
 # that can only ever self-skip is not a test). On a bare host without the headers
 # it is not built and the reason is printed; the pure camera test still runs.
-DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo
+DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo \
+                    $(BUILD)/desktop_test_motif_distinctness
 ifeq ($(strip $(DESKTOP_GL_MISSING)),)
 desktop-test: $(DESKTOP_GL_TESTS)
 DESKTOP_ALL_TESTS += $(DESKTOP_GL_TESTS)

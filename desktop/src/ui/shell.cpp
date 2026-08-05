@@ -279,10 +279,34 @@ void shell_sync_live_tab(ShellState &s) {
         scene3d::Camera cam = s.scenes[i].cam;
         scene3d::HudState hud = s.scenes[i].hud;
         dt_primer_state primer = s.scenes[i].primer;
+        // 61 T9: and the layout digest. CARRYING IT IS THE NOTICE'S HINGE —
+        // drop it and the fingerprint resets with everything else, prev.valid
+        // is false on every batch, and the reflow notice can never fire. A
+        // silent failure no pure test can catch, because the RULE stays
+        // correct; the wiring test in test_shell.cpp is what guards it.
+        //
+        // But carry it ONLY WITHIN ONE CAPTURE. This same reset also runs when
+        // a continuous re-arm opens a NEW recording into this slot, and the
+        // digest is per-RECORDING state: comparing capture B's first floor
+        // against capture A's would fire a reflow note on a FIRST weave, naming
+        // a region count ("5 regions became 1") that no single recording ever
+        // had. The camera/HUD/primer above are per-VIEW and are right to cross
+        // that boundary; this is not.
+        const long cap_ord =
+            static_cast<long>(sess.recordings().size()) +
+            (sess.growing() != nullptr ? 1 : 0);
+        space::LayoutFingerprint layout_fp;
+        long layout_fp_capture = -1;
+        if (s.scenes[i].layout_fp_capture == cap_ord) {
+            layout_fp = s.scenes[i].layout_fp;
+            layout_fp_capture = s.scenes[i].layout_fp_capture;
+        }
         s.scenes[i] = SceneView{};
         s.scenes[i].cam = cam;
         s.scenes[i].hud = hud;
         s.scenes[i].primer = primer;
+        s.scenes[i].layout_fp = layout_fp;
+        s.scenes[i].layout_fp_capture = layout_fp_capture;
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
@@ -1186,6 +1210,35 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         regs.insert(regs.end(), obs.begin(), obs.end());
         space::Projection proj = space::build_projection(std::move(regs));
         proj.data_span_note = std::move(span_note);
+        // 61 T9: did this weave move the floor the reader was already looking
+        // at? Computed HERE, while `proj` is still in scope and before
+        // build_terrain moves it.
+        //
+        // On the spec's other half — "recompute only when that set changes" —
+        // be precise about what the tree actually guarantees. rebuild_layout
+        // runs inside build_projection, which this !sv.built gate calls ONCE
+        // PER WEAVE, not once per frame; a weave whose region set did not
+        // change still recomputes. That recompute is harmless rather than
+        // unnoticed: build_projection is a pure function of the regions, so it
+        // reproduces an identical layout, the digest matches and no note fires
+        // (test_projection pins exactly that). The mitigation's INTENT — the
+        // reader is never told the floor moved when it did not — is met by the
+        // digest comparison below, not by suppressing the recompute.
+        const space::LayoutFingerprint layout_fp = space::layout_fingerprint(proj);
+        proj.layout_note = space::layout_reflow_note(sv.layout_fp, layout_fp);
+        sv.layout_fp = layout_fp;
+        // Stamp which capture this digest describes, so shell_sync_live_tab's
+        // preserve-list can tell "the same floor grew" from "a different
+        // capture took this slot". A non-live recording keeps -1 and simply
+        // never matches, which is correct: a file does not re-weave.
+        {
+            const LiveSession &lsess = s.inspect.session;
+            sv.layout_fp_capture =
+                (s.live_tab >= 0 && static_cast<size_t>(s.live_tab) == i)
+                    ? static_cast<long>(lsess.recordings().size()) +
+                          (lsess.growing() != nullptr ? 1 : 0)
+                    : -1;
+        }
         sv.terr = space::build_terrain(std::move(proj), r);
         // 36 T2: the terrain's Projection anchors a rel PC path onto the plane
         // (build_terrain moved it into sv.terr.proj above; the terrain is built
@@ -1825,11 +1878,35 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // drawing a trajectory-time ruler over one would be the fabricated
     // correspondence this whole family avoids. The HUD's axis block names the
     // real axis on every kind.
-    if (sv.kind == scene3d::SceneKind::Plane)
+    // 61 T5: the trajectory has LEFT the trace-time axis, but the axis itself
+    // is still ridden by the three opt-in layers (lifetime pillars, sediment
+    // strata, access arcs) — so the ruler is gated on one of them being drawn
+    // rather than deleted or left unconditional. Unconditional would label an
+    // axis the default scene no longer uses, which is worse than no ruler and
+    // exactly the fabricated correspondence the SceneKind gate beside it
+    // already guards against; deleting it would strand those three layers on
+    // an unlabelled axis the moment a reader switches one on.
+    //
+    // `f.layers` and NOT `sv.hud.layers`: f.layers is the set AFTER lod_apply,
+    // which can clear a layer the reader asked for at distance. Gating on the
+    // requested set would leave a ruler labelling an axis the entity budget had
+    // already dropped the geometry for.
+    if (sv.kind == scene3d::SceneKind::Plane &&
+        (f.layers.lifetime || f.layers.data_ribbon || f.layers.sediment))
         scene3d::draw_trajectory_ruler(
             ImGui::GetWindowDrawList(), sv.cam, vp_origin,
             ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
             sv.terr.nsteps, s.scene_host->traj_scale());
+
+    // 61 T8: the atlas's in-place region labels, beside the ruler and under the
+    // same Plane gate. No LAYOUT gate is needed and none is wanted — atlas_labels
+    // returns empty under Hilbert, which is exactly why that refusal lives in the
+    // pure function rather than being re-stated at every call site.
+    if (sv.kind == scene3d::SceneKind::Plane)
+        scene3d::draw_atlas_labels(
+            ImGui::GetWindowDrawList(), sv.cam, vp_origin,
+            ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+            sv.terr.proj);
 
     // T4 (50-two-way-brushing): a located selection off-screen is DISCLOSED —
     // a small edge-anchored label naming the direction — rather than moved to

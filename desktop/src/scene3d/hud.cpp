@@ -295,8 +295,14 @@ std::vector<uint64_t> trajectory_axis_ticks(uint64_t nsteps, int max_ticks) {
 }
 
 const char *vertical_axes_note() {
-    return "two vertical meanings share this screen axis: terrain height = "
-           "access density (log), path height = trace time (steps)";
+    // 61 T5: the path no longer carries trace time — it lies flat and is read
+    // through the playhead, which is what returns this axis to access density.
+    // The three OPT-IN layers still put trace time here, so the axis can still
+    // carry two meanings; it just does not do so in the default scene, and the
+    // note says which case the reader is in rather than claiming both always.
+    return "vertical = access density (log). trace time is the PLAYHEAD, not "
+           "an axis: the path lies flat. the opt-in lifetime / ribbon / "
+           "sediment layers do stand trace time on this axis (steps)";
 }
 
 std::string camera_here_text(const space::Projection &proj, float u, float v) {
@@ -412,6 +418,42 @@ void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
             draw_list->AddLine(prev, p, col, 1.0f);
         prev = p;
         have_prev = true;
+    }
+}
+
+// 61 T8: Component 1's actual deliverable — the floor names its own
+// rectangles. The transform is draw_trajectory_ruler's, verbatim: one cam.mvp +
+// mat4x4_mul_vec4, the behind-the-camera clip[3] <= 0 skip, the same NDC->screen
+// mapping. The world point is the ground plane at the rect's centre,
+// {u, 0, v}, rather than the ruler's {0, t*scale, 0}.
+//
+// The label takes its region's own swatch colour, so a floor label and its
+// legend row agree by construction rather than by two literals staying in step.
+void draw_atlas_labels(ImDrawList *draw_list, const Camera &cam, ImVec2 origin,
+                       ImVec2 size, const space::Projection &proj) {
+    if (draw_list == nullptr || size.x <= 0.0f || size.y <= 0.0f)
+        return;
+    const std::vector<space::AtlasLabel> labels = space::atlas_labels(proj);
+    if (labels.empty())
+        return; // Hilbert, or nothing big enough to read — both are no-ops
+    float m[16];
+    cam.mvp(m, size.x / size.y); // the SAME aspect the viewport rendered at
+    for (const space::AtlasLabel &l : labels) {
+        vec4 world = {l.u, 0.0f, l.v, 1.0f};
+        vec4 clip;
+        mat4x4_mul_vec4(clip, reinterpret_cast<vec4 *>(m), world);
+        if (clip[3] <= 0.0f)
+            continue; // behind the camera: cannot place this label
+        const float ndc_x = clip[0] / clip[3], ndc_y = clip[1] / clip[3];
+        const ImVec2 p(origin.x + (ndc_x * 0.5f + 0.5f) * size.x,
+                       origin.y + (1.0f - (ndc_y * 0.5f + 0.5f)) * size.y);
+        const space::Region &reg = proj.regions[l.region];
+        const space::RegionStyle st = space::region_style(reg.kind);
+        const ImU32 col = ImGui::ColorConvertFloat4ToU32(
+            ImVec4(st.r, st.g, st.b, 0.95f));
+        const ImVec2 sz = ImGui::CalcTextSize(l.text.c_str());
+        draw_list->AddText(ImVec2(p.x - sz.x * 0.5f, p.y - sz.y * 0.5f), col,
+                           l.text.c_str());
     }
 }
 
@@ -531,6 +573,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     // 54 T1: the observed-data-span derivation, surfaced the same way.
     if (!terr.proj.data_span_note.empty())
         ImGui::TextColored(kDim, "%s", terr.proj.data_span_note.c_str());
+    // 61 T9: the reflow notice, surfaced the same way — computed by the shell
+    // and stashed on the model, never derived in the HUD.
+    if (!terr.proj.layout_note.empty())
+        ImGui::TextColored(kDim, "%s", terr.proj.layout_note.c_str());
     // 36 T4: the placement notes as dim asides beside mem_note (anchor_error is a
     // refusal, so it rides in the refuse colour). No HudState field is needed —
     // these derive from terr/traj each frame.

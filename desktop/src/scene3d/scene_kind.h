@@ -103,14 +103,24 @@ struct SceneAxes {
 inline SceneAxes scene_axes(SceneKind k) {
     switch (k) {
     case SceneKind::Plane:
+        // 61 T5/T10: the u/v labels no longer name HILBERT. The address->cell
+        // mapping is selectable (Projection::Layout), so naming one layout in
+        // a user-visible axis label is false under the other; the axis is the
+        // ADDRESS plane either way. And Y no longer carries a worldline's
+        // trace step at all — T5 took trace time off the spatial budget, so
+        // the path lies flat and time is read through the playhead. The three
+        // OPT-IN layers do still stand trace time on this axis, which is why
+        // the denial names them rather than claiming the axis has one meaning.
         return SceneAxes{
-            "address (Hilbert plane, u)",
-            "terrain height = access density; a worldline's height = its own "
-            "trace step",
-            "address (Hilbert plane, v)",
-            "NOT one clock: the terrain playhead (trace-residency time) and a "
-            "worldline's step axis are separate, and neither is the flat "
-            "views' execution step (34, 49 T4)"};
+            "address (the address plane's u)",
+            "terrain height = access density (log). A worldline does NOT rise "
+            "with trace time: it lies flat and is read through the playhead. "
+            "The opt-in lifetime / ribbon / sediment layers DO stand trace "
+            "time on this axis",
+            "address (the address plane's v)",
+            "NOT one clock: the terrain playhead (trace-residency time), the "
+            "vehicle's own followed step, and the flat views' execution step "
+            "are three separate axes (34, 49 T4, 61 T5)"};
     case SceneKind::Divergence:
         return SceneAxes{
             "recording side — A on the left, B on the right",
@@ -121,9 +131,9 @@ inline SceneAxes scene_axes(SceneKind k) {
             "instruction"};
     case SceneKind::Invocation:
         return SceneAxes{
-            "address (Hilbert plane, u)",
+            "address (the address plane's u)",
             "invocation # — a discrete call ordinal",
-            "address (Hilbert plane, v)",
+            "address (the address plane's v)",
             "NOT a time and never scrubbed: the gap between two invocations is "
             "unobserved, of unknown length (08 T6)"};
     case SceneKind::ModuleRibbon:
@@ -142,9 +152,9 @@ inline SceneAxes scene_axes(SceneKind k) {
             "register, and Z counts recorded writes, not elapsed time"};
     }
     // Unreachable for a complete enum; kept total rather than UB.
-    return SceneAxes{"address (Hilbert plane, u)",
+    return SceneAxes{"address (the address plane's u)",
                      "terrain height = access density",
-                     "address (Hilbert plane, v)", "NOT one clock"};
+                     "address (the address plane's v)", "NOT one clock"};
 }
 
 // One line per axis, in X/Y/Z order, then the vertical axis's denial — the

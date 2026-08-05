@@ -257,6 +257,15 @@ $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 $(BUILD)/scenes_victim: $(BUILD)/scenes_victim.o
 	$(CC) $(CFLAGS) $^ -lpthread -lm -o $@
 
+# 61 T7c: the serve-session recording test and the target it traces. The target
+# is ALSO the crossings fixture's program (its syscalls span three
+# SyscallClass families), so the two never drift apart.
+$(BUILD)/serve_record_target: examples/serve_record_target.c
+	$(CC) $(CFLAGS) -O0 -g $< -o $@
+
+$(BUILD)/test_serve_record: cli/test_serve_record.c
+	$(CC) $(CFLAGS) $< -o $@
+
 # quiet_hot_victim backs the 39 T4 continuous-through-a-quiet-window smoke: hotfn
 # goes HOT (dense entries), then QUIET (~1.5s never entered), then hot again, so a
 # --continuous capture pinned to it must SURVIVE the quiet stretch and capture the
@@ -673,7 +682,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
            $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY) \
-           $(CLI_MEM_PARITY) $(CLI_REWEAVE)
+           $(CLI_MEM_PARITY) $(CLI_REWEAVE) \
+           $(BUILD)/test_serve_record $(BUILD)/serve_record_target
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
@@ -690,6 +700,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	 else echo "# SKIP reweave: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
 	@echo "--- procinfo (the attach-free process snapshot) ---"
 	@$(BUILD)/test_procinfo
+	@echo "--- test_serve_record (61 T7c: a serve session is ONE recording) ---"
+	$(BUILD)/test_serve_record
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

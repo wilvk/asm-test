@@ -167,17 +167,35 @@ std::string camera_here_text(const space::Projection &proj, float u, float v);
 // adding its line here fails test_camera's exhaustiveness check.
 const std::vector<std::string> &scene_control_lines();
 
-// 49 T4: draw the trajectory-time ruler into the 3D VIEWPORT (not the HUD
-// window) — ticks 0..nsteps, projected through `cam` at world (0, tick *
-// traj_scale, 0) (the plane's own origin corner) into `origin`/`size`'s
-// screen rect, captioned for the trajectory axis ONLY (never the terrain
-// playhead — the two clocks stay visually separate, per the HUD note above).
-// No-op when nsteps == 0. The caller (draw_scene_overview) only reaches this
-// after a real GL frame rendered, so a null backend never calls it — the
-// graceful degradation the pane already practises for the whole viewport.
+// 49 T4: draw the trace-time ruler into the 3D VIEWPORT (not the HUD window) —
+// ticks 0..nsteps, projected through `cam` at world (0, tick * traj_scale, 0)
+// (the plane's own origin corner) into `origin`/`size`'s screen rect. Never
+// the terrain playhead — the two clocks stay visually separate, per the HUD
+// note above. No-op when nsteps == 0. The caller (draw_scene_overview) only
+// reaches this after a real GL frame rendered, so a null backend never calls
+// it — the graceful degradation the pane already practises for the viewport.
+//
+// 61 T5: it no longer measures the TRAJECTORY, which has left this axis and
+// now lies flat. What it measures is the axis the three OPT-IN layers still
+// ride — the observed-lifetime pillars, the sediment strata and the access
+// arcs — so shell.cpp gates the call on one of those being drawn. Calling it
+// unconditionally would label an axis the default scene does not use.
 void draw_trajectory_ruler(ImDrawList *draw_list, const Camera &cam,
                            ImVec2 origin, ImVec2 size, uint64_t nsteps,
                            float traj_scale);
+
+// 61 T8: draw the atlas's region labels into the 3D VIEWPORT (not the HUD
+// window), each at its rectangle's centre ON the ground plane, projected
+// through `cam` into `origin`/`size`'s screen rect — the SAME world->clip
+// transform draw_trajectory_ruler above uses. A no-op for a Hilbert projection,
+// because space::atlas_labels refuses one (see projection.h), which is why the
+// caller needs no layout gate.
+//
+// PARTIAL BY DESIGN: rects below the legibility threshold carry no label, and
+// the HUD's region legend remains the complete list. Do not present what this
+// draws as every region.
+void draw_atlas_labels(ImDrawList *draw_list, const Camera &cam, ImVec2 origin,
+                       ImVec2 size, const space::Projection &proj);
 
 struct HudState {
     uint64_t t = 0;      // playhead: the inclusive terrain slice [0, t]

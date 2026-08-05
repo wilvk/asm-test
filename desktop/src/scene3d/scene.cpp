@@ -34,6 +34,7 @@
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
 #include "scene3d/shaders/embedded.h"
+#include "scene3d/trajscale.h" // 61 T1: the worldline's world-Y-per-step rule
 
 namespace asmdesk::scene3d {
 
@@ -96,6 +97,11 @@ void bind_quad_attribs() {
     glEnableVertexAttribArray(kAttrSide);
     glVertexAttribPointer(kAttrSide, 1, GL_FLOAT, GL_FALSE, stride,
                           reinterpret_cast<const void *>(6 * sizeof(float)));
+    // 61 T5: the per-vertex trace step. Zero for every buffer whose caller
+    // passes no per-vertex value, which is every quad line but the worldline.
+    glEnableVertexAttribArray(kAttrStep);
+    glVertexAttribPointer(kAttrStep, 1, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<const void *>(7 * sizeof(float)));
 }
 } // namespace
 
@@ -467,6 +473,12 @@ void Scene::set_terrain(const space::Terrain &t) {
     std::vector<float> norm(t.height.size());
     for (size_t i = 0; i < t.height.size(); i++)
         norm[i] = t.height[i] * scale;
+    // 61 T5: keep the normalised field so a FLAT worldline can ride the
+    // skyline. This is the SAME array the height texture below carries, so the
+    // path's clearance is computed from the surface actually drawn.
+    height_norm_ = norm;
+    terr_w_ = t.w;
+    terr_h_ = t.h;
 
     if (!tex_height_)
         glGenTextures(1, &tex_height_);
@@ -794,12 +806,52 @@ void Scene::free_traj() {
     nspur_ = 0;
 }
 
+// 61 T5: where a flat path/spur vertex sits over plane point (u,v) — just clear
+// of the terrain surface there, so the worldline DRAPES the city rather than
+// drowning under it. A bare constant lift does not work: the path spends most
+// of its length over the HOTTEST cells, which are precisely the tallest, so a
+// small constant buries it exactly where it matters and a constant large
+// enough to clear the tallest column detaches it from the floor everywhere
+// else. The terrain's world Y is height_norm_[cell] * y_scale (the product the
+// terrain vertex shader forms), so this reproduces the skyline instead of
+// guessing a clearance.
+//
+// The path is still FLAT in the sense that matters: its height carries no
+// trace time. What it carries is the terrain's own reading, which the reader
+// is already looking at — so the path is never mistaken for an axis.
+float Scene::flat_path_y(float u, float v) const {
+    if (height_norm_.empty() || terr_w_ == 0 || terr_h_ == 0)
+        return kFlatPathLift;
+    uint32_t x = static_cast<uint32_t>(u * static_cast<float>(terr_w_));
+    uint32_t y = static_cast<uint32_t>(v * static_cast<float>(terr_h_));
+    if (x >= terr_w_)
+        x = terr_w_ - 1;
+    if (y >= terr_h_)
+        y = terr_h_ - 1;
+    const size_t i = static_cast<size_t>(y) * terr_w_ + x;
+    if (i >= height_norm_.size())
+        return kFlatPathLift;
+    return height_norm_[i] * y_scale + kFlatPathLift;
+}
+
 void Scene::set_trajectories(const space::TrajectorySet &ts,
                              const space::Projection &proj) {
     free_traj();
-    const float scale =
-        time_scale > 0.0f ? time_scale : (nsteps > 0 ? 0.6f / nsteps : 0.02f);
-    traj_scale_ = scale; // T6: render() derives uHeadY from this later
+    // 61 T1: `nsteps` is the TERRAIN's extent and a `mem` stream can outlast
+    // it, so the denominator is EXTENDED to cover the largest step actually
+    // present rather than the path being clamped — a step past the stated
+    // extent is still a real step. The rule itself is header-only arithmetic
+    // (scene3d/trajscale.h) so it is testable without a GL context.
+    uint64_t max_t = 0;
+    for (const space::Trajectory &tr : ts.trajectories)
+        for (const space::TrajPoint &pt : tr.points)
+            max_t = std::max(max_t, pt.t);
+    const float scale = scene_traj_scale(nsteps, max_t, time_scale);
+    // The trace-time axis the three OPT-IN layers still ride (lifetime pillars,
+    // sediment strata, access arcs), and what causal.cpp's spur feet are
+    // measured against. 61 T5 took the worldline itself off this axis, but the
+    // scale stays live and permanently so.
+    traj_scale_ = scale;
 
     std::vector<float> spur_verts; // GL_LINES pairs
     std::vector<float> pts_pos;    // pick points (all PC vertices)
@@ -809,6 +861,12 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
 
     for (const space::Trajectory &tr : ts.trajectories) {
         std::vector<float> line; // PC vertices as a strip
+        // 61 T5: the trace step of each entry of `line`, in the same order, so
+        // the quad expansion can hand every corner the step of the endpoint it
+        // sits on. With flat time the step is no longer recoverable from the
+        // geometry, and the comet tail and playhead cut are both step
+        // comparisons.
+        std::vector<float> line_step;
         float last_pc[3] = {0, 0, 0};
         bool have_last_pc = false;
         // T6: parallel per-PC-vertex facts (see Line::pt_* doc comment) — one
@@ -822,7 +880,15 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
         for (const space::TrajPoint &pt : tr.points) {
             float u = 0, v = 0;
             bool projected = proj.project(pt.addr, &u, &v);
-            float y = static_cast<float>(pt.t) * scale;
+            // 61 T5: flat by default — trace time animates rather than
+            // occupying Y — plus a small constant lift so the path is not
+            // coplanar with the terrain floor. Without the lift a worldline at
+            // y == 0 z-fights the plane and vanishes under any cell with
+            // nonzero height, which is the failure this constant exists to
+            // prevent.
+            float y = traj_vertex_y(pt.t, scale, flat_time);
+            if (flat_time)
+                y += flat_path_y(u, v);
             if (!pt.is_access) {
                 // Every PC vertex is pickable, in the canonical order pick.h
                 // enumerates (project failures still consume an index so the
@@ -839,6 +905,7 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
                 pt_pick_id.push_back(pid);
                 if (projected) {
                     line.insert(line.end(), {u, y, v});
+                    line_step.push_back(static_cast<float>(pt.t));
                     last_pc[0] = u;
                     last_pc[1] = y;
                     last_pc[2] = v;
@@ -877,7 +944,11 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
             // no id array here.
             {
                 std::vector<float> quads;
-                expand_line_quads(line, /*strip=*/true, quads);
+                // 61 T5: the per-vertex trace step rides the expansion, so
+                // every corner carries the step of the endpoint it sits on.
+                expand_line_quads(line, /*strip=*/true, quads,
+                                  /*per_segment_id=*/nullptr,
+                                  /*out_ids=*/nullptr, &line_step);
                 upload_quad_line(l.quads, quads);
             }
             l.pt_t = std::move(pt_t);
@@ -1299,7 +1370,7 @@ void Scene::draw_mispred(const float mvp[16], int fbw, int fbh, bool halos,
 }
 
 bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
-                        int *out_line) const {
+                        int *out_line, uint32_t *out_pick_id) const {
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
         const Line &l = traj_lines_[li];
         if (l.statistical)
@@ -1319,6 +1390,8 @@ bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
                 out_pos[2] = l.pt_pos[i * 3 + 2];
                 if (out_line)
                     *out_line = static_cast<int>(li);
+                if (out_pick_id && i < l.pt_pick_id.size())
+                    *out_pick_id = l.pt_pick_id[i];
                 return true;
             }
         } else {
@@ -1341,6 +1414,8 @@ bool Scene::find_vertex(bool exact, uint64_t target, float out_pos[3],
                 out_pos[2] = l.pt_pos[best * 3 + 2];
                 if (out_line)
                     *out_line = static_cast<int>(li);
+                if (out_pick_id && best < l.pt_pick_id.size())
+                    *out_pick_id = l.pt_pick_id[best];
                 return true;
             }
         }
@@ -1463,17 +1538,22 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
     GLint uColor = glGetUniformLocation(prog_line_, "uColor");
     GLint uStipple = glGetUniformLocation(prog_line_, "uStipple");
     GLint uHasHead = glGetUniformLocation(prog_line_, "uHasHead");
-    GLint uHeadY = glGetUniformLocation(prog_line_, "uHeadY");
-    GLint uTailHalf = glGetUniformLocation(prog_line_, "uTailHalf");
-    GLint uTimeCutY = glGetUniformLocation(prog_line_, "uTimeCutY");
+    GLint uCometLo = glGetUniformLocation(prog_line_, "uCometLo");
+    GLint uCometHi = glGetUniformLocation(prog_line_, "uCometHi");
+    GLint uTimeCutStep = glGetUniformLocation(prog_line_, "uTimeCutStep");
     GLint uHasTimeCut = glGetUniformLocation(prog_line_, "uHasTimeCut");
-    const float head_y = static_cast<float>(follow_step) * traj_scale_;
-    const float tail_half = 3.0f * traj_scale_; // ~3 steps either side
-    // T1 (49): clip the path to the terrain playhead — no cut (byte-identical
-    // to the pre-49 render) once slice_step reaches the end of the recording.
+    // 61 T5: the head is found by STEP, not by height. The trail is the window
+    // ending at the followed step, `comet_tail` steps long — which is what the
+    // old `3.0f * traj_scale_` Y band was approximating all along, and which
+    // collapses to nothing once Y is flat.
+    const auto comet = comet_window(follow_step, comet_tail);
+    // T1 (49): clip the path to the terrain playhead — no cut once slice_step
+    // reaches the end of the recording. 61 T5: compared in STEPS. The two
+    // clocks stay distinct — slice_step is the terrain's residency playhead and
+    // follow_step is the vehicle's own axis, and fusing them is a stated
+    // non-goal.
     const bool has_time_cut = slice_step < nsteps;
-    const float time_cut_y = static_cast<float>(slice_step) * traj_scale_;
-    glUniform1f(uTimeCutY, time_cut_y);
+    glUniform1f(uTimeCutStep, static_cast<float>(slice_step));
     glUniform1i(uHasTimeCut, has_time_cut ? 1 : 0);
     for (size_t li = 0; li < traj_lines_.size(); ++li) {
         const Line &l = traj_lines_[li];
@@ -1499,8 +1579,8 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
             have_head && static_cast<int>(li) == head_line;
         glUniform1i(uHasHead, is_head_line ? 1 : 0);
         if (is_head_line) {
-            glUniform1f(uHeadY, head_y);
-            glUniform1f(uTailHalf, tail_half);
+            glUniform1f(uCometLo, static_cast<float>(comet.first));
+            glUniform1f(uCometHi, static_cast<float>(comet.second));
         }
         draw_quad_line(prog_line_, l.quads, kTrajWidthPx);
     }
@@ -1654,6 +1734,30 @@ int Scene::render_pick_into_fbo(const Camera &cam, int fbw, int fbh) {
         glEnable(GL_PROGRAM_POINT_SIZE);
         glBindVertexArray(vao_pts_);
         glDrawArrays(GL_POINTS, 0, pts_count_);
+        // 61 T5: with trace time off the Y axis, N visits to ONE address are
+        // one point in space, so only one vertex id can own that pixel — under
+        // GL_LESS, whichever was drawn first, which is the EARLIEST visit
+        // regardless of where the reader is. Re-draw the FOLLOWED vertex with
+        // GL_LEQUAL so it wins its own pixel.
+        //
+        // This is not a tie-break invented here: doc 44's rule is that the
+        // followed citizen reuses its underlying PC vertex's pick id, and the
+        // head glyph is drawn at exactly this point. Without it, clicking the
+        // head resolves to a DIFFERENT visit than the one being followed — a
+        // wrong drill-in, not a cosmetic defect. The other coincident visits
+        // become unreachable by click, which is honest: they are not distinct
+        // places, and the playhead is what selects among them.
+        float head_pos[3] = {0, 0, 0};
+        uint32_t head_id = 0;
+        if (flat_time && find_head(head_pos, nullptr, &head_id)) {
+            const Pick hp = decode_pick(head_id, n_);
+            if (hp.kind == Pick::Vertex &&
+                hp.vertex < static_cast<uint64_t>(pts_count_)) {
+                glDepthFunc(GL_LEQUAL);
+                glDrawArrays(GL_POINTS, static_cast<GLint>(hp.vertex), 1);
+                glDepthFunc(GL_LESS);
+            }
+        }
         glBindVertexArray(0);
         glDisable(GL_PROGRAM_POINT_SIZE);
     }

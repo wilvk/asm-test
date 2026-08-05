@@ -6,6 +6,7 @@
 // easily commit: anchoring a syscall that precedes every recorded instruction
 // to instruction 0, and implying a kernel DWELL the recording never measured.
 #include <cstdio>
+#include <optional> // 61 T7c: load_recording_file returns std::optional
 #include <sstream>
 #include <string>
 
@@ -13,6 +14,10 @@
 #include "space/projection.h"
 #include "space/terrain.h" // regions_from_codeimage
 #include "views/crossing.h"
+
+#ifndef ASMTEST_FIXTURE_DIR
+#error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
+#endif
 
 using namespace asmdesk;
 using namespace asmdesk::space;
@@ -271,6 +276,84 @@ int main() {
         check("truncated: no resume vertex was fabricated",
               layer.spurs.size() == 1 && !layer.spurs[0].has_resume,
               "the recording states no instruction after this syscall");
+    }
+
+    // --- 61 T7c: the crossing channel over a REAL capture -------------------
+    // Every other block in this file feeds build_crossing_layer hand-written
+    // NDJSON. Those are right for the anchoring edge cases they were written
+    // for, but nothing in the tree had ever built a crossing layer from
+    // syscalls a real kernel actually serviced. This closes that.
+    //
+    // Deliberately NOT a GL test: views/crossing.h is engine-free by design
+    // (its geometry POD lives in space/ so scene3d/ can consume it without
+    // depending on views/), so the honest place to pin this channel is the pure
+    // test that already owns the contract, not a rendered frame that would drag
+    // views/ into the GL closure to assert a colour.
+    //
+    // PROVENANCE — desktop/test/fixtures/motif-crossings.asmtrace was recorded
+    // ONCE, in the asmtest-cli image, from
+    // desktop/test/fixtures/syscall_target.c (committed beside it):
+    //   ./t &
+    //   { start mode=trace func=work max=40 ; stop ;
+    //     start mode=log max=120 ; quit } |
+    //     asmspy --serve --record=<this file>
+    // TWO engines in ONE serve session, because no single mode emits all three
+    // kinds this needs: `trace` arms the codeimage and records the worldline,
+    // `log` records the syscalls. That is only a single loadable recording
+    // because of the session-level --record sink; before it, each engine wrote
+    // its own header and the file was unloadable. Attaching to an
+    // already-running target needs CAP_SYS_PTRACE in the container.
+    //
+    // FROZEN, never regenerated: desktop/test/fixtures/ has no byte-check gate,
+    // which is exactly why a non-byte-reproducible live capture belongs there.
+    {
+        std::string err;
+        // load_recording_file returns std::optional<Recording>, NOT a pointer —
+        // `rec != nullptr` does not compile against an optional.
+        std::optional<Recording> rec = load_recording_file(
+            std::string(ASMTEST_FIXTURE_DIR) + "/motif-crossings.asmtrace",
+            err);
+        check("the real-capture fixture loads", rec.has_value(), err);
+        if (rec.has_value()) {
+            // The shape check that stands in for the byte-stability gate the
+            // GENERATED corpus gets. A has-it-rotted precondition, not an
+            // approximation of any result — if it trips, the fixture is wrong
+            // and every assertion below would fail for a misleading reason.
+            check("the capture still carries a codeimage",
+                  rec->by_kind.count("codeimage") != 0,
+                  "no codeimage: there is no plane to anchor a spur onto");
+            check("the capture still carries a trace",
+                  rec->by_kind.count("trace") != 0 &&
+                      !rec->by_kind.at("trace").empty(),
+                  "no trace worldline: build_crossing_layer self-gates and the "
+                  "assertions below would pass vacuously");
+            check("the capture still carries at least two syscalls",
+                  rec->by_kind.count("syscall") != 0 &&
+                      rec->by_kind.at("syscall").size() >= 2,
+                  "fewer than two syscall rows: the class channel cannot be "
+                  "shown to distinguish anything");
+
+            const Projection p = build_projection(regions_from_codeimage(*rec));
+            const SyscallView sv = obs_syscalls_build(*rec);
+            const CrossingLayer layer = build_crossing_layer(sv, *rec, p);
+
+            check("a real capture produces crossing spurs", !layer.spurs.empty(),
+                  "no spur from a capture carrying " +
+                      std::to_string(rec->by_kind.at("syscall").size()) +
+                      " syscalls and a trace");
+            // D7: an unclassified syscall abstains as Other. That is CORRECT
+            // and must not be asserted away — what would be wrong is EVERY spur
+            // landing on Other, which would mean the class channel conveys
+            // nothing about what the program did.
+            bool any_classified = false;
+            for (const CrossingSpur &sp : layer.spurs)
+                if (sp.cls != SyscallClass::Other)
+                    any_classified = true;
+            check("the class channel distinguishes at least one real syscall",
+                  any_classified,
+                  "every spur classified as Other — the channel is a single "
+                  "colour and names nothing about what the program did");
+        }
     }
 
     if (failures) {
