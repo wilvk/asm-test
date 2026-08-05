@@ -177,6 +177,15 @@ struct InvocationScene {
     uint32_t holes = 0;
     uint32_t unknown_cells = 0;
     uint32_t open_slabs = 0; // frayed prefixes
+
+    // True when this scene has geometry a user can actually SEE. A slab with no
+    // cells is a wireframe with nothing in it: `blocks` is the slab's shared
+    // X/Z, and it is empty when no `coverage` event ever described a block set,
+    // so every cell loop runs zero times. The availability gate must ask this
+    // rather than `slabs.empty()`, which only answers "did the builder produce
+    // a container" — a question whose answer is yes for a scene that draws a
+    // frame ring around nothing.
+    bool drawable() const { return !slabs.empty() && !blocks.empty(); }
 };
 
 // `proj` (optional) keeps the slab's X/Z on the Hilbert address plane; without

@@ -595,6 +595,55 @@ int main() {
         }
     }
 
+    // ---- T3: a slab with no cells is not a scene ----------------------------
+    //
+    // RegionInvocation::blocks is populated ONLY by a `coverage` event
+    // (views/region.cpp). A recording whose trace events are not closed by a
+    // coverage footer yields a trailing OPEN invocation with no blocks, so the
+    // union set is empty and every slab gets zero cells. The availability gate
+    // used to ask slabs.empty(), which is FALSE here — so the scene was offered
+    // as available, with no reason text, and drew a frame ring around nothing.
+    {
+        RegionView rv;
+        RegionInvocation inv;
+        inv.number = 1;
+        inv.closed = false;          // no coverage footer closed it
+        inv.insns = {0x0, 0x4, 0x8}; // instructions WERE recorded
+        // inv.blocks deliberately left empty — that is the whole case
+        rv.invocations.push_back(inv);
+
+        const InvocationScene s = build_invocation_scene(rv, nullptr);
+        check("T3/blockless: still has a slab", s.slabs.size() == 1,
+              "the builder must still produce the slab — dropping it would hide "
+              "the last thing the target did before the recording ended");
+        check("T3/blockless: no cells", s.slabs[0].cells.empty(),
+              "with no union blocks there is nothing to place in the slab");
+        check("T3/blockless: not drawable", !s.drawable(),
+              "a slab with zero cells has no geometry; drawable() is what the "
+              "availability gate must ask instead of slabs.empty()");
+        check("T3/blockless: states its reason", !s.note.empty(),
+              "an unavailable kind must state WHY (D7) — a blank refusal "
+              "teaches nothing");
+        check("T3/blockless: names coverage",
+              s.note.find("coverage") != std::string::npos,
+              "the note must name the missing coverage footer, the actual gap: "
+              "got \"" + s.note + "\"");
+
+        // The positive control: one closed invocation WITH blocks is drawable.
+        RegionView ok;
+        RegionInvocation good;
+        good.number = 1;
+        good.closed = true;
+        good.insns = {0x0, 0x4};
+        good.blocks = {0x0};
+        ok.invocations.push_back(good);
+        const InvocationScene g = build_invocation_scene(ok, nullptr);
+        check("T3/blocked: drawable", g.drawable(),
+              "a closed invocation with a block set must stay available");
+        check("T3/blocked: no note", g.note.empty(),
+              "an available kind carries no refusal text");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d standalone-scene check(s) failed\n", failures);
         return 1;

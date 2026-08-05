@@ -278,6 +278,18 @@ InvocationScene build_invocation_scene(const RegionView &rv,
             all.insert(b);
     s.blocks.assign(all.begin(), all.end());
 
+    // Instructions were recorded but no `coverage` event ever described a block
+    // set, so the slab has no X/Z to place anything on: every cell loop below
+    // runs zero times and the scene draws a frame ring around nothing. The
+    // slabs are still built — dropping them would hide the last thing the
+    // target did — so `slabs.empty()` cannot detect this and the gate asks
+    // drawable() instead. State the gap precisely: this is a capture stopped
+    // before its first footer, NOT a recording with no region capture at all.
+    if (all.empty())
+        s.note = "no block coverage in this recording — the invocation stack "
+                 "places cells on the block set a `coverage` event carries, and "
+                 "this capture's instructions were never closed by one";
+
     for (const RegionInvocation &inv : rv.invocations) {
         InvSlab slab;
         slab.number = static_cast<uint32_t>(inv.number);

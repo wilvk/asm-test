@@ -954,7 +954,11 @@ shell_kind_availability(const SceneView &sv, const Streams *b) {
     if (b == nullptr)
         why[scene_kind_index(scene3d::SceneKind::Divergence)] =
             "needs a second recording (press d to attach one)";
-    if (sv.invocation.slabs.empty())
+    // drawable(), never slabs.empty(): a slab whose union block set is empty
+    // has no cells, so the scene is a wireframe around nothing. Asking whether
+    // the builder produced a CONTAINER is not asking whether there is anything
+    // to see.
+    if (!sv.invocation.drawable())
         why[scene_kind_index(scene3d::SceneKind::Invocation)] =
             sv.invocation.note.empty() ? "no region capture in this recording"
                                        : sv.invocation.note;
