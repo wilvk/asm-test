@@ -1699,9 +1699,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     if (!sv.has_regions) {
         ImGui::TextUnformatted(
             "no address-space regions in this recording — the 3D overview "
-            "needs "
-            "codeimage events (or a live maps snapshot) to place the plane. "
-            "The "
+            "places its plane from codeimage events, which the serve host "
+            "records for the tree / trace / dataflow / auto modes. The "
             "provenance, trajectory and legend above still read.");
         // The keyboard viewport target still exists (22 T2), so a keyboard-only
         // analyst can Tab in and orbit the camera even with no plane to draw.

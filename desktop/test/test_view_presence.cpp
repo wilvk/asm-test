@@ -80,6 +80,15 @@ int main() {
             check("min/reveal-named", e && !e->reason.empty(),
                   "an absent view must carry a non-empty machine reason (never "
                   "a vague 'unavailable')");
+            // A reason may not send the reader after something that does not
+            // exist. The Scene3D reason offered "a live maps snapshot" as an
+            // alternative region source; the only Region producers in the tree
+            // are regions_from_codeimage and observed_data_spans, and no
+            // regions_from_maps exists anywhere.
+            check("min/reason-no-phantom-source",
+                  e && e->reason.find("maps snapshot") == std::string::npos,
+                  "an absent-reason must not name a capability the tree does "
+                  "not implement — no regions_from_maps exists");
         }
         // The affordance count equals the absent entries.
         size_t nabs = view_absent_count(vp), counted = 0;

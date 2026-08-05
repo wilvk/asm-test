@@ -492,12 +492,17 @@ ModuleRibbonScene build_module_ribbon(const TreeView &tv) {
               [](const RibbonLane &a, const RibbonLane &b) {
                   return a.tid < b.tid;
               });
-    // ONE lane in a 3D scene is a worse 2D chart. The caller renders the flat
-    // icicle timeline instead; the scene says so rather than tilting it.
+    // ONE lane in a 3D scene is a worse 2D chart. Say what the shape IS — the
+    // note must not promise a substitute view, because there is none:
+    // `single_thread` has no consumer outside this model's dump and its unit
+    // test, so nothing in the tree renders an icicle timeline. The scene stays
+    // SELECTABLE either way (59 T4), which is why this is a note and never a
+    // kind_unavailable entry — those are rendered under BeginDisabled.
     s.single_thread = s.lanes.size() == 1;
     if (s.single_thread)
-        s.note = "single-threaded recording: one lane in a 3D scene is a worse "
-                 "2D chart — showing the flat icicle timeline instead";
+        s.note = "single-threaded recording: one lane, so the depth axis "
+                 "carries the whole finding and the thread axis carries "
+                 "nothing — a 2D icicle would show this better";
     return s;
 }
 

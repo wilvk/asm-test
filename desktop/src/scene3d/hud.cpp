@@ -362,7 +362,14 @@ const std::vector<std::string> &scene_control_lines() {
                 lines.push_back("-: dolly out");
                 break;
             case CamKey::Reset:
-                lines.push_back("R: reset view (the landmark)");
+                // CamKey::Reset applies Camera::reset() — the literal default
+                // pose, which the button row below calls "default view". 48 T4
+                // is explicit that "reset view" (the landmark) and "default
+                // view" are two buttons with two meanings, "neither silently
+                // repurposed into the other"; naming the landmark here was
+                // exactly that repurposing, for the keyboard-only analyst this
+                // generated list exists to serve.
+                lines.push_back("R: default view (the plane's default pose)");
                 break;
             case CamKey::TopDown:
                 lines.push_back("T: top-down (2D-ish)");

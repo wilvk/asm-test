@@ -118,9 +118,15 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
     // 3D overview — the address-space spacetime surface. Present iff the recording
     // carries codeimage regions to place the plane.
     bool has_regions = !space::regions_from_codeimage(r).empty();
+    // The reason names the capture modes that record `codeimage`, never "a live
+    // maps snapshot": no regions_from_maps exists anywhere in the tree, so that
+    // phrasing sent the reader looking for a capture option nobody built. (The
+    // producer DOES read /proc/<pid>/maps — serve_exe_text_span — but it emits
+    // a `codeimage` from it; there is no viewer-side maps path.)
     add(ViewId::Scene3D, "3D overview", has_regions,
-        "no codeimage regions — the 3D overview needs codeimage events (or a "
-        "live maps snapshot) to place the address-space plane",
+        "no address-space regions in this recording — the 3D overview places "
+        "its plane from `codeimage` events, which the serve host records for "
+        "the tree / trace / dataflow / auto modes",
         std::nullopt);
 
     return v;

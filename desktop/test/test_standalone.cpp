@@ -448,6 +448,26 @@ int main() {
             check("T4/2D: a single-tid recording asks for the 2D form",
                   one.single_thread, "one lane was left as a 3D scene");
             check("T4/2D: and says why", !one.note.empty(), "silent degrade");
+            // The note must not describe a fallback nothing implements:
+            // `single_thread` has no consumer outside this model's own dump and
+            // this test, so nothing anywhere renders an icicle timeline. And the
+            // one lane must stay SELECTABLE — 59 T4 requires it, so this note
+            // may never migrate into kind_unavailable, which the selector
+            // renders under BeginDisabled.
+            // The defect is the CLAIM that a substitute view is being
+            // displayed, not the word "icicle" — naming the better 2D form is
+            // useful advice. Pin the claim: nothing may be "shown instead",
+            // because nothing is.
+            check("T4/2D: no phantom fallback",
+                  one.note.find("instead") == std::string::npos &&
+                      one.note.find("showing") == std::string::npos,
+                  "the note claimed a substitute view was being shown instead, "
+                  "but single_thread has no consumer and nothing renders one: "
+                  "got \"" +
+                      one.note + "\"");
+            check("T4/2D: stays selectable", !one.lanes.empty(),
+                  "a one-lane ribbon must remain available — disabling it "
+                  "would contradict 59 T4");
         }
         // No call tree at all: a stated reason, not an empty scene.
         {
