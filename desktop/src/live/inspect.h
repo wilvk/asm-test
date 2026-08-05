@@ -146,11 +146,22 @@ struct AttachFacts {
     // /proc/sys/kernel/yama/ptrace_scope. -1 = the file is absent, which means
     // the Yama LSM is not enforcing at all — NOT "unknown, assume the worst".
     int yama_scope = -1;
-    bool target_opted_in = false; // the target called PR_SET_PTRACER
-    long tracer_pid = 0;          // /proc/<pid>/status TracerPid (0 = none)
-    int elf_class = 64;           // 32 = an i386 tracee; 0 = unreadable
-    bool is_kthread = false;      // no mm: a kernel thread
-    bool is_self = false;         // our own pid
+    // The target called PR_SET_PTRACER (or is our descendant) -- MEASURED by
+    // probe_attach via open("/proc/<pid>/mem", O_RDONLY), which runs the
+    // kernel's own ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS), the same
+    // check PTRACE_ATTACH runs, and changes no state (NOT PTRACE_SEIZE: a
+    // SEIZE probe cannot detach without a prior ptrace-stop and leaves the
+    // target frozen). This is the fact that turns a scope-1 "maybe" into a
+    // "yes" -- 12 of 15 live Firefox processes pass it, unprivileged.
+    bool target_opted_in = false;
+    long tracer_pid = 0; // /proc/<pid>/status TracerPid (0 = none)
+    int elf_class = 64;  // 32 = an i386 tracee; 0 = unreadable
+    // No mm: a kernel thread. Discriminated from an unreadable process (a
+    // readlink("/proc/<pid>/exe") failure, which EACCES far more often than a
+    // real kernel thread) via /proc/<pid>/status's VmSize field, which every
+    // process with an address space carries and every kernel thread omits.
+    bool is_kthread = false;
+    bool is_self = false; // our own pid
 };
 
 enum class Attach {

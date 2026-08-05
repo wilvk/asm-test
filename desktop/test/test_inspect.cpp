@@ -235,6 +235,50 @@ static void test_attach() {
                       "every row must carry a reason");
         }
     }
+
+    // 2026-08-06 plan, Task 1: the probe must not invent facts.
+    //
+    // `readlink("/proc/<pid>/exe")` fails with EACCES for every process we do
+    // not own -- 453 of 588 on the box this was measured on, INCLUDING pid 1.
+    // Reporting those as kernel threads is a confidently wrong sentence on 77%
+    // of the picker, and it wins over the uid reason because attach_verdict
+    // checks is_kthread first.
+    {
+        AttachFacts f;
+        f.is_kthread = false;
+        f.same_uid = false;
+        AttachVerdict v = attach_verdict(f);
+        check("probe/other-user-not-kthread",
+              has(v.why, "uid") || has(v.remedy, "CAP_SYS_PTRACE"),
+              "a process owned by another user must be refused for its UID, "
+              "not described as having no user-space address space");
+    }
+    {
+        // The other invented fact: target_opted_in is what turns "maybe" into
+        // "yes", and 12 of 15 live Firefox processes DO opt in (their crash
+        // reporter calls PR_SET_PTRACER). Nothing outside this test ever set it.
+        AttachFacts f;
+        f.yama_scope = 1;
+        f.target_opted_in = true;
+        check("probe/optin-is-yes", attach_verdict(f).verdict == Attach::Yes,
+              "a target that opted in is attachable under scope 1 -- this is "
+              "the branch that makes a browser's content processes reachable");
+    }
+    {
+        // And the probe itself. SELF is always attachable-by-us in the sense the
+        // probe measures (we can open our own /proc/self/mem), so it is the one
+        // pid whose answer is knowable without privilege or a victim.
+        AttachFacts self = probe_attach((long)::getpid(), read_yama_scope(),
+                                        (long)::geteuid(), false);
+        check("probe/self-not-kthread", !self.is_kthread,
+              "our own process has an address space; a readlink failure must "
+              "never be reported as 'kernel thread'");
+        check(
+            "probe/self-opted-in-measured", self.target_opted_in,
+            "probe_attach must MEASURE attachability (open /proc/<pid>/mem, "
+            "which runs the kernel's own ptrace_may_access) rather than leave "
+            "the field at its default -- unset, every row renders 'maybe'");
+    }
 }
 
 // ---------------------------------------------------------------------------

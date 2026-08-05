@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include <dirent.h>
+#include <fcntl.h> // open/O_RDONLY/O_CLOEXEC — the attach-probe mem open
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h> // nanosleep — the fixed activity-sample window
@@ -273,13 +274,40 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid,
             f.tracer_pid = std::atol(tracer.c_str());
     }
 
+    // Whether we may actually attach, MEASURED rather than inferred from the
+    // Yama scope. open("/proc/<pid>/mem", O_RDONLY) runs the kernel's own
+    // ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS) -- the same check
+    // PTRACE_ATTACH runs -- and changes no state.
+    //
+    // NOT PTRACE_SEIZE: every DETACH after a SEIZE probe returns ESRCH (the
+    // tracee is not in a ptrace-stop, which `man 2 ptrace` requires for it), so
+    // the probe LEAVES THE TARGET SEIZED and one SIGCONT later it reads
+    // "State: t (tracing stop)". Measured, on a real victim.
+    //
+    // A success under scope 1 means the target called PR_SET_PTRACER (or is our
+    // descendant), which is exactly what target_opted_in names. This is the
+    // branch that makes a browser's content processes reachable: 12 of 15 live
+    // Firefox processes pass it today, unprivileged, at ptrace_scope=1.
+    {
+        int fd = ::open((base + "/mem").c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            ::close(fd);
+            f.target_opted_in = true;
+        }
+    }
+
     // A kernel thread has no exe link (no mm). readlink failing for any other
     // reason also leaves us unable to read the ELF, so the class stays 0 =
-    // unknown rather than being assumed 64.
+    // unknown rather than being assumed 64. Discriminate on VmSize, which
+    // /proc/<pid>/status carries for every process WITH an address space and
+    // omits for every kernel thread -- and which is world-readable, so it
+    // answers for processes we cannot otherwise read (readlink on /exe fails
+    // with EACCES far more often than it fails because the target is a kernel
+    // thread; the two send an operator to completely different places).
     char buf[512];
     ssize_t n = ::readlink((base + "/exe").c_str(), buf, sizeof buf - 1);
     if (n <= 0) {
-        f.is_kthread = true;
+        f.is_kthread = status_field(status, "VmSize").empty();
         f.elf_class = 0;
     } else {
         buf[n] = '\0';
