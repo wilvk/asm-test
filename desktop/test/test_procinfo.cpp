@@ -120,11 +120,16 @@ int main() {
     check("no rate from one snapshot", !r0.have,
           "a single snapshot cannot yield a rate — 0% would be a lie");
 
-
     // A second snapshot one second later, 50 jiffies busier at 100 Hz = 50%.
+    // The 50 is SPLIT across utime and stime rather than loaded entirely
+    // onto utime: cpu_pct sums both, and with q.stime == p.stime the stime
+    // term contributed exactly 0, so an implementation that dropped stime
+    // from the sum altogether produced the same 50% and passed. Split
+    // 30 + 20, and dropping either term now lands at 30% or 20%.
     ProcInfo q = p;
     q.ts_ns = p.ts_ns + 1000000000ull;
-    q.utime = p.utime + 50;
+    q.utime = p.utime + 30;
+    q.stime = p.stime + 20;
     q.clk_tck = 100;
     q.io_read_bytes = p.io_read_bytes + 2048;
     ProcRates r1 = procinfo_rates(p, q);
@@ -241,6 +246,88 @@ int main() {
           vn.find("undercount") != std::string::npos,
           "verdict '" + vn +
               "' did not caveat a nonzero-but-truncated count");
+
+    // The three branches below the budget caveat had NO coverage at all:
+    // the p-fixture only ever exercises the "syms_total > 0, no JIT, no
+    // anon-exec" path, so a mutation deleting any of the others was
+    // invisible.
+    {
+        // 1. named == 0 -> the raw-addresses conclusion. This is the one
+        //    branch that draws a CONCLUSION from an absence, so it is the
+        //    one that has to be reachable only when the absence is real.
+        ProcInfo none = p;
+        none.syms_total = 0;
+        none.jit_methods = 0;
+        std::string v = procinfo_names_verdict(none);
+        check("a genuinely symbol-free target does get the raw-addresses "
+              "verdict",
+              v.find("raw addresses") != std::string::npos,
+              "verdict '" + v + "'");
+
+        // 2. the JIT arm: count AND source, both of which the confident
+        //    sentence is built from.
+        ProcInfo jit = p;
+        jit.jit_methods = 1402;
+        jit.jit_source = "perf-map";
+        std::string vj = procinfo_names_verdict(jit);
+        check("the JIT arm states the method count",
+              vj.find("1402") != std::string::npos, "verdict '" + vj + "'");
+        check("the JIT arm names the map's source",
+              vj.find("perf-map") != std::string::npos, "verdict '" + vj + "'");
+
+        // 3. anon-exec WITHOUT a JIT map: executable memory no symtab
+        //    covers, and no jitdump/perf-map to explain it -- the "names,
+        //    except here" caveat. Deliberately paired with its negative:
+        //    the same bytes WITH a JIT map are explained, and must not
+        //    produce the caveat.
+        ProcInfo anon = p;
+        anon.jit_methods = 0;
+        anon.jit_source.clear();
+        anon.anon_exec_bytes = 12582912; // 12 MB
+        std::string va = procinfo_names_verdict(anon);
+        check("unexplained anonymous executable memory is called out",
+              va.find("anonymous executable memory") != std::string::npos,
+              "verdict '" + va + "'");
+        check("the anon-exec caveat states its size in KB",
+              va.find("12288") != std::string::npos, "verdict '" + va + "'");
+        ProcInfo anon_jit = anon;
+        anon_jit.jit_methods = 5;
+        anon_jit.jit_source = "jitdump";
+        check("anon-exec explained BY a JIT map is not called out again",
+              procinfo_names_verdict(anon_jit).find(
+                  "anonymous executable memory") == std::string::npos,
+              "verdict '" + procinfo_names_verdict(anon_jit) + "'");
+    }
+
+    // 4. An unreadable /proc/<pid>/maps: every number this verdict is built
+    //    from comes from that file, so zero means "never read", not "not
+    //    there". This must WIN over both the budget caveat and the
+    //    raw-addresses conclusion, which is why it is the first check in
+    //    the function.
+    {
+        ProcInfo nomaps = p;
+        nomaps.maps_readable = false;
+        nomaps.syms_total = 0;
+        nomaps.jit_methods = 0;
+        std::string v = procinfo_names_verdict(nomaps);
+        check("an unreadable maps withholds the raw-addresses conclusion",
+              v.find("raw addresses") == std::string::npos,
+              "verdict '" + v + "'");
+        check("an unreadable maps names /proc/<pid>/maps as the reason",
+              v.find("/maps could not be read") != std::string::npos,
+              "verdict '" + v + "'");
+        nomaps.budget_exceeded = true;
+        check("the unreadable-maps reason DOMINATES the budget caveat",
+              procinfo_names_verdict(nomaps).find("/maps could not be read") !=
+                  std::string::npos,
+              "verdict '" + procinfo_names_verdict(nomaps) + "'");
+    }
+
+    // The wire flag itself decodes (the fixtures carry it true), so a
+    // decode that hardcoded false would fail here rather than silently
+    // withholding every verdict in the app.
+    check("maps_readable decodes from the wire", p.maps_readable,
+          "the fixture emits code.maps_readable:true");
 
     // Sections with no coverage above: runtime (the wire key is "static", not
     // "static_linked" — a rename mismatch would silently leave this false-by-
@@ -695,6 +782,84 @@ int main() {
                   " (the bug would show ~" + std::to_string(bug_age) + ")");
     }
 
+    // --- a pid that VANISHED reports the spec's named outcome ------------
+    // `asmspy --info` writes its "no such process" line to stderr (which
+    // this runner sends to /dev/null) and exits 3 —
+    // ASMSPY_INFO_EXIT_NO_SUCH_PID, a code of its own precisely so this arm
+    // can tell it apart. Reported as "asmspy produced no output (exit 1)"
+    // before, which blames the probe for a race that is the ROUTINE
+    // consequence of browsing a live process list: the target exits between
+    // the Processes table listing it and the debounce firing.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_vanished.sh";
+        procinfo_tick(run, 4242, 0.0);
+        procinfo_tick(run, 4242, 0.30); // spawn
+        for (int i = 0; i < 200 && run.child_pid != 0; i++) {
+            procinfo_tick(run, 4242, 0.30 + 0.01 * i);
+            ::usleep(1000);
+        }
+        const std::string st = procinfo_status(run);
+        check("a vanished pid is reported as having exited, naming the pid",
+              st.find("pid 4242 exited") != std::string::npos, "status: " + st);
+        check("a vanished pid never blames asmspy for producing no output",
+              st.find("produced no output") == std::string::npos,
+              "status: " + st);
+    }
+
+    // --- a spawn that never happened is still a FAILURE -------------------
+    // spawn() returns false in three places — nothing resolved to run,
+    // pipe2 failed, fork failed — and every one of them leaves a stated
+    // reason and no snapshot, i.e. a failed probe. It was not COUNTED as
+    // one, so the backoff never grew and the runner retried at FRAME RATE
+    // for as long as the condition lasted: fork() failing under EAGAIN
+    // answered with a fork attempt every frame. Note that an asmspy_path
+    // pointing at a nonexistent FILE does not reach this path at all — the
+    // fork succeeds and the CHILD's execvp fails, which the empty-buffer
+    // arm already handles; the first return is the only one reachable
+    // without breaking the process's fd or pid limits, so it is the one
+    // driven here: an empty $PATH and a cwd with no ./build/asmspy make
+    // resolve_asmspy_path() genuinely find nothing. Both are restored
+    // immediately, before any other check runs.
+    {
+        char cwd[4096] = "";
+        const char *pathenv = ::getenv("PATH");
+        const std::string saved_path = pathenv ? pathenv : "";
+        const bool have_cwd = ::getcwd(cwd, sizeof cwd) != nullptr;
+        ::setenv("PATH", "", 1);
+        const bool moved = ::chdir("/") == 0;
+
+        ProcInfoRunner run; // asmspy_path stays "" -> resolve, and find none
+        procinfo_tick(run, 777, 0.0);
+        double t = 0.30;
+        for (int i = 0; i < 300; i++) {
+            procinfo_tick(run, 777, t);
+            t += 0.05;
+        }
+        const std::string st = procinfo_status(run);
+        const int fails = run.fail_count;
+        const int spawns = run.spawns;
+
+        ::setenv("PATH", saved_path.c_str(), 1);
+        if (have_cwd && moved && ::chdir(cwd) != 0)
+            check("restored the cwd after the no-asmspy test", false,
+                  "chdir back to the test's own cwd failed");
+
+        check("setup: resolve_asmspy_path found nothing to run",
+              spawns == 0 && st.find("no asmspy found") != std::string::npos,
+              "spawns=" + std::to_string(spawns) + " status: " + st);
+        // 300 frames of 0.05s = ~15s. Uncounted, EVERY one of those frames
+        // re-enters spawn(); counted, the 0.5/1/2/4/8/10s backoff admits a
+        // handful. fail_count is the observable either way, since spawn()
+        // never got far enough to increment `spawns`.
+        check("a spawn that could not even start still backs off",
+              fails > 0 && fails <= 12,
+              "fail_count=" + std::to_string(fails) +
+                  " over ~15s of a persistent, un-spawnable condition — "
+                  "uncounted, this is one retry per frame (300)");
+    }
+
     // --- C2: a target that fails EVERY time must back off, not respawn at
     // frame rate forever. fake_asmspy_mismatch.sh always "fails" (a pid
     // mismatch) from this runner's perspective, so every attempt is a
@@ -755,7 +920,15 @@ int main() {
         // it should be nowhere near what a 32-byte-triggered flood grew to.
         check("the buffer's capacity is released after an over-cap trip, "
               "not just its logical size",
-              run.buf.capacity() < 4096,
+              // 1024, not 4096: procinfo_full.asmtrace (what the fake
+              // asmspy echoes) is 4081 bytes, so a 4096 threshold passed
+              // whether or not the allocation was ever released -- a check
+              // that could not fail against the very bug it names. The cap
+              // under test here is 32 bytes and the drain path SWAPS the
+              // string rather than clear()ing it, so a correct runner
+              // leaves a capacity in the tens of bytes; the broken one
+              // leaves whatever the flood grew to.
+              run.buf.capacity() < 1024,
               "buf.capacity()=" + std::to_string(run.buf.capacity()) +
                   " -- clear() without releasing the allocation pins it");
     }

@@ -112,7 +112,8 @@ static void settle(InspectState &s, long pid, const ProcInfo &snapshot,
 // broken ScrollY table cannot fake, because BeginTable returning false
 // draws nothing and does not advance the cursor at all.
 static std::string render(InspectState &s, ImGuiIO &io,
-                          float *out_mods_table_h = nullptr) {
+                          float *out_mods_table_h = nullptr,
+                          float *out_threads_table_h = nullptr) {
     io.DisplaySize = ImVec2(1280, 900);
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::NewFrame();
@@ -131,6 +132,16 @@ static std::string render(InspectState &s, ImGuiIO &io,
     if (out_mods_table_h) {
         ImGuiTable *tbl = ImGui::TableFindByID(ImGui::GetID("mods"));
         *out_mods_table_h = tbl ? tbl->OuterRect.GetHeight() : -1.0f;
+    }
+    // The threads table is the OTHER half of the same fix, and the one that
+    // CAUSED it: it is drawn FIRST, so a missing outer_size there is what
+    // starved the mods table below. Its own rect is the only signal that
+    // says whether its explicit height is still there -- the mods check
+    // alone cannot distinguish "threads is bounded" from "this window
+    // happened to be tall enough for both".
+    if (out_threads_table_h) {
+        ImGuiTable *tbl = ImGui::TableFindByID(ImGui::GetID("threads"));
+        *out_threads_table_h = tbl ? tbl->OuterRect.GetHeight() : -1.0f;
     }
     ImGui::End();
     ImGui::Render();
@@ -259,7 +270,14 @@ static ProcInfo make_budget_aborted_no_modules() {
     p.jit_methods = 0;
     p.anon_exec_bytes = 0;
     p.modules.clear();
-    p.modules_truncated = false;
+    // TRUE, matching what the producer actually emits for this exact case:
+    // pi_read_code_and_modules' upfront budget guard (cli/asmspy_proc.c)
+    // sets modules_truncated = 1 on the way out precisely because "the list
+    // below never even started". A fixture with it false described a state
+    // the producer cannot reach, and left the pane's "skip the table
+    // entirely when there is nothing to show" guard untested -- both of the
+    // avoid() checks in scenario 4b were vacuously true against it.
+    p.modules_truncated = true;
     p.budget_exceeded = true;
     return p;
 }
@@ -353,7 +371,18 @@ int main() {
         want("names verdict renders (uncaveated; budget not exceeded)", out,
              "will show names");
         want("attach word MAYBE for attachable==-1", out, "MAYBE");
-        want("mode ok renders yes", out, "yes");
+        // `ok` is two-valued, the attach verdict is three-valued: a mode
+        // that clears its own gates under attachable == -1 is "maybe", not
+        // "yes". This fixture is exactly that state (Yama ptrace_scope=1,
+        // the stock Debian/Ubuntu default), and it used to render nine
+        // green "yes" cells directly under the MAYBE verdict line above,
+        // with an empty "why not" column.
+        want("mode cell renders maybe under an undetermined attach", out,
+             "maybe");
+        avoid("an undetermined mode never renders a confident yes", out, "yes");
+        want("an undetermined mode carries the attach reason, not a blank "
+             "why-not cell",
+             out, "yama ptrace_scope");
     }
 
     // --- 3. the refusal fixture ------------------------------------------
@@ -403,9 +432,17 @@ int main() {
              "worker --flag …");
         want("threads_truncated shows the exact counts", out,
              "showing 3 of 500");
-        want("modules_truncated states the cut list, not a silent drop", out,
-             "showing the 1 highest-symbol modules");
-        want("children_truncated states its cap", out, "capped at 1");
+        // "the N highest-symbol modules" describes the 64-row CAP, which is
+        // applied AFTER a full symbol-count ranking. This snapshot is a
+        // BUDGET abort (budget_exceeded && modules_truncated): the merge
+        // loop stopped mid-scan, nothing was ranked, and the survivor's
+        // symbol count is 0 because it was never counted.
+        want("a budget-cut module list says the ranking never ran", out,
+             "cut mid-scan when the gather budget ran out");
+        avoid("a budget-cut module list never claims a ranking", out,
+              "highest-symbol");
+        want("children_truncated states the list is short, not a cap of 1", out,
+             "the scan stopped early, so there may be more");
         // budget_exceeded must caveat the names verdict rather than assert
         // it (Task 5 review addition): syms_total/jit_methods can themselves
         // be undercounts of a truncated gather.
@@ -420,6 +457,99 @@ int main() {
         want("io unreadable states the credential remedy", out,
              "needs matching creds");
         want("fds unreadable states so, not a bare 0", out, "unreadable");
+        // The CONTRAST case for the "maybe" cell in scenario 2: this
+        // snapshot's attachable is 1, so a mode that clears its gates is a
+        // real, measured yes and must still render as one.
+        want("a mode under a DEFINITE attach still renders yes", out, "yes");
+        // The banner must name the two sections a budget abort can cut
+        // that nothing else states: the fd walk (measured at 1017 ms
+        // against a 1M-fd target, four times the whole budget) and the
+        // /proc children scan.
+        want("budget banner names the fd count", out, "fd count");
+        want("budget banner names the children list", out, "children");
+    }
+
+    // --- 4c. a module list cut by the CAP, not the budget ------------------
+    // The contrast case for scenario 4's budget-cut wording: modules_
+    // truncated with budget_exceeded FALSE is the 64-row cap, which IS
+    // applied after a full symbol-count ranking, so "the N highest-symbol
+    // modules" is the true sentence there and must survive.
+    {
+        InspectState s;
+        ProcInfo p = make_wide_snapshot();
+        p.modules_truncated = true; // capped, not budget-cut
+        settle(s, 6502, p);
+        std::string out = render(s, io);
+        want("a CAP-truncated module list does claim the ranking", out,
+             "showing the 8 highest-symbol modules");
+        avoid("a cap-truncated list never blames the budget", out,
+              "cut mid-scan");
+    }
+
+    // --- 4d. an unreadable /proc/<pid>/maps is not a measured-zero code
+    // surface. The symbol loader and the module scanner both read that file
+    // first, so a target this user does not own produces the IDENTICAL
+    // all-zero struct a genuinely code-free process would -- and the pane
+    // rendered "0 symbols . 0 modules" plus a confident "will show raw
+    // addresses" verdict for it. Reproduced against live targets: 4 of 684
+    // pids landed in exactly this shape.
+    {
+        InspectState s;
+        ProcInfo p = make_budget_aborted_no_modules();
+        p.budget_exceeded = false;   // isolate this from the budget path
+        p.modules_truncated = false; // ... and from the truncation lines
+        p.maps_readable = false;
+        settle(s, 6503, p);
+        std::string out = render(s, io);
+        want("an unreadable maps names ITS OWN reason, not the budget's", out,
+             "maps could not be read");
+        avoid("an unreadable maps never prints a confident count", out,
+              "0 symbols");
+        avoid("an unreadable maps withholds the raw-addresses verdict", out,
+              "will show raw addresses");
+        want("the withheld verdict says the measurement is absent", out,
+             "absent measurement");
+    }
+
+    // --- 4e. namespace ids that could not be read are not "same namespaces"
+    // ns_differs is computed from four readlink ids, each 0 when unreadable,
+    // and 0 == 0 compares equal -- so all-four-zero fell into the else arm
+    // and asserted a shared namespace about a process whose namespaces were
+    // never read. Verified live against `docker run alpine`, which showed
+    // that claim two lines above a contradicting docker-...scope cgroup.
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        p.ns_pid = p.ns_net = p.ns_mnt = p.ns_user = 0;
+        p.ns_differs = false;
+        p.cgroup = "/system.slice/docker-abc123.scope";
+        settle(s, 6504, p);
+        std::string out = render(s, io);
+        want("unreadable namespace ids state so", out,
+             "namespace ids unreadable");
+        avoid("unreadable namespace ids never claim a shared namespace", out,
+              "same namespaces as this app");
+    }
+
+    // --- 4f. a children scan the budget cut short is not "none" ------------
+    // The /proc walk is budgeted per entry, and this pid's children sit
+    // wherever inode order puts them -- so an abort before the first hit is
+    // reachable, and it used to render "none" (a measurement) followed by
+    // "capped at 0".
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.children.clear();
+        p.children_truncated = true;
+        settle(s, 6505, p);
+        std::string out = render(s, io);
+        avoid("a cut-short children scan never renders a measured 'none'", out,
+              "none");
+        avoid("a cut-short children scan never claims a cap of zero", out,
+              "capped at 0");
+        want("a cut-short children scan says the scan stopped early", out,
+             "the /proc scan stopped early");
     }
 
     // --- 4b. budget_exceeded with the code-surface section fully skipped ---
@@ -571,10 +701,30 @@ int main() {
         InspectState s;
         ProcInfo p = make_wide_snapshot();
         settle(s, 7001, p);
-        float mods_h = 0.0f;
-        std::string out = render(s, io, &mods_h);
+        float mods_h = 0.0f, threads_h = 0.0f;
+        std::string out = render(s, io, &mods_h, &threads_h);
         want("wide snapshot's module rows render their text", out,
              "libmod5.so");
+        // The threads table's OWN explicit outer_size, asserted directly
+        // rather than inferred from the mods table surviving. It is capped
+        // at row_h * (min(rows, 8) + 1) -- 9 rows here -- so it must be
+        // several rows tall AND must NOT have claimed the rest of the 500px
+        // window, which is precisely what a ScrollY table with no
+        // outer_size does (that is the bug, and it is the reason the mods
+        // table below it measured -175px available).
+        check("threads table's rendered rect is several rows tall",
+              threads_h > 20.0f,
+              "the \"threads\" ImGuiTable's OuterRect height = " +
+                  std::to_string(threads_h) + "px");
+        check("threads table does NOT claim all remaining window height "
+              "(that is what starves the mods table below it)",
+              threads_h < 300.0f,
+              "the \"threads\" ImGuiTable's OuterRect height = " +
+                  std::to_string(threads_h) +
+                  "px in a 500px window -- 9 capped rows cannot be that "
+                  "tall, so BeginTable(\"threads\", ...) most likely lost "
+                  "its explicit outer_size and is claiming "
+                  "GetContentRegionAvail()");
         check("mods table's OWN rendered rect is a real height, not the "
               "~1px floor a missing outer_size collapses to (non-text "
               "signal)",
