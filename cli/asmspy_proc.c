@@ -1833,7 +1833,24 @@ static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
     if (line[0])
         yama = atoi(line);
 
-    if (out->fp.tracer_pid) {
+    /* FIRST, ahead of every other fact: PTRACE_ATTACH on a task in
+     * exit_state is unconditionally -EPERM (kernel/ptrace.c refuses before
+     * any of the checks below are even consulted), so a zombie's verdict
+     * cannot be anything else — and none of the remedies below would help.
+     * Without this branch a defunct task inherits the ordinary same-uid
+     * path and renders "attach YES" with nine green modes, which is the
+     * most confident possible statement of the one thing that definitely
+     * cannot happen. out->state is filled by asmspy_procinfo's /proc/<pid>/
+     * stat parse, which runs long before this function. */
+    if (out->state == 'Z') {
+        out->attachable = 0;
+        snprintf(out->attach_why, sizeof out->attach_why,
+                 "defunct (zombie) — the task has already exited");
+        snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                 "nothing is left to attach to; trace its parent (pid %ld) "
+                 "instead",
+                 out->ppid);
+    } else if (out->fp.tracer_pid) {
         out->attachable = 0;
         snprintf(out->attach_why, sizeof out->attach_why,
                  "already traced by pid %d", (int)out->fp.tracer_pid);
@@ -1866,10 +1883,22 @@ static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
                  "same uid, nothing else traces it");
     }
 
-    /* Every mode starts at the attach verdict, then adds its OWN gate. */
+    /* Every mode starts at the attach verdict, then adds its OWN gate.
+     *
+     * attachable == -1 (Yama ptrace_scope=1 and we are not root — the
+     * DEFAULT state of every stock Debian/Ubuntu host, so the common case
+     * and not an edge one) leaves mode_ok TRUE, because the mode's own
+     * gates below are still the only things this snapshot can decide. But
+     * the ATTACH those modes all depend on is undetermined, and shipping
+     * the cell with an empty why rendered nine confident "yes" rows
+     * directly beneath a verdict line reading MAYBE — a table arguing with
+     * the sentence above it. Carry the attach_why into the -1 case too;
+     * `ok` alone cannot express three states, so the reason is what makes
+     * the third one legible (the desktop pane reads `attachable` and draws
+     * these cells "maybe"). */
     for (int m = 0; m < ASMSPY_MODE__COUNT; m++) {
         out->mode_ok[m] = (out->attachable != 0);
-        if (!out->mode_ok[m])
+        if (!out->mode_ok[m] || out->attachable == -1)
             snprintf(out->mode_why[m], sizeof out->mode_why[m], "%.90s",
                      out->attach_why);
     }
@@ -1894,9 +1923,16 @@ static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
             ASMSPY_MODE_GRAPH,    ASMSPY_MODE_PROCS};
         for (size_t i = 0; i < sizeof x86_only / sizeof x86_only[0]; i++) {
             out->mode_ok[x86_only[i]] = 0;
+            /* NOT "would name every syscall wrong": that is true of the
+             * five engines that decode a syscall NUMBER, and false for
+             * tree/graph/procs, which single-step to build a call tree,
+             * graph or topology and never look at the syscall table at
+             * all. The reason all eight share is the one the comment
+             * above already states, and the one their own guard states —
+             * every register read assumes the x86-64 ABI. */
             snprintf(out->mode_why[x86_only[i]], sizeof out->mode_why[0],
-                     "32-bit tracee — the engines are x86-64 only, and would "
-                     "name every syscall wrong");
+                     "32-bit tracee — the single-step engines read registers "
+                     "against the x86-64 ABI only");
         }
     }
     /* --sample is IBS silicon, a fact about the HOST, not the target. */
@@ -2041,18 +2077,52 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
         fclose(f);
     }
 
-    /* fd count */
+    /* fd count.
+     *
+     * BUDGETED, unlike every other single-file read in this function: this
+     * is a readdir over a directory whose size the TARGET chooses, not a
+     * fixed-size line. Measured hook-free against a process holding 1M open
+     * fds, the walk alone burns 1017 ms — four times the whole 250 ms
+     * gather budget, spent before threads, modules or the verdict are even
+     * started. Stopping short leaves n_fds an UNDERCOUNT, so the sticky
+     * budget_exceeded flag (which every consumer already renders as "these
+     * numbers may be short rather than zero") is set here explicitly rather
+     * than left to the end-of-gather check, which would report the overrun
+     * without attributing it. */
     snprintf(p, sizeof p, "/proc/%d/fd", (int)pid);
     {
         DIR *d = opendir(p);
         if (d) {
             struct dirent *e;
             out->fds_readable = 1;
-            while ((e = readdir(d)))
+            while ((e = readdir(d))) {
+                if (pi_over_budget(out)) {
+                    out->budget_exceeded = 1;
+                    break;
+                }
                 if (is_all_digits(e->d_name))
                     out->n_fds++;
+            }
             closedir(d);
         }
+    }
+
+    /* /proc/<pid>/maps — whether the CODE SURFACE is readable at all.
+     *
+     * Probed HERE, beside io/fd above, rather than inside
+     * pi_read_code_and_modules: that function can be skipped outright by an
+     * already-blown budget, and a flag left at 0 by a section that never
+     * ran would claim a permission denial nobody measured. The open itself
+     * is the whole test — the kernel runs its ptrace_may_access check in
+     * proc_maps_open, so an inaccessible target fails at open(2) rather
+     * than yielding a short read (verified: /proc/1/maps is EACCES to an
+     * ordinary uid). An open that succeeds and reads EMPTY is a real,
+     * different fact — a kernel thread has no mappings — and stays a
+     * measured zero. */
+    snprintf(p, sizeof p, "/proc/%d/maps", (int)pid);
+    if ((f = fopen(p, "r"))) {
+        out->maps_readable = 1;
+        fclose(f);
     }
 
     snprintf(p, sizeof p, "/proc/%d/oom_score", (int)pid);
@@ -2087,7 +2157,21 @@ int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out) {
         DIR *d = opendir("/proc");
         struct dirent *e;
         if (d) {
-            while ((e = readdir(d)) && !pi_over_budget(out)) {
+            while ((e = readdir(d))) {
+                /* A budget-cut scan has NOT established that there are no
+                 * more children — it stopped looking. Leaving
+                 * children_truncated false renders the survivors (often
+                 * none, since /proc is walked in inode order and this
+                 * pid's children can sit anywhere in it) as a measured
+                 * "Children: none", which is the one claim this snapshot
+                 * refuses to manufacture. The flag is the same one the CAP
+                 * exit below sets, and both mean "the list is short and we
+                 * are saying so". */
+                if (pi_over_budget(out)) {
+                    out->budget_exceeded = 1;
+                    out->children_truncated = 1;
+                    break;
+                }
                 if (!is_all_digits(e->d_name))
                     continue;
                 long cand = atol(e->d_name);

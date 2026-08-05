@@ -242,6 +242,17 @@ typedef struct {
     unsigned long syms_total, jit_methods;
     char jit_source[16]; /* "jitdump"|"perf-map"|"both"|""                */
     unsigned long long anon_exec_bytes;
+    /* /proc/<pid>/maps opened, i.e. the code surface above was actually
+     * READABLE. Same "an absence is flagged, never rendered as 0" rule as
+     * io_readable / fds_readable above, applied to the one input every
+     * field in this section derives from: the symbol loader and the module
+     * scanner BOTH read /proc/<pid>/maps first, so a permission denial (a
+     * different-uid target, a hidepid mount) leaves syms_total, n_modules
+     * and anon_exec_bytes at their zero defaults — which reads as a
+     * measured "no code surface", and is not one. Unlike an unreadable
+     * /proc/<pid>/io this is not a rare case: it is the state of every
+     * process this user does not own. */
+    int maps_readable;
 
     /* --- modules (Task 3) --- */
     asmspy_pi_module_t modules[ASMSPY_PI_MODULES_CAP];
@@ -273,6 +284,18 @@ typedef struct {
  * than yield a plausible empty snapshot. Individual unreadable fields
  * keep their zero/"" defaults and set their own *_readable flag. */
 int asmspy_procinfo(pid_t pid, asmspy_procinfo_t *out);
+
+/* `asmspy --info <pid>`'s exit code when that -1 is what came back: the pid
+ * does not exist. Its own code, distinct from 1 ("the output you asked for
+ * did not happen" — an unopenable --record, a refused body overflow) and
+ * from 2 (this binary's usage/bad-argument code), because a target that
+ * exits between a process table listing it and the probe firing is the
+ * ROUTINE outcome of browsing a live list, not a failure of asmspy. The
+ * desktop's Process details runner (desktop/src/live/procinfo.cpp) maps it
+ * to "pid N exited"; it is part of the CLI's contract, hence declared here
+ * beside the function whose return value produces it and documented in
+ * docs/internal/gui/asmtrace-schema.md's procinfo section. */
+#define ASMSPY_INFO_EXIT_NO_SUCH_PID 3
 
 /* ------------------------------------------------------------------ */
 /* Function-symbol resolver (asmspy_proc.c)                            */

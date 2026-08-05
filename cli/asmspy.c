@@ -8254,8 +8254,9 @@ static int info_emit_json(const asmspy_procinfo_t *pi, const char *record,
         pi->threads_truncated ? "true" : "false");
     APP("\"code\":{\"syms_total\":%lu,\"jit_methods\":%lu,\"jit_source\":\"%"
         "s\","
-        "\"anon_exec_bytes\":%llu},",
-        pi->syms_total, pi->jit_methods, e1, pi->anon_exec_bytes);
+        "\"anon_exec_bytes\":%llu,\"maps_readable\":%s},",
+        pi->syms_total, pi->jit_methods, e1, pi->anon_exec_bytes,
+        pi->maps_readable ? "true" : "false");
 
     APP("\"modules\":[");
     for (int i = 0; i < pi->n_modules; i++) {
@@ -8346,9 +8347,20 @@ static void info_print_text(const asmspy_procinfo_t *pi) {
            pi->exe_deleted ? "  (deleted)" : "");
     printf("  user     %s (uid %ld)   ppid %ld   threads %d\n", pi->user,
            pi->uid, pi->ppid, pi->threads);
-    printf("  rss      %lu KB   fds %s%d   cpu %llu jiffies @ %lu Hz\n",
-           pi->rss_kb, pi->fds_readable ? "" : "~", pi->n_fds,
-           pi->utime + pi->stime, pi->clk_tck);
+    {
+        /* The digit is STRUCTURALLY always 0 when the directory could not be
+         * opened (n_fds is only ever incremented inside that walk), so the
+         * old "~0" spent its entire meaning on a tilde documented nowhere,
+         * and read as a measured zero to anyone who did not know. Say the
+         * same thing the desktop pane says, in the same words. */
+        char fds[24];
+        if (pi->fds_readable)
+            snprintf(fds, sizeof fds, "%d", pi->n_fds);
+        else
+            snprintf(fds, sizeof fds, "— (unreadable)");
+        printf("  rss      %lu KB   fds %s   cpu %llu jiffies @ %lu Hz\n",
+               pi->rss_kb, fds, pi->utime + pi->stime, pi->clk_tck);
+    }
     printf("  attach   %s — %s\n",
            pi->attachable == 1   ? "YES"
            : pi->attachable == 0 ? "NO"
@@ -8356,18 +8368,38 @@ static void info_print_text(const asmspy_procinfo_t *pi) {
            pi->attach_why);
     if (pi->attach_remedy[0])
         printf("           -> %s\n", pi->attach_remedy);
+    /* `ok` is two-valued but the ATTACH verdict is three-valued, so a
+     * mode that clears its own gates while sitting under an undetermined
+     * attach (attachable == -1: ptrace_scope=1, the stock Debian/Ubuntu
+     * default) is "maybe", not "ok" — printing nine confident "ok"s two
+     * lines under "attach MAYBE" is the table arguing with the verdict
+     * above it. The shared reason is NOT repeated nine times below: it is
+     * the attach_why already printed on that very line. */
+    const char *maybe = pi->attachable == -1 ? " ?   " : " ok  ";
     printf("  modes    ");
     for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
         printf("%s%s", asmspy_mode_name((asmspy_mode_t)m),
-               pi->mode_ok[m] ? " ok  " : " NO  ");
+               pi->mode_ok[m] ? maybe : " NO  ");
     printf("\n");
+    if (pi->attachable == -1)
+        printf("           ? = the attach itself is undetermined (see "
+               "above); each mode's own gates are clear\n");
     for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
         if (!pi->mode_ok[m])
             printf("           %-9s %s\n", asmspy_mode_name((asmspy_mode_t)m),
                    pi->mode_why[m]);
-    printf("  names    %lu symbols · %d modules · %lu JIT methods%s%s\n",
-           pi->syms_total, pi->n_modules, pi->jit_methods,
-           pi->jit_source[0] ? " via " : "", pi->jit_source);
+    /* Every number on this line comes from /proc/<pid>/maps (directly, or
+     * via the symbol loader that reads it first). When that file could not
+     * be opened they are all still at their zero defaults, and printing
+     * them asserts a code surface was measured and found empty. */
+    if (pi->maps_readable)
+        printf("  names    %lu symbols · %d modules · %lu JIT methods%s%s\n",
+               pi->syms_total, pi->n_modules, pi->jit_methods,
+               pi->jit_source[0] ? " via " : "", pi->jit_source);
+    else
+        printf("  names    — (/proc/%ld/maps unreadable — the code surface "
+               "was never read)\n",
+               pi->pid);
     printf("  threads\n");
     for (int i = 0; i < pi->n_threads_v; i++) {
         const asmspy_pi_thread_t *t = &pi->threads_v[i];
@@ -8391,7 +8423,15 @@ static int cmd_info(pid_t pid, int json, const char *record) {
     if (asmspy_procinfo(pid, pi) != 0) {
         fprintf(stderr, "no such process: %d\n", (int)pid);
         free(pi);
-        return 1;
+        /* A DISTINCT code, not the generic 1. "the process exited between
+         * the table listing it and the probe firing" is the routine outcome
+         * of browsing a live process list — the desktop's details pane
+         * fires this automatically on every selection change — and a caller
+         * that cannot tell it from a real failure reports a normal race as
+         * a broken asmspy. 1 stays reserved for "the output you asked for
+         * did not happen" (an unopenable --record, a refused overflow); 2
+         * is already this binary's usage/bad-argument code. */
+        return ASMSPY_INFO_EXIT_NO_SUCH_PID;
     }
     /* The two output channels are INDEPENDENT, exactly as every other mode
      * treats them: --json puts NDJSON on stdout, --record=<f> puts it in a
