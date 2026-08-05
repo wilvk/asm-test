@@ -191,6 +191,9 @@ ProcInfo procinfo_parse(const Recording &r) {
         p.jit_methods = cd.value("jit_methods", (uint64_t)0);
         p.jit_source = cd.value("jit_source", std::string());
         p.anon_exec_bytes = cd.value("anon_exec_bytes", (uint64_t)0);
+        // See ProcInfo::maps_readable for why the default is true rather
+        // than the usual zero/false.
+        p.maps_readable = cd.value("maps_readable", true);
     }
 
     if (body.contains("modules") && body["modules"].is_array())
@@ -267,6 +270,21 @@ ProcRates procinfo_rates(const ProcInfo &prev, const ProcInfo &cur) {
 }
 
 std::string procinfo_names_verdict(const ProcInfo &p) {
+    // FIRST, ahead of even the budget caveat below: every number this
+    // verdict is built from comes from /proc/<pid>/maps, directly or via
+    // the symbol loader that reads it first. When that file could not be
+    // opened, syms_total and jit_methods are zero because nothing was
+    // read -- not because nothing is there -- and the "no symbols and no
+    // JIT map ... raw addresses" sentence below would be a confident
+    // conclusion drawn from a permission denial. This dominates the budget
+    // caveat when both hold: "we never got to look" is more specific, and
+    // more actionable, than "we ran out of time looking".
+    if (!p.maps_readable)
+        return "names verdict withheld: /proc/" + std::to_string(p.pid) +
+               "/maps could not be read, so no symbol table, module list or "
+               "JIT map was ever consulted — this is an absent measurement, "
+               "not a code-free process. Re-run as that process's user, or "
+               "with CAP_SYS_PTRACE";
     // A budget-truncated gather can abort the whole code-surface section
     // before syms_total/jit_methods are counted (leaving them at their zero
     // defaults), or bail MID-loop (leaving a partial, undercounted sum) —
@@ -590,7 +608,16 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
             } else if (ioerr) {
                 r.status = std::string("read failed: ") + std::strerror(errno);
             } else if (r.buf.empty()) {
-                r.status = exited == 127
+                // 3 is `asmspy --info`'s own code for "no such process"
+                // (ASMSPY_INFO_EXIT_NO_SUCH_PID, cli/libasmspy.h), given a
+                // code of its own precisely so this arm can tell the
+                // routine race -- the target exited between the Processes
+                // table listing it and the debounce firing -- from a
+                // broken probe. Reporting it as "produced no output" named
+                // asmspy as the thing that failed, when nothing failed.
+                r.status = exited == 3
+                               ? "pid " + std::to_string(probed) + " exited"
+                           : exited == 127
                                ? "could not run asmspy — check the path in "
                                  "Connect, or build it with `make cli`"
                                : "asmspy produced no output (exit " +
@@ -644,8 +671,18 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
         r.want_since >= 0 && now_s - r.want_since >= r.debounce_s;
     const bool due = r.last_ok_at < 0 || now_s - r.last_ok_at >= r.refresh_s;
     const bool retry_ok = r.next_retry_at < 0 || now_s >= r.next_retry_at;
-    if (idle && debounced && r.visible && due && retry_ok)
-        spawn(r, selected_pid, now_s);
+    if (idle && debounced && r.visible && due && retry_ok &&
+        !spawn(r, selected_pid, now_s)) {
+        // A spawn that never happened is a failed probe like any other --
+        // it left a stated reason in r.status and produced no snapshot.
+        // Without the backoff, the three reasons spawn() can return false
+        // for (no asmspy resolved, pipe2 failed, fork failed) are all
+        // conditions that persist, so the runner retried EVERY FRAME for
+        // as long as they lasted: fork() failing under EAGAIN was retried
+        // at frame rate by the one code path best placed to make it worse.
+        r.fail_count++;
+        r.next_retry_at = now_s + backoff_s(r.fail_count);
+    }
 }
 
 const ProcInfo &procinfo_current(const ProcInfoRunner &r) { return r.shown; }

@@ -41,6 +41,17 @@ static std::string pi_names_verdict_caveated(const ProcInfo &p) {
 void draw_details_pane(InspectState &s) {
     s.details.visible = ImGui::IsWindowFocused(
         ImGuiFocusedFlags_RootAndChildWindows | ImGuiFocusedFlags_DockHierarchy);
+    // The Connect pane's "asmspy path" field (InspectState::asmspy_path, set
+    // from Settings in main.cpp and editable in shell.cpp/inspect_door.cpp)
+    // is the ONLY writer of this runner's exe. Nothing outside the tests
+    // assigned it before, so the runner always fell through to
+    // resolve_asmspy_path() and its own failure remedy — "or set the path in
+    // Connect" — named a control that did not feed it. procinfo_tick reads
+    // the change and clears the failure backoff, which is what makes fixing
+    // the path in Connect take effect on the next frame instead of after a
+    // backoff for the OLD path. Blank still means resolve, so a session that
+    // never opens Connect behaves exactly as before.
+    s.details.asmspy_path = s.asmspy_path;
     procinfo_tick(s.details, s.selected_pid, ImGui::GetTime());
 
     if (s.selected_pid <= 0) {
@@ -82,8 +93,9 @@ void draw_details_pane(InspectState &s) {
         ImGui::TextColored(
             dt_warn_col(),
             "partial: the 250ms gather budget ran out — module sizes, "
-            "per-module symbol counts, the symbol/module totals and "
-            "anonymous-executable bytes may be absent rather than zero");
+            "per-module symbol counts, the symbol/module totals, "
+            "anonymous-executable bytes, the fd count and the children "
+            "list may be absent or short rather than zero");
 
     // --- Can I trace this? (open) ---------------------------------------
     if (ImGui::CollapsingHeader("Can I trace this?",
@@ -109,13 +121,30 @@ void draw_details_pane(InspectState &s) {
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(m.mode.c_str());
                 ImGui::TableNextColumn();
-                ImGui::TextColored(m.ok ? dt_good_col() : dt_bad_col(), "%s",
-                                   m.ok ? "yes" : "no");
+                // `ok` is two-valued; the attach verdict is three-valued.
+                // A mode that clears its own gates under an UNDETERMINED
+                // attach (attachable == -1 — Yama ptrace_scope=1, the stock
+                // Debian/Ubuntu default, so the common case) is "maybe",
+                // not "yes": nine green cells directly under a verdict line
+                // reading MAYBE is a pane arguing with itself, and it is
+                // the state most operators see first. Same three colours as
+                // the verdict word above, for the same reason.
+                const bool undetermined = m.ok && p.attachable == -1;
+                ImGui::TextColored(undetermined ? dt_maybe_col()
+                                   : m.ok       ? dt_good_col()
+                                                : dt_bad_col(),
+                                   "%s",
+                                   undetermined ? "maybe"
+                                   : m.ok       ? "yes"
+                                                : "no");
                 ImGui::TableNextColumn();
                 // A refusal without its reason is the failure this pane exists
                 // to prevent — the producer guarantees why is non-empty when
                 // ok is false, so an empty one here is a wire bug worth seeing.
-                ImGui::TextUnformatted(m.ok ? "" : m.why.c_str());
+                // An undetermined cell carries the attach_why for the same
+                // reason: a hedge with no reason is a hedge nobody can act on.
+                ImGui::TextUnformatted(m.ok && !undetermined ? ""
+                                                             : m.why.c_str());
             }
             ImGui::EndTable();
         }
@@ -231,11 +260,26 @@ void draw_details_pane(InspectState &s) {
         // taken — pi_names_verdict_caveated above already withholds ITS
         // conclusion for exactly this reason; this guard is the same rule
         // applied to the raw counts.
-        const bool code_unmeasured = p.budget_exceeded && p.modules.empty();
+        //
+        // A permission denial on /proc/<pid>/maps is the SECOND way to get
+        // the identical all-zero struct, and the more common one: the
+        // symbol loader and the module scanner both read that file first,
+        // so a target this user does not own yields "0 symbols · 0 modules"
+        // and a confident "will show raw addresses" verdict — measured
+        // against 684 live pids, 4 of them landed in exactly that shape.
+        // Checked FIRST, because "we never got to look" dominates "we ran
+        // out of time looking" when both are true.
+        const char *code_unmeasured =
+            !p.maps_readable
+                ? "symbols / modules / anonymous executable — (/proc/<pid>/"
+                  "maps could not be read, so the code surface was never "
+                  "measured)"
+            : p.budget_exceeded && p.modules.empty()
+                ? "symbols / modules / anonymous executable — (the gather "
+                  "budget ran out before this section was read)"
+                : nullptr;
         if (code_unmeasured) {
-            ImGui::TextDisabled(
-                "symbols / modules / anonymous executable — (the gather "
-                "budget ran out before this section was read)");
+            ImGui::TextDisabled("%s", code_unmeasured);
         } else {
             ImGui::Text("%llu symbols · %zu modules",
                         (unsigned long long)p.syms_total, p.modules.size());
@@ -277,18 +321,44 @@ void draw_details_pane(InspectState &s) {
                 }
                 ImGui::EndTable();
             }
-            if (p.modules_truncated)
+            // "the N highest-symbol modules" is only true when the cut was
+            // the 64-row CAP, which is applied AFTER a full symbol-count
+            // ranking. A budget abort cuts the module-merge loop MID-SCAN
+            // instead: the survivors never reach the ranking, every one of
+            // them still reads 0 symbols, and what is left is whatever
+            // /proc/<pid>/maps happened to list first — address order, which
+            // the qsort then leaves in NAME order among the equal-zero
+            // rows. Claiming those are the highest-symbol modules describes
+            // a ranking that never ran.
+            if (p.modules_truncated && p.budget_exceeded)
+                ImGui::TextDisabled(
+                    "… (%zu modules, cut mid-scan when the gather budget ran "
+                    "out — not ranked, and their symbol counts are unread)",
+                    p.modules.size());
+            else if (p.modules_truncated)
                 ImGui::TextDisabled(
                     "… (showing the %zu highest-symbol modules)",
                     p.modules.size());
         }
     }
     if (ImGui::CollapsingHeader("Containment")) {
-        ImGui::TextUnformatted(p.ns_differs
-                                   ? "in a DIFFERENT namespace than this app — "
-                                     "the pid does not mean what the local "
-                                     "table implies"
-                                   : "same namespaces as this app");
+        // ns_differs is computed from four readlink(/proc/<pid>/ns/*) ids,
+        // each 0 when unreadable — and "0 == 0" is not a match, it is two
+        // absences comparing equal. All four zero therefore reaches the
+        // else arm and asserts "same namespaces as this app" about a
+        // process whose namespaces were never read: verified against a live
+        // `docker run alpine`, which rendered that claim two lines above a
+        // docker-…scope cgroup flatly contradicting it.
+        if (!p.ns_pid && !p.ns_net && !p.ns_mnt && !p.ns_user)
+            ImGui::TextUnformatted(
+                "— (namespace ids unreadable — whether this process shares "
+                "our namespaces is unknown; the cgroup below may say)");
+        else
+            ImGui::TextUnformatted(
+                p.ns_differs ? "in a DIFFERENT namespace than this app — "
+                               "the pid does not mean what the local "
+                               "table implies"
+                             : "same namespaces as this app");
         ImGui::Text("cgroup   %s", p.cgroup.c_str());
         ImGui::Text("seccomp  %s", p.seccomp < 0 ? "unknown"
                                    : p.seccomp == 0 ? "off"
@@ -298,10 +368,23 @@ void draw_details_pane(InspectState &s) {
     if (ImGui::CollapsingHeader("Children")) {
         for (const PiChild &c : p.children)
             ImGui::Text("%ld  %s", c.pid, c.comm.c_str());
-        if (p.children.empty())
+        // "none" is a MEASUREMENT — the whole /proc walk completed and
+        // found no process whose ppid is this one. A truncated walk did not
+        // establish that; it stopped looking. And the cut is not always the
+        // 32-row cap: a budget abort can end the scan before it has found a
+        // single child (this pid's children sit wherever /proc's inode
+        // order puts them), which rendered "none" followed by the frankly
+        // absurd "capped at 0".
+        if (p.children.empty() && !p.children_truncated)
             ImGui::TextDisabled("none");
-        if (p.children_truncated)
-            ImGui::TextDisabled("… (capped at %zu)", p.children.size());
+        else if (p.children.empty())
+            ImGui::TextDisabled(
+                "— (the /proc scan stopped early — this is not 'no "
+                "children')");
+        else if (p.children_truncated)
+            ImGui::TextDisabled("… (%zu shown; the scan stopped early, so "
+                                "there may be more)",
+                                p.children.size());
     }
 }
 

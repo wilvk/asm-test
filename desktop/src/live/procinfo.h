@@ -92,6 +92,16 @@ struct ProcInfo {
 
     uint64_t syms_total = 0, jit_methods = 0, anon_exec_bytes = 0;
     std::string jit_source;
+    // The wire's code.maps_readable: /proc/<pid>/maps opened at all. False
+    // makes every number on the line above an UNMEASURED zero rather than a
+    // measured one -- the symbol loader and the module scanner both read
+    // that file first, so a permission denial yields exactly the same
+    // struct a genuinely code-free process would. Defaults TRUE, not false,
+    // and that is deliberate: a recording written before this flag existed
+    // carries no opinion either way, and stamping "unreadable" on it would
+    // manufacture a refusal nobody measured -- the same failure in the
+    // other direction. Every current producer emits the key.
+    bool maps_readable = true;
 
     std::vector<PiModule> modules;
     bool modules_truncated = false;
