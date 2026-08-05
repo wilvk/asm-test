@@ -18,7 +18,11 @@
 4. **Task 5's ribbon test pinned the wrong token.** Asserting the note lacks "icicle" also rejects the correct replacement, which names the better 2D form as advice. The defect was the CLAIM that a substitute was on screen, so the test pins "instead"/"showing".
 5. **Task 4 introduced `is_prism_write`, which Task 9's Interfaces block assigns to Task 9.** The write rule changes in Task 4, so that is where the shared predicate belongs; Task 9 added only `lane_prism_any`.
 
-**Verified against the real tree while executing:** a `--serve --record` tree capture really does emit `codeimage` (1) alongside `call` (60) — previously only verified by reading `asmspy.c:4031-4040`. A merged `tree` → `trace` → `dataflow` session produced `codeimage 3, call 40, df_step 150, df_edge 200, 11 wide reg writes` in ONE file, opening **three** substrates at once. The trace leg's `coverage` footer did not land (its bounded region-entry wait expired), so the invocation stack is the one substrate not yet demonstrated from a merged file.
+**Verified against the real tree while executing:** a `--serve --record` tree capture really does emit `codeimage` alongside `call` — previously only verified by reading `asmspy.c:4031-4040`.
+
+**A follow-on shipped as `e164d9d1`: the substrate sweep.** Running the modes by hand still leaves the pane showing one substrate, because `shell_sync_live_tab` keeps a single slot on `growing()`-else-`back()` — so "Capture every substrate" runs `tree` → `trace` → `dataflow` back to back into ONE recording, refusing without the session `--record` (each leg would otherwise land in its own Recording) and bounding every leg (an unbounded first leg means the sweep never reaches its second). Measured with the exact parameters `inspect_sweep_poll` sends: `codeimage 3, call 400, trace 8000, coverage 400, df_step 20, 11 wide writes` — **all four substrates from one recording**, 8841 events, clean `end` footer.
+
+**Correction to an earlier claim in this file.** A previous revision said the invocation stack could not be demonstrated from a merged file because "the trace leg's bounded region-entry wait expired". That was wrong. The trace leg had been handed `len=4096` for a routine that is **84 bytes**; `asmspy --syms` resolves the real extent, and with it the leg captures its `trace` events and `coverage` footers every time. Nothing about the entry wait was at fault — and it is why the sweep's region field takes a function NAME, which the host resolves itself.
 
 ---
 
