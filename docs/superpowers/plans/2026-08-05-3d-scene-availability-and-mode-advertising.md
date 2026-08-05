@@ -8,6 +8,18 @@
 
 **Tech Stack:** C11 (`cli/`), C++17 + Dear ImGui 1.91.9b-docking + nlohmann/json (`desktop/`), GNU make, Docker lanes.
 
+**Status — ✅ 9/9 COMPLETE (2026-08-05), `5a89fd23`..`453b800f`.** `make desktop-test`, `make desktop-ui-test` (28/28), `make docker-desktop` (the CI lane) and `make asmtrace-golden-check` (36 recordings byte-identical) all green.
+
+**Five things this plan got wrong, corrected in the tree rather than here, so a reader trusting the snippets below is warned:**
+
+1. **Task 1 under-counted the drift.** The plan predicted five failures; there are seven. `stream` advertised BOTH "Slice" and "Timeline", and it turns out `stream` fills **nothing** — no `by_kind("stream")` consumer exists anywhere in `desktop/src`, and `observer_has_any` does not count them. Its row is now `{}`, and `test_budget` pins WHICH mode may be empty rather than asserting all are non-empty — a stronger contract, not a weakened one.
+2. **Task 1's test broke three `test_shell` assertions the plan did not mention.** `live-panes/*` pins the pane mapping through behaviour, not by function name, so a `grep` for `mode_viz_panes` in `desktop/test/` finds nothing. They encoded the drift and were updated with their reasons.
+3. **Task 5's `grep -rn "maps snapshot" desktop/src/ | wc -l # expect 0` is wrong.** Five hits remain and should: they are design comments in `space/` headers describing what a `Region` can be. Only user-facing strings needed changing.
+4. **Task 5's ribbon test pinned the wrong token.** Asserting the note lacks "icicle" also rejects the correct replacement, which names the better 2D form as advice. The defect was the CLAIM that a substitute was on screen, so the test pins "instead"/"showing".
+5. **Task 4 introduced `is_prism_write`, which Task 9's Interfaces block assigns to Task 9.** The write rule changes in Task 4, so that is where the shared predicate belongs; Task 9 added only `lane_prism_any`.
+
+**Verified against the real tree while executing:** a `--serve --record` tree capture really does emit `codeimage` (1) alongside `call` (60) — previously only verified by reading `asmspy.c:4031-4040`. A merged `tree` → `trace` → `dataflow` session produced `codeimage 3, call 40, df_step 150, df_edge 200, 11 wide reg writes` in ONE file, opening **three** substrates at once. The trace leg's `coverage` footer did not land (its bounded region-entry wait expired), so the invocation stack is the one substrate not yet demonstrated from a merged file.
+
 ---
 
 ## The measurement this plan rests on
