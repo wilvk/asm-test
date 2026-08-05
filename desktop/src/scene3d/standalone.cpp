@@ -632,7 +632,7 @@ uint32_t lane_width_for(const std::string &disasm, const std::string &guest) {
 std::vector<uint32_t> lane_prism_registers(const DataflowStream &df) {
     std::set<uint32_t> regs;
     for (const ValRec &v : df.recs)
-        if (v.wide && v.space == "reg")
+        if (is_prism_write(v))
             regs.insert(v.reg);
     return std::vector<uint32_t>(regs.begin(), regs.end());
 }
@@ -643,7 +643,7 @@ LanePrismScene build_lane_prism(const DataflowStream &df, uint32_t reg_id,
     s.reg_id = reg_id;
     bool any_default = false;
     for (const ValRec &v : df.recs) {
-        if (!v.wide || v.space != "reg" || v.reg != reg_id)
+        if (!is_prism_write(v) || v.reg != reg_id)
             continue;
         PrismWrite w;
         w.step = v.step;

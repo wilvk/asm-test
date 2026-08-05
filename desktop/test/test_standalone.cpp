@@ -644,6 +644,47 @@ int main() {
               "an available kind carries no refusal text");
     }
 
+    // ---- T5: Z counts WRITES (scene_kind.h) ---------------------------------
+    //
+    // The x86-64 producer captures wide values for READ operands too, so an
+    // unfiltered walk stacks the pre-state read under the post-state write for
+    // ONE step, and offers registers that were only ever read as selectable
+    // subjects. The axis says "stacked writes, oldest nearest" and "Z counts
+    // recorded writes"; the filter has to keep that promise.
+    {
+        DataflowStream df;
+        auto wide_rec = [](uint32_t step, uint32_t reg, bool write) {
+            ValRec v;
+            v.step = step;
+            v.space = "reg";
+            v.reg = reg;
+            v.size = 16;
+            v.wide = true;
+            v.write = write;
+            v.value_valid = true;
+            v.bytes.assign(16, 0u);
+            return v;
+        };
+        // one `paddd xmm0, xmm1`: read xmm0, read xmm1, write xmm0
+        df.recs.push_back(wide_rec(0, 100, false));
+        df.recs.push_back(wide_rec(0, 101, false));
+        df.recs.push_back(wide_rec(0, 100, true));
+
+        const std::vector<uint32_t> regs = lane_prism_registers(df);
+        check("T5/writes: only written registers are subjects",
+              regs.size() == 1 && regs[0] == 100,
+              "a register that was only READ is not a prism subject — Z counts "
+              "writes; got " + std::to_string(regs.size()) + " register(s)");
+
+        const LanePrismScene s = build_lane_prism(df, 100, "x86_64");
+        check("T5/writes: one Z level per write", s.writes.size() == 1,
+              "one step wrote xmm0 once, so there is ONE Z level; stacking the "
+              "read under it draws two levels for one write");
+        check("T5/writes: the survivor is the write",
+              s.writes.empty() || s.writes[0].step == 0,
+              "the surviving record must be the write, not the read");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d standalone-scene check(s) failed\n", failures);
         return 1;

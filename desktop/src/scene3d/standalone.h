@@ -335,6 +335,18 @@ struct LanePrismScene {
 // Which wide registers this pass wrote, ascending by Capstone id — the
 // selector's options. A prism is of ONE register; a scene that mixed two
 // would put two meanings on one X axis.
+// Is one ValRec a prism WRITE? The single rule, shared by the option list and
+// the scene builder so the two can never disagree about which records the Z
+// axis counts. `write` is load-bearing: the x86-64 producer captures wide
+// values for READ operands too (df_on_code calls df_capture_reg_value on every
+// register read), so without it one `paddd xmm0, xmm1` stacks the pre-state
+// read under the post-state write as two Z levels for a single write, and
+// offers xmm1 — never written — as a selectable subject. scene_kind.h states
+// the axis as "stacked writes, oldest nearest ... Z counts recorded writes".
+inline bool is_prism_write(const ValRec &v) {
+    return v.wide && v.write && v.space == "reg";
+}
+
 std::vector<uint32_t> lane_prism_registers(const DataflowStream &df);
 // `guest` is the recording's arch ("x86" / "arm64"), passed to
 // space::mnemonic_class for the ambiguity gate. An unknown guest simply never
