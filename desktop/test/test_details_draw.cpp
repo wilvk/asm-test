@@ -64,6 +64,24 @@ static void avoid(const char *what, const std::string &hay, const char *needle) 
     check(what, hay.find(needle) == std::string::npos,
           std::string("did NOT expect to find '") + needle + "' in:\n" + hay);
 }
+static size_t count_of(const std::string &hay, const std::string &needle) {
+    size_t n = 0;
+    for (size_t at = hay.find(needle); at != std::string::npos;
+         at = hay.find(needle, at + needle.size()))
+        ++n;
+    return n;
+}
+// Presence is not enough when the SAME string is legitimately rendered
+// somewhere else in the pane -- an attach_why that also fills every mode's
+// why-not cell is exactly that case, and a presence check there is satisfied
+// by the line ABOVE the table while the cells are all blank. Count instead.
+static void want_at_least(const char *what, const std::string &hay,
+                          const std::string &needle, size_t least) {
+    size_t got = count_of(hay, needle);
+    check(what, got >= least,
+          "expected '" + needle + "' at least " + std::to_string(least) +
+              " times, found " + std::to_string(got) + " in:\n" + hay);
+}
 
 static ProcInfo load_fixture(const char *name) {
     std::ifstream f(std::string(ASMTEST_FIXTURE_DIR) + "/" + name);
@@ -349,8 +367,41 @@ int main() {
         want("no-selection hint shown", out, "pick a process");
         avoid("no-selection hides a lingering valid snapshot's comm", out,
               "zsh");
+        // Derived from the fixture, never hardcoded: these fixtures are
+        // REGENERATED from the live producer whenever the wire changes (this
+        // wave regenerated both, because they still carried a body the fixed
+        // producer can no longer emit), and a literal pid turns every
+        // regeneration into an unrelated test edit.
+        const std::string pid_line =
+            "pid " + std::to_string(s.details.shown.pid);
         avoid("no-selection hides a lingering valid snapshot's pid line", out,
-              "pid 2346208");
+              pid_line.c_str());
+    }
+
+    // --- 1b. the Connect pane's asmspy path reaches the runner -----------
+    // InspectState::asmspy_path is fed from Settings (main.cpp) and edited in
+    // both Connect panes (shell.cpp / inspect_door.cpp); ProcInfoRunner::
+    // asmspy_path is what spawn() actually execs. Nothing outside the tests
+    // connected the two, so the runner always fell through to
+    // resolve_asmspy_path() and its own failure remedy -- "or set the path in
+    // Connect" -- named a control that did not feed it. A whitebox check on
+    // the copy, because the observable effect (a different binary being
+    // exec'd) needs a live fork this draw test does not do. Deliberately on
+    // the selected_pid <= 0 path: the copy must happen BEFORE the early
+    // return, since procinfo_tick's own path-change backoff reset reads it on
+    // the very next line.
+    {
+        InspectState s;
+        s.selected_pid = 0;
+        std::strncpy(s.asmspy_path, "/opt/custom/bin/asmspy",
+                     sizeof(s.asmspy_path) - 1);
+        render(s, io);
+        check("the Connect asmspy path is copied into the details runner",
+              s.details.asmspy_path == "/opt/custom/bin/asmspy",
+              "runner asmspy_path = '" + s.details.asmspy_path +
+                  "' -- the pane must assign InspectState::asmspy_path into "
+                  "the runner, or Connect's field (and the remedy naming it) "
+                  "feed nothing");
     }
 
     // --- 2. a full snapshot, injected straight into the runner ----------
@@ -361,7 +412,8 @@ int main() {
               "procinfo_full.asmtrace failed to parse");
         settle(s, 4242, full);
         std::string out = render(s, io);
-        want("header renders the real pid", out, "pid 2346208");
+        const std::string pid_line = "pid " + std::to_string(full.pid);
+        want("header renders the real pid", out, pid_line.c_str());
         want("header renders comm", out, "zsh");
         avoid("no budget banner on an unexceeded gather", out,
               "gather budget ran out");
@@ -380,9 +432,52 @@ int main() {
         want("mode cell renders maybe under an undetermined attach", out,
              "maybe");
         avoid("an undetermined mode never renders a confident yes", out, "yes");
-        want("an undetermined mode carries the attach reason, not a blank "
-             "why-not cell",
-             out, "yama ptrace_scope");
+        // Presence alone CANNOT see this cell: under attachable == -1 the
+        // producer copies attach_why verbatim into every mode's why, so the
+        // identical string is already on the verdict line above the table
+        // and a find() is satisfied with all nine cells blank (measured:
+        // reverting the cell to `m.ok ? "" : m.why` left the whole suite
+        // green). Count instead -- once for the verdict line, plus once per
+        // mode row.
+        want_at_least("an undetermined mode carries the attach reason in its "
+                      "OWN why-not cell, not only on the verdict line above",
+                      out, "yama ptrace_scope", full.modes.size() + 1);
+    }
+
+    // --- 2b. the why-not cell renders the MODE's own why field ------------
+    // `trace.why` and `modes[].why` are two separate wire fields, and the
+    // cell must render the second. Against a real -1 body they hold the same
+    // string (the producer copies one into the other), which is why the
+    // count check above is the only thing that can see the cell there; here
+    // they are made to differ so a single presence check names the field
+    // directly. The schema permits any string in a mode's why -- and a
+    // 90-char-truncated copy is already a different string whenever
+    // attach_why is longer than that -- so this is a shape the wire allows,
+    // not one it forbids.
+    {
+        InspectState s;
+        ProcInfo p;
+        p.valid = true;
+        p.pid = 8300;
+        p.comm = "undetermined";
+        p.state = 'S';
+        p.runtime = "native";
+        p.attachable = -1;
+        p.attach_why = "yama ptrace_scope=1 — only a descendant";
+        {
+            PiMode m;
+            m.mode = "log";
+            m.ok = true; // clears its own gates; the ATTACH is what is unknown
+            m.why = "the attach itself is undetermined for this engine";
+            p.modes.push_back(m);
+        }
+        settle(s, 8300, p);
+        std::string out = render(s, io);
+        want("the why-not cell renders the MODE's own why, not a re-print of "
+             "trace.why",
+             out, "undetermined for this engine");
+        want("the verdict line still renders trace.why", out,
+             "only a descendant");
     }
 
     // --- 3. the refusal fixture ------------------------------------------

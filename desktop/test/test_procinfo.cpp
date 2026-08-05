@@ -920,14 +920,20 @@ int main() {
         // it should be nowhere near what a 32-byte-triggered flood grew to.
         check("the buffer's capacity is released after an over-cap trip, "
               "not just its logical size",
-              // 1024, not 4096: procinfo_full.asmtrace (what the fake
-              // asmspy echoes) is 4081 bytes, so a 4096 threshold passed
-              // whether or not the allocation was ever released -- a check
-              // that could not fail against the very bug it names. The cap
-              // under test here is 32 bytes and the drain path SWAPS the
-              // string rather than clear()ing it, so a correct runner
-              // leaves a capacity in the tens of bytes; the broken one
-              // leaves whatever the flood grew to.
+              // 1024, not 4096. The threshold must sit far below the
+              // FIXTURE's size, not just below it: procinfo_full.asmtrace
+              // (what the fake asmspy echoes) is ~4 KB, so the buggy
+              // capacity lands within a few dozen bytes of 4096 and which
+              // side it falls on is decided by the fixture, not by the bug.
+              // Measured all three ways: at 4081 bytes (the size before this
+              // wave) the bug PASSED a `< 4096` check -- a test that could
+              // not fail against the very thing it names; at 4102 (the same
+              // fixture hand-patched with one more key) it failed by six
+              // bytes; regenerated, it is back under. The cap under test
+              // here is 32 bytes and the drain path SWAPS the string rather
+              // than clear()ing it, so a correct runner leaves a capacity in
+              // the tens of bytes -- 1024 states that property instead of
+              // grazing the payload size.
               run.buf.capacity() < 1024,
               "buf.capacity()=" + std::to_string(run.buf.capacity()) +
                   " -- clear() without releasing the allocation pins it");
