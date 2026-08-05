@@ -148,6 +148,37 @@ std::vector<const char *> mode_visualizations(LiveMode m) {
     return {};
 }
 
+const std::vector<LiveMode> &sweep_legs() {
+    static const std::vector<LiveMode> v = {LiveMode::Tree, LiveMode::Trace,
+                                            LiveMode::Dataflow};
+    return v;
+}
+
+std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
+                          bool have_region, bool already_sweeping,
+                          bool jack_held) {
+    if (!host_started)
+        return "connect to a serve host first — a sweep drives the same "
+               "protocol the patch bay does";
+    if (!have_pid)
+        return "select a process first: a sweep captures one target";
+    if (!recording)
+        return "turn on \"record the whole session to one file\" in Connect: "
+               "each leg is its own Recording and the live tab shows one, so "
+               "only that file carries them together — which is what lets the "
+               "3D pane offer more than one substrate";
+    if (!have_region)
+        return "name a region (a function name, or base+len): the trace and "
+               "dataflow legs single-step ONE region, and the serve host "
+               "refuses them without it";
+    if (already_sweeping)
+        return "a sweep is already running";
+    if (jack_held)
+        return "stop the running capture first — the target has one ptrace "
+               "jack and a sweep needs it for each leg in turn";
+    return "";
+}
+
 bool mode_uses_ptrace(LiveMode m) { return row_for(m)->ptrace; }
 
 bool mode_needs_region(LiveMode m) {

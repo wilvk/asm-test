@@ -107,6 +107,37 @@ bool mode_arm64_blocking_hazard(LiveMode m, const std::string &arch);
 // choice over the resolved capability model, so test_budget pins it.
 LiveMode budget_least_perturbing(bool sample_available);
 
+// --- the substrate sweep (59 T1) --------------------------------------------
+//
+// Each of the 3D pane's substrates comes from a DIFFERENT engine, and the serve
+// host runs one engine at a time, so no single capture can fill more than one:
+//
+//   tree      -> the module excursion ribbon (`call` events)
+//   trace     -> the invocation stack (`trace` + a `coverage` block set)
+//   dataflow  -> the SIMD lane prism (wide `df_step.ops` register writes)
+//
+// The address plane rides along — all three arm a `codeimage`.
+//
+// The DIVERGENCE worldline is deliberately absent and cannot be added. It
+// compares two RECORDINGS, so no sequence of captures within one session can
+// produce it; run a sweep twice and attach the second file as B.
+//
+// Pure, and here rather than in the ImGui door, for the same reason the budget
+// table is: the part that can be WRONG is the rule, and a rule verified only
+// against a live target would be verified almost nowhere.
+const std::vector<LiveMode> &sweep_legs();
+
+// Why a sweep cannot start, given the facts the door holds; "" when it can.
+// Every reason names the thing to fix rather than a bare refusal.
+//
+// `recording` is the load-bearing one. The desktop's live tab shows exactly ONE
+// Recording, so without a session-level `--record` each leg lands in its own
+// Recording and the pane can still only show one substrate — the sweep would
+// cost three captures and change nothing.
+std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
+                          bool have_region, bool already_sweeping,
+                          bool jack_held);
+
 struct BudgetDecision {
     bool allowed = true;
     // Set when !allowed: the mode already holding the jack, and prose naming

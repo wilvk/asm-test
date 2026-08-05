@@ -427,6 +427,98 @@ int main(void) {
         }
     }
 
+    // ---- the substrate sweep (59 T1) ---------------------------------------
+    //
+    // Each 3D substrate comes from a different engine and the host runs ONE at
+    // a time, so no single capture fills more than one. The sweep runs them
+    // back to back — and is only worth running into a session recording,
+    // because the desktop's live tab shows exactly one Recording.
+    {
+        const std::vector<LiveMode> &legs = sweep_legs();
+        check("sweep/legs-count", legs.size() == 3,
+              "one leg per substrate a LIVE capture can fill (tree, trace, "
+              "dataflow); got " + std::to_string(legs.size()));
+        bool tree = false, trace = false, df = false, diverge = false;
+        for (LiveMode m : legs) {
+            const std::string n = mode_name(m);
+            tree = tree || n == "tree";
+            trace = trace || n == "trace";
+            df = df || n == "dataflow";
+        }
+        check("sweep/legs-are-the-three-engines", tree && trace && df,
+              "the ribbon needs `call` (tree), the invocation stack needs a "
+              "`coverage` block set (trace), the prism needs wide register "
+              "writes (dataflow) — three engines, three legs");
+        (void)diverge;
+
+        // EVERY leg must arm a codeimage, or the address plane never places and
+        // the pane the sweep exists for cannot host the scene it captured.
+        for (LiveMode m : legs) {
+            bool has3d = false;
+            for (const char *v : mode_visualizations(m))
+                has3d = has3d || std::string(v) == "3D overview";
+            check("sweep/every-leg-places-the-plane", has3d,
+                  std::string("leg `") + mode_name(m) +
+                      "` does not fill the 3D overview, so it cannot belong to "
+                      "a sweep whose whole point is that pane");
+        }
+
+        // Every leg is a ptrace mode, which is exactly why they must run in
+        // SEQUENCE — the one-jack rule forbids running them together.
+        for (LiveMode m : legs)
+            check("sweep/legs-need-the-jack", mode_uses_ptrace(m),
+                  std::string("leg `") + mode_name(m) +
+                      "` does not hold the ptrace jack, so a sweep would not "
+                      "need to serialise it");
+    }
+    {
+        // The refusals, in the order an operator hits them.
+        check("sweep/blocked-no-host",
+              sweep_blocked(false, false, false, false, false, false)
+                      .find("connect") != std::string::npos,
+              "with no host the reason must say to connect");
+        check("sweep/blocked-no-pid",
+              sweep_blocked(true, false, false, false, false, false)
+                      .find("process") != std::string::npos,
+              "with no pid the reason must say to select one");
+        // THE load-bearing refusal: without --record each leg lands in its own
+        // Recording and the live tab shows one, so a sweep would cost three
+        // captures and change nothing the pane can show.
+        check("sweep/blocked-no-recording",
+              sweep_blocked(true, true, false, false, false, false)
+                      .find("record the whole session") != std::string::npos,
+              "a sweep without a session recording gains NOTHING — the reason "
+              "must say so, and say where to turn it on");
+        check("sweep/blocked-no-region",
+              sweep_blocked(true, true, true, false, false, false)
+                      .find("region") != std::string::npos,
+              "the trace and dataflow legs single-step ONE region");
+        check("sweep/blocked-jack-held",
+              sweep_blocked(true, true, true, true, false, true)
+                      .find("ptrace jack") != std::string::npos,
+              "a sweep may not bypass the one-jack rule");
+        check("sweep/blocked-already",
+              !sweep_blocked(true, true, true, true, true, false).empty(),
+              "a second sweep must not start on top of a running one");
+        check("sweep/ready",
+              sweep_blocked(true, true, true, true, false, false).empty(),
+              "host + pid + recording + region, jack free, no sweep running is "
+              "everything a sweep needs");
+        // No refusal may be blank — the same D7 rule the rest of this file pins.
+        const std::string all[] = {
+            sweep_blocked(false, false, false, false, false, false),
+            sweep_blocked(true, false, false, false, false, false),
+            sweep_blocked(true, true, false, false, false, false),
+            sweep_blocked(true, true, true, false, false, false),
+            sweep_blocked(true, true, true, true, true, false),
+            sweep_blocked(true, true, true, true, false, true),
+        };
+        for (const std::string &r : all)
+            check("sweep/every-refusal-names-a-fix", r.size() > 20,
+                  "a refusal must name the thing to fix, never a bare "
+                  "'unavailable': got \"" + r + "\"");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_budget: %d FAILURE(S)\n", failures);
         return 1;

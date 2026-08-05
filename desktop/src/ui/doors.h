@@ -279,6 +279,21 @@ struct InspectState {
     // serve loop refuses a second concurrent start too, but the budget is
     // decided HERE so the UI can render an occupied jack and offer a swap
     // rather than firing a command that comes back as an error.
+    // --- substrate sweep (59 T1) --------------------------------------------
+    // One capture per 3D substrate, back to back, into ONE recording. The live
+    // tab shows exactly one Recording (shell_sync_live_tab keeps a single slot
+    // pointing at growing()-else-back()), so a sweep is only worth running with
+    // `record_session` on: without it each leg lands in its own Recording and
+    // the pane can still show only one substrate at a time.
+    //
+    // Each leg is BOUNDED by sweep_max. A hand-driven capture runs until the
+    // operator stops it, which is right for a person and fatal for a sequence —
+    // an unbounded first leg would mean the sweep never reaches its second.
+    size_t sweep_at = 0;
+    bool sweep_running = false;
+    std::string sweep_note;
+    long sweep_max = 400;
+
     std::vector<LiveMode> active;
     // 39 T5: the count of terminal `session` events already reconciled against
     // `active`. A capture that ends on its OWN (one-shot `auto`, hit `max`, target
@@ -418,6 +433,38 @@ void inspect_arm_queue(InspectState &s);
 // register ring is armed on a dataflow/auto capture; empty for the whole-process
 // modes. Pure over InspectState; test_shell drives it.
 nlohmann::json inspect_start_params(const InspectState &s);
+
+// --- substrate sweep (59 T1) ------------------------------------------------
+//
+// The legs a sweep runs, in order — one per 3D substrate a LIVE capture can
+// fill, because each comes from a different engine and the serve host runs one
+// engine at a time:
+//
+//   tree      -> the module excursion ribbon (`call` events)
+//   trace     -> the invocation stack (`trace` + a `coverage` block set)
+//   dataflow  -> the SIMD lane prism (wide `df_step.ops` register writes)
+//
+// The address plane rides along: all three arm a `codeimage`.
+//
+// The DIVERGENCE worldline is deliberately absent and cannot be added here. It
+// compares two RECORDINGS, so no sequence of captures inside one session can
+// produce it — run a sweep twice and attach the second file as B (`d`).
+const std::vector<LiveMode> &inspect_sweep_legs();
+
+// Why a sweep cannot start right now; "" when it can. Each reason names the
+// thing to fix, never a bare "unavailable".
+std::string inspect_sweep_blocked(const InspectState &s);
+
+// Begin a sweep (no-op when inspect_sweep_blocked is non-empty), and abandon
+// one. Cancelling leaves any running leg alone: stopping a capture is the Stop
+// button's job, and silently killing one from here would lose its events.
+void inspect_sweep_start(InspectState &s);
+void inspect_sweep_cancel(InspectState &s);
+
+// Per-frame: arm the next leg once the jack is free. Returns true if it started
+// one. Rides the SAME one-ptrace-jack rule the Queue does (budget_queue_ready),
+// so a sweep can never bypass the budget.
+bool inspect_sweep_poll(InspectState &s);
 
 // Apply the per-mode default for `continuous` (see InspectState::continuous):
 // ON for `auto`, off for every other mode. Applied once per entry into a mode —

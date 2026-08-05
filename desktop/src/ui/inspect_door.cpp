@@ -245,6 +245,75 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     return params;
 }
 
+const std::vector<LiveMode> &inspect_sweep_legs() { return sweep_legs(); }
+
+// The InspectState-shaped view of the pure rule in live/budget.h. Kept a thin
+// forward on purpose: the decision is what can be wrong, and it is tested there
+// against no live target at all.
+std::string inspect_sweep_blocked(const InspectState &s) {
+    return sweep_blocked(s.host_started, s.selected_pid > 0,
+                         s.record_session && s.record_path[0] != '\0',
+                         s.region[0] != '\0', s.sweep_running,
+                         !s.active.empty());
+}
+
+void inspect_sweep_start(InspectState &s) {
+    if (!inspect_sweep_blocked(s).empty())
+        return;
+    s.sweep_at = 0;
+    s.sweep_running = true;
+    s.sweep_note = "sweep armed";
+}
+
+void inspect_sweep_cancel(InspectState &s) {
+    // Deliberately does NOT stop a running leg: that is the Stop button's job,
+    // and killing a capture from here would discard events the operator never
+    // asked to lose. This only stops the sweep from arming the NEXT one.
+    s.sweep_running = false;
+    s.sweep_at = 0;
+    s.sweep_note = "sweep cancelled — the running leg (if any) was left alone";
+}
+
+bool inspect_sweep_poll(InspectState &s) {
+    if (!s.sweep_running)
+        return false;
+    const std::vector<LiveMode> &legs = inspect_sweep_legs();
+    if (s.sweep_at >= legs.size()) {
+        s.sweep_running = false;
+        s.sweep_note =
+            "sweep complete — every leg captured. Disconnect, then File > Open "
+            "the recorded file: that ONE recording carries the call tree, the "
+            "region trace and the wide register writes together, so the 3D "
+            "pane offers the address plane, the invocation stack, the module "
+            "excursion ribbon and the SIMD lane prism. The divergence "
+            "worldline needs a SECOND recording — sweep again and attach it "
+            "with `d`.";
+        return false;
+    }
+    const LiveMode leg = legs[s.sweep_at];
+    // The SAME jack rule the Queue obeys — a sweep may never bypass the budget.
+    if (s.awaiting_started || !budget_queue_ready(leg, s.active))
+        return false;
+
+    // `want` is what inspect_start_params reads, so set it before building.
+    s.want = leg;
+    inspect_apply_continuous_default(s);
+    // A sweep must not re-arm: a continuous leg never ends on its own, so the
+    // sweep would stall on it forever.
+    s.continuous = false;
+    nlohmann::json params = inspect_start_params(s);
+    // BOUNDED. A hand-driven capture runs until the operator stops it; a
+    // sequence cannot, or its first leg is also its last.
+    params["max"] = s.sweep_max;
+    s.session.send_start(mode_name(leg), s.selected_pid, params);
+    s.active.push_back(leg);
+    s.awaiting_started = true;
+    s.sweep_at++;
+    s.sweep_note = "sweep: leg " + std::to_string(s.sweep_at) + "/" +
+                   std::to_string(legs.size()) + " (" + mode_name(leg) + ")";
+    return true;
+}
+
 // `continuous` defaults PER MODE: on for `auto`, off for everything else. An
 // `auto` capture finds its own region from a sample window, so one invocation of
 // it is usually over before the operator has looked at anything — "keep watching
@@ -670,6 +739,11 @@ void draw_patch_bay(InspectState &s) {
         s.has_queued = false;
     }
 
+    // 59 T1: the substrate sweep, polled on the same freed jack and after the
+    // Queue — an explicitly queued want is the operator's own next choice and
+    // outranks an automated sequence.
+    inspect_sweep_poll(s);
+
     BudgetDecision d = budget_can_start(s.want, s.active);
     // BUDGET BLOCK (F23): "BLOCKED — jack held by <session> on <target>" — a
     // FACT, read BLOCKED not "paused", so it never reads as the operator pause.
@@ -737,6 +811,35 @@ void draw_patch_bay(InspectState &s) {
         ImGui::TextColored(kMaybe,
                            "PAUSED (you) — emission is suspended (tracing is "
                            "not); the only recovery is Resume.");
+
+    // 59 T1: the substrate sweep. Each 3D substrate comes from a DIFFERENT
+    // engine and the host runs one at a time, so no single capture can fill
+    // more than one. This runs them back to back into one recording.
+    ImGui::Separator();
+    {
+        const std::string why = inspect_sweep_blocked(s);
+        ImGui::BeginDisabled(!why.empty());
+        if (ImGui::Button("Capture every substrate"))
+            inspect_sweep_start(s);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (s.sweep_running) {
+            if (ImGui::Button("Cancel sweep"))
+                inspect_sweep_cancel(s);
+        } else {
+            ImGui::TextDisabled("tree -> trace -> dataflow, %ld events each",
+                                s.sweep_max);
+        }
+        if (!why.empty())
+            ImGui::TextDisabled("%s", why.c_str());
+        if (!s.sweep_note.empty())
+            ImGui::TextColored(s.sweep_running ? kMaybe : kGood, "%s",
+                               s.sweep_note.c_str());
+        ImGui::TextDisabled(
+            "The divergence worldline is not among them: it compares two "
+            "RECORDINGS, so no capture sequence can produce it. Sweep twice "
+            "and attach the second file as B (`d`).");
+    }
 
     // The arm64 kill confirm (T5), now the ONLY pre-commit gate: it fires just for
     // the case that can silently TERMINATE the target (a single-stepped thread in
