@@ -279,6 +279,18 @@ void shell_sync_live_tab(ShellState &s) {
         scene3d::Camera cam = s.scenes[i].cam;
         scene3d::HudState hud = s.scenes[i].hud;
         dt_primer_state primer = s.scenes[i].primer;
+        // 59 T1: the chosen SUBSTRATE and its per-kind cameras, on the same
+        // rule. Keeping `cam` while dropping `kind` is worse than dropping
+        // both — the pane snaps back to the address plane WEARING the
+        // abandoned substrate's orbit. Carrying `hud` cannot help: the pane
+        // overwrites hud.kind from sv.kind on the next frame. Moved rather
+        // than copied so the vectors are not reallocated on every batch.
+        const scene3d::SceneKind kind = s.scenes[i].kind;
+        const uint32_t prism_reg = s.scenes[i].prism_reg;
+        std::vector<scene3d::Camera> kind_cam =
+            std::move(s.scenes[i].kind_cam);
+        std::vector<char> kind_cam_inited =
+            std::move(s.scenes[i].kind_cam_inited);
         // 61 T9: and the layout digest. CARRYING IT IS THE NOTICE'S HINGE —
         // drop it and the fingerprint resets with everything else, prev.valid
         // is false on every batch, and the reflow notice can never fire. A
@@ -307,6 +319,12 @@ void shell_sync_live_tab(ShellState &s) {
         s.scenes[i].primer = primer;
         s.scenes[i].layout_fp = layout_fp;
         s.scenes[i].layout_fp_capture = layout_fp_capture;
+        s.scenes[i].kind = kind;
+        s.scenes[i].hud.kind = kind; // the pane re-syncs this, but not before
+                                     // a frame could read the stale value
+        s.scenes[i].prism_reg = prism_reg;
+        s.scenes[i].kind_cam = std::move(kind_cam);
+        s.scenes[i].kind_cam_inited = std::move(kind_cam_inited);
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;

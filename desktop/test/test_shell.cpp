@@ -1902,6 +1902,40 @@ int main() {
         shell_sync_live_tab(ls);
         check("25t6/camera preserved", ls.scenes[i].cam.yaw == 2.5f,
               "a live 3D re-weave must keep the camera, not reset the orbit");
+        // 59 T1: the SUBSTRATE and its per-kind cameras ride the same
+        // preserve-list, and for the same reason. Keeping `cam` while dropping
+        // `kind` is worse than dropping both: the pane snaps back to the
+        // address plane WEARING the abandoned substrate's orbit. `hud.kind` is
+        // carried but cannot help — draw_scene_overview overwrites it from
+        // sv.kind on the next frame.
+        ls.scenes[i].kind = scene3d::SceneKind::ModuleRibbon;
+        ls.scenes[i].prism_reg = 101;
+        ls.scenes[i].kind_cam.assign(scene3d::all_scene_kinds().size(),
+                                     scene3d::Camera{});
+        ls.scenes[i].kind_cam_inited.assign(scene3d::all_scene_kinds().size(),
+                                            0);
+        const size_t rib =
+            scene_kind_index(scene3d::SceneKind::ModuleRibbon);
+        ls.scenes[i].kind_cam[rib].yaw = 1.25f;
+        ls.scenes[i].kind_cam_inited[rib] = 1;
+        sess.feed_line(
+            R"({"k":"df_step","step":9,"off":0,"disasm":"nop","ops":[]})");
+        shell_sync_live_tab(ls);
+        check("25t6/substrate preserved",
+              ls.scenes[i].kind == scene3d::SceneKind::ModuleRibbon,
+              "a live event batch reset the chosen substrate to the address "
+              "plane — the user's scene selection is per-VIEW state, exactly "
+              "like the camera beside it");
+        check("25t6/per-kind cameras preserved",
+              rib < ls.scenes[i].kind_cam.size() &&
+                  ls.scenes[i].kind_cam[rib].yaw == 1.25f &&
+                  rib < ls.scenes[i].kind_cam_inited.size() &&
+                  ls.scenes[i].kind_cam_inited[rib] == 1,
+              "the per-substrate cameras were destroyed, so switching back to "
+              "a substrate would re-seed its default framing");
+        check("25t6/prism register preserved", ls.scenes[i].prism_reg == 101,
+              "the lane prism's selected register is per-VIEW state too — "
+              "resetting it silently re-picks a different register");
         // 61 T9: the layout fingerprint must survive the SAME reset, for the
         // same reason and by the same mechanism. If it does not, every batch
         // compares against an invalid fingerprint, the reflow notice can never
