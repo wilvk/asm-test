@@ -39,6 +39,7 @@
  * below). asmspy_procinfo itself is never expected to attach, which is the
  * entire point of the feature.
  */
+#include <dirent.h> /* the maps-unreadable premise scans /proc itself */
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -1004,6 +1005,152 @@ int main(void) {
         }
     }
 
+    /* --- an unreadable /proc/<pid>/maps is FLAGGED, not zeroed ---------
+     * Every code-surface number (syms_total, n_modules, anon_exec_bytes) is
+     * derived from that one file, so a permission denial yields exactly the
+     * struct a genuinely code-free process would — and downstream that
+     * rendered as "0 symbols · 0 modules" with a confident "will show raw
+     * addresses" verdict. The premise is verified BY CONSTRUCTION, like the
+     * never-attach premise above: we look for a pid whose maps WE cannot
+     * open, and only then assert what asmspy_procinfo says about it. Running
+     * as root (make docker-cli does) there is no such pid, and the check is
+     * skipped LOUDLY rather than passing vacuously. */
+    {
+        check("self reread (for the maps-readability check)",
+              asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+        check("our own maps is readable and says so", pi->maps_readable != 0,
+              "maps_readable should be true for our own process");
+
+        DIR *pd = opendir("/proc");
+        long denied = 0;
+        if (pd) {
+            struct dirent *pe;
+            while ((pe = readdir(pd)) && !denied) {
+                char mp[64];
+                if (pe->d_name[0] < '0' || pe->d_name[0] > '9')
+                    continue;
+                snprintf(mp, sizeof mp, "/proc/%.15s/maps", pe->d_name);
+                FILE *mf = fopen(mp, "r");
+                if (mf)
+                    fclose(mf);
+                else if (errno == EACCES || errno == EPERM)
+                    denied = atol(pe->d_name);
+            }
+            closedir(pd);
+        }
+        if (!denied) {
+            fprintf(stderr,
+                    "SKIP maps-unreadable: no pid on this host has a maps we "
+                    "cannot open (running as root, or CAP_SYS_PTRACE) — the "
+                    "unreadable branch is skipped rather than asserted "
+                    "vacuously.\n");
+        } else if (asmspy_procinfo((pid_t)denied, pi) == 0) {
+            check("an unreadable maps is reported as unreadable",
+                  pi->maps_readable == 0,
+                  "maps_readable should be false for a pid whose "
+                  "/proc/<pid>/maps we just failed to open ourselves");
+            check("an unreadable maps leaves the code surface at zero — "
+                  "which is exactly why the flag has to exist",
+                  pi->syms_total == 0 && pi->n_modules == 0,
+                  "a maps we cannot open somehow yielded symbols/modules");
+        }
+    }
+
+    /* --- a ZOMBIE is never attachable ----------------------------------
+     * PTRACE_ATTACH on a task in exit_state is unconditionally -EPERM, so
+     * "attach YES" with nine green modes is the most confident possible
+     * statement of the one thing that cannot happen. Constructed rather
+     * than found: fork a child that exits immediately and do NOT reap it. */
+    {
+        pid_t z = fork();
+        if (z == 0)
+            _exit(0);
+        if (z < 0) {
+            check("fork for the zombie check", 0, strerror(errno));
+        } else {
+            /* Wait for it to actually become defunct — a fork that has not
+             * been scheduled yet is still 'R'. */
+            for (int i = 0; i < 500; i++) {
+                if (asmspy_procinfo(z, pi) == 0 && pi->state == 'Z')
+                    break;
+                usleep(1000);
+            }
+            check("the zombie fixture actually reached state Z",
+                  pi->state == 'Z',
+                  "the forked child never became defunct — the check below "
+                  "would be about the wrong thing");
+            if (pi->state == 'Z') {
+                check("a zombie is NOT attachable", pi->attachable == 0,
+                      "PTRACE_ATTACH on a task in exit_state is always "
+                      "-EPERM, so attachable must be 0");
+                check("a zombie's why names the reason",
+                      strstr(pi->attach_why, "zombie") != NULL, pi->attach_why);
+                int any_ok = 0;
+                for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
+                    if (pi->mode_ok[m])
+                        any_ok = 1;
+                check("every mode is refused on a zombie", !any_ok,
+                      "a mode reported runnable against a defunct task");
+            }
+            waitpid(z, NULL, 0);
+        }
+    }
+
+    /* --- a budget-cut fd walk and children scan STATE their shortfall ---
+     * Both are readdir loops over a directory whose size the TARGET
+     * chooses: /proc/<pid>/fd measured 1017 ms at 1M open fds — four times
+     * the whole 250 ms budget — and the /proc walk behind `children` is
+     * system-wide. Neither said anything when cut, so a truncated fd count
+     * rendered as a measured number and a cut-short children scan rendered
+     * as "Children: none".
+     *
+     * asmspy_test_budget_trip_after is set DIRECTLY here (not via the
+     * rearm-on-entry hook every other budget test uses) precisely because
+     * these two loops run BEFORE pi_read_code_and_modules, where that hook
+     * arms. The count is tiny and exact: the fd walk is the first
+     * pi_over_budget caller in the whole gather, so `2` means "the third
+     * entry readdir returns trips it", whatever the first two happen to
+     * be — and at most two entries can have been counted. */
+    {
+        int spare[24];
+        int nspare = 0;
+        for (int i = 0; i < 24; i++) {
+            spare[nspare] = open("/dev/null", O_RDONLY);
+            if (spare[nspare] >= 0)
+                nspare++;
+        }
+        check("cap-exercise: opened enough spare fds", nspare > 8,
+              "too few spare fds to tell a budgeted walk from a full one");
+
+        check("self reread (natural, for the fd baseline)",
+              asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+        const int natural_fds = pi->n_fds;
+        check("the natural fd count sees the spare fds", natural_fds > nspare,
+              "an unbudgeted walk must see at least the fds we just opened");
+
+        asmspy_test_budget_trip_after = 2;
+        check("self reread (forced overrun inside the fd walk)",
+              asmspy_procinfo(getpid(), pi) == 0, "nonzero");
+        asmspy_test_budget_trip_after = -1;
+
+        check("the fd walk is budgeted, not run to completion",
+              pi->n_fds <= 2 && pi->n_fds < natural_fds,
+              "n_fds should have stopped at the trip point; an unbudgeted "
+              "walk returns the full count regardless");
+        check("a budget-cut fd walk sets budget_exceeded",
+              pi->budget_exceeded != 0,
+              "the walk stopped short without saying so");
+        check("a budget-cut children scan states its truncation rather than "
+              "reporting 'none'",
+              pi->children_truncated != 0,
+              "children_truncated must be set when the scan stopped looking "
+              "— an empty list with the flag clear reads as a measured "
+              "'no children'");
+
+        for (int i = 0; i < nspare; i++)
+            close(spare[i]);
+    }
+
     /* --- the capability verdict -------------------------------------- */
     /* Our own pid: an engine cannot trace its own tracer thread, but the
      * verdict is about the TARGET's facts, and we are a native 64-bit
@@ -1016,6 +1163,33 @@ int main(void) {
         check("refused mode states why",
               pi->mode_ok[m] || pi->mode_why[m][0] != '\0',
               "a refused mode with an empty reason");
+    /* attachable == -1 is the DEFAULT state of a stock Debian/Ubuntu host
+     * (yama ptrace_scope=1, not root), so this is the common case, not an
+     * edge one: mode_ok stays true (the mode's own gates are all this
+     * snapshot can decide) while the attach it depends on is undetermined.
+     * A cell rendered "yes" with an empty reason under a verdict line
+     * reading MAYBE is the table arguing with the sentence above it. Host-
+     * conditional, and skipped LOUDLY where the host cannot produce a -1 —
+     * asserting it unconditionally would be asserting nothing on a root or
+     * ptrace_scope=0 lane. */
+    if (pi->attachable == -1) {
+        int any_missing = 0;
+        for (int m = 0; m < ASMSPY_MODE__COUNT; m++)
+            if (pi->mode_ok[m] && !pi->mode_why[m][0])
+                any_missing = 1;
+        check("an UNDETERMINED attach carries its reason into every mode",
+              !any_missing,
+              "attachable == -1 with a mode carrying ok=true and an empty "
+              "why — nothing downstream can render the third state without "
+              "it");
+    } else {
+        fprintf(stderr,
+                "SKIP undetermined-mode-reason: this host's attach verdict "
+                "for our own pid is %d, not -1 (needs yama ptrace_scope>=1 "
+                "and non-root) — the undetermined branch isn't exercised "
+                "here.\n",
+                pi->attachable);
+    }
     check("mode names", strcmp(asmspy_mode_name(ASMSPY_MODE_LOG), "log") == 0,
           "mode name mismatch");
     check("dataflow ok on a native 64-bit target",

@@ -2343,6 +2343,14 @@ for name in refused:
     m = modes[name]
     assert m["ok"] is False, "%s should be refused for a 32-bit tracee, got ok=%r" % (name, m["ok"])
     assert "32-bit" in m["why"], "%s why does not name the 32-bit reason: %r" % (name, m["why"])
+# tree/graph/procs single-step to build a call tree, graph or topology and
+# never touch the syscall table, so "would name every syscall wrong" was
+# simply false for them (and for --watch, which watches memory). The reason
+# all eight share is the register ABI, which is what their own guard in
+# cli/asmspy_engine.c states.
+for name in ("tree", "graph", "procs"):
+    assert "syscall" not in modes[name]["why"], \
+        "%s is refused with a syscall-decoding reason, which is not true of it: %r" % (name, modes[name]["why"])
 for name in untouched:
     m = modes[name]
     assert "32-bit" not in m["why"], \
@@ -3653,10 +3661,19 @@ echo "$info_json" | grep -q '"attachable"' \
 $BUILD/asmspy --info $$ | grep -q "pid $$" \
     || fail "--info text: no pid line"
 
-# A nonexistent pid is refused, not rendered blank.
-if $BUILD/asmspy --info 134217727 >/dev/null 2>&1; then
-    fail "--info: a nonexistent pid must exit nonzero"
-fi
+# A nonexistent pid is refused, not rendered blank — and refused with its OWN
+# exit code (ASMSPY_INFO_EXIT_NO_SUCH_PID = 3, cli/libasmspy.h), not the
+# generic 1 that also means "the --record you asked for could not be
+# written". A caller that browses a live process list hits this race
+# routinely (the desktop details pane fires a probe on every selection
+# change) and must be able to tell it from a broken asmspy: the pane renders
+# 3 as "pid N exited" and anything else as a failure.
+set +e
+$BUILD/asmspy --info 134217727 >/dev/null 2>&1
+nprc=$?
+set -e
+[ "$nprc" -eq 3 ] \
+    || fail "--info: a nonexistent pid must exit 3 (ASMSPY_INFO_EXIT_NO_SUCH_PID), got $nprc"
 
 # A --record path that cannot be opened must exit nonzero too (finding A):
 # info_emit_json's failure must reach cmd_info's return value, not just its
@@ -3854,7 +3871,17 @@ fi
 # SAME snapshot printed all of it).
 if command -v python3 >/dev/null 2>&1; then
     BIGARG=$(python3 -c "print('a' * 2600)")
-    sh -c 'sleep 60; :' "$BIGARG" >/dev/null 2>&1 &
+    # python3, NOT `sh -c 'sleep 60; :' "$BIGARG"`. That form leaked TWO
+    # orphaned `sleep 60` grandchildren per bare-host run: the shell forks
+    # sleep, and killing $! (the shell) leaves the sleep behind. The obvious
+    # repair — `exec sleep 60` — is WRONG here on both available shells: it
+    # does not remove the grandchild under dash, and under bash-as-/bin/sh
+    # the exec optimization replaces the shell with sleep and DISCARDS the
+    # 2600-byte argv this very test measures, turning the assertion below
+    # red. python3 does its own sleeping in-process, so $! is the only
+    # process there is, and its argv keeps the big entry. Already inside the
+    # `command -v python3` guard.
+    python3 -c 'import time; time.sleep(60)' "$BIGARG" >/dev/null 2>&1 &
     BAPID=$!
     sleep 1
     kill -0 "$BAPID" 2>/dev/null || fail "the big-argv victim did not start"
@@ -3890,8 +3917,13 @@ if command -v python3 >/dev/null 2>&1; then
     U8BASE=$(mktemp -d)
     U8DIR="$U8BASE/lat$(printf '\351')n1"
     mkdir -p "$U8DIR"
-    ( cd "$U8DIR" && exec sh -c 'sleep 60; :' "$(printf 'arg\345bad')" ) \
-        >/dev/null 2>&1 &
+    # python3, for the same grandchild-orphan reason as the big-argv victim
+    # above (python sleeps in-process; a shell forks `sleep` and leaves it).
+    # The raw 0xe5 byte survives argv unharmed — CPython decodes argv with
+    # surrogateescape and this script never reads it; what matters is that
+    # /proc/<pid>/cmdline carries the invalid byte for asmspy to sanitize.
+    ( cd "$U8DIR" && exec python3 -c 'import time; time.sleep(60)' \
+        "$(printf 'arg\345bad')" ) >/dev/null 2>&1 &
     U8PID=$!
     sleep 1
     kill -0 "$U8PID" 2>/dev/null || fail "the non-UTF-8 cwd/argv victim did not start"
