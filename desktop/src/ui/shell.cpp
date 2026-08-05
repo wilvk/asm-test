@@ -973,6 +973,24 @@ shell_kind_availability(const SceneView &sv, const Streams *b) {
     return why;
 }
 
+// T1 (59): entering an unavailable kind is guarded by the selector's
+// BeginDisabled; STAYING on one was guarded by nothing. See the header for the
+// failure this closes. Plane is the fallback: it is the only kind with no
+// standalone data behind it, so it is what remains when a substrate's data
+// goes away mid-session.
+scene3d::SceneKind
+shell_evict_unavailable_kind(scene3d::SceneKind cur,
+                             const std::vector<std::string> &why) {
+    if (cur == scene3d::SceneKind::Plane)
+        return cur; // the fallback, and never evicted from
+    const size_t i = scene_kind_index(cur);
+    // A vector that has not been sized yet says nothing about availability —
+    // read it as "not known to be unavailable" rather than indexing past it.
+    if (i >= why.size() || why[i].empty())
+        return cur;
+    return scene3d::SceneKind::Plane;
+}
+
 // T1 (59): decode a standalone pick and answer BOTH questions at once — "what
 // is this" (the hover readout) and "where would a click go" (the drill-in) —
 // from ONE decode, so the two can never disagree. That is the same anti-drift
@@ -1326,6 +1344,34 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     }
     sv.hud.kind = sv.kind;
     sv.hud.kind_unavailable = shell_kind_availability(sv, shell_b(s));
+    // T1 (59): leave a substrate whose data went away — BEFORE the re-entry
+    // block below, so a kind evicted this frame cannot also be re-entered this
+    // frame. The camera is saved and restored on the same rule the explicit
+    // switch uses, so an eviction is not a second way to lose the plane orbit.
+    // A silent snap-back is indistinguishable from a crash to the person
+    // watching, so it is announced.
+    {
+        const scene3d::SceneKind keep =
+            shell_evict_unavailable_kind(sv.kind, sv.hud.kind_unavailable);
+        if (keep != sv.kind) {
+            const size_t left = scene_kind_index(sv.kind);
+            shell_log_push(s,
+                           std::string("3D overview left \"") +
+                               scene3d::scene_kind_name(sv.kind) + "\" — " +
+                               sv.hud.kind_unavailable[left],
+                           ToastKind::Info);
+            sv.kind_cam[left] = sv.cam;
+            sv.kind_cam_inited[left] = 1;
+            sv.kind = keep;
+            const size_t ki = scene_kind_index(sv.kind);
+            if (!sv.kind_cam_inited[ki]) {
+                sv.kind_cam[ki] = scene3d::standalone_default_camera(sv.kind);
+                sv.kind_cam_inited[ki] = 1;
+            }
+            sv.cam = sv.kind_cam[ki];
+            sv.hud.kind = sv.kind;
+        }
+    }
     if (sv.hud.req_kind_change) {
         sv.hud.req_kind_change = false;
         if (sv.hud.req_kind != sv.kind) {

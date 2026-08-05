@@ -2793,6 +2793,48 @@ int main() {
               "alone), not want (auto -> the whole exact deck)");
     }
 
+    // ---- 59 T1: a kind that becomes unavailable must be LEFT ----------------
+    //
+    // Entering an unavailable kind is guarded (the selector wraps those entries
+    // in BeginDisabled). Staying on one was guarded by NOTHING, so detaching B
+    // while the divergence substrate was showing kept drawing it as an empty
+    // scene — the exact fabrication build_divergence_scene refuses to perform
+    // by returning a refusal card instead.
+    {
+        std::vector<std::string> why(scene3d::all_scene_kinds().size());
+        const size_t div = scene_kind_index(scene3d::SceneKind::Divergence);
+
+        why[div] = "";
+        check("evict/available-stays",
+              shell_evict_unavailable_kind(scene3d::SceneKind::Divergence,
+                                           why) ==
+                  scene3d::SceneKind::Divergence,
+              "an available kind must not be evicted");
+
+        why[div] = "needs a second recording (press d to attach one)";
+        check("evict/unavailable-falls-back",
+              shell_evict_unavailable_kind(scene3d::SceneKind::Divergence,
+                                           why) == scene3d::SceneKind::Plane,
+              "a kind that became unavailable must fall back to Plane rather "
+              "than keep drawing an empty substrate");
+
+        check("evict/plane-is-terminal",
+              shell_evict_unavailable_kind(scene3d::SceneKind::Plane, why) ==
+                  scene3d::SceneKind::Plane,
+              "Plane is the fallback and has no availability gate here; it must "
+              "never be evicted from");
+
+        // A short/absent availability vector must not index out of range, and
+        // must be read as "nothing is known to be unavailable".
+        std::vector<std::string> empty;
+        check("evict/short-vector-safe",
+              shell_evict_unavailable_kind(scene3d::SceneKind::LanePrism,
+                                           empty) ==
+                  scene3d::SceneKind::LanePrism,
+              "an availability vector that has not been sized yet must not "
+              "evict, and must not read past its end");
+    }
+
     // ---- R2: the Log is a bounded, colored scrollback -----------------------
     {
         ShellState gs;

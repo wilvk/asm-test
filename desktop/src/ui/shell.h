@@ -758,5 +758,19 @@ void shell_apply_mode_panes(ShellState &s, Mode m);
 // ends. Pure model move over ShellState; test_shell drives it headlessly.
 void shell_apply_live_panes(ShellState &s);
 
+// Which substrate should the 3D pane be showing, given the one it is on and the
+// per-kind availability reasons this recording produced (empty string = that
+// kind can be shown)?
+//
+// Entering an unavailable kind is already guarded — the selector wraps those
+// entries in BeginDisabled — but STAYING on one was guarded by nothing, so
+// detaching the B recording while the divergence substrate was showing kept
+// drawing it as an empty scene, the exact fabrication build_divergence_scene
+// refuses to perform. Plane is the fallback and is never evicted from. Pure, so
+// test_shell asserts it without an ImGui frame.
+scene3d::SceneKind
+shell_evict_unavailable_kind(scene3d::SceneKind cur,
+                             const std::vector<std::string> &why);
+
 } // namespace asmdesk
 #endif // ASMDESK_UI_SHELL_H
