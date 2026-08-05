@@ -2168,6 +2168,104 @@ int main() {
               "path must actually apply when the recording matches");
     }
 
+    // --- the AUTO-LED substrate sweep's hand-off -----------------------------
+    //
+    // From the `auto` front door, three of the five 3D substrates were
+    // unreachable: an `auto` capture records `codeimage` + `df_step` and nothing
+    // else, so the invocation stack (`coverage`) and the module excursion ribbon
+    // (`call`) stayed disabled — and "Capture every substrate", which would have
+    // filled them, refused to start without a hand-named region, which an `auto`
+    // operator by construction does not have.
+    //
+    // The auto-led sweep closes that: leg 1 samples for a region, and the scoped
+    // leg behind it inherits what the `pick` event named. THIS is the hand-off,
+    // and it is the part that can be silently wrong.
+    {
+        std::vector<LiveNote> notes;
+        check("sweep/pick/none-yet", inspect_sweep_pick_region(notes).empty(),
+              "with no pick on the wire there is no region to hand on — the "
+              "sweep must stop and say so, not send address 0");
+
+        // An idle window rides the SAME channel with zero base/len (39 T3).
+        notes.push_back(
+            {"session",
+             nlohmann::json::parse(
+                 R"J({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"idle","func":"(idle window)","base":0,"len":0,"attempt":1,"of":3}})J")});
+        check(
+            "sweep/pick/idle-window-is-not-a-region",
+            inspect_sweep_pick_region(notes).empty(),
+            "an idle window observed NOTHING; treating its sentinel as a pick "
+            "would hand the trace leg a zero-length region at address 0");
+
+        notes.push_back(
+            {"session",
+             nlohmann::json::parse(
+                 R"({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"entry","func":"first_ranked","base":4096,"len":64,"attempt":1,"of":2}})")});
+        check("sweep/pick/adopts-the-pick",
+              inspect_sweep_pick_region(notes) == "0x1000:64",
+              "the scoped leg must inherit the region the sampler measured, in "
+              "the grammar inspect_start_params reads back");
+
+        // The host WALKS past a ranked candidate that never re-enters and
+        // re-emits on each, so the LAST real pick is the region it captured.
+        // Taking the first would scope the trace leg to a function the auto leg
+        // itself gave up on.
+        notes.push_back(
+            {"session",
+             nlohmann::json::parse(
+                 R"({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"entry","func":"second_ranked","base":8192,"len":96,"attempt":2,"of":2}})")});
+        check("sweep/pick/last-walked-candidate-wins",
+              inspect_sweep_pick_region(notes) == "0x2000:96",
+              "the host walks past a candidate that never re-enters; the leg "
+              "must inherit the one it ENDED on, not the one it abandoned");
+
+        // A non-`session` note is not a pick, whatever it carries.
+        notes.push_back({"err", nlohmann::json::parse(R"({"state":"pick"})")});
+        check("sweep/pick/only-session-notes",
+              inspect_sweep_pick_region(notes) == "0x2000:96",
+              "an `err` note is not the pick channel");
+    }
+    {
+        // The SHAPE the button will run, and the LATCH that keeps it stable. The
+        // auto-led sweep writes the picked region into the region field, so a
+        // shape re-derived per frame would flip mid-sequence.
+        InspectState is;
+        check("sweep/shape/no-region-leads-with-auto",
+              !inspect_sweep_legs(is).empty() &&
+                  inspect_sweep_legs(is)[0] == LiveMode::Auto,
+              "with no region named, pressing the button must run the auto-led "
+              "sweep — that is the only shape reachable from the `auto` door");
+        std::snprintf(is.region, sizeof is.region, "%s", "hotfn");
+        check("sweep/shape/named-region-runs-the-three-engines",
+              !inspect_sweep_legs(is).empty() &&
+                  inspect_sweep_legs(is)[0] == LiveMode::Tree,
+              "a named region needs no picker, so the sweep runs the three "
+              "scoped engines directly");
+
+        // The latch: start auto-led, then let the region field fill in the way
+        // the poll fills it, and the shape must not move.
+        InspectState latched;
+        latched.host_started = true;
+        latched.selected_pid = 1;
+        latched.record_session = true;
+        std::snprintf(latched.record_path, sizeof latched.record_path, "%s",
+                      "/tmp/sweep.asmtrace");
+        const std::string why_blocked =
+            "an un-named region must not block the sweep any more: got \"" +
+            inspect_sweep_blocked(latched) + "\"";
+        check("sweep/latch/startable-with-no-region",
+              inspect_sweep_blocked(latched).empty(), why_blocked.c_str());
+        inspect_sweep_start(latched);
+        check("sweep/latch/started", latched.sweep_running, "the sweep armed");
+        std::snprintf(latched.region, sizeof latched.region, "%s", "0x1000:64");
+        check("sweep/latch/shape-survives-the-adopted-region",
+              !inspect_sweep_legs(latched).empty() &&
+                  inspect_sweep_legs(latched)[0] == LiveMode::Auto,
+              "the auto leg fills the region field in; re-deriving the shape "
+              "from it would swap the leg list out from under the running "
+              "sequence");
+    }
+
     // --- region gap: inspect_start_params attaches a scoped region ONLY for the
     // scoped modes (trace/dataflow) and picks base+len vs func by the spec shape.
     // A whole-process mode and `auto` send none — so the door never blocks Start on

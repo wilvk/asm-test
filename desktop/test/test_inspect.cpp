@@ -379,6 +379,43 @@ static void test_evidence() {
         check("ev/idle-no-walk-note", pick_walk_note(p).empty(),
               "an idle window carries no candidate-walk note (its attempt/of is "
               "the WINDOW retry, not a candidate ordinal)");
+        check("ev/idle-no-region", pick_region_spec(p).empty(),
+              "an idle window picked NOTHING — handing its zero base/len to a "
+              "scoped leg would single-step address 0");
+    }
+    {
+        // The AUTO-LED SWEEP's hand-off. `auto` samples for its own region;
+        // `trace` cannot. So a sweep that leads with auto must carry the picked
+        // region to the leg behind it, and this is the rule that says what it
+        // carries: the EXACT base+len the sampler measured, spelled the way
+        // parse_region_spec reads it back.
+        //
+        // base+len rather than the func NAME on purpose: a name is re-resolved
+        // against the symbol table by the serve host, and a duplicated static
+        // symbol (firefox carries thousands) would resolve to a DIFFERENT
+        // function than the one the sampler actually watched.
+        json body = json::parse(
+            R"({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"entry","func":"entered_often","base":4198400,"len":96,"weight":184,"sites":2,"attempt":1,"of":1}})");
+        AutoPick p;
+        check("ev/region/parse", parse_auto_pick(body, &p), "the pick parses");
+        const std::string spec = pick_region_spec(p);
+        check("ev/region/spec", spec == "0x401000:96",
+              "the spec must be the pick's own base+len in the grammar "
+              "parse_region_spec reads (0xADDR:LEN): got \"" +
+                  spec + "\"");
+
+        // A pick with no extent is not a region. The sampler emits len 0 for a
+        // symbol it could not size, and a zero-length region is one the host
+        // would refuse — the sweep must stop and say so, not send it.
+        AutoPick z = p;
+        z.len = 0;
+        check(
+            "ev/region/zero-len-is-no-region", pick_region_spec(z).empty(),
+            "a zero-length pick is not a region a scoped leg can single-step");
+        AutoPick nb = p;
+        nb.base = 0;
+        check("ev/region/zero-base-is-no-region", pick_region_spec(nb).empty(),
+              "a pick with no base is not a region");
     }
 }
 

@@ -246,7 +246,13 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     return params;
 }
 
-const std::vector<LiveMode> &inspect_sweep_legs() { return sweep_legs(); }
+const std::vector<LiveMode> &inspect_sweep_legs(const InspectState &s) {
+    // While a sweep runs the shape is the LATCHED one — an auto-led sweep fills
+    // `region` in from its own pick, and re-reading it here would swap the leg
+    // list mid-sequence. Idle, it previews what pressing the button would run.
+    return sweep_legs(s.sweep_running ? s.sweep_have_region
+                                      : s.region[0] != '\0');
+}
 
 // The InspectState-shaped view of the pure rule in live/budget.h. Kept a thin
 // forward on purpose: the decision is what can be wrong, and it is tested there
@@ -254,8 +260,7 @@ const std::vector<LiveMode> &inspect_sweep_legs() { return sweep_legs(); }
 std::string inspect_sweep_blocked(const InspectState &s) {
     return sweep_blocked(s.host_started, s.selected_pid > 0,
                          s.record_session && s.record_path[0] != '\0',
-                         s.region[0] != '\0', s.sweep_running,
-                         !s.active.empty());
+                         s.sweep_running, !s.active.empty());
 }
 
 void inspect_sweep_start(InspectState &s) {
@@ -263,7 +268,14 @@ void inspect_sweep_start(InspectState &s) {
         return;
     s.sweep_at = 0;
     s.sweep_running = true;
-    s.sweep_note = "sweep armed";
+    // Latch the shape now: everything below reads it, and the auto-led leg is
+    // about to change the field it was derived from.
+    s.sweep_have_region = s.region[0] != '\0';
+    s.sweep_note = s.sweep_have_region
+                       ? "sweep armed"
+                       : "sweep armed — no region named, so the `auto` leg "
+                         "samples for one and the `trace` leg behind it "
+                         "single-steps whatever it picks";
 }
 
 void inspect_sweep_cancel(InspectState &s) {
@@ -275,10 +287,38 @@ void inspect_sweep_cancel(InspectState &s) {
     s.sweep_note = "sweep cancelled — the running leg (if any) was left alone";
 }
 
+// The auto leg's hand-off. A scoped leg single-steps ONE region and the serve
+// host refuses it without one; in an auto-led sweep that region is whatever the
+// sampler picked, which arrives on the wire as a `session state:"pick"` event.
+// Adopt the LAST real pick (the host walks past candidates that never re-enter,
+// and re-emits on each, so the last one is the region actually captured) into
+// the region field — where the operator can SEE what the next leg will step.
+// Returns the adopted spec, or "" when no pick carried a region.
+std::string inspect_sweep_pick_region(const std::vector<LiveNote> &notes) {
+    std::string spec;
+    for (const LiveNote &n : notes) {
+        AutoPick p;
+        if (n.kind != "session" || !parse_auto_pick(n.body, &p))
+            continue;
+        const std::string r = pick_region_spec(p);
+        if (!r.empty())
+            spec = r; // keep walking: the LAST real pick is the captured one
+    }
+    return spec;
+}
+
+static std::string inspect_sweep_adopt_pick(InspectState &s) {
+    const std::string spec = inspect_sweep_pick_region(s.session.notes());
+    if (spec.empty() || spec.size() >= sizeof s.region)
+        return std::string();
+    std::snprintf(s.region, sizeof s.region, "%s", spec.c_str());
+    return spec;
+}
+
 bool inspect_sweep_poll(InspectState &s) {
     if (!s.sweep_running)
         return false;
-    const std::vector<LiveMode> &legs = inspect_sweep_legs();
+    const std::vector<LiveMode> &legs = inspect_sweep_legs(s);
     if (s.sweep_at >= legs.size()) {
         s.sweep_running = false;
         s.sweep_note =
@@ -295,6 +335,26 @@ bool inspect_sweep_poll(InspectState &s) {
     // The SAME jack rule the Queue obeys — a sweep may never bypass the budget.
     if (s.awaiting_started || !budget_queue_ready(leg, s.active))
         return false;
+
+    // An auto-led sweep's scoped leg inherits the region the auto leg picked.
+    // If the auto leg found none — the sampler was refused (perf locked down),
+    // or every window was idle — there is nothing to single-step, so the sweep
+    // STOPS here and says which leg it stopped at and why. Firing the leg anyway
+    // would send a start the host refuses, and report it as the operator's
+    // mistake rather than as the measured fact it is.
+    if (mode_needs_region(leg) && s.region[0] == '\0' &&
+        inspect_sweep_adopt_pick(s).empty()) {
+        const std::string why = s.session.status().skip_reason;
+        s.sweep_running = false;
+        s.sweep_note =
+            "sweep stopped before its `" + std::string(mode_name(leg)) +
+            "` leg: the `auto` leg picked no region, so there is nothing for a "
+            "scoped leg to single-step" +
+            (why.empty() ? std::string() : " — the host said: " + why) +
+            ". The legs that needed no region did run. Name a region and sweep "
+            "again to add the invocation stack.";
+        return false;
+    }
 
     // `want` is what inspect_start_params reads, so set it before building.
     s.want = leg;
@@ -828,21 +888,22 @@ void draw_patch_bay(InspectState &s) {
     ImGui::Separator();
     {
         const std::string why = inspect_sweep_blocked(s);
+        // Derived from the same sweep_legs the poll walks, so the line under the
+        // button can never describe a sequence other than the one that runs.
+        const std::string plan = sweep_plan(
+            s.sweep_running ? s.sweep_have_region : s.region[0] != '\0',
+            s.sweep_max);
         ImGui::BeginDisabled(!why.empty());
         if (ImGui::Button("Capture every substrate"))
             inspect_sweep_start(s);
         ImGui::EndDisabled();
-        flow_same_line(s.sweep_running
-                           ? flow_button_w("Cancel sweep")
-                           : flow_textf_w("tree -> trace -> dataflow, %ld "
-                                          "events each",
-                                          s.sweep_max));
+        flow_same_line(s.sweep_running ? flow_button_w("Cancel sweep")
+                                       : flow_text_w(plan.c_str()));
         if (s.sweep_running) {
             if (ImGui::Button("Cancel sweep"))
                 inspect_sweep_cancel(s);
         } else {
-            ImGui::TextDisabled("tree -> trace -> dataflow, %ld events each",
-                                s.sweep_max);
+            ImGui::TextDisabled("%s", plan.c_str());
         }
         if (!why.empty())
             ImGui::TextDisabled("%s", why.c_str());

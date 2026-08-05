@@ -983,22 +983,48 @@ shell_kind_availability(const SceneView &sv, const Streams *b) {
     if (b == nullptr)
         why[scene_kind_index(scene3d::SceneKind::Divergence)] =
             "needs a second recording (press d to attach one)";
+    // Each substrate comes from a DIFFERENT engine and the serve host runs one
+    // at a time, so "this recording has no X" is only half the answer: without
+    // the other half an operator who captured in `auto` — where three of these
+    // four are empty by construction, an auto capture recording `codeimage` +
+    // `df_step` and nothing else — reads four disabled rows as a broken pane.
+    // So every reason names the capture that fills it, and points at the one
+    // control that runs them all back to back.
+    const std::string sweep_hint =
+        " — the patch bay's \"Capture every substrate\" runs every leg into "
+        "one "
+        "recording (from `auto` it leads with the picker, so no region need be "
+        "named)";
     // drawable(), never slabs.empty(): a slab whose union block set is empty
     // has no cells, so the scene is a wireframe around nothing. Asking whether
     // the builder produced a CONTAINER is not asking whether there is anything
     // to see.
     if (!sv.invocation.drawable())
         why[scene_kind_index(scene3d::SceneKind::Invocation)] =
-            sv.invocation.note.empty() ? "no region capture in this recording"
-                                       : sv.invocation.note;
+            (sv.invocation.note.empty()
+                 ? "no region capture in this recording: the invocation stack "
+                   "places its cells on the block set a `coverage` event "
+                   "carries, which a `trace` capture of a region records"
+                 : sv.invocation.note) +
+            sweep_hint;
     if (sv.module_ribbon.lanes.empty())
         why[scene_kind_index(scene3d::SceneKind::ModuleRibbon)] =
-            sv.module_ribbon.note.empty() ? "no call tree in this recording"
-                                   : sv.module_ribbon.note;
+            (sv.module_ribbon.note.empty()
+                 ? "no call tree in this recording: the ribbon is drawn over "
+                   "the `call` events a `tree` capture records"
+                 : sv.module_ribbon.note) +
+            sweep_hint;
     if (sv.prism.writes.empty())
         why[scene_kind_index(scene3d::SceneKind::LanePrism)] =
-            sv.prism.note.empty() ? "no wide register writes in this recording"
-                                  : sv.prism.note;
+            (sv.prism.note.empty()
+                 ? "no wide register writes in this recording: the prism "
+                   "stacks "
+                   "the wide `df_step` operand writes a `dataflow` or `auto` "
+                   "capture records — of a region that actually uses the "
+                   "vector "
+                   "registers"
+                 : sv.prism.note) +
+            sweep_hint;
     return why;
 }
 

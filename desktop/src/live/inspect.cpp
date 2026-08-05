@@ -417,6 +417,21 @@ bool pick_is_idle_window(const AutoPick &p) {
     return p.evidence == "idle" || p.func == "(idle window)";
 }
 
+std::string pick_region_spec(const AutoPick &p) {
+    // An idle window picked NOTHING; its zero base/len are the sentinel, not a
+    // region. Handing them to a scoped leg would single-step address 0.
+    if (pick_is_idle_window(p) || p.base == 0 || p.len == 0)
+        return std::string();
+    // The pick's OWN base+len, in parse_region_spec's grammar. Not the func
+    // name: a name is re-resolved against the symbol table by the serve host,
+    // and a duplicated static symbol would resolve to a different function than
+    // the one the sampler actually watched.
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "0x%llx:%llu", (unsigned long long)p.base,
+                  (unsigned long long)p.len);
+    return std::string(buf);
+}
+
 std::string pick_evidence_label(const AutoPick &p) {
     if (pick_is_idle_window(p)) {
         // An empty window is a RETRY, not a verdict: the sampler ran and nothing

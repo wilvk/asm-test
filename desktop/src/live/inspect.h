@@ -263,6 +263,17 @@ bool pick_is_weak_evidence(const AutoPick &p);
 // instead.
 bool pick_is_idle_window(const AutoPick &p);
 
+// The region spec a sweep's SCOPED legs inherit from an `auto` pick — the exact
+// base+len the sampler measured, spelled in parse_region_spec's grammar
+// ("0xADDR:LEN"). Empty for an idle-window marker or a pick with no extent: a
+// sweep must stop and say so rather than hand a scoped leg address 0.
+//
+// base+len rather than the func NAME on purpose. A name is re-resolved against
+// the symbol table by the serve host, and a duplicated static symbol (any large
+// C++ target carries thousands) would resolve to a DIFFERENT function than the
+// one the sampler actually watched.
+std::string pick_region_spec(const AutoPick &p);
+
 // The label to show beside the pick. For residency it states the weakness and
 // its consequence in the same breath — a caveat the user has to already
 // understand is not a caveat.

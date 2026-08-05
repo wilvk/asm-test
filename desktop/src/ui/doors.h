@@ -293,6 +293,12 @@ struct InspectState {
     bool sweep_running = false;
     std::string sweep_note;
     long sweep_max = 400;
+    // Which SHAPE the running sweep is: latched at inspect_sweep_start from
+    // whether a region was named. It cannot be re-derived per frame, because an
+    // auto-led sweep WRITES the region its first leg picked — and the leg list
+    // would then flip from `auto -> tree -> trace` to `tree -> trace ->
+    // dataflow` in the middle of the sequence.
+    bool sweep_have_region = false;
 
     std::vector<LiveMode> active;
     // 39 T5: the count of terminal `session` events already reconciled against
@@ -446,14 +452,32 @@ nlohmann::json inspect_start_params(const InspectState &s);
 //
 // The address plane rides along: all three arm a `codeimage`.
 //
+// With NO region named the shape is `auto -> tree -> trace` instead: the auto
+// leg samples for its own region (and is itself the dataflow engine), and the
+// trace leg behind it single-steps whatever it picked. That is what makes the
+// other substrates reachable from the `auto` front door — see sweep_legs in
+// live/budget.h for the whole rule.
+//
 // The DIVERGENCE worldline is deliberately absent and cannot be added here. It
 // compares two RECORDINGS, so no sequence of captures inside one session can
 // produce it — run a sweep twice and attach the second file as B (`d`).
-const std::vector<LiveMode> &inspect_sweep_legs();
+//
+// The shape is LATCHED at inspect_sweep_start: the auto leg writes the picked
+// region into `region`, and re-deriving the list from it mid-sweep would swap
+// the leg list out from under the running sequence.
+const std::vector<LiveMode> &inspect_sweep_legs(const InspectState &s);
 
 // Why a sweep cannot start right now; "" when it can. Each reason names the
 // thing to fix, never a bare "unavailable".
 std::string inspect_sweep_blocked(const InspectState &s);
+
+// The region an auto-led sweep's SCOPED leg inherits, read off the session's
+// `pick` events; "" when no pick carried one (the sampler was refused, or every
+// window was idle). The LAST real pick wins: the serve host walks past a ranked
+// candidate that never re-enters and re-emits on each, so the last one names the
+// region it actually captured. Pure over the notes so test_shell can drive it
+// with no live host — this is the hand-off the whole auto-led shape rests on.
+std::string inspect_sweep_pick_region(const std::vector<LiveNote> &notes);
 
 // Begin a sweep (no-op when inspect_sweep_blocked is non-empty), and abandon
 // one. Cancelling leaves any running leg alone: stopping a capture is the Stop

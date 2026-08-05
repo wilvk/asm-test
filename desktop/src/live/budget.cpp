@@ -148,15 +148,34 @@ std::vector<const char *> mode_visualizations(LiveMode m) {
     return {};
 }
 
-const std::vector<LiveMode> &sweep_legs() {
-    static const std::vector<LiveMode> v = {LiveMode::Tree, LiveMode::Trace,
-                                            LiveMode::Dataflow};
-    return v;
+const std::vector<LiveMode> &sweep_legs(bool have_region) {
+    static const std::vector<LiveMode> named = {LiveMode::Tree, LiveMode::Trace,
+                                                LiveMode::Dataflow};
+    // Auto FIRST: it is the leg that samples for the region, and `trace` behind
+    // it cannot start without one. `tree` sits in the middle because it needs no
+    // region at all — so a sweep whose auto leg picked nothing still lands the
+    // module ribbon before it has to stop.
+    static const std::vector<LiveMode> led = {LiveMode::Auto, LiveMode::Tree,
+                                              LiveMode::Trace};
+    return have_region ? named : led;
+}
+
+std::string sweep_plan(bool have_region, long max_events) {
+    std::string legs;
+    for (LiveMode m : sweep_legs(have_region))
+        legs += (legs.empty() ? "" : " -> ") + std::string(mode_name(m));
+    legs += ", " + std::to_string(max_events) + " events each";
+    if (have_region)
+        return legs;
+    // The empty region box is not a missing setting here — it is what selects
+    // this shape. Say so, and say which leg fills it in.
+    return legs +
+           " — no region named, so the `auto` leg samples for one and the "
+           "`trace` leg single-steps whatever it picks";
 }
 
 std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
-                          bool have_region, bool already_sweeping,
-                          bool jack_held) {
+                          bool already_sweeping, bool jack_held) {
     if (!host_started)
         return "connect to a serve host first — a sweep drives the same "
                "protocol the patch bay does";
@@ -167,10 +186,6 @@ std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
                "each leg is its own Recording and the live tab shows one, so "
                "only that file carries them together — which is what lets the "
                "3D pane offer more than one substrate";
-    if (!have_region)
-        return "name a region (a function name, or base+len): the trace and "
-               "dataflow legs single-step ONE region, and the serve host "
-               "refuses them without it";
     if (already_sweeping)
         return "a sweep is already running";
     if (jack_held)

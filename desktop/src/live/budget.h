@@ -122,10 +122,34 @@ LiveMode budget_least_perturbing(bool sample_available);
 // compares two RECORDINGS, so no sequence of captures within one session can
 // produce it; run a sweep twice and attach the second file as B.
 //
+// TWO SHAPES, chosen by whether the operator named a region:
+//
+//   have_region   tree -> trace -> dataflow    (each scoped leg steps THAT region)
+//   !have_region  auto -> tree  -> trace       (the auto leg SAMPLES for one)
+//
+// The auto-led shape is what makes the pane reachable from the `auto` front
+// door. An `auto` capture records `codeimage` + `df_step` and nothing else, so
+// its recording offers the address plane (and the lane prism, when the picked
+// region writes wide registers) with the invocation stack and the module
+// excursion ribbon disabled — and the sweep that would have filled them refused
+// to start without a hand-named region, which an `auto` operator by
+// construction does not have. `auto` IS the dataflow engine with a picker in
+// front of it (the serve host runs asmspy_engine_dataflow for SM_AUTO), so it
+// replaces the dataflow leg rather than adding to it, and the region it picks is
+// what the `trace` leg behind it single-steps. Every leg that needs a region
+// therefore runs AFTER the auto leg — the region does not exist until its `pick`
+// lands.
+//
 // Pure, and here rather than in the ImGui door, for the same reason the budget
 // table is: the part that can be WRONG is the rule, and a rule verified only
 // against a live target would be verified almost nowhere.
-const std::vector<LiveMode> &sweep_legs();
+const std::vector<LiveMode> &sweep_legs(bool have_region);
+
+// The standing one-line description of what a sweep will do, derived from
+// sweep_legs so the two can never drift apart. The auto-led form must say that
+// the FIRST leg is what finds the region — otherwise an operator reads the
+// empty region box as the reason the button will fail.
+std::string sweep_plan(bool have_region, long max_events);
 
 // Why a sweep cannot start, given the facts the door holds; "" when it can.
 // Every reason names the thing to fix rather than a bare refusal.
@@ -134,9 +158,15 @@ const std::vector<LiveMode> &sweep_legs();
 // Recording, so without a session-level `--record` each leg lands in its own
 // Recording and the pane can still only show one substrate — the sweep would
 // cost three captures and change nothing.
+//
+// There is deliberately NO have_region parameter. An un-named region used to
+// refuse here, and that refusal is exactly what left the invocation stack and
+// the module ribbon unreachable from `auto`: the sweep now leads with the one
+// mode that finds its own region. A sweep whose auto leg then picks nothing
+// stops at the first scoped leg and says so — a fact measured on the wire, not
+// guessed at before it runs.
 std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
-                          bool have_region, bool already_sweeping,
-                          bool jack_held);
+                          bool already_sweeping, bool jack_held);
 
 struct BudgetDecision {
     bool allowed = true;

@@ -434,7 +434,7 @@ int main(void) {
     // back to back — and is only worth running into a session recording,
     // because the desktop's live tab shows exactly one Recording.
     {
-        const std::vector<LiveMode> &legs = sweep_legs();
+        const std::vector<LiveMode> &legs = sweep_legs(true);
         check("sweep/legs-count", legs.size() == 3,
               "one leg per substrate a LIVE capture can fill (tree, trace, "
               "dataflow); got " + std::to_string(legs.size()));
@@ -451,72 +451,163 @@ int main(void) {
               "writes (dataflow) — three engines, three legs");
         (void)diverge;
 
-        // EVERY leg must arm a codeimage, or the address plane never places and
-        // the pane the sweep exists for cannot host the scene it captured.
-        for (LiveMode m : legs) {
-            bool has3d = false;
-            for (const char *v : mode_visualizations(m))
-                has3d = has3d || std::string(v) == "3D overview";
-            check("sweep/every-leg-places-the-plane", has3d,
-                  std::string("leg `") + mode_name(m) +
-                      "` does not fill the 3D overview, so it cannot belong to "
-                      "a sweep whose whole point is that pane");
+        // EVERY leg of EVERY shape must arm a codeimage, or the address plane
+        // never places and the pane the sweep exists for cannot host the scene
+        // it captured. Same for the jack: every leg is a ptrace mode, which is
+        // exactly why they must run in SEQUENCE.
+        for (bool have_region : {true, false})
+            for (LiveMode m : sweep_legs(have_region)) {
+                bool has3d = false;
+                for (const char *v : mode_visualizations(m))
+                    has3d = has3d || std::string(v) == "3D overview";
+                check(
+                    "sweep/every-leg-places-the-plane", has3d,
+                    std::string("leg `") + mode_name(m) +
+                        "` does not fill the 3D overview, so it cannot belong "
+                        "to a sweep whose whole point is that pane");
+                check("sweep/legs-need-the-jack", mode_uses_ptrace(m),
+                      std::string("leg `") + mode_name(m) +
+                          "` does not hold the ptrace jack, so a sweep would "
+                          "not need to serialise it");
+            }
+    }
+    {
+        // The AUTO-LED shape. `auto` is the one capture mode that needs no
+        // region — it SAMPLES for one — and it is the front door the patch bay
+        // offers first. From it, three of the five substrates were unreachable:
+        // an `auto` capture records `codeimage` + `df_step` and nothing else, so
+        // the invocation stack (`coverage`) and the module excursion ribbon
+        // (`call`) stayed disabled, and the sweep that would have filled them
+        // refused to start without a hand-named region — which an `auto`
+        // operator by construction does not have.
+        //
+        // So with no region named the sweep LEADS with `auto`: that leg is the
+        // dataflow engine (the serve host runs asmspy_engine_dataflow for
+        // SM_AUTO), and the region it picks is what the scoped leg behind it
+        // single-steps.
+        const std::vector<LiveMode> &led = sweep_legs(false);
+        check("sweep/auto/leads-with-auto",
+              !led.empty() && std::string(mode_name(led[0])) == "auto",
+              "the auto leg must run FIRST — it is what samples for the region "
+              "the scoped leg behind it single-steps");
+        bool has_tree = false, has_trace = false;
+        for (LiveMode m : led) {
+            const std::string n = mode_name(m);
+            has_tree = has_tree || n == "tree";
+            has_trace = has_trace || n == "trace";
         }
+        check("sweep/auto/covers-ribbon-and-stack", has_tree && has_trace,
+              "the ribbon still needs `call` (tree) and the invocation stack "
+              "still needs a `coverage` block set (trace) — leading with auto "
+              "replaces the dataflow leg, not those two");
+        check(
+            "sweep/auto/no-second-dataflow-leg",
+            led.size() == 3 && std::string(mode_name(led[1])) != "dataflow" &&
+                std::string(mode_name(led[2])) != "dataflow",
+            "`auto` IS the dataflow engine with a picker in front of it, so a "
+            "separate dataflow leg would re-capture the same substrate at the "
+            "cost of a whole extra leg");
 
-        // Every leg is a ptrace mode, which is exactly why they must run in
-        // SEQUENCE — the one-jack rule forbids running them together.
-        for (LiveMode m : legs)
-            check("sweep/legs-need-the-jack", mode_uses_ptrace(m),
-                  std::string("leg `") + mode_name(m) +
-                      "` does not hold the ptrace jack, so a sweep would not "
-                      "need to serialise it");
+        // The ordering invariant that makes the hand-off possible at all: the
+        // region does not exist until the auto leg's `pick` lands, so every leg
+        // that needs one must come AFTER it.
+        size_t auto_at = led.size();
+        for (size_t i = 0; i < led.size(); i++)
+            if (led[i] == LiveMode::Auto)
+                auto_at = i;
+        for (size_t i = 0; i < led.size(); i++)
+            if (mode_needs_region(led[i]))
+                check("sweep/auto/scoped-leg-runs-after-the-pick", i > auto_at,
+                      std::string("leg `") + mode_name(led[i]) +
+                          "` single-steps ONE region, but it is placed before "
+                          "the auto leg that picks it — the host would refuse "
+                          "it with no region at all");
     }
     {
         // The refusals, in the order an operator hits them.
-        check("sweep/blocked-no-host",
-              sweep_blocked(false, false, false, false, false, false)
-                      .find("connect") != std::string::npos,
-              "with no host the reason must say to connect");
+        check(
+            "sweep/blocked-no-host",
+            sweep_blocked(false, false, false, false, false).find("connect") !=
+                std::string::npos,
+            "with no host the reason must say to connect");
         check("sweep/blocked-no-pid",
-              sweep_blocked(true, false, false, false, false, false)
-                      .find("process") != std::string::npos,
+              sweep_blocked(true, false, false, false, false).find("process") !=
+                  std::string::npos,
               "with no pid the reason must say to select one");
         // THE load-bearing refusal: without --record each leg lands in its own
         // Recording and the live tab shows one, so a sweep would cost three
         // captures and change nothing the pane can show.
         check("sweep/blocked-no-recording",
-              sweep_blocked(true, true, false, false, false, false)
+              sweep_blocked(true, true, false, false, false)
                       .find("record the whole session") != std::string::npos,
               "a sweep without a session recording gains NOTHING — the reason "
               "must say so, and say where to turn it on");
-        check("sweep/blocked-no-region",
-              sweep_blocked(true, true, true, false, false, false)
-                      .find("region") != std::string::npos,
-              "the trace and dataflow legs single-step ONE region");
-        check("sweep/blocked-jack-held",
-              sweep_blocked(true, true, true, true, false, true)
-                      .find("ptrace jack") != std::string::npos,
-              "a sweep may not bypass the one-jack rule");
+        // NOT a refusal any more, and this is the whole point: an un-named
+        // region used to block the sweep, which is what left every substrate
+        // but the address plane unreachable from `auto`.
+        check(
+            "sweep/no-region-is-not-a-refusal",
+            sweep_blocked(true, true, true, false, false).empty(),
+            "an un-named region must NOT block a sweep — the auto leg samples "
+            "for one, and refusing here is what made the invocation stack and "
+            "the module ribbon unreachable from the `auto` front door");
+        check(
+            "sweep/blocked-jack-held",
+            sweep_blocked(true, true, true, false, true).find("ptrace jack") !=
+                std::string::npos,
+            "a sweep may not bypass the one-jack rule");
         check("sweep/blocked-already",
-              !sweep_blocked(true, true, true, true, true, false).empty(),
+              !sweep_blocked(true, true, true, true, false).empty(),
               "a second sweep must not start on top of a running one");
         check("sweep/ready",
-              sweep_blocked(true, true, true, true, false, false).empty(),
-              "host + pid + recording + region, jack free, no sweep running is "
+              sweep_blocked(true, true, true, false, false).empty(),
+              "host + pid + recording, jack free, no sweep running is "
               "everything a sweep needs");
         // No refusal may be blank — the same D7 rule the rest of this file pins.
         const std::string all[] = {
-            sweep_blocked(false, false, false, false, false, false),
-            sweep_blocked(true, false, false, false, false, false),
-            sweep_blocked(true, true, false, false, false, false),
-            sweep_blocked(true, true, true, false, false, false),
-            sweep_blocked(true, true, true, true, true, false),
-            sweep_blocked(true, true, true, true, false, true),
+            sweep_blocked(false, false, false, false, false),
+            sweep_blocked(true, false, false, false, false),
+            sweep_blocked(true, true, false, false, false),
+            sweep_blocked(true, true, true, true, false),
+            sweep_blocked(true, true, true, false, true),
         };
         for (const std::string &r : all)
             check("sweep/every-refusal-names-a-fix", r.size() > 20,
                   "a refusal must name the thing to fix, never a bare "
                   "'unavailable': got \"" + r + "\"");
+    }
+    {
+        // The standing line under the button. It is derived from sweep_legs, so
+        // the two shapes can never describe each other — and the auto-led one
+        // must say that the FIRST leg is what finds the region, or the operator
+        // reads an empty region box as a bug.
+        const std::string named = sweep_plan(true, 400);
+        const std::string led = sweep_plan(false, 400);
+        check("sweep/plan/named-names-its-legs",
+              named.find("tree") != std::string::npos &&
+                  named.find("trace") != std::string::npos &&
+                  named.find("dataflow") != std::string::npos,
+              "a plan that does not name its legs cannot be checked against "
+              "what runs: got \"" +
+                  named + "\"");
+        check("sweep/plan/named-names-the-bound",
+              named.find("400") != std::string::npos,
+              "every leg is bounded, and an operator who does not know the "
+              "bound cannot tell a finished leg from a stalled one");
+        // Tied to the LEG ORDER, not to the prose: the explanatory tail names
+        // `auto` too, so a plan that merely mentions it would pass while
+        // printing the wrong sequence.
+        check("sweep/plan/auto-leads", led.rfind("auto ->", 0) == 0,
+              "the auto-led plan must OPEN with the leg that leads: got \"" +
+                  led + "\"");
+        check("sweep/plan/auto-says-where-the-region-comes-from",
+              led.find("sample") != std::string::npos ||
+                  led.find("pick") != std::string::npos,
+              "with no region named the plan must say the first leg FINDS one, "
+              "not leave the empty region box unexplained: got \"" +
+                  led + "\"");
+        check("sweep/plan/shapes-differ", named != led,
+              "two different leg lists must not print the same plan");
     }
 
     if (failures) {
