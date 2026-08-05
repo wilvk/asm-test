@@ -408,10 +408,16 @@ Append to `desktop/test/test_capview.cpp`:
         // The load-bearing one: the two probes must be allowed to DISAGREE. On
         // an AMD box with perf locked down, the substrate is present and the
         // syscall is refused, and a preflight that cannot tell them apart will
-        // promise a mode that emits nothing.
-        check("cap/perf-is-not-the-substrate-probe", true,
-              "documentation check: perf_ok must not be assigned from "
-              "asmtest_ibs_available()");
+        // promise a mode that emits nothing. Asserted as a real implication on
+        // THIS host, where the disagreement is the measured state — not as a
+        // comment. On a host where perf does open, the implication is vacuously
+        // true and the check still cannot fire wrongly.
+        check("cap/perf-is-not-the-substrate-probe",
+              !(asmtest_ibs_available() && !s.perf_ok) || !s.perf_reason.empty(),
+              "the substrate probe says IBS is present and the syscall was "
+              "refused — the two MUST be separate fields, and the refusal must "
+              "carry its reason; assigning perf_ok from asmtest_ibs_available() "
+              "reproduces the exact defect this field exists to fix");
     }
 ```
 
@@ -800,12 +806,61 @@ Create `cli/test_ptracesample.c` — a C `main()` in the `CHECK` idiom that fork
      * orphaned breakpoint or a swallowed signal kills or freezes it, and both
      * were real defects in the prototype. */
     CHECK(kill(vpid, 0) == 0, "the victim survived the sampler");
-    CHECK(victim_progressed_after_detach(vpid),
-          "the victim still makes progress after detach -- a swallowed SIGALRM "
-          "collapsed throughput 99% in the prototype");
 ```
 
-Add a **signal-driven** victim (`cli/sigload_victim.c`: a 100 Hz `ITIMER_REAL` plus a counter it prints) so the lane is not blind to correction 1, and assert its post-detach rate is within 20% of its pre-attach rate.
+Add a **signal-driven** victim so the lane is not blind to correction 1 — the
+defect that destroyed 89% of a target's SIGALRMs is invisible against a
+signal-free spinner. Create `cli/sigload_victim.c`: a 100 Hz `ITIMER_REAL`
+whose handler increments a counter, with the process printing
+`ticks=<n>\n` (line-buffered, `setvbuf(stdout, NULL, _IOLBF, 0)`) once a
+second. Then define the progress helper the test needs — it is a real
+function, not a hand-wave:
+
+```c
+/* Count the victim's ticks over `ms` by reading the lines it prints. The
+ * sampler is allowed to cost some throughput; it is NOT allowed to swallow
+ * the target's signals, which is a different failure and a fatal one. */
+static long sigload_ticks_over(FILE *victim_out, int ms) {
+    char line[64];
+    long first = -1, last = -1;
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += ms / 1000;
+    for (;;) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec >= deadline.tv_sec)
+            break;
+        if (!fgets(line, sizeof line, victim_out))
+            break;
+        long v = 0;
+        if (sscanf(line, "ticks=%ld", &v) != 1)
+            continue;
+        if (first < 0)
+            first = v;
+        last = v;
+    }
+    return (first < 0 || last < 0) ? 0 : last - first;
+}
+```
+
+and assert the rate survives:
+
+```c
+    /* Correction 1, made visible. An unconditional PTRACE_CONT with sig=0
+     * destroyed 89% of this victim's SIGALRMs in the prototype and collapsed
+     * its throughput ~99%. A sampler that re-injects signals costs a few
+     * percent; one that eats them fails here. 20% is a generous band chosen so
+     * scheduler noise on a loaded CI box cannot trip it -- the defect it
+     * catches is an order of magnitude larger. */
+    long before = sigload_ticks_over(vout, 1000);
+    (void)asmspy_ptrace_sample(spid, &syms, NULL, cands, 8, 400, why, sizeof why);
+    long after = sigload_ticks_over(vout, 1000);
+    CHECK(before > 50, "the signal victim ticked before we attached");
+    CHECK(after * 100 >= before * 80,
+          "the victim's signal rate must survive the sampler: re-inject with "
+          "PTRACE_GETSIGINFO rather than PTRACE_CONT(sig=0)");
+```
 
 - [ ] **Step 2: Run it to verify it fails**
 
