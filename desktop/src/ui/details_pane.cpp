@@ -7,6 +7,7 @@
 //
 // Two sections are open by default — "Can I trace this?" and "What is it doing
 // now" — because they are the two that change what the operator does next.
+#include <algorithm>
 #include <string>
 
 #include "imgui.h"
@@ -25,21 +26,15 @@ static ImVec4 pi_verdict_col(int attachable) {
                              : dt_maybe_col();
 }
 
-// procinfo_names_verdict reads off syms_total/jit_methods, and a budget-
-// truncated gather can UNDERCOUNT both — so its confident "a trace of this
-// process will show names" conclusion can be wrong in exactly the direction
-// that matters (Task 5 review). State the uncertainty instead of the
-// conclusion when budget_exceeded is set. This wraps the shared model
-// function rather than editing it: procinfo.cpp is a shared file another
-// task in this plan is mid-edit on for an unrelated runner fix.
+// The budget_exceeded caveat (Task 5 review) now lives IN
+// procinfo_names_verdict itself (Task 7 review round 2, IMPORTANT 4):
+// procinfo.cpp is no longer mid-edit by another task, and leaving the
+// caveat pane-local meant the shared function still manufactured a
+// confident "no symbols and no JIT map" verdict out of a budget-truncated
+// zero for every OTHER caller (a row tooltip, a --shot card, ...). This
+// stays a thin pass-through rather than disappearing at the call site, so a
+// future pane-local wrinkle has somewhere to go without touching every call.
 static std::string pi_names_verdict_caveated(const ProcInfo &p) {
-    if (p.budget_exceeded)
-        return "names verdict withheld: the gather budget ran out before "
-               "symbols/JIT methods were fully counted, so syms_total (" +
-               std::to_string(p.syms_total) + ") and jit_methods (" +
-               std::to_string(p.jit_methods) +
-               ") may be undercounts — re-run once the target is idle for a "
-               "trustworthy answer";
     return procinfo_names_verdict(p);
 }
 
@@ -84,10 +79,11 @@ void draw_details_pane(InspectState &s) {
     // measured is the one thing this whole snapshot refuses to do, so the
     // partial state is stated once, up front, before any number below it.
     if (p.budget_exceeded)
-        ImGui::TextColored(dt_warn_col(),
-                           "partial: the 250ms gather budget ran out — module "
-                           "sizes, exec bits and per-module symbol counts may "
-                           "be absent rather than zero");
+        ImGui::TextColored(
+            dt_warn_col(),
+            "partial: the 250ms gather budget ran out — module sizes, "
+            "per-module symbol counts, the symbol/module totals and "
+            "anonymous-executable bytes may be absent rather than zero");
 
     // --- Can I trace this? (open) ---------------------------------------
     if (ImGui::CollapsingHeader("Can I trace this?",
@@ -130,9 +126,19 @@ void draw_details_pane(InspectState &s) {
     if (ImGui::CollapsingHeader("What is it doing now",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("%d threads", p.n_threads);
+        // ScrollY with no outer_size claims ALL remaining vertical space in
+        // the window — leaving nothing for anything drawn after it (Task 7
+        // review IMPORTANT 1: the mods table below measured -175px available
+        // and BeginTable("mods", ...) returned false EVERY FRAME as a
+        // result). Cap this table's height to what its own rows need
+        // (+1 for the header), so the rest of the pane still gets space.
+        const float row_h = ImGui::GetTextLineHeightWithSpacing();
+        const float threads_h =
+            row_h * (std::min<size_t>(p.threads.size(), 8) + 1);
         if (ImGui::BeginTable("threads", 4,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_ScrollY)) {
+                                  ImGuiTableFlags_ScrollY,
+                              ImVec2(0, threads_h))) {
             ImGui::TableSetupColumn("tid", ImGuiTableColumnFlags_WidthFixed);
             ImGui::TableSetupColumn("comm");
             ImGui::TableSetupColumn("state",
@@ -186,11 +192,16 @@ void draw_details_pane(InspectState &s) {
             ImGui::TextDisabled("cpu  — (needs a second sample)");
         }
         ImGui::Text("rss  %llu KB", (unsigned long long)p.rss_kb);
-        if (p.io_readable && r.have)
+        // Gated on io_readable / r.io_have, NOT the CPU-derived r.have: io's
+        // own readiness is unrelated to whether the CPU tick rate or the
+        // utime/stime counters cooperated this round (Task 7 review "cheap
+        // fix") — collapsing them onto one flag would render "needs a
+        // second sample" for io even when io itself was genuinely measured.
+        if (!p.io_readable)
+            ImGui::TextDisabled("io   — (/proc/<pid>/io needs matching creds)");
+        else if (r.io_have)
             ImGui::Text("io   %.0f B/s read · %.0f B/s write", r.read_bps,
                         r.write_bps);
-        else if (!p.io_readable)
-            ImGui::TextDisabled("io   — (/proc/<pid>/io needs matching creds)");
         else
             ImGui::TextDisabled("io   — (needs a second sample)");
         if (p.fds_readable)
@@ -205,41 +216,72 @@ void draw_details_pane(InspectState &s) {
         ImGui::Text("ppid  %ld", p.ppid);
         ImGui::Text("exe   %s%s", p.exe.empty() ? "(unreadable)" : p.exe.c_str(),
                     p.exe_deleted ? "  (deleted)" : "");
-        ImGui::Text("cwd   %s", p.cwd.c_str());
+        // Same readlink(/proc/<pid>/cwd) failure as exe above (reachable on
+        // a same-uid non-dumpable target, e.g. /usr/bin/ping) rendered a
+        // blank line here instead of the same "(unreadable)" exe already
+        // states for the identical cause (Task 7 review "cheap fix").
+        ImGui::Text("cwd   %s", p.cwd.empty() ? "(unreadable)" : p.cwd.c_str());
         ImGui::Text("up    %.0fs", p.elapsed_s);
     }
     if (ImGui::CollapsingHeader("Code surface")) {
-        ImGui::Text("%llu symbols · %zu modules",
-                    (unsigned long long)p.syms_total, p.modules.size());
-        if (p.jit_methods)
-            ImGui::Text("%llu JIT methods via %s",
-                        (unsigned long long)p.jit_methods,
-                        p.jit_source.c_str());
-        ImGui::Text("%llu KB anonymous executable",
-                    (unsigned long long)(p.anon_exec_bytes / 1024));
-        if (ImGui::BeginTable("mods", 3,
-                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                  ImGuiTableFlags_ScrollY)) {
-            ImGui::TableSetupColumn("module");
-            ImGui::TableSetupColumn("symbols",
-                                    ImGuiTableColumnFlags_WidthFixed);
-            ImGui::TableSetupColumn("size", ImGuiTableColumnFlags_WidthFixed);
-            ImGui::TableSetupScrollFreeze(0, 1);
-            ImGui::TableHeadersRow();
-            for (const PiModule &m : p.modules) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::TextUnformatted(m.name.c_str());
-                ImGui::TableNextColumn();
-                ImGui::Text("%llu", (unsigned long long)m.syms);
-                ImGui::TableNextColumn();
-                ImGui::Text("%llu KB", (unsigned long long)(m.size / 1024));
-            }
-            ImGui::EndTable();
+        // A budget-truncated gather can abort THIS ENTIRE SECTION before it
+        // starts (Task 7 review IMPORTANT 2): syms_total/jit_methods/
+        // anon_exec_bytes keep their zero defaults and modules stays empty.
+        // "0 symbols · 0 modules" then asserts a measurement that was never
+        // taken — pi_names_verdict_caveated above already withholds ITS
+        // conclusion for exactly this reason; this guard is the same rule
+        // applied to the raw counts.
+        const bool code_unmeasured = p.budget_exceeded && p.modules.empty();
+        if (code_unmeasured) {
+            ImGui::TextDisabled(
+                "symbols / modules / anonymous executable — (the gather "
+                "budget ran out before this section was read)");
+        } else {
+            ImGui::Text("%llu symbols · %zu modules",
+                        (unsigned long long)p.syms_total, p.modules.size());
+            if (p.jit_methods)
+                ImGui::Text("%llu JIT methods via %s",
+                            (unsigned long long)p.jit_methods,
+                            p.jit_source.c_str());
+            ImGui::Text("%llu KB anonymous executable",
+                        (unsigned long long)(p.anon_exec_bytes / 1024));
         }
-        if (p.modules_truncated)
-            ImGui::TextDisabled("… (showing the %zu highest-symbol modules)",
-                                p.modules.size());
+        // An empty table (headers, zero rows) reads as "confirmed zero
+        // modules" — the same failure the guard above refuses for the
+        // counts. Skip the table entirely when there is nothing to show;
+        // `code_unmeasured` above already said why.
+        if (!p.modules.empty()) {
+            const float row_h = ImGui::GetTextLineHeightWithSpacing();
+            const float mods_h =
+                row_h * (std::min<size_t>(p.modules.size(), 8) + 1);
+            if (ImGui::BeginTable("mods", 3,
+                                  ImGuiTableFlags_Borders |
+                                      ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_ScrollY,
+                                  ImVec2(0, mods_h))) {
+                ImGui::TableSetupColumn("module");
+                ImGui::TableSetupColumn("symbols",
+                                        ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("size",
+                                        ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableHeadersRow();
+                for (const PiModule &m : p.modules) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(m.name.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu", (unsigned long long)m.syms);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%llu KB", (unsigned long long)(m.size / 1024));
+                }
+                ImGui::EndTable();
+            }
+            if (p.modules_truncated)
+                ImGui::TextDisabled(
+                    "… (showing the %zu highest-symbol modules)",
+                    p.modules.size());
+        }
     }
     if (ImGui::CollapsingHeader("Containment")) {
         ImGui::TextUnformatted(p.ns_differs

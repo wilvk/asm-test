@@ -1,19 +1,33 @@
 // test_details_draw.cpp — the Process details pane renders in all of its real
 // states without a live process: nothing selected, a full snapshot, a
-// budget-truncated snapshot, and a refusal. Drives ImGui's null backend.
+// budget-truncated snapshot (both the "one module survived" and the "whole
+// section skipped" shapes), a refusal, and the io/cpu absence-vs-zero
+// branches. Drives ImGui's null backend.
 //
 // This plan's recurring failure mode (seven tasks running) is a first-draft
 // test that passes against deliberately broken code — "it did not crash" is
 // not evidence a refusal, a truncation flag or an absence-vs-zero distinction
-// actually reached the screen. So every check here reads ImGui's own log of
+// actually reached the screen. So most checks here read ImGui's own log of
 // what it rendered (ImGui::LogToClipboard walks the widget tree emitting its
 // literal text; the null backend's clipboard is a plain in-process buffer —
 // see imgui.cpp's non-Win32/non-macOS Platform_*ClipboardTextFn_DefaultImpl),
-// and asserts on that RENDERED TEXT, never merely on absence of a crash. Every
-// check below was verified BY MUTATION: a one-line change to details_pane.cpp
-// (banner removed, have==false printing "0%", a mode's `why` dropped, a
-// `*_truncated` flag not surfaced, the selected_pid<=0 guard deleted) was
-// rebuilt and confirmed to flip this test to FAIL before being reverted.
+// and assert on that RENDERED TEXT, never merely on absence of a crash.
+//
+// Text is NOT enough on its own, though: Task 7's review found a ScrollY
+// table (the module list) that measured -175px of available height in the
+// real docked shell and silently failed to open EVERY FRAME, while
+// LogToClipboard happily logged all its rows anyway — the oracle cannot see
+// whether a row ever had screen space, only whether its text was submitted.
+// The last scenario below therefore reads the table's own ImGuiTable::
+// OuterRect (a non-text signal `render()`'s `out_mods_table_h` reports) —
+// BeginTable's own RETURN VALUE turned out not to be usable under the null
+// backend (its early-return-when-clipped path does not reproduce there;
+// see the comment on `render()`), but a table given no explicit outer_size
+// still collapses to a ~1px floor there, which its rendered rect exposes.
+//
+// Every check below was verified BY MUTATION (see the task report for the
+// full, current list and score) — reverting the fix under test flips this
+// binary to FAIL, then the fix is restored before moving to the next one.
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -21,6 +35,7 @@
 #include <string>
 
 #include "imgui.h"
+#include "imgui_internal.h" // ImGuiTable::OuterRect -- see render()
 
 #include "doc/recording.h"
 #include "live/procinfo.h"
@@ -83,10 +98,25 @@ static void settle(InspectState &s, long pid, const ProcInfo &snapshot,
 // PUBLIC ImGuiStorage API keyed the same way CollapsingHeader keys its own
 // persisted open/closed bool — no imgui_internal.h, no test-only hook in
 // production code.
-static std::string render(InspectState &s, ImGuiIO &io) {
+//
+// The window is a FIXED, modest size (not auto-resizing to content) --
+// mirroring a real docked rail rather than an infinite canvas. That is
+// deliberate: Task 7 review IMPORTANT 1 found that a `BeginTable(...,
+// ImGuiTableFlags_ScrollY)` with no explicit outer_size claims ALL
+// remaining vertical space, so a table drawn AFTER it can be starved to a
+// negative available height and silently fail to open -- invisible to any
+// assertion on LOGGED TEXT (LogToClipboard emits a row's text whether or
+// not the table actually claimed screen space). `out_cursor_y`, when
+// given, reports where the cursor ended up (window-local Y) after the
+// whole pane drew -- a non-text, "did this actually occupy space" signal a
+// broken ScrollY table cannot fake, because BeginTable returning false
+// draws nothing and does not advance the cursor at all.
+static std::string render(InspectState &s, ImGuiIO &io,
+                          float *out_mods_table_h = nullptr) {
     io.DisplaySize = ImVec2(1280, 900);
     io.DeltaTime = 1.0f / 60.0f;
     ImGui::NewFrame();
+    ImGui::SetNextWindowSize(ImVec2(360, 500), ImGuiCond_Always);
     ImGui::Begin("details-under-test");
     for (const char *label :
          {"Identity", "Code surface", "Containment", "Children"})
@@ -94,6 +124,14 @@ static std::string render(InspectState &s, ImGuiIO &io) {
     ImGui::LogToClipboard();
     draw_details_pane(s);
     ImGui::LogFinish();
+    // GetID("mods") computed HERE, with "details-under-test" as the
+    // current window and no other ID pushed since Begin(), is the exact
+    // same id BeginTable("mods", ...) computed inside draw_details_pane --
+    // the pane pushes no extra PushID scope before reaching it.
+    if (out_mods_table_h) {
+        ImGuiTable *tbl = ImGui::TableFindByID(ImGui::GetID("mods"));
+        *out_mods_table_h = tbl ? tbl->OuterRect.GetHeight() : -1.0f;
+    }
     ImGui::End();
     ImGui::Render();
     if (ImGui::GetDrawData() == nullptr) {
@@ -201,6 +239,72 @@ static ProcInfo make_truncated_snapshot() {
     return p;
 }
 
+// A budget-truncated gather that aborted BEFORE the code-surface section
+// ever started (Task 7 review IMPORTANT 2): syms_total/jit_methods/
+// anon_exec_bytes at their zero defaults AND modules empty. Distinct from
+// make_truncated_snapshot() above, which has ONE module -- that scenario
+// exercises the banner + the truncation lines, not this "the whole section
+// was skipped" case, which needs modules genuinely empty to trigger the
+// pane's code_unmeasured guard.
+static ProcInfo make_budget_aborted_no_modules() {
+    ProcInfo p;
+    p.valid = true;
+    p.pid = 8001;
+    p.comm = "worker";
+    p.state = 'R';
+    p.runtime = "native";
+    p.attachable = 1;
+    p.attach_why = "same uid, no LSM blocking";
+    p.syms_total = 0;
+    p.jit_methods = 0;
+    p.anon_exec_bytes = 0;
+    p.modules.clear();
+    p.modules_truncated = false;
+    p.budget_exceeded = true;
+    return p;
+}
+
+// Several threads AND several modules, budget_exceeded=false (so the
+// code_unmeasured guard does not fire and the mods table is genuinely
+// expected to render) -- built to prove Task 7 review IMPORTANT 1: a
+// ScrollY table with no outer_size claims ALL remaining vertical space, so
+// a table drawn AFTER it (here, "mods" after "threads") can be starved to
+// a negative available height and BeginTable silently returns false. A
+// text-only assertion cannot see this (LogToClipboard logs a row's text
+// whether or not the row ever had screen space); this snapshot exists so
+// the test can measure the window's rendered content height instead.
+static ProcInfo make_wide_snapshot() {
+    ProcInfo p;
+    p.valid = true;
+    p.pid = 8002;
+    p.comm = "widerunner";
+    p.state = 'R';
+    p.runtime = "native";
+    p.attachable = 1;
+    p.attach_why = "same uid, no LSM blocking";
+    for (int i = 0; i < 8; ++i) {
+        PiThread t;
+        t.tid = 8100 + i;
+        t.comm = "widerunner";
+        t.state = 'R';
+        t.have_syscall = true;
+        t.nr = 0;
+        t.name = "read";
+        p.threads.push_back(t);
+    }
+    p.n_threads = 8;
+    p.syms_total = 12345;
+    for (int i = 0; i < 8; ++i) {
+        PiModule m;
+        m.name = "libmod" + std::to_string(i) + ".so";
+        m.size = 4096;
+        m.syms = 10;
+        m.exec = true;
+        p.modules.push_back(m);
+    }
+    return p;
+}
+
 int main() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -287,6 +391,14 @@ int main() {
         want("budget banner renders and names the affected fields", out,
              "gather budget ran out");
         want("budget banner names module sizes", out, "module sizes");
+        want("budget banner names the symbol/module totals", out,
+             "symbol/module totals");
+        want("budget banner names anonymous-executable bytes", out,
+             "anonymous-executable bytes");
+        // "exec bits" is dropped from the banner (Task 7 review IMPORTANT
+        // 2): this pane never displays a module's exec bit, so naming it
+        // as an affected field was simply wrong.
+        avoid("budget banner no longer claims 'exec bits'", out, "exec bits");
         want("argv_truncated appends an ellipsis to the command line", out,
              "worker --flag …");
         want("threads_truncated shows the exact counts", out,
@@ -310,6 +422,28 @@ int main() {
         want("fds unreadable states so, not a bare 0", out, "unreadable");
     }
 
+    // --- 4b. budget_exceeded with the code-surface section fully skipped ---
+    // (Task 7 review IMPORTANT 2). Distinct from scenario 4: there, ONE
+    // module survives, so the pane's normal "%llu symbols . %zu modules"
+    // line is the CORRECT thing to render (truncation, not full-skip).
+    // Here modules is genuinely empty, matching pi_read_code_and_modules
+    // being skipped outright because the budget was ALREADY exceeded on
+    // entry -- reproduced end to end by the reviewer against the real
+    // producer. "0 symbols . 0 modules" would assert a measurement that
+    // was never taken; the pane must say so instead.
+    {
+        InspectState s;
+        ProcInfo p = make_budget_aborted_no_modules();
+        settle(s, 6501, p);
+        std::string out = render(s, io);
+        want("code-surface unmeasured line renders", out,
+             "the gather budget ran out before this section was read");
+        avoid("a budget-truncated FULL SKIP never prints a confident count",
+              out, "0 symbols");
+        avoid("no mods table header renders for a genuinely empty list", out,
+              "highest-symbol modules");
+    }
+
     // --- 5. have==false renders an em dash, NEVER "0%" -------------------
     // Paired with its contrast case (have=true, cpu_pct=0.0) so a mutation
     // that ignores `have` and always prints a percentage is caught: the
@@ -323,6 +457,9 @@ int main() {
         settle(s, 6001, p, none);
         std::string out = render(s, io);
         want("cpu em-dash when not yet measurable", out, "needs a second sample");
+        // The literal em dash glyph, not just the accompanying English --
+        // a mutation could keep the words and drop the dash, or vice versa.
+        want("cpu renders the actual em-dash glyph", out, "cpu  \xe2\x80\x94");
         avoid("cpu never prints 0% for a first snapshot", out, "0.0%");
     }
     {
@@ -336,6 +473,119 @@ int main() {
         std::string out = render(s, io);
         want("cpu DOES print 0.0% once a rate is genuinely measured", out,
              "0.0%");
+    }
+
+    // --- 5b/5c. io's readiness is gated on io_readable/io_have, NOT the
+    // CPU-derived r.have (Task 7 review "cheap fix") -- neither branch was
+    // exercised above: scenario 4 has io_readable=false throughout, so
+    // "needs a second sample" and "measured bytes/sec" for io were both
+    // untested.
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        p.io_readable = true; // readable, but no second sample YET
+        ProcRates r;
+        r.have = true; // cpu happens to be ready; io must not borrow this
+        r.cpu_pct = 3.0;
+        r.io_have = false;
+        settle(s, 6003, p, r);
+        std::string out = render(s, io);
+        want("io em-dash when io_readable but not yet sampled twice", out,
+             "io   \xe2\x80\x94 (needs a second sample)");
+        avoid("io does not print a rate it never measured", out, "B/s");
+    }
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        p.io_readable = true;
+        ProcRates r;
+        r.have = false; // cpu NOT ready; io must not be masked by this
+        r.io_have = true;
+        r.read_bps = 512.0;
+        r.write_bps = 256.0;
+        settle(s, 6004, p, r);
+        std::string out = render(s, io);
+        want("io renders measured bytes/sec once io_have is true", out,
+             "512 B/s read");
+        avoid("io is not gated on the CPU-derived have (cpu itself is "
+              "correctly '-- (needs a second sample)' here; io must not be)",
+              out, "io   \xe2\x80\x94");
+    }
+    {
+        // fds' own em-dash (unreadable), for the same reason as cpu/io above
+        // -- the literal glyph, not just the word.
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        settle(s, 6005, p);
+        std::string out = render(s, io);
+        want("fds renders the actual em-dash glyph", out, "fds  \xe2\x80\x94");
+    }
+
+    // --- 6b. an unreadable cwd states so, the same way exe already does ----
+    // (Task 7 review "cheap fix"): both are the identical readlink(/proc/
+    // <pid>/cwd or .../exe) failure, reachable on a same-uid non-dumpable
+    // target (e.g. /usr/bin/ping) -- exe already said "(unreadable)" for
+    // it; cwd rendered a blank line instead until now.
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        p.cwd.clear();
+        settle(s, 6007, p);
+        std::string out = render(s, io);
+        want("cwd unreadable states so like exe already does", out,
+             "cwd   (unreadable)");
+    }
+
+    // --- 7. an ssh host configured states the pid is LOCAL -----------------
+    // (doors.h InspectState::ssh_host). Untested until now: every prior
+    // scenario left ssh_host blank.
+    {
+        InspectState s;
+        ProcInfo p = make_truncated_snapshot();
+        p.budget_exceeded = false;
+        settle(s, 6006, p);
+        std::strncpy(s.ssh_host, "build-box.internal", sizeof(s.ssh_host) - 1);
+        std::string out = render(s, io);
+        want("ssh_host states the pid is local", out, "this pid is LOCAL");
+        want("ssh_host names the capture host", out, "build-box.internal");
+    }
+
+    // --- 8. the mods table must actually occupy screen space (IMPORTANT 1)
+    // A text-only assertion cannot catch a ScrollY table that renders at a
+    // ~1px floor for lack of an explicit outer_size: LogToClipboard logs a
+    // row's text whether or not that row ever had real screen space, which
+    // is exactly how this bug shipped uncaught the first time. This reads
+    // the "mods" ImGuiTable's own OuterRect straight out of ImGui's table
+    // registry (imgui_internal.h, the same idiom test_layout.cpp/
+    // test_shell.cpp already use for whitebox docking checks) -- a fixed
+    // explicit outer_size (row_h * rows, independent of available space)
+    // renders as a real, multi-row-tall rect; the bug's implicit (0,0)
+    // outer_size collapses to CalcItemSize's ~1px floor once
+    // GetContentRegionAvail() has gone negative, which the threads table
+    // above it (8 rows, in a fixed 360x500 window) reliably drives it to.
+    {
+        InspectState s;
+        ProcInfo p = make_wide_snapshot();
+        settle(s, 7001, p);
+        float mods_h = 0.0f;
+        std::string out = render(s, io, &mods_h);
+        want("wide snapshot's module rows render their text", out,
+             "libmod5.so");
+        check("mods table's OWN rendered rect is a real height, not the "
+              "~1px floor a missing outer_size collapses to (non-text "
+              "signal)",
+              mods_h > 20.0f,
+              "the \"mods\" ImGuiTable's OuterRect height = " +
+                  std::to_string(mods_h) +
+                  "px -- too short to be 8 real rows; BeginTable(\"mods\", "
+                  "...) most likely has no explicit outer_size, so "
+                  "CalcItemSize() clamped it to a ~1px floor once the "
+                  "threads table above it drove GetContentRegionAvail() "
+                  "negative");
     }
 
     ImGui::DestroyContext();

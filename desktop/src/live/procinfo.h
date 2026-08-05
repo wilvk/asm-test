@@ -122,6 +122,14 @@ uint64_t procinfo_parse_hex(const std::string &s);
 struct ProcRates {
     bool have = false; // false = not yet measurable, NOT "measured zero"
     double cpu_pct = 0;
+    // io's readiness is tracked SEPARATELY from `have` (Task 7 review "cheap
+    // fix"): `have` is gated on the CPU tick rate (clk_tck) and the utime/
+    // stime counters not going backwards, neither of which is io's business.
+    // Gating the io line on `have` meant a target with a genuinely
+    // measurable io rate but an unrelated CPU-side hiccup would render "not
+    // yet measurable" for io too — collapsing two independent absences into
+    // one.
+    bool io_have = false;
     double read_bps = 0, write_bps = 0;
 };
 

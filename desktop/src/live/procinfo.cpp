@@ -240,24 +240,49 @@ ProcRates procinfo_rates(const ProcInfo &prev, const ProcInfo &cur) {
         return r;
     if (prev.pid != cur.pid || prev.start_ticks != cur.start_ticks)
         return r; // a different process (or a reused pid)
-    if (cur.ts_ns <= prev.ts_ns || cur.clk_tck == 0)
-        return r;
+    if (cur.ts_ns <= prev.ts_ns)
+        return r; // no positive interval: neither rate means anything
     const double dt = double(cur.ts_ns - prev.ts_ns) / 1e9;
-    const uint64_t pj = prev.utime + prev.stime, cj = cur.utime + cur.stime;
-    if (cj < pj)
-        return r; // counters went backwards: not a rate
-    r.have = true;
-    r.cpu_pct = 100.0 * (double(cj - pj) / double(cur.clk_tck)) / dt;
+    // io's readiness is independent of the CPU-only gates below (Task 7
+    // review "cheap fix"): clk_tck==0 and "utime/stime went backwards" are
+    // facts about the CPU counters, not about io_read_bytes/io_write_bytes.
+    // Computing io_have/read_bps/write_bps here, before either CPU gate,
+    // keeps a genuinely measurable io rate from being masked by an
+    // unrelated CPU-side absence.
     if (cur.io_readable && prev.io_readable) {
+        r.io_have = true;
         if (cur.io_read_bytes >= prev.io_read_bytes)
             r.read_bps = double(cur.io_read_bytes - prev.io_read_bytes) / dt;
         if (cur.io_write_bytes >= prev.io_write_bytes)
             r.write_bps = double(cur.io_write_bytes - prev.io_write_bytes) / dt;
     }
+    if (cur.clk_tck == 0)
+        return r; // cpu_pct's denominator; io_have/bps above already stand
+    const uint64_t pj = prev.utime + prev.stime, cj = cur.utime + cur.stime;
+    if (cj < pj)
+        return r; // counters went backwards: not a rate
+    r.have = true;
+    r.cpu_pct = 100.0 * (double(cj - pj) / double(cur.clk_tck)) / dt;
     return r;
 }
 
 std::string procinfo_names_verdict(const ProcInfo &p) {
+    // A budget-truncated gather can abort the whole code-surface section
+    // before syms_total/jit_methods are counted (leaving them at their zero
+    // defaults), or bail MID-loop (leaving a partial, undercounted sum) —
+    // Task 7 review IMPORTANT 4. Either way, "no symbols and no JIT map" or
+    // a confident count would manufacture a verdict out of the truncation
+    // itself; state the uncertainty instead of the conclusion. This must be
+    // the first check: a budget-truncated zero is not the same fact as a
+    // genuinely symbol-free target, and the caveat has to win regardless of
+    // which branch below would otherwise fire.
+    if (p.budget_exceeded)
+        return "names verdict withheld: the gather budget ran out before "
+               "symbols/JIT methods were fully counted, so syms_total (" +
+               std::to_string(p.syms_total) + ") and jit_methods (" +
+               std::to_string(p.jit_methods) +
+               ") may be undercounts — re-run once the target is idle for a "
+               "trustworthy answer";
     const uint64_t named = p.syms_total + p.jit_methods;
     if (named == 0)
         return "no symbols and no JIT map — a trace of this process will show "

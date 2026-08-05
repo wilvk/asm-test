@@ -131,8 +131,41 @@ int main() {
     check("rate available", r1.have, "two snapshots must yield a rate");
     check("cpu 50%", r1.cpu_pct > 49.0 && r1.cpu_pct < 51.0,
           "cpu_pct = " + std::to_string(r1.cpu_pct));
+    check("io_have available", r1.io_have,
+          "two io_readable snapshots must yield io_have");
     check("read 2048 B/s", r1.read_bps > 2040.0 && r1.read_bps < 2056.0,
           "read_bps = " + std::to_string(r1.read_bps));
+
+    // Task 7 review "cheap fix": io's readiness must be INDEPENDENT of the
+    // CPU-only gates (clk_tck==0, utime/stime went backwards) — a target
+    // with a genuinely measurable io rate but an unrelated CPU-side hiccup
+    // must not have that io rate masked by the CPU gate.
+    ProcInfo q_no_tick = q;
+    q_no_tick.clk_tck = 0;
+    ProcRates r_no_tick = procinfo_rates(p, q_no_tick);
+    check("no cpu rate without a tick rate", !r_no_tick.have,
+          "clk_tck==0 must not yield a cpu rate");
+    check("io_have survives a missing tick rate", r_no_tick.io_have,
+          "io's readiness must not be gated on the CPU tick rate");
+    check("read_bps survives a missing tick rate",
+          r_no_tick.read_bps > 2040.0 && r_no_tick.read_bps < 2056.0,
+          "read_bps = " + std::to_string(r_no_tick.read_bps));
+
+    // Fixed, known jiffy values rather than deriving from the real
+    // capture's utime/stime (which may legitimately be 0 on an idle
+    // process, and p.utime - 1 would then underflow the unsigned counter
+    // instead of going "backwards").
+    ProcInfo base_back = p;
+    base_back.utime = 1000;
+    base_back.stime = 1000;
+    ProcInfo q_cpu_back = q;
+    q_cpu_back.utime = 900; // 900+900 < 1000+1000: counters "went backwards"
+    q_cpu_back.stime = 900;
+    ProcRates r_cpu_back = procinfo_rates(base_back, q_cpu_back);
+    check("no cpu rate when counters go backwards", !r_cpu_back.have,
+          "utime/stime going backwards must not yield a cpu rate");
+    check("io_have survives cpu counters going backwards", r_cpu_back.io_have,
+          "io's readiness must not be gated on the cpu jiffy counters");
 
     // An explicitly-invalid snapshot must never seed a rate even when its
     // pid/start_ticks MATCH cur — this isolates the `valid` guard from the
@@ -180,6 +213,34 @@ int main() {
               std::string::npos,
           "verdict '" + procinfo_names_verdict(p) +
               "' does not mention syms_total=" + std::to_string(p.syms_total));
+
+    // Task 7 review IMPORTANT 4: a budget-truncated gather can leave
+    // syms_total/jit_methods at zero (a full section skip) or a partial
+    // undercount (a mid-loop bail) WITHOUT that being a genuine "no
+    // symbols" fact. procinfo_names_verdict must state the uncertainty
+    // rather than manufacture a confident verdict out of the truncation
+    // itself — checked directly against the shared function (this is where
+    // Task 5/7's review found the caveat belongs, not pane-local).
+    ProcInfo truncated_zero = p;
+    truncated_zero.budget_exceeded = true;
+    truncated_zero.syms_total = 0;
+    truncated_zero.jit_methods = 0;
+    std::string vz = procinfo_names_verdict(truncated_zero);
+    check("budget_exceeded verdict withholds 'no symbols'",
+          vz.find("no symbols and no JIT map") == std::string::npos,
+          "verdict '" + vz +
+              "' asserted 'no symbols' from a budget-truncated zero");
+    check("budget_exceeded verdict states the uncertainty",
+          vz.find("undercount") != std::string::npos,
+          "verdict '" + vz + "' does not say the counts may be undercounts");
+
+    ProcInfo truncated_nonzero = p; // syms_total > 0 from the real capture
+    truncated_nonzero.budget_exceeded = true;
+    std::string vn = procinfo_names_verdict(truncated_nonzero);
+    check("budget_exceeded caveats even a nonzero syms_total",
+          vn.find("undercount") != std::string::npos,
+          "verdict '" + vn +
+              "' did not caveat a nonzero-but-truncated count");
 
     // Sections with no coverage above: runtime (the wire key is "static", not
     // "static_linked" — a rename mismatch would silently leave this false-by-

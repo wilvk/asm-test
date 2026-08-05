@@ -1353,6 +1353,45 @@ int main() {
         ds.inspect.host_started = false;
         ds.inspect.selected_pid = 0;
 
+        // Process details (gui-process-details Task 7 review, IMPORTANT 3):
+        // its context gate (pctx_details) is selected_pid ALONE, deliberately
+        // NOT host_started like its sibling kPaneCapture just above — assert
+        // both directions the same way that sibling gate is asserted a few
+        // lines up. Driven through shell_apply_mode_panes (not a hand-set
+        // pane_open, unlike the kPaneCapture/kPanePtSlice checks above) so a
+        // regression in ANY of kPaneDetails' three wiring points is visible
+        // here, not just the context gate itself:
+        //   - the kManagedPanes row (pane_def/pane_is_open/pane_shown all
+        //     fall through to TRUE for an unmanaged name — see pane_shown's
+        //     own `d == nullptr` clause above — so losing that row does not
+        //     hide the pane, it leaves it shown UNCONDITIONALLY; only the
+        //     second assertion below (no selection) can catch that);
+        //   - the mode_wants_pane Capture-mode arm (shell_apply_mode_panes
+        //     would then never set pane_open[kPaneDetails] true at all, so
+        //     the FIRST assertion below fails instead);
+        //   - the context gate itself (pctx_details gaining a host_started
+        //     requirement would fail the first assertion the same way the
+        //     sibling kPaneCapture check above does).
+        // NOT caught here, same as no other pane in this file: which dock
+        // node it lands in (layout.cpp's DockBuilderDockWindow call) — dock-
+        // node placement has no assertion for ANY pane in this tree.
+        shell_apply_mode_panes(ds, Mode::Capture);
+        ds.inspect.host_started = false;
+        ds.inspect.selected_pid = 1234;
+        frame(ds);
+        frame(ds);
+        check("pane/details shows with no host, just a selection",
+              active(kPaneDetails),
+              "Process details must not require host_started (pctx_details "
+              "is selected_pid alone)");
+        ds.inspect.selected_pid = 0;
+        frame(ds);
+        frame(ds);
+        check("pane/details hides with no selection", !active(kPaneDetails),
+              "Process details must hide once nothing is selected");
+        ds.inspect.host_started = false;
+        ds.inspect.selected_pid = 0;
+
         // Its BODY draws cleanly everywhere (it self-gates internally with the
         // disclosure + a disabled Replay button), independent of the host gate —
         // render it in a plain window so ImGui validates its Begin / EndDisabled
