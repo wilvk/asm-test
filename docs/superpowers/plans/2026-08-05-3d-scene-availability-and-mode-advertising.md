@@ -28,6 +28,7 @@ Every row below was verified against the working tree at `b3d23d01` by reading t
 | B10 | `mode_visualizations(Log)` and `(Trace)` both advertise "Timeline", which neither can fill; `Trace` under-advertises the Canvas | The Timeline is the operand timeline, one row per `df_step` (`timeline.cpp:133-183` over `Streams::df`); `log` emits only `syscall`, `trace` only `trace`/`coverage`. `shell.cpp:3390-3393` opens `kPaneTimeline` for both | Two more promised-but-empty panes, opened rather than merely named |
 | B11 | The Scene3D absent-reason promises "a live maps snapshot" with no desktop path behind it | `view_presence.cpp:122-123` and the identical placard at `shell.cpp:1649-1656`; the only `Region` producers are `regions_from_codeimage` (reads `by_kind["codeimage"]`) and `observed_data_spans`, which the gate does not consult. No `regions_from_maps` exists | An operator whose recording lacks codeimage goes looking for a maps-snapshot capture option that was never built |
 | B12 | The generated keymap line conflates the two camera buttons the tree documents as distinct | `hud.cpp:365` emits "R: reset view (the landmark)", but `CamKey::Reset` is `Camera::reset()` — the literal default pose, which `hud.cpp:800-808` names "default view" | 48 T4 states "two buttons, two meanings, neither silently repurposed into the other"; the keymap repurposes one into the other for keyboard-only analysts |
+| B13 | The whole 3D pane is gated on `codeimage`, so three substrates that need no address plane are unreachable | `view_presence.cpp:120` marks `ViewId::Scene3D` absent on `regions_from_codeimage(r).empty()`, and both tab strips skip absent views (`shell.cpp:2657`, `:3921`). `build_divergence_scene`, `build_module_ribbon` and `build_lane_prism` take no `space::` parameter at all; `StandaloneFrame` (`standalone_gl.h:39-45`) has no terrain field | A `tree`-only or `dataflow`-only recording cannot reach its own substrate. A corpus scan finds **20 recordings** in the tree that carry a substrate but no codeimage — including `desktop/test/fixtures/obs-tree.asmtrace` — none of which can open the pane today |
 | F1 | The desktop cannot produce a merged multi-mode recording, though it can consume one | `LiveSession` spawns a fixed argv that never carries `--record` (`session.cpp:81-87`); `Spec` has no record-path field; Save serializes exactly one `Recording` — `growing()` else `done.back()` (`inspect_door.cpp:865-871`) | `asmspy --serve --record=<f>` already lands `call` + `trace`/`coverage` + wide `df_step.ops` in ONE loadable file (`cli/test_serve_record.c`, `build/test-serve-record.asmtrace`), and `Workspace::open` loads it — but only if some other tool produced it |
 
 **Why this is not a test-only shim.** B1, B2 and B3 each let the pane assert something the recording does not support: a populated scene, a live substrate, a restored view. B4 mislabels read operands as writes on a documented axis. B5, B11 and B12 are text that describes code that does not exist. B7–B10 are a table that has drifted from the producer it describes. None of these is caught by tightening an assertion; each needs the behaviour corrected at its source.
@@ -43,7 +44,7 @@ Every row below was verified against the working tree at `b3d23d01` by reading t
 - **`cli/*.c` is inside the CI-gated `make fmt-check`.** `desktop/` is not (it has its own ungated `desktop-fmt-check`). Run `make fmt-check` after touching `cli/`. Do not let `clang-format -i` re-sort `shell.cpp`'s addon include fences — that produces an `imgui_internal.h #error`.
 - **`shell_kind_availability` is file-local static** (`shell.cpp:951-952`) with exactly one call site (`shell.cpp:1324`). It cannot be reached from a test as it stands. Task 2 must either move the pure decision into a testable unit or accept that only the builder half is covered — do not paper over this by asserting on the builders and claiming the gate is tested.
 - **Availability is not the same as a note.** An unavailable kind is offered DISABLED and cannot be selected (`hud.cpp:504-509`). A kind that is available but degenerate must stay SELECTABLE and carry a note. Moving a note into `kind_unavailable` is a regression — see Self-review's refuted candidates.
-- **The 3D pane is gated on codeimage regions, upstream of every scene.** `draw_scene_overview` early-returns at `shell.cpp:1649` when `!sv.has_regions`, before any substrate chrome. Every fix in Tasks 2–7 is only observable for a recording that carries `codeimage`. Use a fixture that does.
+- **The 3D pane is gated on codeimage regions, upstream of every scene — until Task 9.** Two separate gates enforce this and they are NOT interchangeable. The one that actually hides the pane is `view_presence.cpp:120`; `draw_scene_overview`'s early return at `shell.cpp:1649` is downstream of it and is unreachable for a codeimage-less recording today. Until Task 9 lands, every fix in Tasks 2–7 is only observable for a recording that carries `codeimage` — use a fixture that does. **Order matters: do Task 9 LAST**, because it makes several currently-unreachable code paths reachable, and Tasks 2–7 are what make those paths honest when they arrive.
 - **Fixtures.** Fixtures generated from the real CLI get a Step 1 showing the exact generating command AND a shape-verification command run BEFORE committing; the fixture is then frozen. `desktop/test/fixtures/*.asmtrace` are ungated; the `build/asmtrace-rec/` golden corpus is byte-gated by `make asmtrace-golden-check`, which stops at the FIRST mismatch.
 - **Pre-existing failures.** `desktop_test_shell`'s attach/no-host checks FAIL on a host with nothing to attach to and are PRE-EXISTING. They stop a naive `for` loop, so verify touched tests INDIVIDUALLY rather than trusting a suite exit code.
 
@@ -727,6 +728,244 @@ struct Spec {
 
 ---
 
+### Task 9: Unblock the codeimage gate — a substrate without a plane is still a scene
+
+**Files:**
+- Modify: `desktop/src/scene3d/standalone.h` (add `is_prism_write` + `lane_prism_any`)
+- Modify: `desktop/src/scene3d/standalone.cpp` (`:623`, `:634` — route both readers through `is_prism_write`)
+- Modify: `desktop/src/ui/view_presence.cpp` (`:118-124` — the Scene3D predicate and its reason)
+- Modify: `desktop/src/ui/view_presence.h` (`:63` — the header contract is currently wrong)
+- Modify: `desktop/src/ui/shell.cpp` (`:1649` narrow; `:1668`, `:1764`, `:1831`, `:1916` gate; `:951-970` add the Plane slot)
+- Modify: `desktop/src/scene3d/hud.cpp` (`:311`, `:71`, `:470`, `:1222` — the empty-plane guards this task makes reachable)
+- Modify: `scripts/verify-shot-recordings.py` (`:53-66`), `docs/guides/desktop-gui-scenes.md` (`:233-235`)
+- Test: `desktop/test/test_view_presence.cpp`, `desktop/test/test_shell.cpp`, `desktop/test/test_layers.cpp` (extend)
+
+**Interfaces:**
+- Consumes: Task 2's `drawable()` semantics (the invocation predicate must mirror **cells**, not slabs, or the two rules disagree); Task 3's eviction (a kind that is present-but-unavailable must still be leavable); Task 7's `kind == Plane` HUD guard.
+- Produces: a widened presence rule, and one shared prism predicate the option list and the gate both call:
+
+```cpp
+// standalone.h — the ONE rule for "is this a prism write", shared by the option
+// list and by the pane's presence predicate so the two can never disagree.
+inline bool is_prism_write(const ValRec &v) { return v.wide && v.write && v.space == "reg"; }
+
+// The presence gate's early-exit form: view_presence() runs per frame and must
+// not build the whole option set to answer a yes/no.
+inline bool lane_prism_any(const DataflowStream &df) {
+    for (const ValRec &v : df.recs)
+        if (is_prism_write(v))
+            return true;
+    return false;
+}
+```
+
+**The early return is not the gate.** This is the correction that shapes the task. `draw_scene_overview`'s `!sv.has_regions` return at `shell.cpp:1649` looks like the blocker and is not: for a codeimage-less recording the pane is never drawn at all, because `view_presence.cpp:120` marks `ViewId::Scene3D` absent and both tab strips `continue` over absent views. Fixing only the early return changes nothing a user can see. The presence rule is the gate; the early return is a second, narrower one behind it, and both must move.
+
+**Divergence stays out of the predicate.** The obvious fifth clause would be `b_attachable`, and it is wrong: that flag means "a second recording is open and could be attached with `d`" (`shell.cpp:2501-2503`), not "B is attached". Two recordings open with none attached would make the pane present with an empty divergence scene — precisely the B1/B2 defect this plan exists to remove. The pane opens on plane-or-invocation-or-ribbon-or-prism; divergence remains reachable only once one of those has opened it, which is honest and costs nothing real.
+
+**Note the drift risk in `ObserverState`.** `obs.tree` and `obs.region` are produced by the same *functions* the scenes use, but not by the same *calls* — `observer_build` passes an `ObsLifecycle*` and `shell_weave_standalone` passes none, so `tree.have_effective`, `tree.effective.depth` and both views' `.skip` genuinely differ between the two copies on the live path. The predicates below read only `rows` and `invocations[].blocks`, which are lifecycle-independent. **Do not widen them to read `effective` or `skip`** without re-deriving them from the scenes' own call.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `desktop/test/test_view_presence.cpp`:
+
+```cpp
+    // Task 9: three substrates need no address plane, so codeimage must not
+    // gate the whole pane.
+    //
+    // build_divergence_scene / build_module_ribbon / build_lane_prism take no
+    // space:: parameter and StandaloneFrame carries no terrain — the plane is
+    // one substrate among five, not a precondition for the other four. Gating
+    // ViewId::Scene3D on regions_from_codeimage made a tree-only or
+    // dataflow-only recording unable to reach its own scene.
+    {
+        // A call tree and NOTHING else: no codeimage, so no plane.
+        Recording r = load_fixture("obs-tree.asmtrace");
+        check("3d/tree-fixture/no-codeimage",
+              space::regions_from_codeimage(r).empty(),
+              "obs-tree.asmtrace is the case under test precisely because it "
+              "has calls and no codeimage; if that changed, pick another");
+
+        ObserverState obs;
+        obs.tree = obs_tree_build(r);
+        obs.region = obs_region_build(r);
+        Streams a;
+        const std::vector<ViewPresence> vp =
+            view_presence(a, obs, StepIndex{}, r, Mode::Replay, false);
+
+        const ViewPresence *s3 = nullptr;
+        for (const ViewPresence &e : vp)
+            if (e.id == ViewId::Scene3D)
+                s3 = &e;
+        check("3d/tree-fixture/entry-exists", s3 != nullptr,
+              "Scene3D must always appear in the presence list, present or not");
+        check("3d/tree-fixture/present", s3 != nullptr && s3->present,
+              "a recording with a call tree can fill the module excursion "
+              "ribbon, which needs no plane — the pane must open for it");
+    }
+
+    {
+        // Nothing at all: no codeimage, no calls, no coverage blocks, no wide
+        // writes. The pane must STILL be absent, and say so accurately.
+        Recording r = load_fixture("min-trace.asmtrace");
+        ObserverState obs;
+        obs.tree = obs_tree_build(r);
+        obs.region = obs_region_build(r);
+        Streams a;
+        const std::vector<ViewPresence> vp =
+            view_presence(a, obs, StepIndex{}, r, Mode::Replay, false);
+        for (const ViewPresence &e : vp)
+            if (e.id == ViewId::Scene3D) {
+                check("3d/min/absent", !e.present,
+                      "a recording with no substrate at all must not open the "
+                      "pane — widening the gate is not removing it");
+                check("3d/min/reason-names-all",
+                      e.reason.find("codeimage") != std::string::npos &&
+                          e.reason.find("call") != std::string::npos,
+                      "the reason must name what would have opened it, not "
+                      "only codeimage: got \"" + e.reason + "\"");
+            }
+    }
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `make build/desktop_test_view_presence && ./build/desktop_test_view_presence`
+
+Expected:
+
+```
+FAIL 3d/tree-fixture/present: a recording with a call tree can fill the module excursion ribbon, which needs no plane — the pane must open for it
+FAIL 3d/min/reason-names-all: the reason must name what would have opened it, not only codeimage: got "no codeimage regions — the 3D overview needs codeimage events (or a live maps snapshot) to place the address-space plane"
+```
+
+`3d/tree-fixture/no-codeimage`, `3d/tree-fixture/entry-exists` and `3d/min/absent` must PASS from the start — they are the controls. If `3d/min/absent` ever fails, the predicate has been widened into "always present", which is a worse defect than the one being fixed.
+
+- [ ] **Step 3: Widen the presence predicate**
+
+Add the substrate predicates to `view_presence.cpp` above `view_presence()`. Each mirrors ONE builder's own emptiness condition over inputs this function already holds:
+
+```cpp
+// T3 — the invocation stack places one CELL per block of the union block set,
+// so the gate is "some invocation has blocks", never "some invocation exists".
+// This mirrors InvocationScene::drawable() (Task 2); the two must agree, or the
+// tab opens onto a scene the selector then refuses.
+static bool scene3d_has_invocation(const ObserverState &obs) {
+    if (!obs.region.basis_error.empty())
+        return false; // the builder emits a refusal card, and no slabs
+    for (const RegionInvocation &inv : obs.region.invocations)
+        if (!inv.blocks.empty())
+            return true;
+    return false;
+}
+
+// T4 — build_module_ribbon's own refusal is tv.rows.empty(), and those rows ARE
+// the `call` events.
+static bool scene3d_has_module_ribbon(const ObserverState &obs) {
+    return !obs.tree.rows.empty();
+}
+```
+
+Then replace the gate at `:118-124`:
+
+```cpp
+    // 3D overview — five substrates, only ONE of which is the address plane.
+    // Divergence, the module ribbon and the lane prism take no Projection and
+    // carry no terrain, so gating the whole pane on codeimage made a tree-only
+    // or dataflow-only recording unable to reach its own scene. Divergence is
+    // deliberately NOT a clause here: `b_attachable` means "a second recording
+    // is open", not "B is attached", so admitting on it would open the pane
+    // onto an empty scene — the defect this family exists to remove.
+    const bool has_plane = !space::regions_from_codeimage(r).empty();
+    const bool has_substrate = has_plane || scene3d_has_invocation(obs) ||
+                               scene3d_has_module_ribbon(obs) ||
+                               scene3d::lane_prism_any(a.df);
+    add(ViewId::Scene3D, "3D overview", has_substrate,
+        "nothing this pane can show — the address plane needs `codeimage` "
+        "events, the invocation stack needs a `coverage` block set, the module "
+        "excursion ribbon needs `call` events, and the SIMD lane prism needs "
+        "wide register writes. This recording carries none of them",
+        std::nullopt);
+```
+
+Correct the header contract at `view_presence.h:63`, which currently states the codeimage-only rule.
+
+- [ ] **Step 4: Narrow the early return and its four unguarded neighbours**
+
+`shell.cpp:1649` — scope the return to the kind that actually needs a plane:
+
+```cpp
+    // No plane to draw without regions — say so, never a blank void. Scoped to
+    // Plane: the other four substrates are woven at :1297 from region capture,
+    // the call tree, wide-register writes and a B-side recording, none of which
+    // needs a codeimage, so a missing plane is no reason to refuse them.
+    if (!sv.has_regions && sv.kind == scene3d::SceneKind::Plane) {
+```
+
+Four neighbours are plane-only and unguarded, and each becomes reachable the moment the return narrows. Add `sv.kind == scene3d::SceneKind::Plane &&` to:
+
+- `:1668` — the "nothing placed on the plane" placard. **This one is already live**, not merely latent: it fires today over a standalone scene whenever a recording has a codeimage span but places nothing (the ambiguous two-span case, `terrain.cpp:336-340`).
+- `:1916` — the off-screen-selection label. Also already live: `sv.highlight` is computed from `sv.terr.proj` independently of the displayed kind and survives a kind switch, so ordinary orbit puts the plane point off-frustum and the label fires over a standalone scene today.
+
+And give the two bare `draw_flat_surface()` calls at `:1764` (the `!ready()` branch) and `:1831` (the `!tex` branch) the same kind arm the null-backend branch already has at `:1744-1752` — otherwise a lane prism is offered an empty 64×64 plane grid as its "reading surface".
+
+While there: the null-backend non-Plane arm's sentence is **factually wrong for Invocation**, whose X and Z axes are literally "address (the address plane's u/v)" (`scene_kind.h:132-138`). Derive it from `scene_axes(sv.kind)` instead of hardcoding "its axes are not addresses".
+
+- [ ] **Step 5: Give Plane its own availability slot**
+
+With the pane now opening on plane-less recordings, `Plane` becomes selectable with nothing behind it. Add the fifth slot to `shell_kind_availability` — `hud.cpp:499-513` is already generic over the index and needs no change:
+
+```cpp
+    if (!sv.has_regions)
+        why[scene_kind_index(scene3d::SceneKind::Plane)] =
+            "no address-space regions — the plane is placed from `codeimage` "
+            "events, which the serve host records for the tree / trace / "
+            "dataflow / auto modes";
+```
+
+- [ ] **Step 6: Make the HUD honest on an empty plane**
+
+These are not pre-existing bugs — they are **unreachable today** precisely because of the gate, and this task is what makes them reachable. Each must land in the same commit or the unblock ships a set of fresh lies:
+
+1. `camera_here_text` (`hud.cpp:311`) — distinguish "no domain" from "outside the domain". `unproject` returns false on `regions.empty()`, so today's wording would assert a compacted domain that does not exist.
+2. `placement_chips` heights block (`hud.cpp:71`) — add the third branch so a total placement failure is never silent, mirroring the trajectory half's existing "PATH NOT PLACED" chip.
+3. `basis_chip` (`hud.cpp:470-475`) — a basis is a claim about the TRACE, but Ok-green reads as a claim about PLACEMENT. Qualify it when nothing placed; do not delete it (the basis WAS measured).
+4. The region legend (`hud.cpp:1222`) — `TextDisabled("none — no region was placed in this recording")`, matching the wording its two siblings at `:772` and `:882` already use.
+
+Task 7's `kind == Plane` guard is **sufficient** for the goto row and needs no additional empty-projection guard — verified.
+
+- [ ] **Step 7: Prove the gate still bites**
+
+Delete the `has_plane ||` clause and confirm `3d/min/absent` still passes but the golden `scene-abs-loop` presence check (`test_view_presence.cpp:110`) goes red. Restore. Then delete `scene3d_has_module_ribbon` and confirm `3d/tree-fixture/present` fires. *A widened gate that cannot be observed narrowing again is indistinguishable from a deleted one.*
+
+- [ ] **Step 8: Update the stale rationale this change invalidates**
+
+A corpus scan says the new predicate flips **20 recordings** to present — four top-level fixtures (`obs-codeimage-gate`, `obs-region`, `truncated`, `obs-tree`), one top-level golden (`fp-scale-add`), and fifteen under `tests/golden-asmtrace/`. None is a recording any test asserts a Scene3D presence value for, so no golden churns. But four places state the old rule as fact and become wrong:
+
+- `scripts/verify-shot-recordings.py:53-66` — the `need(..., "codeimage", 1, "the 3D pane is absent without codeimage")` reason is now false. Keep the requirement (the *shots* want a plane) and re-word the reason.
+- `scripts/capture-shot-recordings.sh:5-14` — the "FOUR recordings, not one, and that is structural" paragraph, already superseded by Task 8.
+- `docs/guides/desktop-gui-scenes.md:233-235` and `desktop/src/ui/view_presence.h:63` — both assert the codeimage-only rule.
+- `mk/desktop.mk:957-959` — "no golden in the corpus carries `call` at all" is already stale (`obs-tree` and `export/tree-small` do).
+
+- [ ] **Step 9: Verify**
+
+```bash
+make build/desktop_test_view_presence && ./build/desktop_test_view_presence
+make build/desktop_test_shell && ./build/desktop_test_shell
+make build/desktop_test_standalone && ./build/desktop_test_standalone
+make build/desktop_test_layers && ./build/desktop_test_layers
+make desktop-test
+make docker-desktop
+```
+
+Expected: all green except `test_shell`'s pre-existing attach/no-host failures. Then a manual check: open `desktop/test/fixtures/obs-tree.asmtrace`, confirm the **3D overview tab now appears**, that the scene selector offers `module excursion ribbon` as selectable and `address plane` as **disabled with its reason**, and that the HUD states no placement rather than claiming one.
+
+- [ ] **Step 10: Commit and push**
+
+Use the Task 1 commit block with these paths and this subject: `desktop: a substrate without a plane is still a scene`.
+
+---
+
 ## Self-review
 
 **Defect coverage.**
@@ -746,6 +985,7 @@ struct Spec {
 | B11 phantom "live maps snapshot" | Task 5 |
 | B12 keymap conflates the two camera buttons | Task 5 |
 | F1 desktop cannot record a session | Task 8 |
+| B13 codeimage gates every substrate | Task 9 |
 
 **Two candidates this review REFUTED — do not "fix" them back.**
 
@@ -754,7 +994,8 @@ struct Spec {
 
 **What this plan deliberately does NOT do.**
 
-- **It does not change the Scene3D presence rule.** `view_presence.cpp:120` gates the whole 3D pane on `!regions_from_codeimage(r).empty()`, and `draw_scene_overview` early-returns at `shell.cpp:1649`. Three substrates — Divergence, ModuleRibbon, LanePrism — need no address plane and take no `Projection`, yet are unreachable for a codeimage-less recording. That is a real structural gap, but changing the presence rule touches the pane's whole contract and every absent-view test, and it does not block anything here: `tree`, `trace`, `dataflow` and `auto` all arm a codeimage, so every scene this plan makes reachable is reachable. **Follow-up brief required** before touching it.
+- **It does not admit Divergence to the presence predicate.** Task 9 opens the pane on plane-or-invocation-or-ribbon-or-prism. The available B-side signal, `b_attachable`, means "a second recording is open", not "B is attached", so a fifth clause on it would open the pane onto an empty divergence scene — the B1/B2 defect class. Divergence stays reachable only once another substrate has opened the pane. Closing that properly needs a real "is B attached" signal threaded into `view_presence`, which is a signature change and a separate brief.
+- **It does not rename the pane.** "3D overview" is now sometimes a pane with no 3D plane in it. The phrase is live in seven code files and ~35 prose sites; no test pins it as a `ViewPresence` label, so a rename is mechanically safe but wide, and it buys nothing this plan needs.
 - **It does not make `auto` fill every scene.** `auto` is dataflow-with-a-picker: it never calls `region_record`, so it cannot emit the `coverage` footer the invocation stack's block axis needs, and deriving blocks from an instruction stream is the greedy block-attribution rule this tree forbids (`docs/internal/gui/57-causal-layers.md:138`). Task 8's merged session is the supported route.
 - **It does not address divergence.** That substrate compares two recordings and is a `d`-key action by construction. Four of five is the ceiling for any single capture.
 
@@ -763,5 +1004,7 @@ struct Spec {
 - Task 1 changes strings that `test_budget.cpp` may already pin at `:295-340`. Read those assertions before editing and update them in the same commit; a plan that leaves a pinned string stale produces a red suite the next agent inherits.
 - Task 8's `ssh` branch writes the recording on the REMOTE host. Shipping it without saying so would produce a file the user cannot open. If the UI cannot make that clear, refuse the combination rather than half-supporting it.
 - Task 3 introduces the tree's first automatic change of a user-chosen mode. If the eviction notice proves noisy in practice, the fix is to make the notice quieter — never to make the eviction silent.
+
+**A third refuted candidate, from the Task 9 research.** The early return at `shell.cpp:1649` looks like the thing hiding the standalone substrates, and an earlier draft of this plan said so. It is not: for a codeimage-less recording the pane is never drawn at all, because `view_presence.cpp:120` marks it absent and both tab strips skip absent views. `shell_standalone_chrome`'s comment promising it runs "on every path" is therefore not an observably broken promise — the path itself is unreachable. Fixing only the early return would change nothing a user can see. **Task 9 must move the presence rule; the early return is secondary.**
 
 **Known soft spots.** `shell_kind_availability` is file-local static with one call site, so Task 2 verifies the *builder* half directly and the gate half only by inspection unless the decision is extracted. Task 3 assumes that extraction happened; if it did not, its test cannot link and the task must do the extraction first. Neither task should be reported complete on a builder-only assertion.
