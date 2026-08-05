@@ -81,7 +81,26 @@ class LiveSession {
         // locally. The remote transport IS ssh — the protocol carries no auth
         // of its own, by design.
         std::string ssh_host;
+        // non-empty: spawn the host with `--record=<path>`, teeing every event
+        // of EVERY capture in this session into one file.
+        //
+        // This is the only artifact that can carry `call` + `trace`/`coverage`
+        // + wide `df_step.ops` together, because LiveSession keeps each capture
+        // as its own Recording (`done_` is a vector) and the Save pane
+        // serialises exactly one of them. A merged file reopened through
+        // File ▸ Open is what lets the 3D pane host four substrates at once.
+        //
+        // Over ssh the path is written on the REMOTE host — `start` refuses the
+        // combination rather than producing a file the user cannot open.
+        std::string record_path;
     };
+
+    // The exact argv the host is spawned with, for `exe` already resolved.
+    // Pure, so a test pins both the presence and the ABSENCE of --record
+    // without spawning anything: an empty record_path must leave the argv
+    // byte-identical to what every existing lane already expects.
+    static std::vector<std::string> host_argv(const Spec &spec,
+                                              const std::string &exe);
 
     LiveSession() = default;
     ~LiveSession();

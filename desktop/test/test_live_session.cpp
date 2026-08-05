@@ -567,10 +567,54 @@ static void test_end_state() {
     }
 }
 
+// The spawn argv (59 T1 / plan Task 8). A merged multi-mode recording is the
+// only artifact that can carry `call` + `trace`/`coverage` + wide
+// `df_step.ops` together, because this class keeps each capture as its own
+// Recording and the Save pane serialises exactly one. `asmspy --serve
+// --record=<f>` already produces such a file; the desktop simply had no way to
+// ask for one.
+static void test_host_argv(void) {
+    auto joined = [](const std::vector<std::string> &v) {
+        std::string o;
+        for (size_t i = 0; i < v.size(); i++)
+            o += (i ? " " : "") + v[i];
+        return o;
+    };
+
+    // No record path: byte-identical to what every existing lane expects.
+    {
+        LiveSession::Spec sp;
+        const std::string a = joined(LiveSession::host_argv(sp, "/bin/asmspy"));
+        check("argv/local-plain", a == "/bin/asmspy --serve",
+              "an empty record_path must leave the argv exactly as it was: "
+              "got \"" + a + "\"");
+    }
+    {
+        LiveSession::Spec sp;
+        sp.ssh_host = "box";
+        const std::string a = joined(LiveSession::host_argv(sp, "asmspy"));
+        check("argv/ssh-plain", a == "ssh -T box asmspy --serve",
+              "the ssh argv must be unchanged when nothing is recorded: got \"" +
+                  a + "\"");
+    }
+
+    // With one: --record rides after --serve.
+    {
+        LiveSession::Spec sp;
+        sp.record_path = "/tmp/s.asmtrace";
+        const std::string a = joined(LiveSession::host_argv(sp, "/bin/asmspy"));
+        check("argv/local-record",
+              a == "/bin/asmspy --serve --record=/tmp/s.asmtrace",
+              "a record_path must reach the host as --record=<path>: got \"" +
+                  a + "\"");
+    }
+}
+
 int main(void) {
     test_state_machine();
     test_process_path();
     test_end_state();
+    test_host_argv();
     if (failures) {
         std::fprintf(stderr, "test_live_session: %d FAILURE(S)\n", failures);
         return 1;

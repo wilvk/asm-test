@@ -148,6 +148,13 @@ struct InspectState {
     // The asmspy the host will spawn; blank = resolve $PATH then ./build.
     char asmspy_path[512] = {0};
     char ssh_host[256] = {0};
+    // Optional: record the WHOLE session — every capture, one file. Off by
+    // default (a capture session should not write to disk unasked). This is
+    // the only way to get `call` + `trace`/`coverage` + wide `df_step.ops` into
+    // one Recording, because each capture is its own in-memory Recording and
+    // Save serialises exactly one. Local only; see LiveSession::Spec.
+    char record_path[512] = {0};
+    bool record_session = false;
 
     // Pre-fill the asmspy path with resolve_asmspy_path() once, so the Connect
     // pane shows the concrete resolved exe (editable) rather than a blank field.

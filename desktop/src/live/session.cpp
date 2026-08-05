@@ -59,6 +59,24 @@ std::string resolve_asmspy_path() {
 
 LiveSession::~LiveSession() { shutdown(); }
 
+std::vector<std::string> LiveSession::host_argv(const Spec &spec,
+                                                const std::string &exe) {
+    std::vector<std::string> argv;
+    if (spec.ssh_host.empty()) {
+        argv = {exe, "--serve"};
+    } else {
+        // -T: no tty, so the remote asmspy sees a plain pipe and our NDJSON is
+        // never mangled by line-discipline translation.
+        argv = {"ssh", "-T", spec.ssh_host, exe, "--serve"};
+    }
+    // The session-level sink: every event of EVERY capture in this session,
+    // teed into one file. An empty path adds nothing, so the argv stays
+    // byte-identical to what every existing lane already expects.
+    if (!spec.record_path.empty())
+        argv.push_back("--record=" + spec.record_path);
+    return argv;
+}
+
 bool LiveSession::start(const Spec &spec, std::string &err) {
     err.clear();
     std::string exe = spec.asmspy_path;
@@ -77,14 +95,19 @@ bool LiveSession::start(const Spec &spec, std::string &err) {
     if (exe.empty())
         exe = "asmspy";
 
-    std::vector<std::string> argv;
-    if (spec.ssh_host.empty()) {
-        argv = {exe, "--serve"};
-    } else {
-        // -T: no tty, so the remote asmspy sees a plain pipe and our NDJSON is
-        // never mangled by line-discipline translation.
-        argv = {"ssh", "-T", spec.ssh_host, exe, "--serve"};
+    // Over ssh the recording is written on the REMOTE filesystem, so a path the
+    // user picked in a local file dialog would silently name a remote file they
+    // cannot open. Refuse the combination rather than half-support it.
+    if (!spec.record_path.empty() && !spec.ssh_host.empty()) {
+        err = "recording the session is local-only: over ssh, --record writes "
+              "on the REMOTE host, where this desktop cannot open it. Record "
+              "there with `asmspy --serve --record=<f>` and copy the file back.";
+        st_.state = LiveState::Failed;
+        st_.fatal = err;
+        return false;
     }
+
+    const std::vector<std::string> argv = host_argv(spec, exe);
     st_.command.clear();
     for (size_t i = 0; i < argv.size(); i++)
         st_.command += (i ? " " : "") + argv[i];

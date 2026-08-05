@@ -46,6 +46,8 @@ void inspect_connect(InspectState &s) {
     LiveSession::Spec spec;
     spec.asmspy_path = s.asmspy_path;
     spec.ssh_host = s.ssh_host;
+    if (s.record_session)
+        spec.record_path = s.record_path;
     std::string err;
     s.host_started = s.session.start(spec, err);
     s.host_error = s.host_started ? std::string() : err;
@@ -1065,6 +1067,28 @@ void draw_connect_pane(InspectState &s) {
             "--serve`).");
         ImGui::TextDisabled("To save these across launches, set them in File > "
                             "Settings; this pane is a per-session override.");
+        // Record the WHOLE session (59 T1 / Task 8). Each capture is its own
+        // in-memory Recording and Save writes exactly one, so this file is the
+        // only way to get a call tree, a region trace and wide register writes
+        // into ONE recording — which is what lets the 3D pane offer four
+        // substrates at once when the file is reopened.
+        ImGui::Checkbox("record the whole session to one file",
+                        &s.record_session);
+        if (s.record_session) {
+            ImGui::InputTextWithHint("##record_path", "/path/to/session.asmtrace",
+                                     s.record_path, sizeof s.record_path);
+            ImGui::TextDisabled(
+                "Every capture in this session is teed into that one file. "
+                "Reopen it with File > Open and a single recording can host "
+                "the address plane, the invocation stack, the module ribbon "
+                "and the lane prism together. Local only — over ssh the file "
+                "would be written on the remote host.");
+            if (s.ssh_host[0] != '\0')
+                ImGui::TextColored(kMaybe,
+                                   "an ssh host is set: Connect will refuse "
+                                   "this combination rather than write a file "
+                                   "you cannot open");
+        }
         if (ImGui::Button("Connect"))
             inspect_connect(s);
         if (!s.host_error.empty())
