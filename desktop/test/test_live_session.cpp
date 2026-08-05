@@ -117,6 +117,36 @@ static void test_state_machine() {
               "a skipped session still frees the jack");
     }
     {
+        // The skip must land on the RECORDING, not only on LiveStatus. Status
+        // is per-session and the next Start overwrites it; the recording is
+        // what every view predicate is handed. Without this, `auto` on a host
+        // with perf locked down reaches the panes as an ordinary empty capture,
+        // and the "unavailable views" placard recites which events each view
+        // would have needed while nothing says the capture was refused.
+        LiveSession s;
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"auto","pid":7,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(
+            R"({"k":"end","events":0,"truncated":false,"skip":{"code":2,"reason":"perf_event_open refused (EACCES): needs perf_event_paranoid<=2 or CAP_PERFMON"}})");
+        check("sm/skip-rec-closed", s.recordings().size() == 1,
+              "the skipped capture is still a completed recording");
+        if (s.recordings().size() == 1) {
+            const Recording &r = s.recordings().front();
+            check("sm/skip-rec-flagged", r.skipped,
+                  "a live capture the producer refused must reach the views as "
+                  "SKIPPED, not as an ordinary empty recording");
+            check("sm/skip-rec-reason",
+                  r.skip_reason.find("perf_event_paranoid") !=
+                      std::string::npos,
+                  "the reason names the REMEDY and must survive onto the "
+                  "recording verbatim");
+            check("sm/skip-rec-not-torn", !r.torn,
+                  "the producer wrote its footer and said why — that is a "
+                  "clean end, not a torn capture");
+        }
+    }
+    {
         // Torn: a stream that stops with a recording still open.
         LiveSession s;
         s.feed_line(

@@ -56,6 +56,25 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
                                         Mode mode, bool b_attachable,
                                         bool is_live) {
     std::vector<ViewPresence> v;
+    // A capture that SKIPPED never ran, so every data verdict below is a
+    // consequence of that ONE fact rather than a fact about the view. It
+    // dominates, the way attach_verdict's dominating fact does, so it leads —
+    // and it carries the producer's verbatim reason, which is the only text in
+    // this model that names the REMEDY (a sysctl, a capability). Without it,
+    // running `auto` on a host with perf locked down fills the "unavailable
+    // views" placard with true, useless sentences about which events each view
+    // would have needed, and nothing anywhere says the capture was refused.
+    //
+    // The per-view sentence is kept after it: which events a view needs is
+    // still true and still worth reading once the capture runs. The skip leads,
+    // it does not erase.
+    const std::string skip_lead =
+        r.skipped ? "this capture SKIPPED and recorded nothing — " +
+                        (r.skip_reason.empty()
+                             ? std::string("the producer gave no reason")
+                             : r.skip_reason) +
+                        ". Fix that first; only then does this view need: "
+                  : std::string();
     auto add = [&](ViewId id, const char *label, bool present,
                    std::string reason, std::optional<dt_view> view) {
         ViewPresence e;
@@ -71,6 +90,8 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
         } else {
             e.present = present;
             e.reason = present ? std::string() : std::move(reason);
+            if (!e.present)
+                e.reason = skip_lead + e.reason;
         }
         v.push_back(std::move(e));
     };

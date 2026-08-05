@@ -194,6 +194,18 @@ std::optional<Recording> load_recording(std::istream &in, std::string &err) {
                 rec.has_steps_total = true;
                 rec.steps_total = as_u64(ev["steps_total"], 0);
             }
+            // The producer's own measured refusal. Keyed on the object's
+            // PRESENCE, never on an event count of zero: a capture that ran and
+            // saw nothing is a different fact, and flagging it would put a
+            // refusal notice on every empty recording.
+            if (ev.contains("skip") && ev["skip"].is_object()) {
+                const json &sk = ev["skip"];
+                rec.skipped = true;
+                if (sk.contains("code") && sk["code"].is_number())
+                    rec.skip_code = sk["code"].get<int>();
+                if (sk.contains("reason") && sk["reason"].is_string())
+                    rec.skip_reason = sk["reason"].get<std::string>();
+            }
             continue; // the footer is not stored in by_kind
         }
 
@@ -294,6 +306,15 @@ std::string recording_to_asmtrace(const Recording &rec) {
         }
         if (rec.has_steps_total)
             end["steps_total"] = rec.steps_total;
+        // A skip that does not survive save/reload launders a capture that was
+        // REFUSED into an unexplained empty one — the exact laundering this
+        // field exists to stop.
+        if (rec.skipped) {
+            json sk;
+            sk["code"] = rec.skip_code;
+            sk["reason"] = rec.skip_reason;
+            end["skip"] = sk;
+        }
         out += end.dump();
         out += '\n';
     }

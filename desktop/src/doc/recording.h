@@ -101,6 +101,21 @@ struct Recording {
     bool has_steps_total = false;
     uint64_t steps_total = 0;
 
+    // The footer's `skip` object (schema `end.skip`): the producer's own
+    // MEASURED reason this capture could not run AT ALL — a locked-down perf,
+    // an absent capability, a target that never entered the region. It is a
+    // clean end, not a torn one: the producer wrote its footer and said why.
+    //
+    // This used to be parsed for nothing and dropped, which made a skipped
+    // capture indistinguishable from one that ran and found nothing. That is
+    // the single fact explaining every empty view downstream, and the ONLY text
+    // in the whole model that names the remedy (a sysctl, a capability) — no
+    // per-view "this needs `codeimage` events" reason can, so every one of them
+    // was true and useless after, say, an `auto` capture the sampler refused.
+    bool skipped = false;
+    int skip_code = 0; // which subsystem refused; 0 when the footer had none
+    std::string skip_reason;
+
     std::string path;
 
     // Authored + unsaved (18-breach-stops.md T3, F24). An Author run materialised

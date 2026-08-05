@@ -5,6 +5,7 @@
 // absent, EACH with a non-empty machine reason; a codeimage recording flips 3D
 // to present; and the "unavailable views (N)" count equals the absent entries.
 #include <cstdio>
+#include <sstream>
 #include <string>
 
 #include "analysis/stepindex.h"
@@ -148,6 +149,65 @@ int main() {
                   e->reason.find("call") != std::string::npos,
               "the reason must name every substrate that would have opened the "
               "pane, not codeimage alone");
+    }
+
+    // A SKIPPED capture explains ITSELF, in every absent view.
+    //
+    // Select a process, pick `auto`, press Start on a host with perf locked
+    // down: the sampler is refused, the capture records ZERO events, and every
+    // view lands in "unavailable views" reciting which events it would have
+    // needed. Each of those sentences is true and useless — the capture never
+    // ran, and the one fact that says so (with the sysctl that fixes it) was
+    // parsed off the `end` footer and thrown away. The skip DOMINATES, exactly
+    // as attach_verdict's dominating fact does, so it leads.
+    {
+        std::string s =
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true}}\n"
+            "{\"k\":\"end\",\"events\":0,\"skip\":{\"code\":2,\"reason\":"
+            "\"perf_event_open refused (EACCES): needs "
+            "perf_event_paranoid<=2 or CAP_PERFMON\"}}\n";
+        std::istringstream in(s);
+        std::string err;
+        auto rec = load_recording(in, err);
+        check("skip/loaded", (bool)rec, "the skipped capture should load");
+        if (rec) {
+            Streams a = decode_streams(*rec);
+            StepIndex si = build_step_index(*rec);
+            ObserverState obs;
+            observer_build(obs, *rec);
+            auto vp = view_presence(a, obs, si, *rec, Mode::Capture, false,
+                                    /*is_live=*/true);
+            const ViewPresence *e = find(vp, ViewId::Scene3D);
+            check("skip/3d-absent", e && !e->present,
+                  "a capture that recorded nothing fills no view");
+            check("skip/3d-leads-with-the-skip",
+                  e && e->reason.find("SKIPPED") != std::string::npos,
+                  "the reason must LEAD with the fact that the capture never "
+                  "ran — every per-view evidence sentence below it is a "
+                  "consequence of that one fact, not a fact about the view");
+            check("skip/3d-carries-the-remedy",
+                  e && e->reason.find("perf_event_paranoid") !=
+                           std::string::npos,
+                  "the producer's own reason names the fix (a sysctl, a "
+                  "capability); no per-view reason can, so it must survive");
+            check("skip/3d-keeps-the-evidence",
+                  e && e->reason.find("codeimage") != std::string::npos,
+                  "which events this view needs is still true and still worth "
+                  "reading once the capture runs — the skip leads, it does not "
+                  "erase");
+            // EVERY absent view, not just the 3D pane: they are all empty for
+            // the same one reason, and a placard that explains one of them is
+            // a placard the operator has to read N times to learn once.
+            for (const ViewPresence &v : vp)
+                if (!v.present)
+                    check("skip/every-absent-view-says-so",
+                          v.reason.find("SKIPPED") != std::string::npos,
+                          "an absent view on a skipped capture must name the "
+                          "skip; leaving one to recite its own evidence sends "
+                          "the operator hunting for data that was never "
+                          "captured");
+        }
     }
 
     // Author mode hides the live-only Observer deck, and names WHY.

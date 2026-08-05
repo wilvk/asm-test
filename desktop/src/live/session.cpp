@@ -449,6 +449,20 @@ void LiveSession::feed_line(const std::string &line) {
             if (d.contains("throttled") && d["throttled"].is_boolean())
                 cur_.drops_throttled = d["throttled"].get<bool>();
         }
+        // The producer's measured refusal, onto the RECORDING and not only onto
+        // LiveStatus. The status line is per-session and is overwritten by the
+        // next Start; the recording is what every view predicate is handed, and
+        // without this a live capture the sampler refused reaches the panes as
+        // an ordinary empty one. Parsed exactly as the file loader parses it —
+        // a live session and a replayed file must agree about the same footer.
+        if (j.contains("skip") && j["skip"].is_object()) {
+            const json &sk = j["skip"];
+            cur_.skipped = true;
+            if (sk.contains("code") && sk["code"].is_number())
+                cur_.skip_code = sk["code"].get<int>();
+            if (sk.contains("reason") && sk["reason"].is_string())
+                cur_.skip_reason = sk["reason"].get<std::string>();
+        }
         close_current(/*torn=*/false);
         return;
     }

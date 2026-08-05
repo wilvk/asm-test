@@ -211,6 +211,65 @@ int main() {
         check("midline/lineno", err.find("line 2") != std::string::npos,
               std::string("message should name line 2: ") + err);
     }
+    // A SKIPPED capture: the `end` footer's `skip` object is the producer's own
+    // MEASURED reason it could not run at all (asmtrace-schema `end.skip`). It
+    // was parsed for nothing and dropped, which made a skipped capture
+    // indistinguishable from a capture that ran and found nothing — the single
+    // fact that explains every empty view downstream.
+    {
+        std::string s =
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true}}\n"
+            "{\"k\":\"end\",\"events\":0,\"truncated\":false,"
+            "\"skip\":{\"code\":2,\"reason\":\"perf_event_open refused "
+            "(EACCES): needs perf_event_paranoid<=2 or CAP_PERFMON\"}}\n";
+        std::istringstream in(s);
+        std::string err;
+        auto r = load_recording(in, err);
+        check("skip/loads", (bool)r, "a skipped capture is a valid recording");
+        check("skip/flagged", r && r->skipped,
+              "the footer said the capture SKIPPED; a 0-event recording that "
+              "skipped is not the same fact as one that ran and saw nothing");
+        check("skip/code", r && r->skip_code == 2,
+              "the skip CODE distinguishes the subsystem that refused");
+        check("skip/reason-verbatim",
+              r && r->skip_reason.find("perf_event_paranoid") !=
+                       std::string::npos,
+              "the producer's reason carries the REMEDY and must survive "
+              "verbatim — it is the only text that names the fix");
+        check("skip/not-torn", r && !r->torn,
+              "a skip is a clean end, not a torn capture: the producer wrote "
+              "its footer and said why");
+
+        // Round-trip: a skip that does not survive save/reload turns a saved
+        // capture back into an unexplained empty one.
+        std::string text = recording_to_asmtrace(*r);
+        std::istringstream back(text);
+        std::string err2;
+        auto r2 = load_recording(back, err2);
+        check("skip/roundtrip",
+              r2 && r2->skipped && r2->skip_code == 2 &&
+                  r2->skip_reason == r->skip_reason,
+              "the skip must survive recording_to_asmtrace — otherwise saving "
+              "a skipped capture launders it into a mystery");
+    }
+    // A capture that RAN and simply recorded nothing is NOT skipped. Without
+    // this control, defaulting `skipped` to true on any empty footer would pass
+    // the checks above while lying about every other recording.
+    {
+        std::string s = "{\"asmtrace\":1,\"provenance\":{\"backend\":\"x\","
+                        "\"exact\":true}}\n"
+                        "{\"k\":\"end\",\"events\":0}\n";
+        std::istringstream in(s);
+        std::string err;
+        auto r = load_recording(in, err);
+        check("noskip/loads", (bool)r, "an empty clean capture loads");
+        check("noskip/not-flagged", r && !r->skipped,
+              "no `skip` in the footer means the capture RAN — flagging it "
+              "would put a refusal notice on every empty recording");
+        check("noskip/no-reason", r && r->skip_reason.empty(),
+              "a capture that did not skip has no skip reason to show");
+    }
     // torn_missing_end: valid events but no end -> torn (not an error)
     {
         std::string s = "{\"asmtrace\":1,\"provenance\":{\"backend\":\"x\","
