@@ -3661,6 +3661,27 @@ echo "$info_json" | grep -q '"attachable"' \
 $BUILD/asmspy --info $$ | grep -q "pid $$" \
     || fail "--info text: no pid line"
 
+# 2026-08-06 plan, Task 2: --info MEASURES attachability rather than inferring it
+# from the Yama scope. NOT against $$: $$ here is THIS SCRIPT's pid, and asmspy
+# runs as a brand-new CHILD process per invocation, so "asmspy --info $$" would
+# be a child probing its own PARENT's mem. Measured directly (strace + three
+# hand-built fork probes: parent->child open succeeds, child->parent fails,
+# sibling->sibling fails) — child->parent is -EPERM under scope 1 with no
+# PR_SET_PTRACER, exactly the descendant-only relationship Yama documents, not
+# a gap in the probe. $AVPID (examples/attach_victim, started at the top of
+# this file and still running here) calls PR_SET_PTRACER_ANY on itself, which
+# IS a relationship scope 1 accepts from an unrelated process without root —
+# the same mechanism a browser's crash reporter uses, and the case this task
+# exists for.
+kill -0 "$AVPID" 2>/dev/null \
+    || fail "attach_victim ($AVPID) is not alive for the --info measured-yes check"
+selfinfo=$("$ASM" --info "$AVPID" 2>&1) || fail "--info on an opted-in target failed"
+printf '%s\n' "$selfinfo" | grep -q 'attach *YES' \
+    || fail "--info must report a MEASURED yes for a target it can open (got: $(printf '%s\n' "$selfinfo" | grep -i attach))"
+printf '%s\n' "$selfinfo" | grep -qi 'launch the target from asmspy' \
+    && fail "the launch remedy is measured broken for confined targets and must not be offered unconditionally"
+echo "--info: attachability is measured, not inferred"
+
 # A nonexistent pid is refused, not rendered blank — and refused with its OWN
 # exit code (ASMSPY_INFO_EXIT_NO_SUCH_PID = 3, cli/libasmspy.h), not the
 # generic 1 that also means "the --record you asked for could not be

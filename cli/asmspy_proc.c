@@ -1819,6 +1819,26 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
     free(tmp);
 }
 
+/* Is this target under a non-trivial LSM label? /proc/<pid>/attr/current is
+ * world-readable and reads "unconfined" (or is empty/absent) when it is not.
+ * This does NOT decide attachability -- AppArmor's profile_tracee_perm
+ * early-returns for an unconfined tracer, and snap's own profile #includes
+ * abstractions/base, which grants ptrace (tracedby) unqualified. It decides
+ * only which REMEDY is honest. */
+static int asmspy_target_is_confined(pid_t pid) {
+    char path[64], buf[128];
+    FILE *f;
+    size_t n;
+    snprintf(path, sizeof path, "/proc/%d/attr/current", (int)pid);
+    f = fopen(path, "r");
+    if (!f)
+        return 0;
+    n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return n > 0 && strncmp(buf, "unconfined", 10) != 0;
+}
+
 /* The attach verdict + which engines could run on this target. The facts
  * are not independent, and the DOMINATING one must be reported, or an
  * operator raises a Yama scope when the real problem is an i386 tracee. */
@@ -1869,14 +1889,47 @@ static void pi_verdict(pid_t pid, asmspy_procinfo_t *out) {
         snprintf(out->attach_remedy, sizeof out->attach_remedy,
                  "scope 3 cannot be lowered without a reboot");
     } else if (yama >= 1 && geteuid() != 0) {
-        out->attachable = -1;
-        snprintf(out->attach_why, sizeof out->attach_why,
-                 "yama ptrace_scope=%d — only a descendant, or a target that "
-                 "called PR_SET_PTRACER",
-                 yama);
-        snprintf(out->attach_remedy, sizeof out->attach_remedy,
-                 "sudo sysctl kernel.yama.ptrace_scope=0, or launch the "
-                 "target from asmspy");
+        /* MEASURE it. open("/proc/<pid>/mem", O_RDONLY) runs the kernel's own
+         * ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS) -- the same check
+         * PTRACE_ATTACH runs -- and changes no state. NOT PTRACE_SEIZE: a SEIZE
+         * probe cannot detach (ESRCH: the tracee is not in a ptrace-stop) and
+         * leaves the target frozen in tracing-stop.
+         *
+         * A success under scope 1 means the target called PR_SET_PTRACER or is
+         * our descendant. Browsers do the former from their crash reporter, so
+         * this arm is the difference between "maybe" and a usable target. */
+        char mempath[64];
+        int memfd;
+        snprintf(mempath, sizeof mempath, "/proc/%d/mem", (int)pid);
+        memfd = open(mempath, O_RDONLY | O_CLOEXEC);
+        if (memfd >= 0) {
+            close(memfd);
+            out->attachable = 1;
+            snprintf(out->attach_why, sizeof out->attach_why,
+                     "yama ptrace_scope=%d, but this target permits it (it "
+                     "called PR_SET_PTRACER, or is a descendant)",
+                     yama);
+        } else {
+            out->attachable = 0;
+            snprintf(out->attach_why, sizeof out->attach_why,
+                     "yama ptrace_scope=%d refused this target (%s) — only a "
+                     "descendant, or a target that called PR_SET_PTRACER",
+                     yama, strerror(errno));
+            /* The launch remedy is MEASURED BROKEN for a confined target:
+             * snap-confine's file capabilities are stripped under
+             * LSM_UNSAFE_PTRACE, so `snap run firefox` under a tracer dies with
+             * "required permitted capability cap_dac_override not found". Offer
+             * it only where it can work. */
+            if (asmspy_target_is_confined(pid))
+                snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                         "sudo sysctl kernel.yama.ptrace_scope=0 (this target "
+                         "is confined, so launching it from asmspy will not "
+                         "work: its launcher drops privileges under a tracer)");
+            else
+                snprintf(out->attach_remedy, sizeof out->attach_remedy,
+                         "sudo sysctl kernel.yama.ptrace_scope=0, or launch "
+                         "the target from asmspy");
+        }
     } else {
         out->attachable = 1;
         snprintf(out->attach_why, sizeof out->attach_why,
