@@ -3704,19 +3704,37 @@ echo "--info: attachability is measured, not inferred"
 # the task's Step 5 manual measurement (a live, confined, refused
 # snapd-desktop-integration process), not by this smoke lane.
 #
-# Guarded on non-root, and NOT a silent self-skip: `make docker-cli`
-# (Dockerfile.cli declares no USER, and mk/cli.mk's `docker run` passes no
-# --user, so that documented local-verify path runs this whole script as UID
-# 0) makes the premise false, not the assertion untestable. As root,
-# pi_verdict's `yama >= 1 && geteuid() != 0` arm this task added never runs
-# AT ALL (geteuid()==0), so every same-uid target -- including this sibling
-# `sleep` -- falls through to the unconditional "same uid, nothing else
-# traces it" success case. That is correct kernel behavior (root bypasses
-# Yama entirely), not a bug: there is no same-uid target root can be refused
-# on, so this specific assertion has nothing left to measure. The CI gate
-# (.github/workflows/ci.yml) runs `make cli-smoke` directly on a bare,
-# non-root runner, where this guard's `else` branch is what actually executes
-# -- root is the exception path here, not the common one.
+# Guarded on non-root AND on an ENFORCING yama scope, matching BOTH halves of
+# the C arm this block exercises (`yama >= 1 && geteuid() != 0`,
+# cli/asmspy_proc.c) — neither guard alone is enough, and NEITHER is a silent
+# self-skip: each states plainly which fact of the two took the arm out of
+# play.
+#
+# Root: `make docker-cli` (Dockerfile.cli declares no USER, and mk/cli.mk's
+# `docker run` passes no --user, so that documented local-verify path runs
+# this whole script as UID 0) makes `geteuid() != 0` false, so the arm never
+# runs AT ALL — every same-uid target, including this sibling `sleep`, falls
+# through to the unconditional "same uid, nothing else traces it" success
+# case. Correct kernel behavior (root bypasses Yama entirely), not a bug:
+# there is no same-uid target root can be refused on.
+#
+# ptrace_scope=0: makes `yama >= 1` false, the SAME arm-skip from the OTHER
+# half. Not hypothetical — docs/getting-started/host-setup.md *instructs*
+# operators to set `kernel.yama.ptrace_scope=0`, and Yama is not namespaced
+# (already documented a few hundred lines above, for a different assertion,
+# at ~3780: "make docker-cli inherits whatever the HOST already has"), so a
+# developer who followed this repo's own setup guide and then ran
+# `make cli-smoke` -- container OR bare host -- hits the identical
+# arm-skipped, assertion-demands-NO, fail()-aborts shape as the root case.
+# Absent/unreadable ptrace_scope (no Yama LSM loaded at all) is the SAME
+# "not enforcing" state as 0 and defaults there rather than erroring.
+#
+# The CI gate (.github/workflows/ci.yml) runs `make cli-smoke` directly on a
+# bare, non-root runner at the kernel default ptrace_scope=1 — where NEITHER
+# guard fires and the real assertion below is what actually executes. Root
+# and scope=0 are the exception paths here, not the common one.
+yama_scope=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null)
+[ -n "$yama_scope" ] || yama_scope=0
 if [ "$(id -u)" -eq 0 ]; then
     echo "--info: SKIPPING the refused-target assertion -- running as root (id -u"
     echo "  = 0, e.g. under 'make docker-cli': Dockerfile.cli declares no USER)."
@@ -3724,6 +3742,15 @@ if [ "$(id -u)" -eq 0 ]; then
     echo "  including a sibling sleep, can be refused here to measure NO against."
     echo "  This is a fact about root, not a self-skip of the feature: the"
     echo "  assertion runs for real in the CI lane and any normal (non-root) run."
+elif [ "$yama_scope" -lt 1 ] 2>/dev/null; then
+    echo "--info: SKIPPING the refused-target assertion -- yama ptrace_scope=$yama_scope"
+    echo "  (docs/getting-started/host-setup.md instructs operators to set this to"
+    echo "  0, and Yama is not namespaced, so make docker-cli inherits it from the"
+    echo "  host too). Below scope 1, Yama does not restrict same-uid ptrace at"
+    echo "  all, so no same-uid target, including a sibling sleep, can be refused"
+    echo "  here to measure NO against. This is a fact about the sysctl, not a"
+    echo "  self-skip of the feature: the assertion runs for real at the kernel"
+    echo "  default ptrace_scope=1 (this host, and every CI runner)."
 else
     sleep 100 &
     SIBPID=$!
