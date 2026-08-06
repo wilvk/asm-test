@@ -487,6 +487,29 @@ int main(void) {
             "T3: a window that qualified a region stops the retry immediately");
     }
 
+    /* 2026-08-06 plan, Task 5: the chain advances on REFUSAL.
+     *
+     * The old rule picked a sampler from whether its SUBSTRATE existed
+     * (asmtest_ibs_available(), a CPUID + sysfs probe) and stopped on the first
+     * refusal. On an AMD box with perf_event_paranoid=4 that means IBS is
+     * chosen, refused, and the run ends -- with a working software path, and
+     * later a working ptrace path, never tried. */
+    CHECK(asmspy_autoregion_sampler_next(ASMSPY_SMP_IBS, 1) == ASMSPY_SMP_SW,
+          "a refused IBS falls through to the software sampler");
+    CHECK(asmspy_autoregion_sampler_next(ASMSPY_SMP_SW, 1) == ASMSPY_SMP_PTRACE,
+          "a refused software sampler falls through to the ptrace sampler");
+    CHECK(asmspy_autoregion_sampler_next(ASMSPY_SMP_PTRACE, 1) ==
+              ASMSPY_SMP_NONE,
+          "the ptrace sampler is last: nothing is left to fall through to");
+    /* No IBS substrate: the chain must SKIP it rather than try and fail, so a
+     * non-AMD host does not pay a refusal to learn what CPUID already said. */
+    CHECK(asmspy_autoregion_sampler_next(ASMSPY_SMP_NONE, 0) == ASMSPY_SMP_SW,
+          "with no IBS substrate the chain starts at the software sampler");
+    CHECK(asmspy_autoregion_sampler_next(ASMSPY_SMP_NONE, 1) == ASMSPY_SMP_IBS,
+          "with an IBS substrate the chain still PREFERS it -- entry evidence "
+          "is stronger than residency, and this task changes the fallback, "
+          "not the preference");
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

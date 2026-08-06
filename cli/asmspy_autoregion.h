@@ -374,6 +374,57 @@ static inline const char *asmspy_autoregion_walk_reason(asmspy_walk_action_t a) 
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * THE SAMPLER CHAIN: advance on REFUSAL, not on substrate ABSENCE (2026-08-06
+ * plan, Task 5).
+ *
+ * The old call-site rule picked IBS whenever asmtest_ibs_available() -- a
+ * CPUID + sysfs check that never calls perf -- said the SILICON existed, and
+ * treated a REFUSAL from the perf open that follows as the end of the run.
+ * On an AMD box with perf locked down (measured on the dev box this plan
+ * targets: perf_event_paranoid=4, a kernel-compiled-in default no file sets --
+ * docs/getting-started/host-setup.md) that means IBS is picked, perf refuses
+ * it, and --auto gives up -- with the portable software-clock path, and once
+ * Task 7 lands, a perf-free ptrace path, never even attempted.
+ *
+ * ASMSPY_SMP_PTRACE is defined now, one task before its sampler exists,
+ * because the chain has to be able to NAME the next rung before there is
+ * anything standing on it -- landing Task 7's sampler without this would ship
+ * it permanently unreached on exactly the host it was built for.
+ *
+ * The substrate check and the refusal check are different axes: substrate
+ * only ever decides the FIRST preference (entry evidence beats residency, so
+ * IBS goes first where the hardware exists); once a sampler has actually been
+ * TRIED, a refusal always falls through regardless of substrate -- a software
+ * sampler that was refused is exactly as informative about trying the next
+ * one as a hardware sampler that was refused. */
+
+/* Which sampler to try after `tried` was refused, or -1 when the chain is
+ * exhausted. Pure: it decides ORDER, never reporting -- the two call sites have
+ * structurally different reporting (the serve loop sets s->rc/s->skip_note; the
+ * headless one returns an exit code), so each keeps its own. */
+typedef enum {
+    ASMSPY_SMP_IBS = 0,
+    ASMSPY_SMP_SW = 1,
+    ASMSPY_SMP_PTRACE = 2,
+    ASMSPY_SMP_NONE = -1
+} asmspy_sampler_t;
+
+static inline asmspy_sampler_t
+asmspy_autoregion_sampler_next(asmspy_sampler_t tried, int ibs_substrate) {
+    switch (tried) {
+    case ASMSPY_SMP_NONE: /* nothing tried yet: the strongest rule first */
+        return ibs_substrate ? ASMSPY_SMP_IBS : ASMSPY_SMP_SW;
+    case ASMSPY_SMP_IBS:
+        return ASMSPY_SMP_SW;
+    case ASMSPY_SMP_SW:
+        return ASMSPY_SMP_PTRACE;
+    case ASMSPY_SMP_PTRACE:
+    default:
+        return ASMSPY_SMP_NONE;
+    }
+}
+
 /* Resolve ONE selected hot edge to a drillable region. Tries to_addr (where
  * control went), then from_addr; an endpoint qualifies only if it resolves AND
  * has size > 0 (the zero-size vacuity rule above). Returns 0 and fills

@@ -2836,16 +2836,76 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
     return nout;
 }
 
-/* Which sampler --auto uses. AUTO detects: IBS-Op where the substrate exists
- * (the entry-arrival rule — the strong one), the portable software clock
- * everywhere else. Explicit ibs/sw force one — sw being how the portable path
+/* Which sampler --auto uses. AUTO PREFERS IBS-Op where the substrate exists
+ * (the entry-arrival rule — the strong one) and the portable software clock
+ * otherwise, but 2026-08-06 T5 made that a STARTING point, not a fixed pick: a
+ * refusal (perf declines the open) now walks asmspy_autoregion_sampler_next to
+ * the next rung (sw, then ptrace) instead of ending the run — see that
+ * function's doc comment in asmspy_autoregion.h for the full "why". Explicit
+ * ibs/sw force one and do NOT walk the chain — sw being how the portable path
  * is exercised (and tested, in docker-cli-ibs) on an AMD host where AUTO would
- * always pick IBS. */
+ * always prefer IBS. */
 typedef enum {
     SAMPLER_AUTO = 0,
     SAMPLER_IBS = 1,
     SAMPLER_SW = 2,
 } sampler_mode_t;
+
+/* Display label for the wire/stderr — T5's chain needs to NAME which sampler
+ * is active (the initial pick, and each one a refusal walks past), not just
+ * pick it. Kept OUT of asmspy_autoregion.h: that header stays pure (no I/O,
+ * not even a string constant meant for a terminal), and this is reporting. */
+static const char *asmspy_sampler_label(asmspy_sampler_t s) {
+    switch (s) {
+    case ASMSPY_SMP_IBS:
+        return "ibs-op";
+    case ASMSPY_SMP_SW:
+        return "sw-clock";
+    case ASMSPY_SMP_PTRACE:
+        return "ptrace";
+    case ASMSPY_SMP_NONE:
+    default:
+        return "none";
+    }
+}
+
+/* The evidence-grade label the wire protocol carries (asmtrace-schema.md): the
+ * client renders "entry" and "residency" differently because they ARE
+ * different-strength evidence (asmspy_autoregion.h's header note). Task 7's
+ * ptrace sampler has not defined its own grade yet, so it reports "?" rather
+ * than guessing one on its behalf. */
+static const char *asmspy_sampler_rule_label(asmspy_sampler_t s) {
+    switch (s) {
+    case ASMSPY_SMP_IBS:
+        return "entry";
+    case ASMSPY_SMP_SW:
+        return "residency";
+    case ASMSPY_SMP_PTRACE:
+    case ASMSPY_SMP_NONE:
+    default:
+        return "?";
+    }
+}
+
+/* Why `s` refused, for the FINAL skip reason (s->skip_note / the headless
+ * stderr summary) once the chain has nothing left to try. IBS/sw each already
+ * print their OWN reason from inside auto_pick/auto_pick_sw the moment they
+ * refuse (so a chain walk is visible step by step, not just at the end); this
+ * is what lets the site that gives up ALSO report the reason for the specific
+ * rung it gave up on, including ptrace, which has no probe of its own yet to
+ * print anything. */
+static const char *asmspy_sampler_unavail_reason(asmspy_sampler_t s) {
+    switch (s) {
+    case ASMSPY_SMP_SW:
+        return asmtest_swclock_unavail_reason();
+    case ASMSPY_SMP_PTRACE:
+        return "no ptrace sampler yet (Task 7)";
+    case ASMSPY_SMP_IBS:
+    case ASMSPY_SMP_NONE:
+    default:
+        return asmtest_ibs_unavail_reason();
+    }
+}
 
 /* The PORTABLE pick: software-clock IP survey -> residency ranking
  * (asmspy_autoregion_rank_ip). Returns how many candidates were written
@@ -2967,38 +3027,81 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     int ncand = 0; /* >0 => the candidate walk below is armed (either sampler) */
     if (auto_region) {
         /* No symbol given: find what the target is DOING and trace that.
-         * AUTO mode picks the sampler by SUBSTRATE (is this an IBS box?), not
-         * by whether perf will allow the open — if IBS exists but perf is
-         * locked down, the sw open would be refused by the same lockdown, and
-         * one skip naming CAP_PERFMON beats two. --sampler=sw forces the
-         * portable path (how an AMD host exercises and tests it). 39 T2: both
-         * samplers now hand back the ranked list, so the walk below is armed
-         * either way — the IBS/entry path is no longer a single, un-walked pick. */
-        int use_sw = sampler == SAMPLER_SW ||
-                     (sampler == SAMPLER_AUTO && !asmtest_ibs_available());
-        /* 39 T3: an EMPTY window (ncand == 0 — the sampler RAN and nothing
-         * qualified, NOT a self-skip, which is < 0) is a retry, not a verdict.
-         * Re-sample a bounded number of windows before giving up: an idle target
-         * yields nothing in ONE window but may enter its work in the next. The
-         * decision reuses the pure candidate-walk (an empty window is "advance"
-         * while windows remain); a self-skip (< 0) and a real pick (> 0) are both
-         * final. auto_pick prints the per-window "nothing entered" itself. */
+         * 2026-08-06 T5: the SAMPLER chain now advances on a REFUSAL (perf
+         * declined the open), not on whether the substrate exists. The old
+         * rule picked IBS whenever asmtest_ibs_available() (CPUID + sysfs,
+         * never perf) said the silicon was there, and stopped outright on the
+         * first refusal — on an AMD box with perf locked down that means IBS
+         * is picked, refused, and --auto gives up, with the portable sw path
+         * (and, once Task 7 lands, the ptrace path) never even tried.
+         * asmspy_autoregion_sampler_next still PREFERS IBS when the substrate
+         * exists — entry evidence beats residency, and this only changes the
+         * FALLBACK — but a refusal now walks to the next rung instead of
+         * ending the run. --sampler=ibs/sw is an explicit override, so it does
+         * NOT walk this chain: forcing one means getting exactly that one (sw
+         * being how the portable path is exercised, in docker-cli-ibs, on an
+         * AMD host where AUTO would always prefer IBS). */
+        int ibs_substrate = asmtest_ibs_available();
+        int chain_auto = sampler == SAMPLER_AUTO;
+        asmspy_sampler_t smp = sampler == SAMPLER_IBS ? ASMSPY_SMP_IBS
+                               : sampler == SAMPLER_SW
+                                   ? ASMSPY_SMP_SW
+                                   : asmspy_autoregion_sampler_next(
+                                         ASMSPY_SMP_NONE, ibs_substrate);
+        char tried[64] = "";
         int wtry = 0;
         for (;;) {
-            ncand = use_sw ? auto_pick_sw(pid, &t, module, cands, AUTO_TRIES,
-                                          window_ms)
-                           : auto_pick(pid, &t, module, cands, AUTO_TRIES,
-                                       window_ms);
-            if (ncand != 0 ||
-                asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
-                    ASMSPY_WALK_ADVANCE)
+            /* 39 T3: an EMPTY window (ncand == 0 — the sampler RAN and nothing
+             * qualified, NOT a self-skip, which is < 0) is a retry, not a
+             * verdict. Re-sample a bounded number of windows before giving up
+             * on THIS sampler: an idle target yields nothing in ONE window but
+             * may enter its work in the next. The decision reuses the pure
+             * candidate-walk (an empty window is "advance" while windows
+             * remain); a self-skip (< 0) and a real pick (> 0) are both final
+             * to the window loop. auto_pick prints the per-window "nothing
+             * entered" itself. */
+            wtry = 0;
+            for (;;) {
+                if (smp == ASMSPY_SMP_SW)
+                    ncand = auto_pick_sw(pid, &t, module, cands, AUTO_TRIES,
+                                         window_ms);
+                else if (smp == ASMSPY_SMP_IBS)
+                    ncand = auto_pick(pid, &t, module, cands, AUTO_TRIES,
+                                      window_ms);
+                else { /* ASMSPY_SMP_PTRACE: Task 7's sampler, not wired up
+                        * yet — a clean, quiet self-skip, same shape as IBS
+                        * with no substrate today. */
+                    fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                            asmspy_sampler_unavail_reason(smp));
+                    ncand = -1;
+                }
+                if (ncand != 0 ||
+                    asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
+                        ASMSPY_WALK_ADVANCE)
+                    break;
+                wtry++;
+                fprintf(
+                    stderr,
+                    "--auto: idle window %d/%d — re-sampling (an idle window "
+                    "is not a verdict)\n",
+                    wtry + 1, AUTO_WINDOW_TRIES);
+            }
+            /* Name every sampler the chain actually tried, so a total refusal
+             * below can report the FULL chain, not just whichever rung gave
+             * up last. */
+            snprintf(tried + strlen(tried), sizeof tried - strlen(tried),
+                     "%s%s", tried[0] ? ", " : "", asmspy_sampler_label(smp));
+            /* Advance ONLY on a self-skip (ncand < 0). An empty window
+             * (ncand == 0) already got its fair, bounded retry above and is a
+             * verdict about the TARGET, not the sampler — it must not also
+             * change sampler. An explicit --sampler=ibs/sw never walks. */
+            if (ncand >= 0 || !chain_auto)
                 break;
-            wtry++;
-            fprintf(
-                stderr,
-                "--auto: idle window %d/%d — re-sampling (an idle window is "
-                "not a verdict)\n",
-                wtry + 1, AUTO_WINDOW_TRIES);
+            asmspy_sampler_t next =
+                asmspy_autoregion_sampler_next(smp, ibs_substrate);
+            if (next == ASMSPY_SMP_NONE)
+                break; /* chain exhausted: report the FINAL refusal below */
+            smp = next;
         }
         if (ncand <= 0) {
             if (ncand == 0 && wtry > 0)
@@ -3006,6 +3109,11 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         "--auto: gave up after %d idle windows (%d ms each) — "
                         "the target executed nothing we could scope\n",
                         wtry + 1, window_ms);
+            if (ncand < 0 && chain_auto)
+                fprintf(stderr,
+                        "--auto: every sampler in the chain refused (tried: "
+                        "%s)\n",
+                        tried);
             asmspy_symtab_free(&t);
             return ncand < 0 ? 0 : 1; /* <0 = clean skip (exit 0), 0 = no pick */
         }
@@ -4077,14 +4185,25 @@ static void serve_run_engine(serve_session_t *s) {
          * the IBS/entry path the same list + walk the sw/residency path had. */
         auto_cand_copy cands[AUTO_TRIES];
         int ncand = 0, attempt = 0;
-        int use_sw = p->sampler == SAMPLER_SW ||
-                     (p->sampler == SAMPLER_AUTO && !asmtest_ibs_available());
+        /* 2026-08-06 T5: the same chain as cmd_dataflow — see its comment for
+         * the full "why" (an AMD box with perf locked down used to pick IBS,
+         * get refused, and give up, with sw — and, once Task 7 lands, ptrace —
+         * never tried). Advances on a REFUSAL (ncand < 0), never on an empty
+         * window, and never when the operator forced a specific sampler. */
+        int ibs_substrate = asmtest_ibs_available();
+        int chain_auto = p->sampler == SAMPLER_AUTO;
+        asmspy_sampler_t smp_id = p->sampler == SAMPLER_IBS ? ASMSPY_SMP_IBS
+                                  : p->sampler == SAMPLER_SW
+                                      ? ASMSPY_SMP_SW
+                                      : asmspy_autoregion_sampler_next(
+                                            ASMSPY_SMP_NONE, ibs_substrate);
         /* The sampler + rule labels the client renders (asmtrace-schema.md, Serve
          * protocol): "entry" is strong evidence, "residency" is weaker and must
-         * be labelled as such. Held here so the initial emit AND every walked
-         * candidate name the same rule. */
-        const char *smp = use_sw ? "sw-clock" : "ibs-op";
-        const char *rule = use_sw ? "residency" : "entry";
+         * be labelled as such. Recomputed whenever smp_id changes (T5) so the
+         * initial emit AND every walked candidate name whichever sampler
+         * actually produced the list, not just the first one tried. */
+        const char *smp = asmspy_sampler_label(smp_id);
+        const char *rule = asmspy_sampler_rule_label(smp_id);
         const char *mod = p->module[0] ? p->module : NULL;
         /* 39 T3: the sample window (ms) is settable on the wire — the grammar
          * already validates `ms`; auto reads it here, defaulting to
@@ -4092,39 +4211,69 @@ static void serve_run_engine(serve_session_t *s) {
          * an EMPTY window (ncand == 0: the sampler RAN, nothing qualified — NOT a
          * self-skip, which is < 0) is a retry, not a verdict: re-sample a bounded
          * number of windows, each reported on the pick channel so a client can
-         * show "re-sampling" rather than freeze. */
+         * show "re-sampling" rather than freeze. A self-skip (< 0) may instead
+         * fall through to the NEXT SAMPLER (T5, chain_auto only); an empty
+         * window never does — it already had its own fair, bounded retry. */
         /* The effective sample window, clamped to the CLI --window bound so an
          * out-of-range wire `ms` cannot truncate into a ~24-day survey (review). */
         int window_ms = serve_auto_window_ms(p);
+        char tried[64] = "";
         int wtry = 0;
         for (;;) {
-            ncand = use_sw ? auto_pick_sw(p->pid, &s->syms, mod, cands,
-                                          AUTO_TRIES, window_ms)
-                           : auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES,
-                                       window_ms);
-            if (ncand != 0 ||
-                asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
-                    ASMSPY_WALK_ADVANCE)
+            wtry = 0;
+            for (;;) {
+                if (smp_id == ASMSPY_SMP_SW)
+                    ncand = auto_pick_sw(p->pid, &s->syms, mod, cands,
+                                         AUTO_TRIES, window_ms);
+                else if (smp_id == ASMSPY_SMP_IBS)
+                    ncand = auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES,
+                                      window_ms);
+                else /* ASMSPY_SMP_PTRACE: Task 7's sampler, not wired up yet —
+                      * a clean, quiet self-skip (its reason surfaces below,
+                      * in skip_note, exactly like IBS/sw's). */
+                    ncand = -1;
+                if (ncand != 0 ||
+                    asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
+                        ASMSPY_WALK_ADVANCE)
+                    break;
+                wtry++;
+                /* An empty window on the pick channel: evidence "idle" (NOT the
+                 * sampler's entry/residency rule — nothing was observed this window,
+                 * so claiming entry/residency would be a lie on the wire), the
+                 * sentinel func "(idle window)" (a real candidate has a real name),
+                 * and attempt/of = the WINDOW retry, so a client shows "idle window
+                 * N/M, re-sampling" rather than a silent gap. */
+                serve_emit_pick(s, smp, "idle", "(idle window)", 0, 0, 0, 0,
+                                wtry, AUTO_WINDOW_TRIES);
+            }
+            snprintf(tried + strlen(tried), sizeof tried - strlen(tried),
+                     "%s%s", tried[0] ? ", " : "", smp);
+            /* Advance ONLY on a self-skip; an empty window is a verdict about
+             * the TARGET, not the sampler, and an explicit --sampler=ibs/sw
+             * never walks (see the comment above). */
+            if (ncand >= 0 || !chain_auto)
                 break;
-            wtry++;
-            /* An empty window on the pick channel: evidence "idle" (NOT the
-             * sampler's entry/residency rule — nothing was observed this window,
-             * so claiming entry/residency would be a lie on the wire), the
-             * sentinel func "(idle window)" (a real candidate has a real name),
-             * and attempt/of = the WINDOW retry, so a client shows "idle window
-             * N/M, re-sampling" rather than a silent gap. */
-            serve_emit_pick(s, smp, "idle", "(idle window)", 0, 0, 0, 0, wtry,
-                            AUTO_WINDOW_TRIES);
+            asmspy_sampler_t next =
+                asmspy_autoregion_sampler_next(smp_id, ibs_substrate);
+            if (next == ASMSPY_SMP_NONE)
+                break; /* chain exhausted: report the FINAL refusal below */
+            smp_id = next;
+            smp = asmspy_sampler_label(smp_id);
+            rule = asmspy_sampler_rule_label(smp_id);
         }
         if (ncand <= 0) {
-            /* <0 = the SAMPLER self-skipped (perf refused); 0 = every window ran
-             * and nothing qualified. Two different facts about two different
-             * subsystems, so they must not share a code or a reason. */
+            /* <0 = the SAMPLER self-skipped (perf refused, or T5's whole chain
+             * did); 0 = every window ran and nothing qualified. Two different
+             * facts about two different subsystems, so they must not share a
+             * code or a reason. */
             s->rc = ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
-            if (ncand < 0)
+            if (ncand < 0 && chain_auto)
+                snprintf(s->skip_note, sizeof s->skip_note,
+                         "%s (chain tried: %s)",
+                         asmspy_sampler_unavail_reason(smp_id), tried);
+            else if (ncand < 0)
                 snprintf(s->skip_note, sizeof s->skip_note, "%s",
-                         use_sw ? asmtest_swclock_unavail_reason()
-                                : asmtest_ibs_unavail_reason());
+                         asmspy_sampler_unavail_reason(smp_id));
             else
                 snprintf(
                     s->skip_note, sizeof s->skip_note,
