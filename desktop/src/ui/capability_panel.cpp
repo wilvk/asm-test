@@ -2,10 +2,17 @@
 // (docs/internal/archive/gui/06-doors-and-learning.md T6). Draws and PROBES ONCE; every
 // rule lives in capview.h, which test_capview drives on synthetic data.
 //
-// In the render-only viewer this file still compiles but probes nothing: a
-// viewer that ran a capability sweep would be reporting on the machine it is
-// running on, not the machine the loaded recording came from — so it shows the
-// RECORDING's provenance and says so.
+// In the render-only viewer this file still compiles but does not run the
+// engine capability SWEEP: a viewer that ran that sweep would be reporting on
+// the machine it is running on, not the machine the loaded recording came
+// from — so the panel shows the RECORDING's provenance and says so instead
+// (draw_capability_panel's #ifndef ASMTEST_DESKTOP_CAN_PROBE branch below).
+// cap_probe's measured perf verdict (perf_ok/perf_reason, 2026-08-06 Task 3)
+// is the ONE exception: it is a bare syscall needing no engine object, so it
+// DOES run in the viewer and in every headless test exactly as it does in the
+// full app — see the "outside the guard" note on cap_probe itself, and
+// CapState::perf_probed for why that measurement is still not always usable
+// (a remote live session runs asmspy on a machine this syscall never touches).
 #include "imgui.h"
 
 #include <cerrno>

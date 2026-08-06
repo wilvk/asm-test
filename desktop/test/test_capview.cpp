@@ -10,12 +10,16 @@
 #include <cstring>
 #include <string>
 
+#include <linux/perf_event.h> // struct perf_event_attr — the test's OWN oracle syscall
+#include <sys/syscall.h> // __NR_perf_event_open
+#include <unistd.h>      // ::syscall / ::close
+
 #include "capview.h"
 #include "live/inspect.h" // remedy_command — the copy-pasteable fix a remedy names
 #include "ui/doors.h" // CapState, cap_probe — Task 3's measured perf verdict
 
 extern "C" {
-#include "asmtest_ibs.h" // asmtest_ibs_available — the SUBSTRATE probe cap_probe must disagree with
+#include "asmtest_ibs.h" // asmtest_ibs_available — informational only, see below; never the oracle
 }
 
 using namespace asmdesk;
@@ -318,20 +322,50 @@ int main() {
             s.perf_ok || !s.perf_reason.empty(),
             "a refused perf must carry the errno's own text -- that string is "
             "the only thing that names the remedy (a sysctl, a capability)");
-        // The load-bearing one: the two probes must be allowed to DISAGREE. On
-        // an AMD box with perf locked down, the substrate is present and the
-        // syscall is refused, and a preflight that cannot tell them apart will
-        // promise a mode that emits nothing. Asserted as a real implication on
-        // THIS host, where the disagreement is the measured state — not as a
-        // comment. On a host where perf does open, the implication is vacuously
-        // true and the check still cannot fire wrongly.
+
+        // Informational only, NEVER the pass/fail oracle below: shows a human
+        // reading test output that the two probes really can disagree on THIS
+        // host. Review (2026-08-06) found the brief's original check --
+        // "!(ibs_available && !perf_ok) || !reason.empty()" -- is a tautology:
+        // De Morgan reduces "!(X && !Y)" to "!X || Y", so under the EXACT
+        // regression this exists to catch (Y assigned FROM X, i.e. perf_ok =
+        // asmtest_ibs_available()) it becomes "!X || X", true for every X on
+        // every host -- a silent regression back to the M11 defect would pass
+        // this suite green forever. No comparison against the substrate probe
+        // can ever be a sound oracle for perf_ok; see the independent check
+        // below instead.
+        std::fprintf(stderr,
+                     "# info: asmtest_ibs_available()=%d perf_ok=%d "
+                     "perf_reason=\"%s\"\n",
+                     asmtest_ibs_available(), (int)s.perf_ok,
+                     s.perf_reason.c_str());
+
+        // The load-bearing check: an INDEPENDENT oracle, not an implication on
+        // the substrate probe. The test takes its own ground-truth reading
+        // with the identical cheapest self-monitoring event cap_probe uses,
+        // and asserts cap_probe's verdict MATCHES what the syscall actually
+        // did just now -- there is no algebraic identity (X compared to X)
+        // that can make this pass regardless of what cap_probe computes.
+        struct perf_event_attr pe;
+        std::memset(&pe, 0, sizeof pe);
+        pe.size = sizeof pe;
+        pe.type = PERF_TYPE_SOFTWARE;
+        pe.config = PERF_COUNT_SW_CPU_CLOCK;
+        pe.disabled = 1;
+        pe.exclude_kernel = 1;
+        pe.exclude_hv = 1;
+        long fd = ::syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+        bool ground_truth_ok = fd >= 0;
+        if (fd >= 0)
+            ::close((int)fd);
         check(
-            "cap/perf-is-not-the-substrate-probe",
-            !(asmtest_ibs_available() && !s.perf_ok) || !s.perf_reason.empty(),
-            "the substrate probe says IBS is present and the syscall was "
-            "refused — the two MUST be separate fields, and the refusal must "
-            "carry its reason; assigning perf_ok from asmtest_ibs_available() "
-            "reproduces the exact defect this field exists to fix");
+            "cap/perf-matches-an-independent-syscall",
+            s.perf_ok == ground_truth_ok,
+            "cap_probe's perf_ok must match a syscall the TEST performed "
+            "itself, not merely be consistent-by-implication with the "
+            "substrate probe -- assigning perf_ok FROM asmtest_ibs_available() "
+            "would fail THIS check on a host where they diverge, unlike the "
+            "tautological implication it replaces");
     }
 
     // --- determinism ------------------------------------------------------

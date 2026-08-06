@@ -4751,10 +4751,31 @@ void draw_shell(ShellState &s) {
     // has several call sites (the auto-connect above, the Connect pane's button, an
     // attach/launch full-detail) all inside inspect_door.cpp, which knows nothing
     // of CapState -- so this is a per-frame check on the RESULT (host_started)
-    // rather than a wrapper around every call site. `!s.caps.probed` makes it
-    // idempotent: it fires exactly once per session, the first frame a host is up.
+    // rather than a wrapper around every call site. `!s.caps.probed` makes the
+    // cascade rebuild + syscall idempotent: it fires exactly once per app
+    // session, the first frame any host is up.
     if (s.inspect.host_started && !s.caps.probed)
         cap_probe(s.caps);
+    // Review finding (2026-08-06, Task 3 fix): cap_probe's perf syscall always
+    // measures the LOCAL machine -- the one running this desktop process. For a
+    // LOCAL session that IS the machine that will run asmspy, so the verdict
+    // above (measured now, or on an earlier connect -- see CapState::probed's
+    // comment on why it is not re-measured) is trustworthy. For a REMOTE
+    // session (ssh_host set; inspect_door.cpp's inspect_connect does `spec.
+    // ssh_host = s.ssh_host`) asmspy runs on an entirely different box, and a
+    // local perf_event_open says nothing about it -- the exact hazard
+    // capability_panel.cpp's own header comment warns the render-only viewer
+    // against, just for a live target instead of a loaded recording.
+    //
+    // perf_probed is therefore recomputed EVERY frame (not latched like
+    // `probed`): the cascade/perf facts are properties of this desktop's own
+    // hardware and do not change across reconnects, but WHICH machine is the
+    // live target changes every time ssh_host does (local -> remote ->
+    // local...). false here is what tells Task 4's mode_host_blocked to block
+    // nothing and say nothing about a host it never measured, rather than
+    // grey or allow `auto` from a guess about the wrong machine.
+    s.caps.perf_probed =
+        s.inspect.host_started && s.inspect.ssh_host[0] == '\0';
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through
     // the ONE writer so the timeline / slice / Loom / Scrubber animate together.

@@ -67,9 +67,21 @@ namespace asmdesk {
 
 // The capability panel's state (06-doors-and-learning.md T6). `rows` is built
 // once at open and on an explicit Refresh — never per frame, and never in the
-// render-only viewer, which probes nothing.
+// render-only viewer, which never runs the engine capability SWEEP that
+// builds them (perf_ok/perf_reason below are the one exception: a syscall,
+// not a sweep, so they run everywhere).
 struct CapState {
     std::vector<cap_row> rows;
+    // Set once cap_probe has run; cleared by nothing except a fresh process --
+    // an explicit Refresh click re-runs cap_probe but does not reset this
+    // first. That means a disconnect and a later reconnect to a DIFFERENT
+    // host does NOT by itself re-measure `rows` or perf_ok/perf_reason; only
+    // Refresh does. That staleness was cosmetic while this only fed a panel a
+    // human reads; now that perf_ok/perf_reason feed Task 4's mode-blocking
+    // decision, it is worth stating plainly rather than leaving it implicit
+    // in the panel's own "probed once at open" caption. (perf_probed below is
+    // the field that actually protects the blocking decision from this: it is
+    // re-derived every frame from the LIVE session, never latched like this.)
     bool probed = false;
     bool native_only = false;
 
@@ -80,6 +92,22 @@ struct CapState {
     // returns EACCES -- the exact defect this field exists to fix.
     bool perf_ok = false;
     std::string perf_reason;
+
+    // Whether perf_ok/perf_reason describe the machine that will ACTUALLY run
+    // asmspy for the CURRENT session -- distinct from `probed` above, which only
+    // means "cap_probe has run at least once" (for the cascade `rows`, a fact
+    // about this desktop's own hardware that never changes across reconnects).
+    // cap_probe's syscall always measures the LOCAL machine (the one running
+    // this desktop process); for a remote session (InspectState::ssh_host set,
+    // inspect_connect: `spec.ssh_host = s.ssh_host`) that is the WRONG machine
+    // -- asmspy runs elsewhere, and a local perf_event_open says nothing about
+    // it, the exact hazard this file's own render-only-viewer comment warns
+    // against for the engine sweep. shell.cpp therefore recomputes this every
+    // frame from the live connection's locality instead of latching it like
+    // `probed`: false must mean "block nothing, say nothing" -- Task 4's
+    // mode_host_blocked only forms a verdict about a host this actually
+    // measured.
+    bool perf_probed = false;
 };
 
 // The Author door's state. `source` is a std::string used as an ImGui text
