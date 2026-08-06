@@ -1820,11 +1820,19 @@ static void pi_read_code_and_modules(pid_t pid, asmspy_procinfo_t *out) {
 }
 
 /* Is this target under a non-trivial LSM label? /proc/<pid>/attr/current is
- * world-readable and reads "unconfined" (or is empty/absent) when it is not.
- * This does NOT decide attachability -- AppArmor's profile_tracee_perm
- * early-returns for an unconfined tracer, and snap's own profile #includes
- * abstractions/base, which grants ptrace (tracedby) unqualified. It decides
- * only which REMEDY is honest. */
+ * world-readable and reads bare "unconfined" (or is empty/absent) when there
+ * is no profile at all -- but a process CAN carry a NAMED profile that is
+ * itself loaded in unconfined MODE, rendered "<profile> (unconfined)", which
+ * enforces nothing, same as no profile. Measured directly on this plan's own
+ * stock host: every process started from a VS Code integrated terminal here
+ * reads "vscode (unconfined)\n" (`od -c /proc/self/attr/current`), while pid
+ * 1 and pid 2 (spawned outside that terminal) read bare "unconfined\n" --
+ * both real, both on the SAME host. A bare-prefix-only check misclassifies
+ * the first as confined and would withhold the launch remedy from a target
+ * that is not actually confined. This does NOT decide attachability --
+ * AppArmor's profile_tracee_perm early-returns for an unconfined tracer, and
+ * snap's own profile #includes abstractions/base, which grants ptrace
+ * (tracedby) unqualified. It decides only which REMEDY is honest. */
 static int asmspy_target_is_confined(pid_t pid) {
     char path[64], buf[128];
     FILE *f;
@@ -1836,7 +1844,13 @@ static int asmspy_target_is_confined(pid_t pid) {
     n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
     buf[n] = '\0';
-    return n > 0 && strncmp(buf, "unconfined", 10) != 0;
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+        buf[--n] = '\0';
+    if (n == 0 || strcmp(buf, "unconfined") == 0)
+        return 0;
+    if (n >= 12 && strcmp(buf + n - 12, "(unconfined)") == 0)
+        return 0;
+    return 1;
 }
 
 /* The attach verdict + which engines could run on this target. The facts

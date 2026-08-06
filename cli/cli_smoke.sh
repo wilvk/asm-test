@@ -3682,6 +3682,42 @@ printf '%s\n' "$selfinfo" | grep -qi 'launch the target from asmspy' \
     && fail "the launch remedy is measured broken for confined targets and must not be offered unconditionally"
 echo "--info: attachability is measured, not inferred"
 
+# The check above only ever exercises the SUCCESS branch of the yama>=1 arm
+# ($AVPID always measures attachable=1) — attach_remedy is untouched on that
+# path (cli/asmspy.c only prints it `if (pi->attach_remedy[0])`), so the
+# "launch" grep finding nothing there is GUARANTEED regardless of whether
+# asmspy_target_is_confined() is correct, inverted, or deleted. Prove the
+# REFUSED branch, and its remedy, for real: a plain `sleep` backgrounded here
+# is a SIBLING of the asmspy process this script goes on to invoke (both are
+# children of THIS script; neither is the other's descendant) — confirmed
+# directly with three hand-built fork probes (parent->child open succeeds,
+# child->parent and sibling->sibling both fail), the same descendant-only
+# rule that refuses $$ above. Plain `sleep` carries no LSM label of its own,
+# so a CORRECT remedy must be the unconfined one: "...or launch the target
+# from asmspy". Verified this catches a real regression: stubbing
+# asmspy_target_is_confined() to unconditionally `return 1` flips this
+# target's remedy to the confined-only sysctl text and fails the assertion
+# below, while the $AVPID checks above stay green throughout — the AVPID-only
+# check was insufficient by itself. The CONFINED direction (a refused target
+# that correctly gets the sysctl-only remedy) has no privilege-free target in
+# this lane — no confined process exists here — so it stays covered only by
+# the task's Step 5 manual measurement (a live, confined, refused
+# snapd-desktop-integration process), not by this smoke lane.
+sleep 100 &
+SIBPID=$!
+sleep 0.3
+kill -0 "$SIBPID" 2>/dev/null \
+    || fail "sibling sleep ($SIBPID) is not alive for the --info measured-no check"
+sibinfo=$("$ASM" --info "$SIBPID" 2>&1) || fail "--info on a refused sibling target failed"
+sibattach=$(printf '%s\n' "$sibinfo" | grep -iE 'attach|->')
+printf '%s\n' "$sibinfo" | grep -q 'attach *NO' \
+    || fail "--info must report a MEASURED no for an unrelated same-uid target (got: $sibattach)"
+printf '%s\n' "$sibinfo" | grep -qi 'launch the target from asmspy' \
+    || fail "--info: an unconfined refused target must still offer the launch remedy (got: $sibattach)"
+kill "$SIBPID" 2>/dev/null || true
+wait "$SIBPID" 2>/dev/null || true
+echo "--info: a genuinely refused, unconfined target measures NO and keeps the launch remedy"
+
 # A nonexistent pid is refused, not rendered blank — and refused with its OWN
 # exit code (ASMSPY_INFO_EXIT_NO_SUCH_PID = 3, cli/libasmspy.h), not the
 # generic 1 that also means "the --record you asked for could not be
