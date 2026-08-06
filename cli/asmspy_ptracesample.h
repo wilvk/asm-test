@@ -128,4 +128,36 @@ static inline const char *asmspy_ps_expand_note(int have_disas) {
                         "ranking is residency-only";
 }
 
+/* MAY PHASE 3 ARM? The single most dangerous decision in this module, as a pure
+ * one.
+ *
+ * Phase 3's int3 is one byte in SHARED process text. Every thread of the target
+ * can execute it, so every thread of the target must be OURS — a task that
+ * reaches it without a tracer takes a SIGTRAP whose default action kills the
+ * whole process (cli/asmspy_engine.c:2954-2957 states exactly this). "We seized
+ * most of them" is not a weaker version of safety, it is the absence of it.
+ *
+ * `fully_seized` is false whenever ANY task of the target may be untraced, OR
+ * may become so before the window ends: a PTRACE_SEIZE refused for a reason
+ * other than the task having exited, a seize scan that never converged, a
+ * followed child dropped for want of table space — and a thread count sitting
+ * within PS_ARM_HEADROOM of the PS_MAX_THREADS cap, because a target one
+ * thread-pool growth away from an untraced task over an 800 ms window is not
+ * safe to arm either. It is re-read AFTER the window as well as before: a run
+ * that LOST coverage part-way confirmed only some candidates against only some
+ * of the thread set, which is not a measurement to present as one.
+ *
+ * Returns NULL when arming is safe, or the sentence the caller must report when
+ * it is not. Pure, so cli/test_ptracesample.c pins both branches — including the
+ * refusal, which on a healthy 4-thread victim is otherwise unreachable. */
+static inline const char *asmspy_ps_arm_note(int fully_seized) {
+    return fully_seized
+               ? NULL
+               : "the target's thread set could not be fully seized, so the "
+                 "int3 arrival check was skipped and these candidates are "
+                 "UNCONFIRMED — a process-wide trap over a task we do not "
+                 "trace "
+                 "kills the process";
+}
+
 #endif /* ASMSPY_PTRACESAMPLE_H */

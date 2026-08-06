@@ -48,9 +48,18 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
+# NOTE the fixed header list: every cli/ object depends on ALL of these, so a
+# header missing from it is a stale object nothing rebuilds. That bit
+# asmspy_ptracesample.h, whose tunables (ASMSPY_PS_HZ, _CONFIRM_MS,
+# _HIT_BUDGET, the two inline decisions) live in the header while the code
+# lives in the .c — and because the header IS listed as a prerequisite of
+# build/test_ptracesample below, the TEST relinked and looked fresh while the
+# sampler under test was still built from the old constants. A green run over
+# code that no longer exists.
 $(BUILD)/%.o: cli/%.c cli/libasmspy.h cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               cli/asmspy_autoregion.h cli/asmspy_arch.h \
+              cli/asmspy_ptracesample.h \
               cli/asmspy_syscall_name.h cli/asmspy_tidsort.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
@@ -265,6 +274,17 @@ $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 # completely invisible against every other victim in this tree. Compiles via the
 # cli/ .o pattern rule.
 $(BUILD)/sigload_victim: $(BUILD)/sigload_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# forkhot_victim FORKS from inside its hot loop, and the child re-enters the
+# same hot function. That is the only shape in this tree that can reach the
+# perf-free picker's copy-on-write hazard: a fork inside an armed window hands
+# the child a private copy of the planted int3, and the child -- a different
+# process, with no tracer -- dies of SIGTRAP the first time it executes that
+# entry. clone_victim covers the THREAD path (same address space,
+# PTRACE_O_TRACECLONE); fork_victim forks once, two seconds in, then sleeps, so
+# it is never hot enough to be armed. Compiles via the cli/ .o pattern rule.
+$(BUILD)/forkhot_victim: $(BUILD)/forkhot_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # scenes_victim backs the documented 3D-scene screenshots
@@ -713,7 +733,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(BUILD)/scenes_victim \
-           $(BUILD)/sigload_victim \
+           $(BUILD)/sigload_victim $(BUILD)/forkhot_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \

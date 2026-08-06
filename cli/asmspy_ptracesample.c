@@ -32,10 +32,47 @@
 #include "asmspy_ptracesample.h"
 #include "libasmspy.h"
 
-/* Threads we will follow. A target with more than this many is sampled over the
- * first PS_MAX_THREADS — the residency phase is a SHORTLIST generator, and a
- * 4096-thread process does not need every thread polled to nominate a body. */
+/* Threads we will follow.
+ *
+ * This cap used to be justified as "the residency phase is a SHORTLIST
+ * generator, and a 4096-thread process does not need every thread polled to
+ * nominate a body". That is true of PHASE 1 and FALSE of PHASE 3, and the
+ * difference is fatal: phase 3's int3 is one byte in SHARED process text, so
+ * thread 513 executes it, takes a SIGTRAP with no tracer, and SIGTRAP's default
+ * action takes the WHOLE PROCESS down. That is verbatim
+ * cli/asmspy_engine.c:2954-2957, and a JVM, a browser or any thread-pool server
+ * clears 512 threads routinely — deterministic, not a race.
+ *
+ * So the cap survives, but it now feeds `covered` (see ps_ctx_t): a truncated
+ * seize is allowed to sample, and is NEVER allowed to arm. */
 #define PS_MAX_THREADS 512
+
+/* Slack ABOVE the seize cap, and it is a safety mechanism, not a convenience.
+ *
+ * The cap is enforced when we ENUMERATE, but a task cloned DURING an armed
+ * window arrives through PTRACE_O_TRACECLONE at its attach-stop, before it has
+ * run a single instruction. If the table has no room for it the only options are
+ * to detach it — releasing an untraced task into a process whose text contains
+ * our int3, i.e. the exact death the cap exists to prevent — or to strand it
+ * stopped forever. With headroom it is simply TABLED: safe, traced, and the
+ * coverage flag is what records that the cap was exceeded.
+ *
+ * MEASURED: without this, cli/test_ptracesample.c's capped run failed roughly 1
+ * time in 5 — tid_victim's second worker is created just after the seize scan,
+ * so the gate saw full coverage, phase 3 armed, and the new thread was detached
+ * into an armed process and killed it. */
+#define PS_ARM_HEADROOM 16
+#define PS_TABLE_SLOTS  (PS_MAX_THREADS + PS_ARM_HEADROOM)
+
+/* Passes ps_seize_all will make before it gives up on converging. One pass is
+ * not enough: a thread cloned BY a thread we had not yet seized is neither
+ * seized nor followed, so the scan repeats until a whole pass adds nothing.
+ * Exhausting these means the target is spawning faster than we can enumerate,
+ * which is a truthful "not fully covered", not a failure. */
+#define PS_SEIZE_PASSES 8
+
+/* PTRACE_DETACH attempts per thread before we call it stuck. */
+#define PS_DETACH_TRIES 3
 
 /* Distinct FUNCTIONS the residency histogram can hold. Samples are folded to
  * their symbol at capture time rather than kept as raw PCs, which keeps this
@@ -78,13 +115,47 @@
 
 typedef struct {
     pid_t tid;
-    int stopped; /* WE consumed its stop and have not resumed it yet */
+    int stopped; /* WE consumed its ptrace-stop and have not resumed it yet */
+    /* In job-control group-stop under PTRACE_LISTEN. A THIRD state, not a
+     * flavour of `stopped`, because a LISTENed tracee is NOT in a ptrace-stop we
+     * hold: PEEKTEXT/POKETEXT/CONT all fail ESRCH on it. Marking it `stopped`
+     * (which is what this file used to do, before the job-control branch even
+     * ran) told ps_unplant it had a thread that could restore the trap byte,
+     * told ps_phase3_one it had a planter, and told ps_resume_all to CONT a
+     * process the user had deliberately suspended — the exact thing the
+     * PTRACE_LISTEN branch exists to prevent. */
+    int listening;
+    /* A fork/vfork CHILD: a different PROCESS that appeared under our options,
+     * not a thread of the target. It must never be used to poke the target's
+     * text (a fork child has its own address space, so restoring through it
+     * would clear `bp_planted` while the parent's byte is still in) and must
+     * never be sampled (its /proc path is not under our pid). */
+    int foreign;
+    /* For a fork child specifically: the entry whose trap BYTE it inherited in
+     * its copy-on-write text, and the original word to put back. A child that is
+     * released still carrying our int3 dies of SIGTRAP with no tracer — the same
+     * fatality as an unseized thread, one address space over. 0 = nothing
+     * inherited (a vfork child SHARES the mm, so the parent's disarm covers it
+     * and restoring through the child would instead disarm the parent). */
+    uint64_t copied_bp;
+    long copied_orig;
 } ps_thr_t;
 
 typedef struct {
     pid_t pid;
-    ps_thr_t t[PS_MAX_THREADS];
+    ps_thr_t t[PS_TABLE_SLOTS];
     int n;
+    /* Is the thread set FULLY ours? Set false by anything that leaves a task of
+     * the target untraced: the PS_MAX_THREADS cap, a PTRACE_SEIZE refused for
+     * anything but ESRCH, a seize scan that never converged, or a table-full
+     * detach of a followed child. Phase 3 is skipped outright when this is
+     * false — see PS_MAX_THREADS and asmspy_ps_arm_note. */
+    int covered;
+    int cap; /* PS_MAX_THREADS, or the ASMSPY_PS_TEST_CAP lever */
+    /* A trap byte we could NOT get back out. Nothing may arm after this, and the
+     * call must not return a clean result: the target is holding an int3 that
+     * will kill it on its next arrival, seconds after we are gone. */
+    int leaked;
     /* The entry this candidate is using, and whether the trap BYTE is in the
      * text right now. These are deliberately two facts, not one, and the split
      * is load-bearing: a thread can be queued at base+1 with its SIGTRAP not
@@ -145,6 +216,22 @@ static long long ps_now_us(void) {
 /* thread table                                                        */
 /* ------------------------------------------------------------------ */
 
+/* APPEND a note to `why` rather than overwriting it. More than one thing can be
+ * worth saying about a single window — "no Capstone" AND "the thread set was not
+ * fully seized" are independent facts, and an assignment would silently drop
+ * whichever fired second. */
+static void ps_note(char *why, size_t whylen, const char *msg) {
+    if (!why || !whylen || !msg)
+        return;
+    size_t used = strnlen(why, whylen);
+    if (used + 1 >= whylen)
+        return;
+    if (used)
+        snprintf(why + used, whylen - used, "; %s", msg);
+    else
+        snprintf(why, whylen, "%s", msg);
+}
+
 static int ps_find(ps_ctx_t *c, pid_t tid) {
     for (int i = 0; i < c->n; i++)
         if (c->t[i].tid == tid)
@@ -152,14 +239,42 @@ static int ps_find(ps_ctx_t *c, pid_t tid) {
     return -1;
 }
 
+/* The table cap, with a TEST LEVER. The truncation path is fatal (see
+ * PS_MAX_THREADS) and cannot be provoked from outside without a 513-thread
+ * victim, so it could only ever be argued rather than demonstrated.
+ * ASMSPY_PS_TEST_CAP=<n> caps the table at `n`, exactly as the engine's
+ * ASMSPY_TEST_THR_OOM lever does for its own untabled-task path
+ * (cli/asmspy_engine.c:1929). Unset = the real cap.
+ *
+ * Read once PER CALL into ps_ctx_t::cap, deliberately NOT into a function-local
+ * static: a static is read on the first sampler call of the process and never
+ * again, so a test that sets the lever between calls silently gets the real cap
+ * and its assertions go vacuous. That happened on the first run of this very
+ * check. */
+static int ps_read_cap(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_CAP");
+    int cap = (e && *e) ? atoi(e) : PS_MAX_THREADS;
+    return (cap <= 0 || cap > PS_MAX_THREADS) ? PS_MAX_THREADS : cap;
+}
+
+/* Add `tid`, or find it.
+ *
+ * Two different limits, and conflating them is what made a followed clone get
+ * DETACHED into an armed process. Exceeding the seize CAP means "we no longer
+ * hold the whole thread set", which is a coverage fact — the task is still
+ * tabled, out of the headroom above, because a task we trace can never die of
+ * our trap. Only exhausting the physical SLOTS is a real refusal, and every
+ * caller must then treat the task as not ours. */
 static int ps_add(ps_ctx_t *c, pid_t tid) {
     int i = ps_find(c, tid);
     if (i >= 0)
         return i;
-    if (c->n >= PS_MAX_THREADS)
+    if (c->n >= c->cap)
+        c->covered = 0;
+    if (c->n >= PS_TABLE_SLOTS)
         return -1;
+    memset(&c->t[c->n], 0, sizeof c->t[c->n]);
     c->t[c->n].tid = tid;
-    c->t[c->n].stopped = 0;
     return c->n++;
 }
 
@@ -261,19 +376,40 @@ static int ps_plant(ps_ctx_t *c, pid_t tid, uint64_t base) {
     return 0;
 }
 
-/* Take the trap byte back out, through any STOPPED thread (one address space).
- * `bp_base` is deliberately LEFT set — see the ps_ctx_t note: threads may still
- * be queued at base+1 and only bp_base can identify them as ours. */
-static void ps_unplant(ps_ctx_t *c) {
+/* Can this table entry POKE the target's text? A thread we actually hold in a
+ * ptrace-stop, in the target's own address space. Excludes:
+ *   - a running thread          (PEEK/POKETEXT are refused, silently)
+ *   - a LISTENed thread         (group-stop, not a stop we hold: ESRCH)
+ *   - a fork/vfork child        (its own mm, or a shared one we must not clear)
+ */
+static int ps_can_poke(const ps_thr_t *t) {
+    return t->stopped && !t->listening && !t->foreign;
+}
+
+/* Take the trap byte back out, through any thread that can poke.
+ *
+ * RETURNS A STATUS, and the caller must not flatten it. This used to be void:
+ * if no tabled thread was stopped, or every POKETEXT returned ESRCH, it returned
+ * silently with bp_planted still 1 — and the disarm then cleared bp_base
+ * unconditionally, so the ADDRESS of the live int3 was gone. The later
+ * ps_detach_all saw bp_planted == 1 and poked address ZERO. The sampler returned
+ * success and the target died seconds later on its next arrival: precisely the
+ * "does not fail loudly" outcome the disarm comment forbids.
+ *
+ * `bp_base` is deliberately LEFT set on success too — see the ps_ctx_t note:
+ * threads may still be queued at base+1 and only bp_base identifies them as
+ * ours. 0 = the byte is out (or was never in), -1 = it is still in the target. */
+static int ps_unplant(ps_ctx_t *c) {
     if (!c->bp_planted)
-        return;
+        return 0;
     for (int i = 0; i < c->n; i++)
-        if (c->t[i].stopped &&
+        if (ps_can_poke(&c->t[i]) &&
             ptrace(PTRACE_POKETEXT, c->t[i].tid, (void *)(uintptr_t)c->bp_base,
                    (void *)(uintptr_t)c->bp_orig) == 0) {
             c->bp_planted = 0;
-            return;
+            return 0;
         }
+    return -1;
 }
 
 /* THE SAFETY NET, lifted verbatim in spirit from rgn_rewind_from_bp. On x86 a
@@ -350,22 +486,63 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
 
     /* A followed clone's very first stop is where we learn its tid. */
     int idx = ps_add(c, w);
-    if (idx < 0) { /* table full: never strand a thread traced-and-stopped */
+    if (idx < 0) {
+        /* Table full. `covered` is already false (ps_add sets it), so phase 3
+         * will not arm — which is what makes this detach survivable rather than
+         * the start of the death described at PS_MAX_THREADS. Never strand a
+         * task traced-and-stopped. */
         ptrace(PTRACE_DETACH, w, NULL, NULL);
         return PS_EV_NONE;
     }
-    c->t[idx].stopped = 1;
+
+    /* A FORK CHILD holding a copy-on-write copy of our trap byte. Release it the
+     * moment we can touch it: restore ITS copy in ITS address space, rewind it
+     * off base+1, and detach. Left as it is, it dies of a SIGTRAP with no
+     * tracer — the same fatality as an unseized thread, one address space over.
+     * This runs BEFORE the job-control branch on purpose: a child's own attach
+     * stop must not be mistaken for a stop the user asked for. */
+    if (c->t[idx].foreign && c->t[idx].copied_bp) {
+        uint64_t cb = c->t[idx].copied_bp;
+        if (ptrace(PTRACE_POKETEXT, w, (void *)(uintptr_t)cb,
+                   (void *)(uintptr_t)c->t[idx].copied_orig) == 0) {
+            ps_rewind(w, cb);
+            ptrace(PTRACE_DETACH, w, NULL, NULL);
+            ps_del(c, w);
+        } else {
+            /* Could not clean it here; keep it TRACED (so its trap is ours to
+             * absorb) and try again at teardown. */
+            c->t[idx].stopped = 1;
+        }
+        return PS_EV_NONE;
+    }
 
     if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
         event == PTRACE_EVENT_VFORK) {
+        c->t[idx].stopped = 1;
         /* CORRECTION 2, the half that makes the option useful: table the child
          * so it is followed and, above all, so the phase-3 int3 in the SHARED
-         * text has a tracer when the new thread reaches it. Do NOT resume the
+         * text has a tracer when the new task reaches it. Do NOT resume the
          * child here — its own attach-stop has not necessarily arrived yet; it
-         * surfaces in this same loop and is released there. */
+         * surfaces in this same loop and is handled there. */
         unsigned long child = 0;
-        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child)
-            ps_add(c, (pid_t)child);
+        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child) {
+            int ci = ps_add(c, (pid_t)child);
+            if (ci < 0) {
+                c->covered = 0; /* a task of the target we cannot follow */
+            } else if (event != PTRACE_EVENT_CLONE) {
+                /* A different PROCESS, not a thread. It must never poke the
+                 * target's text nor be sampled. A FORK child took a private
+                 * copy of the text, so it carries our byte and has to have it
+                 * put back; a VFORK child SHARES the mm, so the parent's own
+                 * disarm covers it and restoring through the child would
+                 * instead disarm the parent. */
+                c->t[ci].foreign = 1;
+                if (event == PTRACE_EVENT_FORK && c->bp_planted) {
+                    c->t[ci].copied_bp = c->bp_base;
+                    c->t[ci].copied_orig = c->bp_orig;
+                }
+            }
+        }
         ps_cont(c, w, 0);
         return PS_EV_NONE;
     }
@@ -373,17 +550,35 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
     if (event == PTRACE_EVENT_STOP) {
         /* Job control (^Z, tty stops). PTRACE_LISTEN leaves the thread stopped
          * — honouring the stop the user asked for — yet traced; PTRACE_CONT
-         * here would resume a process that is supposed to be suspended. */
+         * here would resume a process that is supposed to be suspended.
+         *
+         * `listening`, NOT `stopped`: a LISTENed tracee is in group-stop, which
+         * is not a ptrace-stop we hold, so PEEK/POKE/CONT on it all fail ESRCH.
+         * See ps_thr_t. */
         if (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
             sig == SIGTTOU) {
-            ptrace(PTRACE_LISTEN, w, NULL, NULL);
+            if (ptrace(PTRACE_LISTEN, w, NULL, NULL) == 0) {
+                c->t[idx].listening = 1;
+                c->t[idx].stopped = 0;
+            } else {
+                /* LISTEN refused: an ordinary held stop is wrong for job
+                 * control but INFINITELY better than a thread nothing ever
+                 * resumes, which is the only other option here. */
+                c->t[idx].stopped = 1;
+                ps_cont(c, w, 0);
+            }
             return PS_EV_NONE;
         }
+        c->t[idx].stopped = 1;
+        c->t[idx].listening = 0;
         if (w == hold)
             return PS_EV_STOPPED; /* our PTRACE_INTERRUPT landed */
         ps_cont(c, w, 0);
         return PS_EV_NONE;
     }
+
+    c->t[idx].stopped = 1;
+    c->t[idx].listening = 0;
 
     if (sig == SIGTRAP) {
         /* our own PTRACE_SINGLESTEP over the entry (phase 3's step-and-rearm) */
@@ -438,6 +633,14 @@ static int ps_pump(ps_ctx_t *c, pid_t hold, long budget_us, long spin_us,
                    pid_t *arrived) {
     long long t0 = ps_now_us();
     for (;;) {
+        /* THE DEADLINE, checked on EVERY iteration including the drain path.
+         * It used to sit below the `continue` that drains queued events, so a
+         * target generating stops faster than we consumed them kept this loop
+         * fed forever and every budget in the file became advisory. MEASURED:
+         * one sampler run stopped making progress and had to be killed. */
+        long long el = ps_now_us() - t0;
+        if (el >= budget_us)
+            return PS_EV_NONE;
         int st = 0;
         pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
         if (w > 0) {
@@ -448,16 +651,13 @@ static int ps_pump(ps_ctx_t *c, pid_t hold, long budget_us, long spin_us,
                 return ev;
             if (ev == PS_EV_GONE && (c->n == 0 || (hold && w == hold)))
                 return PS_EV_GONE;
-            continue; /* drain everything already queued before napping */
+            continue; /* drain what is already queued before napping */
         }
         if (w < 0) {
             if (errno == EINTR)
                 continue;
             return PS_EV_GONE; /* ECHILD — nothing left to wait for */
         }
-        long long el = ps_now_us() - t0;
-        if (el >= budget_us)
-            return PS_EV_NONE;
         if (el >= spin_us) {
             struct timespec nap = {0, PS_POLL_US * 1000};
             nanosleep(&nap, NULL);
@@ -493,21 +693,79 @@ static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid) {
     return -1;
 }
 
+/* Stop every thread we hold, over a SNAPSHOT of tids rather than live indices.
+ *
+ * The live-index walk this replaces was unsafe against ps_del's swap-with-last:
+ * a thread swapped from the tail into an already-visited slot was never stopped,
+ * and was then detached while RUNNING — which fails ESRCH, leaves it seized, and
+ * with the pump gone its next signal becomes a stop nobody will ever consume.
+ * That is a permanent version of the freeze correction 1's second half
+ * measured. The snapshot is taken without issuing any ptrace call, so nothing
+ * can mutate the table underneath it.
+ *
+ * Two rounds, because a thread cloned DURING the first round is tabled by the
+ * pump and is not in that round's snapshot. */
 static void ps_stop_all(ps_ctx_t *c) {
-    for (int i = 0; i < c->n;) {
-        pid_t tid = c->t[i].tid;
-        if (ps_ensure_stopped(c, tid) == 0)
-            i++;
-        else if (ps_find(c, tid) >= 0)
-            i++; /* still tabled but unstoppable: leave it, do not spin */
-        /* else it vanished and ps_del swapped a new tid into slot i */
+    for (int round = 0; round < 2; round++) {
+        pid_t snap[PS_TABLE_SLOTS];
+        int n = 0;
+        for (int i = 0; i < c->n; i++)
+            if (!c->t[i].stopped && !c->t[i].listening)
+                snap[n++] = c->t[i].tid;
+        if (n == 0)
+            return;
+        for (int i = 0; i < n; i++)
+            ps_ensure_stopped(c, snap[i]);
     }
 }
 
 static void ps_resume_all(ps_ctx_t *c) {
     for (int i = 0; i < c->n; i++)
-        if (c->t[i].stopped)
+        /* NOT the listening ones: PTRACE_CONT on a group-stopped tracee either
+         * fails or, worse, resumes a process the user deliberately suspended. */
+        if (c->t[i].stopped && !c->t[i].listening)
             ps_cont(c, c->t[i].tid, 0); /* ours: see the file-header rule */
+}
+
+/* Stop everything, take the trap byte out, rewind anyone parked at base+1, and
+ * only THEN forget the address.
+ *
+ * Two attempts, because the usual reason the first fails is that nothing was
+ * stopped yet. If the byte is still in after that, `leaked` is set and bp_base
+ * is KEPT: clearing it is how the address of a live int3 was lost, after which
+ * teardown poked address zero and the target died seconds later with the
+ * sampler reporting success. Returns 0 clean, -1 leaked. */
+static int ps_disarm(ps_ctx_t *c) {
+    ps_stop_all(c);
+    if (ps_unplant(c) != 0) {
+        ps_stop_all(c);
+        if (ps_unplant(c) != 0) {
+            c->leaked = 1;
+            return -1;
+        }
+    }
+    for (int i = 0; i < c->n; i++)
+        ps_rewind(c->t[i].tid, c->bp_base);
+    c->bp_base = 0; /* ONLY now, and only because the byte is provably out */
+    return 0;
+}
+
+/* Detach ONE thread, insisting. PTRACE_DETACH requires a ptrace-stop; on a
+ * running tracee it fails ESRCH — and the old code discarded that return, so the
+ * thread stayed SEIZED after we returned, with the pump gone. Its next signal
+ * then becomes a signal-delivery-stop nobody will ever consume and it hangs
+ * PERMANENTLY. Returns 0 (detached, or it exited), -1 (still ours, and stuck). */
+static int ps_detach_one(ps_ctx_t *c, pid_t tid) {
+    for (int attempt = 0; attempt < PS_DETACH_TRIES; attempt++) {
+        if (ptrace(PTRACE_DETACH, tid, NULL, NULL) == 0)
+            return 0;
+        if (ps_ensure_stopped(c, tid) != 0)
+            /* ps_ensure_stopped removes a vanished tid; anything else means we
+             * could not bring it to a stop and the next attempt will not fare
+             * better. */
+            return ps_find(c, tid) < 0 ? 0 : -1;
+    }
+    return -1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -525,50 +783,127 @@ static void ps_resume_all(ps_ctx_t *c) {
  * passed options 0. PTRACE_O_TRACECLONE is what makes a thread created after
  * this scan our tracee too.
  *
- * Returns the number of threads seized, or -1 if none could be. */
+ * PTRACE_O_TRACEFORK/VFORK are set for the SAME reason one address space over:
+ * a child forked inside an armed window takes a copy-on-write copy of the trap
+ * byte and dies of it. They were previously unset while ps_dispatch carried
+ * arms for both events, so the code READ as though forks were handled while the
+ * arms were unreachable — a fork-per-request server is a realistic target and
+ * the armed windows total ~800 ms.
+ *
+ * THE SCAN REPEATS until a whole pass adds nothing. A single pass is not enough:
+ * a thread cloned BY a thread we had not yet seized is neither in our scan nor
+ * covered by TRACECLONE, and it is exactly such a thread that later executes the
+ * shared int3 with no tracer.
+ *
+ * Sets c->covered = 0 for anything that leaves a task of the target untraced —
+ * the table cap, a refusal that is not ESRCH, or a scan that never converged.
+ * Returns the number of tasks seized, or -1 if none could be. */
 static int ps_seize_all(ps_ctx_t *c) {
     char dir[64];
     snprintf(dir, sizeof dir, "/proc/%d/task", (int)c->pid);
-    DIR *d = opendir(dir);
-    if (!d)
-        return -1;
-    struct dirent *e;
-    int failed = 0;
-    while ((e = readdir(d)) != NULL && c->n < PS_MAX_THREADS) {
-        if (e->d_name[0] < '0' || e->d_name[0] > '9')
-            continue;
-        pid_t tid = (pid_t)atoi(e->d_name);
-        if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)PTRACE_O_TRACECLONE) != 0) {
-            failed++;
-            continue; /* a thread that exited between readdir and here */
+    long opts = PTRACE_O_TRACECLONE | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK;
+    c->covered = 1;
+
+    for (int pass = 0; pass < PS_SEIZE_PASSES; pass++) {
+        DIR *d = opendir(dir);
+        if (!d) {
+            /* The target vanished mid-scan. Whatever we hold is not the whole
+             * thread set by definition. */
+            c->covered = 0;
+            break;
         }
-        ps_add(c, tid);
+        int added = 0;
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (e->d_name[0] < '0' || e->d_name[0] > '9')
+                continue;
+            pid_t tid = (pid_t)atoi(e->d_name);
+            if (ps_find(c, tid) >= 0)
+                continue;
+            if (c->n >= c->cap) {
+                /* Test capacity BEFORE seizing, never after. PTRACE_SEIZE does
+                 * not stop the tracee, so the PTRACE_DETACH that "undid" an
+                 * untabled seize was refused ESRCH on a running task — leaving
+                 * it seized, untabled and unpumped, i.e. a task whose next
+                 * signal-delivery-stop nobody would ever consume. */
+                c->covered = 0;
+                continue;
+            }
+            errno = 0;
+            if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) != 0) {
+                /* ESRCH is a task that exited between readdir and here: it can
+                 * never execute the trap, so coverage is intact. Anything else
+                 * (EPERM, a locked-down container) is a task that is ALIVE and
+                 * NOT OURS, which is exactly the fatal case. */
+                if (errno != ESRCH)
+                    c->covered = 0;
+                continue;
+            }
+            if (ps_add(c, tid) < 0) { /* physical slots exhausted */
+                c->covered = 0;
+                continue;
+            }
+            added++;
+        }
+        closedir(d);
+        if (added == 0)
+            return c->n == 0 ? -1 : c->n; /* converged */
     }
-    closedir(d);
-    (void)failed; /* every SEIZE failing and the task dir being empty are the
-                   * same outcome for the caller: nothing to sample */
+    /* Fell out of the pass budget with tasks still appearing: the target is
+     * spawning faster than we can enumerate. Truthfully not covered. */
+    c->covered = 0;
     return c->n == 0 ? -1 : c->n;
 }
 
-/* Detach every thread, leaving the target alive and running.
+/* Detach every task, leaving the target alive and running.
  *
  * The two hazards this owns are the ones rgn_detach_all documents, and they are
  * the same failure in different clothes: leaving a live process holding a trap
  * we planted. The entry byte must be restored, and any thread queued at base+1
  * must be rewound before it is released — detaching it there resumes it in the
  * middle of an instruction. Both primitives are refused on a running thread, so
- * everything is stopped first. */
-static void ps_detach_all(ps_ctx_t *c) {
-    ps_stop_all(c);
-    /* A no-op unless a phase-3 candidate was abandoned mid-flight — but the one
-     * case it covers is the fatal one. */
-    ps_unplant(c);
+ * everything is stopped first.
+ *
+ * A THIRD hazard, which detaching a thread we merely HOPED was stopped used to
+ * create: PTRACE_DETACH on a running tracee fails ESRCH and leaves it seized
+ * with our pump gone, so its next signal is a stop nobody will ever consume and
+ * it hangs forever. ps_detach_one insists; what it cannot free is reported.
+ *
+ * Returns 0 if the target was handed back clean, -1 if anything was left behind
+ * (a trap byte still in, or a task still seized) — which the caller must not
+ * report as success. */
+static int ps_detach_all(ps_ctx_t *c) {
+    int bad = 0;
+    if (c->bp_base && ps_disarm(c) != 0)
+        bad = 1;
+    else
+        ps_stop_all(c);
+
     for (int i = 0; i < c->n; i++) {
+        /* A fork child still carrying its private copy of a trap byte: its own
+         * address space, its own restore. */
+        if (c->t[i].copied_bp) {
+            if (ptrace(PTRACE_POKETEXT, c->t[i].tid,
+                       (void *)(uintptr_t)c->t[i].copied_bp,
+                       (void *)(uintptr_t)c->t[i].copied_orig) != 0)
+                bad = 1;
+            else
+                ps_rewind(c->t[i].tid, c->t[i].copied_bp);
+        }
         ps_rewind(c->t[i].tid, c->bp_base);
-        ptrace(PTRACE_DETACH, c->t[i].tid, NULL, NULL);
     }
+    /* Snapshot again: ps_detach_one can drop a vanished tid mid-walk. */
+    pid_t snap[PS_TABLE_SLOTS];
+    int n = 0;
+    for (int i = 0; i < c->n; i++)
+        snap[n++] = c->t[i].tid;
+    for (int i = 0; i < n; i++)
+        if (ps_detach_one(c, snap[i]) != 0)
+            bad = 1;
+
     c->bp_base = 0;
     c->n = 0;
+    return bad ? -1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -620,6 +955,13 @@ static int ps_phase1(ps_ctx_t *c, const asmspy_symtab_t *syms, long window_ms,
         pid_t tid = 0;
         for (int k = 0; k < c->n; k++) {
             int i = (rr + k) % c->n;
+            /* Never a fork/vfork CHILD: it is a different process running
+             * different code, and its /proc path is not under our pid, so
+             * folding its pc into this target's histogram would be a lie. Never
+             * a LISTENed one either — it is suspended by the user's job control,
+             * not by us, and interrupting it would undo that. */
+            if (c->t[i].foreign || c->t[i].listening)
+                continue;
             if (ps_thread_executing(c->pid, c->t[i].tid)) {
                 tid = c->t[i].tid;
                 rr = i + 1;
@@ -713,8 +1055,7 @@ static void ps_phase2(ps_ctx_t *c, const asmspy_symtab_t *syms,
                       int shortlist, char *why, size_t whylen) {
     const char *note = asmspy_ps_expand_note(asmtest_disas_available() ? 1 : 0);
     if (note) {
-        if (why && whylen)
-            snprintf(why, whylen, "%s", note);
+        ps_note(why, whylen, note);
         return;
     }
 
@@ -782,9 +1123,12 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
     ps_stop_all(c);
     if (c->n == 0)
         return;
+    /* ps_can_poke, not `stopped`: a LISTENed thread is in group-stop and every
+     * PEEK/POKE on it fails ESRCH, and a fork child would be planted into the
+     * WRONG address space. Picking either loses the candidate silently. */
     pid_t planter = 0;
     for (int i = 0; i < c->n && !planter; i++)
-        if (c->t[i].stopped)
+        if (ps_can_poke(&c->t[i]))
             planter = c->t[i].tid;
     if (!planter || ps_plant(c, planter, cd->addr) != 0) {
         ps_resume_all(c);
@@ -845,14 +1189,9 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
     /* Disarm unconditionally, from every exit above — including the ones that
      * broke out early. A trap left behind does not fail loudly: the target runs
      * on and dies on its NEXT arrival, with no tracer to take the SIGTRAP,
-     * whole seconds after we are gone. bp_base is cleared only AFTER the last
-     * rewind, because until then it is the only thing that can identify a
-     * thread queued at base+1 as ours (see ps_ctx_t). */
-    ps_stop_all(c);
-    ps_unplant(c);
-    for (int i = 0; i < c->n; i++)
-        ps_rewind(c->t[i].tid, c->bp_base);
-    c->bp_base = 0;
+     * whole seconds after we are gone. ps_disarm keeps bp_base when it cannot
+     * get the byte out, and sets `leaked`, which stops any further arming. */
+    ps_disarm(c);
     ps_resume_all(c);
 }
 
@@ -892,9 +1231,11 @@ static void ps_sort(ps_cand_t *v, int n) {
     }
 }
 
+/* A self-skip, with its reason APPENDED — a run that reached the teardown may
+ * already have something to say (no Capstone, an ungrasped thread set), and the
+ * refusal is additional context, not a replacement for it. */
 static int ps_skip(char *why, size_t whylen, const char *msg) {
-    if (why && whylen)
-        snprintf(why, whylen, "%s", msg);
+    ps_note(why, whylen, msg);
     return -1;
 }
 
@@ -922,6 +1263,7 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
     ps_ctx_t c;
     memset(&c, 0, sizeof c);
     c.pid = pid;
+    c.cap = ps_read_cap();
     if (ps_seize_all(&c) < 0) {
         ps_detach_all(&c);
         return ps_skip(why, whylen,
@@ -969,33 +1311,86 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
     ps_phase2(&c, syms, module, cands, &ncand, shortlist, why, whylen);
 
     /* ---- phase 3 -------------------------------------------------- */
-    long per_us = ASMSPY_PS_CONFIRM_MS * 1000L;
-    long long t3_end = ps_now_us() + (long long)window_ms * 1000;
-    int nconf = 0;
-    for (int i = 0; i < ncand && c.n > 0; i++) {
-        /* Stop early once the window's worth of confirming has been spent AND
-         * there is already an answer to give. The HARD bound is the loop itself
-         * (ASMSPY_PS_MAX_CAND x ASMSPY_PS_CONFIRM_MS, 800 ms at the defaults);
-         * this only avoids charging a caller who is running a WINDOW, not a
-         * search, for candidates it no longer needs. When nothing has confirmed
-         * yet the remaining candidates are exactly what is worth paying for. */
-        if (ps_now_us() >= t3_end && nconf > 0)
-            break;
-        ps_phase3_one(&c, &cands[i], per_us);
-        if (cands[i].arrivals > 0)
-            nconf++;
+    /* THE ARM GATE. Phase 3's int3 is one byte of SHARED process text, so it is
+     * only ever safe over a thread set that is entirely OURS. When it is not,
+     * the answer is not "arm anyway and hope" — it is to hand back what phases 1
+     * and 2 found, UNCONFIRMED, and say so. See asmspy_ps_arm_note. */
+    /* THE ARM PRECONDITION, with a MARGIN. Not just "we hold every task now" but
+     * "we can still hold every task that appears during the window": a target
+     * sitting exactly at the seize cap is one thread-pool growth away from a
+     * task we do not own, and the window is up to 800 ms long. Refusing there is
+     * what "we must own the whole thread set" actually means.
+     *
+     * It also makes the rule TESTABLE and, more importantly, DETERMINISTIC. The
+     * plain `covered` form was neither: whether a victim's second worker existed
+     * at seize time or was cloned a few microseconds later decided the answer,
+     * and cli/test_ptracesample.c's capped run failed about one time in three
+     * because of it. A precondition that depends on a race is not a
+     * precondition. */
+    int covered_before = c.covered && c.n + PS_ARM_HEADROOM <= c.cap;
+    if (covered_before) {
+        long per_us = ASMSPY_PS_CONFIRM_MS * 1000L;
+        long long t3_end = ps_now_us() + (long long)window_ms * 1000;
+        int nconf = 0;
+        for (int i = 0; i < ncand && c.n > 0 && !c.leaked && c.covered; i++) {
+            /* Stop early once the window's worth of confirming has been spent
+             * AND there is already an answer to give. The HARD bound is the loop
+             * itself (ASMSPY_PS_MAX_CAND x ASMSPY_PS_CONFIRM_MS, 800 ms at the
+             * defaults); this only avoids charging a caller who is running a
+             * WINDOW, not a search, for candidates it no longer needs. When
+             * nothing has confirmed yet the remaining candidates are exactly
+             * what is worth paying for. */
+            if (ps_now_us() >= t3_end && nconf > 0)
+                break;
+            ps_phase3_one(&c, &cands[i], per_us);
+            if (cands[i].arrivals > 0)
+                nconf++;
+        }
     }
+    /* Coverage is re-read AFTER the loop, not only before it. A task cloned
+     * mid-window is tabled out of the headroom (safe) but still costs us full
+     * coverage, and a run that LOST coverage part-way has confirmed only some
+     * of its candidates against only some of the thread set — not a measurement
+     * to present as one. Both the note and the drop-and-sort below key off
+     * "covered at the start AND still covered at the end". */
+    int confirmed = covered_before && c.covered;
+    const char *arm_note = asmspy_ps_arm_note(confirmed);
+    if (arm_note)
+        ps_note(why, whylen, arm_note);
 
-    ps_detach_all(&c);
+    int dirty = (ps_detach_all(&c) != 0) || c.leaked;
+
+    /* A trap we could not remove, or a task we could not release, is not a
+     * result with a caveat — it is a target we have DAMAGED. Refusing here
+     * rather than returning a pick is the only honest answer: a caller acting on
+     * a region inside a process that is about to take a SIGTRAP with no tracer
+     * would be arming a second trap in a corpse. */
+    if (dirty)
+        return ps_skip(
+            why, whylen,
+            "the target could not be handed back clean — a trap byte "
+            "or a seized task was left behind; do not trace this "
+            "process further without checking it");
 
     /* Confirmation, not re-ordering: a candidate whose entry was never reached
      * is DROPPED. Arming one of those is exactly the hang this module exists to
-     * avoid, and phase 3 measured that it would. */
+     * avoid, and phase 3 measured that it would.
+     *
+     * When phase 3 was SKIPPED there is no such measurement, so nothing may be
+     * dropped and nothing may be re-sorted: phase 1+2's own order (residency
+     * rank, then the calls it named) is the best evidence available, and
+     * ps_sort's key would be uniformly zero. The caller is told they are
+     * unconfirmed and walks them the way it walks the software-clock rank's,
+     * which carries exactly the same weaker guarantee. */
     int keep = 0;
-    for (int i = 0; i < ncand; i++)
-        if (cands[i].arrivals > 0)
-            cands[keep++] = cands[i];
-    ps_sort(cands, keep);
+    if (!confirmed) {
+        keep = ncand;
+    } else {
+        for (int i = 0; i < ncand; i++)
+            if (cands[i].arrivals > 0)
+                cands[keep++] = cands[i];
+        ps_sort(cands, keep);
+    }
 
     int n = keep < max ? keep : max;
     for (int i = 0; i < n; i++) {
@@ -1011,10 +1406,10 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
 
     /* An empty window is a RETRY, not a verdict — but "nothing qualified" has
      * four different causes and they send an operator to four different places,
-     * so say WHICH stage came up empty rather than handing back a bare 0. Only
-     * when there is nothing else to report: phase 2's Capstone note, if it fired,
-     * is the more important thing the caller has to hear. */
-    if (n == 0 && why && whylen && why[0] == '\0') {
+     * so say WHICH stage came up empty rather than handing back a bare 0.
+     * Appended, not assigned: phase 2's Capstone note and the arm gate's note
+     * are independent facts about the same window and must not overwrite. */
+    if (n == 0) {
         const char *msg;
         if (taken == 0)
             msg = "no thread of the target was observed executing user code in "
@@ -1027,7 +1422,7 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
         else
             msg = "no candidate entry was reached within the confirm budget — "
                   "the target may have changed phase";
-        snprintf(why, whylen, "%s", msg);
+        ps_note(why, whylen, msg);
     }
     return n;
 }

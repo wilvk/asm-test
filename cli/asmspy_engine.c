@@ -2968,7 +2968,18 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
  * src/ptrace_backend.c's PTRACE_BP_INSN/PTRACE_BP_LEN split. 0 on success, -1 on
  * failure (notably a W^X-enforced JIT page, which refuses POKETEXT with EIO — this
  * engine has no hardware-bp fallback for the shared plant, the same gap the
- * data-flow tier carries, so such a target self-skips cleanly). */
+ * data-flow tier carries, so such a target self-skips cleanly).
+ *
+ * SECOND COPY: cli/asmspy_ptracesample.c's ps_plant. The perf-free region picker
+ * arms the same trap for a different purpose (counting arrivals at a candidate
+ * entry, not racing to one), and because these three helpers are `static` and
+ * bound to this file's thr_tab_t it re-implements them rather than calling them.
+ * If you fix a hazard here, look there too — and note the DIVERGENCE that copy
+ * found and this one does not have: it splits "the address we armed" from
+ * "the byte is currently in the text", because a thread queued at base+1 whose
+ * SIGTRAP has not yet been consumed AFTER the byte was restored is otherwise
+ * indistinguishable from the target's own int3 (si_code is SI_KERNEL either
+ * way) and gets re-injected — fatal to a target with no SIGTRAP handler. */
 static int rgn_plant_bp(pid_t tid, uint64_t base, long *orig) {
     errno = 0;
     long o = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
@@ -2999,7 +3010,10 @@ static void rgn_remove_bp(pid_t tid, uint64_t base, long orig) {
  * the engine's lifetime, no such stop can be lost. On AArch64 `brk #0` is a fault
  * whose stop-PC lands AT base (nothing to rewind); this then only confirms the
  * thread is alive and really at our breakpoint. Returns 1 if the thread is at the
- * breakpoint (x86: rewound; arm64: nothing to do), 0 otherwise. */
+ * breakpoint (x86: rewound; arm64: nothing to do), 0 otherwise.
+ *
+ * SECOND COPY: cli/asmspy_ptracesample.c's ps_rewind (see rgn_plant_bp above for
+ * why that file re-implements these three rather than calling them). */
 static int rgn_rewind_from_bp(pid_t tid, uint64_t base) {
     asmspy_regs_t regs;
     if (asmspy_regs_read(tid, &regs) != 0)
@@ -3172,7 +3186,15 @@ static int rgn_ensure_stopped(thr_tab_t *tab, pid_t tid) {
  * outlives the tool that killed it by whole seconds, so the damage does not look like
  * ours. Both primitives are refused on a RUNNING thread, so each must be stopped first
  * — which is exactly the step it is tempting to skip, because skipping it still passes
- * a survives-immediately-after-detach check. */
+ * a survives-immediately-after-detach check.
+ *
+ * SECOND COPY: cli/asmspy_ptracesample.c's ps_disarm (see rgn_plant_bp above).
+ * TWO divergences that copy carries and this one does not, both found by review
+ * of the copy: (1) it treats "the restore POKETEXT failed" as a reportable
+ * failure rather than a silent return — this walks the table and simply falls
+ * off the end if no thread can be stopped; (2) it keeps the armed ADDRESS until
+ * the byte is provably out, because clearing it first loses the only handle on a
+ * live trap. Worth carrying back if this engine is ever touched. */
 static void rgn_disarm_entry(thr_tab_t *tab, int hw, pid_t only_tid,
                              uint64_t base, long orig) {
     if (hw) {

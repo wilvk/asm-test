@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -99,9 +100,17 @@ static pid_t spawn_victim(const char *path, const char *banner, int *out_fd) {
 
     char buf[256];
     ssize_t n = read(epipe[0], buf, sizeof buf - 1);
-    close(epipe[0]);
     buf[n > 0 ? n : 0] = '\0';
+    /* The read end stays OPEN for the victim's lifetime, and that is a fix, not
+     * a leak. Closing it after the banner used to kill any victim that printed
+     * to stderr TWICE: tid_victim's two workers each announce themselves from
+     * their own thread, so whenever the second line was written after our close
+     * it took SIGPIPE and the whole process died BEFORE the sampler ever
+     * attached — which then surfaced as "no resolvable function symbols" and a
+     * dead victim, i.e. as a sampler bug. MEASURED at 2-3 runs in 10. A handful
+     * of fds held until this short-lived test exits costs nothing. */
     if (n <= 0 || strstr(buf, banner) == NULL) {
+        close(epipe[0]);
         int st;
         kill(pid, SIGKILL);
         waitpid(pid, &st, 0);
@@ -180,6 +189,35 @@ static long sigload_ticks_over(int fd, int ms) {
     return (first < 0 || last < 0) ? 0 : last - first;
 }
 
+/* Count whole lines arriving on `fd` over `ms`. Distinct from
+ * sigload_ticks_over's first/last DELTA on purpose: forkhot_victim's children
+ * each print one line carrying a counter, and a child killed by an inherited
+ * trap prints NOTHING — leaving a hole in the sequence that a delta would count
+ * as if the child had lived. Lines are the survivors. */
+static long count_lines_over(int fd, int ms) {
+    long lines = 0, deadline = mono_ms() + ms;
+    for (;;) {
+        long left = deadline - mono_ms();
+        if (left <= 0)
+            break;
+        struct pollfd p = {fd, POLLIN, 0};
+        int r = poll(&p, 1, (int)left);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+        char buf[512];
+        ssize_t got = read(fd, buf, sizeof buf);
+        if (got <= 0)
+            break;
+        for (ssize_t i = 0; i < got; i++)
+            if (buf[i] == '\n')
+                lines++;
+    }
+    return lines;
+}
+
 /* The sampler on its own thread, so a measurement can run WHILE it is attached.
  * That is not a convenience: the prototype's signal damage was TRANSIENT — the
  * victim recovered its full rate the instant the tracer detached — so a
@@ -238,6 +276,58 @@ static int traced_by_us(pid_t tid) {
     if (tp <= 0)
         return 0;
     return status_field((pid_t)tp, "Tgid:") == (int)getpid();
+}
+
+/* Is `pid` ALIVE — not merely present?
+ *
+ * `kill(pid, 0) == 0` is not a liveness test: it succeeds on a ZOMBIE, and a
+ * victim killed by an orphaned int3 is exactly that until someone reaps it.
+ * MEASURED — with the trap-restore disabled, every auto_victim check still
+ * passed while the process was a corpse. /proc/<pid>/stat's state field is the
+ * real answer: 'Z' is dead-and-unreaped, 'X' is exiting. */
+static int is_alive(pid_t pid) {
+    char path[64], buf[512];
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    /* the comm field is parenthesised and may contain spaces/parens */
+    char *p = strrchr(buf, ')');
+    if (!p || p[1] != ' ')
+        return 0;
+    return p[2] != 'Z' && p[2] != 'X';
+}
+
+/* THE CHECK THE MODULE'S OWN COMMENTS CALL FATAL, asked directly.
+ *
+ * `kill(pid, 0) == 0` only says the process existed at that instant, and an
+ * orphaned int3 kills on the target's NEXT ARRIVAL — microseconds later, but
+ * after the assertion has already passed. So read the byte back out of the
+ * target's text: 0xcc at a region entry we armed means the sampler returned
+ * success while leaving a trap that will kill this process.
+ *
+ * Reads through process_vm_readv, which needs no ptrace attach at all (the same
+ * /proc access asmspy_symtab_load already used), so it cannot itself perturb
+ * what it measures. Returns 1 if the first byte at `addr` is an int3. */
+static int has_trap_byte(pid_t pid, uint64_t addr) {
+    unsigned char b = 0;
+    struct iovec l = {&b, 1};
+    struct iovec r = {(void *)(uintptr_t)addr, 1};
+    if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 1)
+        return 0; /* unreadable: cannot claim a trap is there */
+#if defined(__aarch64__)
+    unsigned char w[4];
+    struct iovec l4 = {w, 4};
+    struct iovec r4 = {(void *)(uintptr_t)addr, 4};
+    if (process_vm_readv(pid, &l4, 1, &r4, 1, 0) != 4)
+        return 0;
+    return w[0] == 0x00 && w[1] == 0x00 && w[2] == 0x20 && w[3] == 0xd4;
+#else
+    return b == 0xcc;
+#endif
 }
 
 /* The tids of `pid` right now, into `out` (capacity `cap`). Returns the count. */
@@ -364,7 +454,38 @@ int main(int argc, char **argv) {
         CHECK(why[0] == '\0',
               "a Capstone build reports no degradation (an empty `why` on a "
               "successful pick)");
-        CHECK(kill(vpid, 0) == 0, "the victim survived the sampler");
+        /* TEARDOWN, asked three ways — because `kill(pid, 0)` alone is not a
+         * teardown check at all. It says the process existed at that instant,
+         * and both fatal outcomes are LATER: an orphaned int3 kills on the next
+         * arrival, and a task left seized hangs on its next signal. A liveness
+         * check fired microseconds after the sampler returns races the very
+         * failure it is supposed to detect. */
+        for (int i = 0; i < n; i++)
+            CHECK(!has_trap_byte(vpid, cands[i].addr),
+                  "no candidate entry still holds an int3: a trap the sampler "
+                  "could not remove kills the target on its NEXT arrival, long "
+                  "after we reported success");
+        {
+            pid_t tids[128];
+            int nt = task_tids(vpid, tids, 128), still = 0;
+            for (int i = 0; i < nt; i++)
+                if (traced_by_us(tids[i]))
+                    still++;
+            CHECK(still == 0,
+                  "every task was released: PTRACE_DETACH is refused on a "
+                  "RUNNING tracee, and a thread left seized with our pump gone "
+                  "hangs on its next signal, permanently");
+        }
+        /* Now let it RUN. entered_often is arrived at thousands of times in
+         * 200 ms, so a trap we failed to remove is fatal well before this
+         * assertion — which is the whole point of waiting. */
+        {
+            struct timespec nap = {0, 200 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        CHECK(is_alive(vpid),
+              "the victim survived 200ms of running FREE after the sampler "
+              "detached — thousands of arrivals at the entry we armed");
 
         /* The module filter is the same rule --module= uses. A filter matching
          * nothing must yield NOTHING: if it were dropped on the floor this
@@ -382,7 +503,7 @@ int main(int argc, char **argv) {
         CHECK(strstr(why2, "module filter") != NULL,
               "an empty window says WHICH stage came up empty -- here, the "
               "module filter, not the target");
-        CHECK(kill(vpid, 0) == 0, "the victim survived the filtered run too");
+        CHECK(is_alive(vpid), "the victim survived the filtered run too");
 
         asmspy_symtab_free(&syms);
         kill_victim(vpid, -1);
@@ -456,7 +577,7 @@ int main(int argc, char **argv) {
         CHECK(after * 100 >= before * 80,
               "the victim's signal rate is intact after detach (no timer or "
               "handler left disarmed)");
-        CHECK(kill(spid, 0) == 0, "the signal victim survived the sampler");
+        CHECK(is_alive(spid), "the signal victim survived the sampler");
         CHECK(job.rc >= 0,
               "a busy, signal-driven target is not a self-skip for this "
               "sampler");
@@ -550,10 +671,177 @@ int main(int argc, char **argv) {
               "a thread created AFTER the seize is traced by us: without "
               "PTRACE_O_TRACECLONE it reaches the shared int3 with no tracer "
               "and takes the whole process down");
-        CHECK(kill(cpid, 0) == 0, "the cloning victim survived the sampler");
+        CHECK(is_alive(cpid), "the cloning victim survived the sampler");
 
         asmspy_symtab_free(&syms);
         kill_victim(cpid, -1);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §5  A TRUNCATED SEIZE MUST NEVER ARM.                                  */
+    /*                                                                       */
+    /* Phase 3's int3 is one byte in SHARED process text. Every task of the   */
+    /* target can execute it, so every task must be ours: a thread that was   */
+    /* never seized reaches it, takes a SIGTRAP with no tracer, and SIGTRAP's */
+    /* default action takes the WHOLE PROCESS down. "We seized most of them"  */
+    /* is not a weaker safety, it is none.                                    */
+    /*                                                                       */
+    /* The truncation is real — PS_MAX_THREADS is 512 and a JVM, a browser or */
+    /* any thread-pool server clears that routinely — but it cannot be        */
+    /* provoked from outside without a 513-thread victim, so it could only be */
+    /* argued rather than demonstrated. ASMSPY_PS_TEST_CAP caps the table, on */
+    /* the model of the engine's ASMSPY_TEST_THR_OOM lever                    */
+    /* (cli/asmspy_engine.c:1929), which exists for the same reason.          */
+    /* --------------------------------------------------------------------- */
+    CHECK(asmspy_ps_arm_note(1) == NULL,
+          "a fully seized thread set may arm the entry breakpoint");
+    CHECK(asmspy_ps_arm_note(0) != NULL &&
+              strstr(asmspy_ps_arm_note(0), "UNCONFIRMED") != NULL,
+          "a partially seized thread set may NOT arm, and the candidates it "
+          "does return are labelled unconfirmed rather than passed off as "
+          "measured");
+    {
+        char p_threads[256];
+        snprintf(p_threads, sizeof p_threads, "%s/tid_victim", bdir);
+        /* 2 of tid_victim's 3 tasks, so `beta` is a real task of the target
+         * that we do NOT hold. tid_victim rather than threads_victim because
+         * its workers spin at ~99% duty: threads_victim naps between bursts and
+         * MEASURED, under the load of a full cli-smoke run its 400 ms window
+         * observed nothing at all, which made every check below vacuous. */
+        setenv("ASMSPY_PS_TEST_CAP", "2", 1);
+        /* "tid=", not "alpha tid=": tid_victim's two workers race to print
+         * their banners and EITHER may land in our first read. Matching the
+         * specific one made the spawn fail outright about 1 run in 10. Either
+         * line proves the same thing — a thread is running, so main's prctl has
+         * already happened. */
+        pid_t tpid = spawn_victim(p_threads, "tid=", NULL);
+        if (tpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_threads);
+            return 1;
+        }
+        /* Wait for the third task before sampling. tid_victim's two workers are
+         * created back to back and only the FIRST prints a banner, so without
+         * this the sampler can attach to a 2-task process — which fits the cap,
+         * which is not the case under test. */
+        for (long t0 = mono_ms(); mono_ms() - t0 < 2000;) {
+            pid_t tt[16];
+            if (task_tids(tpid, tt, 16) >= 3)
+                break;
+            struct timespec nap = {0, 2 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(tpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_threads);
+            kill_victim(tpid, -1);
+            return 1;
+        }
+        asmspy_autocand_t cands[8];
+        char why[256] = "";
+        int n = asmspy_ptrace_sample(tpid, &syms, NULL, cands, 8, 800, why,
+                                     sizeof why);
+        printf("# tid_victim (seize capped at 2 of 3): rc=%d why='%s'\n", n,
+               why);
+        for (int i = 0; i < n && i < 8; i++)
+            printf("#   [%d] %-20s arrivals=%llu first=%lluus\n", i,
+                   cands[i].name ? cands[i].name : "?", cands[i].arrivals,
+                   cands[i].first_us);
+
+        CHECK(n > 0,
+              "the capped run still observed something (the checks below are "
+              "vacuous otherwise)");
+        CHECK(strstr(why, "fully seized") != NULL,
+              "a truncated seize is REPORTED, not silently treated as full "
+              "coverage");
+        int armed = 0, confirmed = 0;
+        for (int i = 0; i < n; i++) {
+            if (has_trap_byte(tpid, cands[i].addr))
+                armed = 1;
+            if (cands[i].arrivals > 0 || cands[i].first_us > 0)
+                confirmed = 1;
+        }
+        CHECK(!confirmed,
+              "phase 3 did NOT run over a thread set we do not fully hold: no "
+              "candidate carries an arrival or a measured first-arrival time");
+        CHECK(!armed, "and no candidate entry holds a trap byte");
+        /* Let it run: any int3 planted over the two unseized workers is fatal
+         * within microseconds, and `worker` is entered constantly. */
+        {
+            struct timespec nap = {0, 300 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        CHECK(is_alive(tpid),
+              "the partially seized victim survived, running free — the "
+              "unseized threads never met a trap");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(tpid, -1);
+        unsetenv("ASMSPY_PS_TEST_CAP");
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §6  A fork inside an armed window must not hand the child our trap.    */
+    /*                                                                       */
+    /* fork(2) gives the child a copy-on-write copy of the target's TEXT, and */
+    /* during phase 3 that text contains our int3. The child is a different   */
+    /* process with no tracer, so the first time it reaches that entry it     */
+    /* takes a SIGTRAP whose default action kills it. The armed windows total */
+    /* ~800 ms and a fork-per-request server is an ordinary target.           */
+    /*                                                                       */
+    /* Counted by LINES, not by the counter value: a child killed by SIGTRAP  */
+    /* prints nothing at all, and the counter it would have printed is simply */
+    /* missing from the sequence — so a first/last delta would score a dead   */
+    /* child as a live one.                                                   */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_fork[256];
+        snprintf(p_fork, sizeof p_fork, "%s/forkhot_victim", bdir);
+        int fout = -1;
+        pid_t fpid = spawn_victim(p_fork, "forkhot_victim pid=", &fout);
+        if (fpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_fork);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(fpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_fork);
+            kill_victim(fpid, fout);
+            return 1;
+        }
+        asmspy_autocand_t cands[8];
+        long before = count_lines_over(fout, 700);
+
+        job_t job = {0};
+        job.pid = fpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        job.window_ms = 900;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create\n");
+            kill_victim(fpid, fout);
+            return 1;
+        }
+        long during = count_lines_over(fout, 700);
+        pthread_join(th, NULL);
+        (void)count_lines_over(fout, 60); /* drain the unread backlog */
+        long after = count_lines_over(fout, 700);
+
+        printf("# forkhot children completing/700ms: before=%ld during=%ld "
+               "after=%ld (rc=%d why='%s')\n",
+               before, during, after, job.rc, job.why);
+        CHECK(before > 20, "children were completing before we attached");
+        CHECK(during * 100 >= before * 60,
+              "children forked while an entry was ARMED still complete: a "
+              "child inherits a copy-on-write copy of the int3 and dies of it "
+              "unless PTRACE_O_TRACEFORK is set and its copy restored");
+        CHECK(after * 100 >= before * 80,
+              "and the fork rate is intact after detach");
+        CHECK(is_alive(fpid), "the forking victim survived the sampler");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(fpid, fout);
     }
 
     printf("%d checks, %d failures\n", checks, failures);
