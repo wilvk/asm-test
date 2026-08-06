@@ -217,6 +217,59 @@ static long count_lines_over(int fd, int ms) {
     }
     return lines;
 }
+/* Count forkhot_victim's children over `ms`, and how many are MISSING.
+ *
+ * A RATE comparison cannot do this job. forkhot_victim re-bases its cadence from
+ * the measured clock, so the fork rate drifts under load, and a band wide enough
+ * to absorb that drift (97% of 240 is 7 forks) is barely wider than the defect
+ * it must catch (10 of 240). Widen it and the check goes hollow again — the
+ * original 60% band tolerated 40% child mortality.
+ *
+ * So count the HOLES instead. Every child prints `kid=<seq>` carrying the
+ * parent's fork counter, so the sequence is contiguous by construction and a
+ * child killed by an inherited trap leaves a gap. `missing` is
+ * (last - first + 1) - seen, which is invariant under any change of RATE at all:
+ * a slower victim forks fewer children, not fewer of the ones it forked. */
+static void forkhot_gaps_over(int fd, int ms, long *seen, long *missing) {
+    char acc[512];
+    size_t used = 0;
+    long first = -1, last = -1, count = 0;
+    long deadline = mono_ms() + ms;
+    for (;;) {
+        long left = deadline - mono_ms();
+        if (left <= 0)
+            break;
+        struct pollfd p = {fd, POLLIN, 0};
+        int r = poll(&p, 1, (int)left);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR)
+                continue;
+            break;
+        }
+        char buf[512];
+        ssize_t got = read(fd, buf, sizeof buf);
+        if (got <= 0)
+            break;
+        for (ssize_t i = 0; i < got; i++) {
+            if (buf[i] != '\n') {
+                if (used + 1 < sizeof acc)
+                    acc[used++] = buf[i];
+                continue;
+            }
+            acc[used] = '\0';
+            used = 0;
+            long v = 0;
+            if (sscanf(acc, "kid=%ld", &v) != 1)
+                continue;
+            if (first < 0)
+                first = v;
+            last = v;
+            count++;
+        }
+    }
+    *seen = count;
+    *missing = (first < 0) ? 0 : (last - first + 1) - count;
+}
 
 /* The sampler on its own thread, so a measurement can run WHILE it is attached.
  * That is not a convenience: the prototype's signal damage was TRANSIENT — the
@@ -822,7 +875,9 @@ int main(int argc, char **argv) {
             return 1;
         }
         asmspy_autocand_t cands[8];
-        long before = count_lines_over(fout, 1200);
+        long seen_b = 0, miss_b = 0, seen_d = 0, miss_d = 0, seen_a = 0,
+             miss_a = 0;
+        forkhot_gaps_over(fout, 1200, &seen_b, &miss_b);
 
         job_t job = {0};
         job.pid = fpid;
@@ -843,33 +898,36 @@ int main(int argc, char **argv) {
             kill_victim(fpid, fout);
             return 1;
         }
-        long during = count_lines_over(fout, 1200);
+        forkhot_gaps_over(fout, 1200, &seen_d, &miss_d);
         pthread_join(th, NULL);
         (void)count_lines_over(fout, 60); /* drain the unread backlog */
-        long after = count_lines_over(fout, 1200);
+        forkhot_gaps_over(fout, 1200, &seen_a, &miss_a);
 
-        printf("# forkhot children completing/1200ms: before=%ld during=%ld "
-               "after=%ld (rc=%d why='%s')\n",
-               before, during, after, job.rc, job.why);
-        CHECK(before > 100, "children were completing before we attached");
+        printf("# forkhot children/1200ms: before=%ld(gaps %ld) "
+               "during=%ld(gaps %ld) after=%ld(gaps %ld) (rc=%d why='%s')\n",
+               seen_b, miss_b, seen_d, miss_d, seen_a, miss_a, job.rc, job.why);
+        CHECK(seen_b > 100 && miss_b == 0,
+              "children were completing before we attached, with an unbroken "
+              "sequence — the measurement itself is sound");
         /* 90%, not 60%. The loose band was the whole reason this check could
          * not see the follow-up defect: a fork child that reaches phase 3's
          * generic arrival test is re-planted into the WRONG address space and
          * released carrying an int3, and 40% child mortality sailed through.
-         * The band is set by the SIZE OF THE DEFECT, not by noise, and it can
-         * be: the fork rate is driven by a 5 ms timer over equal-length windows,
-         * so a healthy run scores EXACTLY 240 every time (measured, three
-         * consecutive runs). Disabling the fork-child release costs 10 of those
-         * 240 — the children forked inside slow_entry's one ~50 ms armed window
-         * — reproducibly, 230 on every run. 60% and 90% and 95% all sailed past
-         * that; 97% sees it, with 7 lines of slack left over. */
-        CHECK(during * 100 >= before * 97,
+         * ZERO tolerance, and it CAN be zero because a gap is not a rate: a child
+         * either printed its sequence number or it did not. Measured, a healthy
+         * sampler leaves 0 holes in ~240 children every run; disabling the
+         * fork-child release leaves ~10, the children forked inside slow_entry's
+         * one armed window. One unit of slack for a line straddling the window
+         * edge, and no more. No rate band could do this — 60/90/95/97% either
+         * tolerated the defect or would trip on a loaded box, because the defect
+         * and the drift are the same size. */
+        CHECK(miss_d <= 1,
               "children forked while an entry was ARMED still complete: a "
               "child inherits a copy-on-write copy of the int3 and dies of it "
               "unless PTRACE_O_TRACEFORK is set, its copy restored, and it is "
               "never mistaken for an ARRIVAL of the target");
-        CHECK(after * 100 >= before * 80,
-              "and the fork rate is intact after detach");
+        CHECK(seen_a > 100 && miss_a <= 1,
+              "and the fork sequence is unbroken after detach");
         CHECK(is_alive(fpid), "the forking victim survived the sampler");
 
         asmspy_symtab_free(&syms);
@@ -894,15 +952,24 @@ int main(int argc, char **argv) {
     /* Everything here was previously reasoned and never executed.            */
     /* --------------------------------------------------------------------- */
     {
+        /* A MULTI-threaded victim, deliberately. SIGSTOP group-stops every
+         * thread, so the teardown sees group-stops for threads it is NOT
+         * waiting on — and that is the path that used to fall through to
+         * ps_cont and restart a process the user had suspended. With a
+         * single-threaded victim there is only ever the awaited thread, and the
+         * defect is invisible: MEASURED, the mutation that restores it changed
+         * nothing while this check used sigload_victim. */
+        char p_job[256];
+        snprintf(p_job, sizeof p_job, "%s/hotthreads_victim", bdir);
         int vout = -1;
-        pid_t jpid = spawn_victim(p_sig, "sigload_victim pid=", &vout);
+        pid_t jpid = spawn_victim(p_job, "hotthreads_victim pid=", &vout);
         if (jpid < 0) {
-            fprintf(stderr, "FAIL: could not spawn %s\n", p_sig);
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_job);
             return 1;
         }
         asmspy_symtab_t syms = {0};
         if (asmspy_symtab_load(jpid, &syms) != 0) {
-            fprintf(stderr, "FAIL: no symbols for %s\n", p_sig);
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_job);
             kill_victim(jpid, vout);
             return 1;
         }
@@ -935,13 +1002,27 @@ int main(int argc, char **argv) {
         pthread_join(th, NULL);
         long joined_ms = mono_ms() - t0;
         char st_after = proc_state(jpid);
+        /* Sample EVERY thread's state before the SIGCONT — after it they are all
+         * running by design, and the check would be measuring nothing. */
+        int nt_after = 0, running_after = 0;
+        {
+            pid_t tids[128];
+            nt_after = task_tids(jpid, tids, 128);
+            for (int i = 0; i < nt_after; i++) {
+                char st = proc_state(tids[i]);
+                if (st != 'T' && st != 't' && st != '?')
+                    running_after++;
+            }
+        }
         kill(jpid, SIGCONT);
         (void)count_lines_over(vout, 60);
-        long after = sigload_ticks_over(vout, 600);
+        long after = count_lines_over(vout, 600);
 
         printf("# job control: state under SIGSTOP='%c' after detach='%c' "
-               "join=%ldms after=%ld (rc=%d why='%s')\n",
-               st_while, st_after, joined_ms, after, job.rc, job.why);
+               "(%d/%d threads still stopped) join=%ldms after=%ld "
+               "(rc=%d why='%s')\n",
+               st_while, st_after, nt_after - running_after, nt_after,
+               joined_ms, after, job.rc, job.why);
 
         CHECK(st_while == 'T' || st_while == 't',
               "a SIGSTOPped target STAYS stopped under the sampler: "
@@ -959,11 +1040,16 @@ int main(int argc, char **argv) {
         CHECK(st_after == 'T' || st_after == 't',
               "and it is handed back STILL STOPPED — detaching out of "
               "group-stop leaves the process suspended, exactly as the user "
-              "left it");
-        /* >30, not >50: the window is 600 ms at ~95 Hz, so a full-rate victim
-         * scores ~57 and the first tick can land anywhere in it. The property
-         * under test is "it moves again", not the rate — §3 measures the rate. */
-        CHECK(after > 30, "and the victim is running again after SIGCONT");
+              "left it, for EVERY thread and not just the one we awaited");
+        /* Every thread, not just the leader: the defect resumes exactly the ones
+         * the teardown was NOT waiting on, so a leader-only check cannot see
+         * it. */
+        CHECK(
+            nt_after > 1 && running_after == 0,
+            "no thread of the suspended target was restarted by the teardown");
+        /* The property under test is "it moves again", not the rate — §3
+         * measures the rate. hotthreads_victim beats at ~20 Hz. */
+        CHECK(after > 3, "and the victim is running again after SIGCONT");
         CHECK(is_alive(jpid), "the job-controlled victim survived");
 
         asmspy_symtab_free(&syms);
@@ -1064,6 +1150,88 @@ int main(int argc, char **argv) {
 
         asmspy_symtab_free(&syms);
         kill_victim(hpid, hout);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §9  AN UNKNOWN IS NOT A LICENCE TO ACT.                                */
+    /*                                                                       */
+    /* The sampler asks /proc whose address space each task is in. When that  */
+    /* read FAILS the answer is neither "ours" nor "a fork child" — and the   */
+    /* code used to resolve it as the latter, which routed a real thread of   */
+    /* the target through the RELEASE path: detached, dropped from the table, */
+    /* and — because the release path never touched `covered` — leaving the   */
+    /* arm gate satisfied. An int3 then went into shared text a now-untraced  */
+    /* thread was about to execute. One failed open(2) in the CALLING process */
+    /* (this ships in libasmspy.a; the caller is long-lived and may be at its */
+    /* fd limit) was enough to kill the target.                                */
+    /*                                                                       */
+    /* Unreachable from outside without a lever — /proc is readable for any   */
+    /* task we have seized — so ASMSPY_PS_TEST_TGID_FAIL forces it, on the    */
+    /* model of ASMSPY_PS_TEST_CAP and the engine's ASMSPY_TEST_THR_OOM. A    */
+    /* branch that is fatal when it resolves the wrong way does not get to be */
+    /* merely argued about.                                                    */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_hot2[256];
+        snprintf(p_hot2, sizeof p_hot2, "%s/hotthreads_victim", bdir);
+        setenv("ASMSPY_PS_TEST_TGID_FAIL", "1", 1);
+        int uout = -1;
+        pid_t upid = spawn_victim(p_hot2, "hotthreads_victim pid=", &uout);
+        if (upid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_hot2);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(upid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_hot2);
+            kill_victim(upid, uout);
+            return 1;
+        }
+        asmspy_autocand_t cands[8];
+        char why[256] = "";
+        long before = count_lines_over(uout, 400);
+        int n = asmspy_ptrace_sample(upid, &syms, NULL, cands, 8, 400, why,
+                                     sizeof why);
+        printf("# unknown-kind (tgid read forced to fail): rc=%d why='%s'\n", n,
+               why);
+
+        CHECK(strstr(why, "fully seized") != NULL,
+              "a task we cannot classify costs COVERAGE: the arm gate must "
+              "refuse, because an unknown is not a licence to arm");
+        int confirmed = 0, armed = 0;
+        for (int i = 0; i < n; i++) {
+            if (cands[i].arrivals > 0 || cands[i].first_us > 0)
+                confirmed = 1;
+            if (has_trap_byte(upid, cands[i].addr))
+                armed = 1;
+        }
+        CHECK(!confirmed, "phase 3 did not run over a thread set we cannot "
+                          "prove we hold");
+        CHECK(!armed, "and no entry holds a trap byte");
+        {
+            /* The release path must NOT have run: an unclassifiable task stays
+             * traced for the life of the call, which is what stops it meeting a
+             * trap untraced. By teardown it is released like any other. */
+            pid_t tids[128];
+            int nt = task_tids(upid, tids, 128), still = 0;
+            for (int i = 0; i < nt; i++)
+                if (traced_by_us(tids[i]))
+                    still++;
+            CHECK(nt > 1 && still == 0,
+                  "and every task was still handed back at teardown");
+        }
+        {
+            struct timespec nap = {0, 300 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        long after = count_lines_over(uout, 400);
+        CHECK(is_alive(upid) && before > 3 && after > 3,
+              "the victim survived and kept running — no thread was released "
+              "into an address space we had armed");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(upid, uout);
+        unsetenv("ASMSPY_PS_TEST_TGID_FAIL");
     }
 
     printf("%d checks, %d failures\n", checks, failures);
