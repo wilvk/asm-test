@@ -152,6 +152,14 @@ typedef struct {
      * false — see PS_MAX_THREADS and asmspy_ps_arm_note. */
     int covered;
     int cap; /* PS_MAX_THREADS, or the ASMSPY_PS_TEST_CAP lever */
+    /* Teardown suppresses the PTRACE_LISTEN branch. MEASURED (a standalone
+     * probe, 2026-08-06): PTRACE_DETACH on a tracee in LISTEN is refused with
+     * ESRCH; PTRACE_INTERRUPT then re-reports the group-stop, and DETACH from
+     * THAT succeeds and leaves the process in state 'T', still job-control
+     * stopped. Without this flag the retry re-LISTENed the thread on every
+     * round, `stopped` could never become 1, and a merely ^Z'd target burned
+     * 3 x 200 ms and came back as a false "could not be handed back clean". */
+    int tearing_down;
     /* A trap byte we could NOT get back out. Nothing may arm after this, and the
      * call must not return a clean result: the target is holding an int3 that
      * will kill it on its next arrival, seconds after we are gone. */
@@ -232,6 +240,10 @@ static void ps_note(char *why, size_t whylen, const char *msg) {
         snprintf(why, whylen, "%s", msg);
 }
 
+/* The THREAD GROUP this task belongs to, or -1. The one question that separates
+ * "another thread of our target" from "a process that forked out of it". */
+static int ps_tgid_of(pid_t tid);
+
 static int ps_find(ps_ctx_t *c, pid_t tid) {
     for (int i = 0; i < c->n; i++)
         if (c->t[i].tid == tid)
@@ -275,6 +287,38 @@ static int ps_add(ps_ctx_t *c, pid_t tid) {
         return -1;
     memset(&c->t[c->n], 0, sizeof c->t[c->n]);
     c->t[c->n].tid = tid;
+    /* CLASSIFY FOREIGNNESS HERE, from /proc, not from the fork event.
+     *
+     * ptrace(2) does not order the parent's PTRACE_EVENT_FORK stop against the
+     * CHILD's own attach-stop, so a child could arrive first and be tabled as an
+     * ordinary thread of the target. It would then be treated as an ARRIVAL at
+     * our entry, re-planted through — into a DIFFERENT ADDRESS SPACE — and
+     * eventually released still carrying the int3, or handed the SIGTRAP back
+     * (si_code is SI_KERNEL whoever planted it) into a process with no handler.
+     * The task's own Tgid settles it with no ordering to reason about.
+     *
+     * Unreadable /proc counts as FOREIGN. Misreading a thread as foreign costs
+     * a sample and an early disarm; misreading a fork child as a thread kills
+     * it. The costs are not symmetric, so neither is the default. */
+    if (tid != c->pid) {
+        int tgid = ps_tgid_of(tid);
+        c->t[c->n].foreign = (tgid != (int)c->pid);
+    }
+    /* A candidate is armed right now: whatever this task is, if it took a COW
+     * snapshot of the text it has our byte. bp_base rather than bp_planted,
+     * because the step-and-rearm window clears bp_planted while a snapshot taken
+     * before the restore still carries the trap. Restoring an original word that
+     * is already in place is a no-op, so the conservative direction is free. */
+    if (c->t[c->n].foreign && c->bp_base) {
+        c->t[c->n].copied_bp = c->bp_base;
+        c->t[c->n].copied_orig = c->bp_orig;
+        /* A VFORK child SHARES the mm, so this restore disarms the PARENT's
+         * trap rather than a private copy — the candidate loses its remaining
+         * arrivals. That is deliberate: the alternative is to distinguish fork
+         * from vfork, which is only knowable from an event whose ordering
+         * against this stop ptrace(2) does not define. Losing a measurement is
+         * survivable; releasing a task that dies of our byte is not. */
+    }
     return c->n++;
 }
 
@@ -309,6 +353,18 @@ static int ps_read_file(const char *path, char *buf, size_t cap) {
         return -1;
     buf[n] = '\0';
     return (int)n;
+}
+
+/* The thread group `tid` belongs to, or -1 when /proc cannot answer. */
+static int ps_tgid_of(pid_t tid) {
+    char path[64], buf[1024];
+    snprintf(path, sizeof path, "/proc/%d/status", (int)tid);
+    if (ps_read_file(path, buf, sizeof buf) <= 0)
+        return -1;
+    const char *p = strstr(buf, "\nTgid:");
+    if (!p)
+        return -1;
+    return atoi(p + 6);
 }
 
 /* Is `tid` EXECUTING right now — i.e. worth interrupting for a PC sample?
@@ -487,10 +543,21 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
     /* A followed clone's very first stop is where we learn its tid. */
     int idx = ps_add(c, w);
     if (idx < 0) {
-        /* Table full. `covered` is already false (ps_add sets it), so phase 3
-         * will not arm — which is what makes this detach survivable rather than
-         * the start of the death described at PS_MAX_THREADS. Never strand a
-         * task traced-and-stopped. */
+        /* Physically out of slots. `covered` is already false, so no FURTHER
+         * candidate will arm — but the one armed RIGHT NOW still is, and
+         * releasing an untraced task into an armed address space is the death
+         * described at PS_MAX_THREADS. We cannot table it, so we cannot protect
+         * it; what we CAN do is take the trap out of whichever address space it
+         * is about to run in. Same mm (a thread): the candidate is disarmed
+         * early — arrivals lost, nobody dies. Different mm (a fork child): this
+         * is exactly the restore it needed. bp_planted is deliberately NOT
+         * cleared, because we do not know which case this was, and a redundant
+         * restore later is free while a skipped one leaks. */
+        if (c->bp_base) {
+            ptrace(PTRACE_POKETEXT, w, (void *)(uintptr_t)c->bp_base,
+                   (void *)(uintptr_t)c->bp_orig);
+            ps_rewind(w, c->bp_base);
+        }
         ptrace(PTRACE_DETACH, w, NULL, NULL);
         return PS_EV_NONE;
     }
@@ -501,10 +568,16 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
      * tracer — the same fatality as an unseized thread, one address space over.
      * This runs BEFORE the job-control branch on purpose: a child's own attach
      * stop must not be mistaken for a stop the user asked for. */
-    if (c->t[idx].foreign && c->t[idx].copied_bp) {
+    if (c->t[idx].foreign) {
         uint64_t cb = c->t[idx].copied_bp;
-        if (ptrace(PTRACE_POKETEXT, w, (void *)(uintptr_t)cb,
-                   (void *)(uintptr_t)c->t[idx].copied_orig) == 0) {
+        if (!cb) {
+            /* Nothing of ours to put back — it appeared while nothing was
+             * armed. Hand it straight back; it is not our process to trace. */
+            ps_rewind(w, c->bp_base);
+            ptrace(PTRACE_DETACH, w, NULL, NULL);
+            ps_del(c, w);
+        } else if (ptrace(PTRACE_POKETEXT, w, (void *)(uintptr_t)cb,
+                          (void *)(uintptr_t)c->t[idx].copied_orig) == 0) {
             ps_rewind(w, cb);
             ptrace(PTRACE_DETACH, w, NULL, NULL);
             ps_del(c, w);
@@ -525,24 +598,21 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
          * child here — its own attach-stop has not necessarily arrived yet; it
          * surfaces in this same loop and is handled there. */
         unsigned long child = 0;
-        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child) {
-            int ci = ps_add(c, (pid_t)child);
-            if (ci < 0) {
+        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child &&
+            event == PTRACE_EVENT_CLONE) {
+            /* A THREAD, tabled HERE so it is followed even if its own
+             * attach-stop is delayed. */
+            if (ps_add(c, (pid_t)child) < 0)
                 c->covered = 0; /* a task of the target we cannot follow */
-            } else if (event != PTRACE_EVENT_CLONE) {
-                /* A different PROCESS, not a thread. It must never poke the
-                 * target's text nor be sampled. A FORK child took a private
-                 * copy of the text, so it carries our byte and has to have it
-                 * put back; a VFORK child SHARES the mm, so the parent's own
-                 * disarm covers it and restoring through the child would
-                 * instead disarm the parent. */
-                c->t[ci].foreign = 1;
-                if (event == PTRACE_EVENT_FORK && c->bp_planted) {
-                    c->t[ci].copied_bp = c->bp_base;
-                    c->t[ci].copied_orig = c->bp_orig;
-                }
-            }
         }
+        /* A FORK/VFORK child is deliberately NOT tabled here. It is a different
+         * PROCESS; it is classified from /proc and released at its OWN
+         * attach-stop, which it cannot run past. Tabling it here re-adds a child
+         * we may have ALREADY released — ptrace(2) does not order the two stops
+         * — and such an entry never leaves, because a detached task never
+         * reports again. MEASURED against forkhot_victim: the table reached 152
+         * stale tids in a 900 ms window, after which every teardown walk paid
+         * PS_STOP_US per corpse and the run took minutes. */
         ps_cont(c, w, 0);
         return PS_EV_NONE;
     }
@@ -555,8 +625,9 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
          * `listening`, NOT `stopped`: a LISTENed tracee is in group-stop, which
          * is not a ptrace-stop we hold, so PEEK/POKE/CONT on it all fail ESRCH.
          * See ps_thr_t. */
-        if (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-            sig == SIGTTOU) {
+        if ((sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+             sig == SIGTTOU) &&
+            !c->tearing_down) {
             if (ptrace(PTRACE_LISTEN, w, NULL, NULL) == 0) {
                 c->t[idx].listening = 1;
                 c->t[idx].stopped = 0;
@@ -591,7 +662,15 @@ static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
          * the re-injection below, because an int3 reports si_code == SI_KERNEL
          * whoever planted it, and a target with no SIGTRAP handler dies of ours.
          * MEASURED: that is exactly how clone_victim died. */
-        if (c->bp_base && ps_rewind(w, c->bp_base)) {
+        /* `!foreign` is load-bearing, not defensive. A fork child's COW copy of
+         * our int3 traps at the SAME address, so without this its SIGTRAP is
+         * indistinguishable from an arrival of the target — and phase 3 would
+         * then count it, restore through it, and RE-PLANT through it, into a
+         * different address space. It is released by the foreign branch above
+         * instead. (A foreign task can only reach here at all if it was
+         * classified after its first stop, which ps_add now prevents; the guard
+         * is what makes that a design rather than a race.) */
+        if (c->bp_base && !c->t[idx].foreign && ps_rewind(w, c->bp_base)) {
             if (arrived) {
                 *arrived = w;
                 return PS_EV_ARRIVED;
@@ -710,7 +789,7 @@ static void ps_stop_all(ps_ctx_t *c) {
         pid_t snap[PS_TABLE_SLOTS];
         int n = 0;
         for (int i = 0; i < c->n; i++)
-            if (!c->t[i].stopped && !c->t[i].listening)
+            if (!c->t[i].stopped && (!c->t[i].listening || c->tearing_down))
                 snap[n++] = c->t[i].tid;
         if (n == 0)
             return;
@@ -874,6 +953,12 @@ static int ps_seize_all(ps_ctx_t *c) {
  * report as success. */
 static int ps_detach_all(ps_ctx_t *c) {
     int bad = 0;
+    /* From here on a job-control stop must NOT be re-LISTENed: PTRACE_DETACH is
+     * refused ESRCH on a LISTENed tracee (MEASURED), and ps_detach_one's retry
+     * would re-LISTEN it on every round and never converge. Interrupting it
+     * out of LISTEN and detaching from the resulting group-stop leaves the
+     * process in state 'T' — still suspended, exactly as the user left it. */
+    c->tearing_down = 1;
     if (c->bp_base && ps_disarm(c) != 0)
         bad = 1;
     else
@@ -1178,9 +1263,15 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
                 ps_pump(c, who, PS_STOP_US, PS_SPIN_US, NULL);
             }
             c->stepping = 0;
-            if (ps_find(c, who) < 0)
+            int wi = ps_find(c, who);
+            if (wi < 0)
                 break; /* it exited under the step: nothing left to re-arm */
-            if (ps_plant(c, who, cd->addr) != 0)
+            /* Re-arm through `who` ONLY if `who` can poke the TARGET. A task in
+             * a different address space would have the trap planted in ITS text
+             * — arming nothing, and leaving that task to die of a byte we then
+             * never restore. ps_can_poke also rejects a LISTENed thread, whose
+             * POKETEXT is refused ESRCH and would silently lose the candidate. */
+            if (!ps_can_poke(&c->t[wi]) || ps_plant(c, who, cd->addr) != 0)
                 break;
         }
         ps_cont(c, who, 0); /* ours: ps_dispatch classified this stop */
@@ -1315,18 +1406,21 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
      * only ever safe over a thread set that is entirely OURS. When it is not,
      * the answer is not "arm anyway and hope" — it is to hand back what phases 1
      * and 2 found, UNCONFIRMED, and say so. See asmspy_ps_arm_note. */
-    /* THE ARM PRECONDITION, with a MARGIN. Not just "we hold every task now" but
-     * "we can still hold every task that appears during the window": a target
-     * sitting exactly at the seize cap is one thread-pool growth away from a
-     * task we do not own, and the window is up to 800 ms long. Refusing there is
-     * what "we must own the whole thread set" actually means.
+    /* THE ARM PRECONDITION. Be precise about which part does what, because the
+     * three mechanisms here are easy to confuse and only two of them are safety:
      *
-     * It also makes the rule TESTABLE and, more importantly, DETERMINISTIC. The
-     * plain `covered` form was neither: whether a victim's second worker existed
-     * at seize time or was cloned a few microseconds later decided the answer,
-     * and cli/test_ptracesample.c's capped run failed about one time in three
-     * because of it. A precondition that depends on a race is not a
-     * precondition. */
+     *   - what keeps a task cloned MID-WINDOW safe is the table HEADROOM: it is
+     *     always tabled, therefore always traced, therefore can never meet the
+     *     trap untraced. That is the safety property.
+     *   - what keeps the RESULT honest is the per-candidate re-check in the loop
+     *     below and the post-loop re-read of `covered`: a run that lost coverage
+     *     part-way stops arming and is not presented as a measurement.
+     *   - the MARGIN (`n + PS_ARM_HEADROOM <= cap`) buys neither of those. It
+     *     buys DETERMINISM: without it the answer depended on whether a victim's
+     *     second worker existed at seize time or was cloned microseconds later,
+     *     and the capped test failed about one run in three. A precondition that
+     *     depends on a race is not a precondition. It is also conservative near
+     *     the cap, which is the right direction to be wrong in. */
     int covered_before = c.covered && c.n + PS_ARM_HEADROOM <= c.cap;
     if (covered_before) {
         long per_us = ASMSPY_PS_CONFIRM_MS * 1000L;
@@ -1358,7 +1452,12 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
     if (arm_note)
         ps_note(why, whylen, arm_note);
 
-    int dirty = (ps_detach_all(&c) != 0) || c.leaked;
+    /* The verdict is the TEARDOWN's, not the sticky flag's. `leaked` stops any
+     * further arming the moment a disarm fails, which is right — but
+     * ps_detach_all disarms again, and a leak it REPAIRS is not a damaged
+     * target. Telling an operator "I broke your process" when it is provably
+     * intact is its own harm. */
+    int dirty = (ps_detach_all(&c) != 0);
 
     /* A trap we could not remove, or a task we could not release, is not a
      * result with a caveat — it is a target we have DAMAGED. Refusing here

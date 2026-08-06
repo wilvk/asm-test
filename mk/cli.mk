@@ -287,6 +287,14 @@ $(BUILD)/sigload_victim: $(BUILD)/sigload_victim.o
 $(BUILD)/forkhot_victim: $(BUILD)/forkhot_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# hotthreads_victim: several threads hammering ONE entry, so the perf-free
+# picker's phase 3 gets CONCURRENT arrivals. Every other victim that reaches an
+# armed window is single-threaded, so the step-and-rearm race -- a second thread
+# trapping while the first is mid-step, whose stop is consumed by a pump that is
+# not collecting arrivals -- had no coverage at all. Multi-threaded, so -pthread.
+$(BUILD)/hotthreads_victim: $(BUILD)/hotthreads_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 # scenes_victim backs the documented 3D-scene screenshots
 # (docs/guides/desktop-gui-scenes.md) and its SHAPE is the requirement: SSE lane
 # writes for the LanePrism scene, a constantly-entered routine for the Invocation
@@ -734,6 +742,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(BUILD)/scenes_victim \
            $(BUILD)/sigload_victim $(BUILD)/forkhot_victim \
+           $(BUILD)/hotthreads_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \

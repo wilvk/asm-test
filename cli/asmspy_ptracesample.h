@@ -137,15 +137,18 @@ static inline const char *asmspy_ps_expand_note(int have_disas) {
  * whole process (cli/asmspy_engine.c:2954-2957 states exactly this). "We seized
  * most of them" is not a weaker version of safety, it is the absence of it.
  *
- * `fully_seized` is false whenever ANY task of the target may be untraced, OR
- * may become so before the window ends: a PTRACE_SEIZE refused for a reason
- * other than the task having exited, a seize scan that never converged, a
- * followed child dropped for want of table space — and a thread count sitting
- * within PS_ARM_HEADROOM of the PS_MAX_THREADS cap, because a target one
- * thread-pool growth away from an untraced task over an 800 ms window is not
- * safe to arm either. It is re-read AFTER the window as well as before: a run
- * that LOST coverage part-way confirmed only some candidates against only some
- * of the thread set, which is not a measurement to present as one.
+ * `fully_seized` is false whenever ANY task of the target may be untraced: a
+ * PTRACE_SEIZE refused for a reason other than the task having exited, a seize
+ * scan that never converged, or a followed child dropped for want of table
+ * space. It is re-read AFTER the window as well as before, because a run that
+ * LOST coverage part-way confirmed only some candidates against only some of
+ * the thread set — not a measurement to present as one.
+ *
+ * A task cloned DURING the window is kept safe by the table HEADROOM, not by
+ * this predicate: it is always tabled, so it is always traced, so it can never
+ * meet the trap untraced. The caller additionally refuses to arm within
+ * PS_ARM_HEADROOM of the cap, which buys not safety but DETERMINISM — see the
+ * note at the call site.
  *
  * Returns NULL when arming is safe, or the sentence the caller must report when
  * it is not. Pure, so cli/test_ptracesample.c pins both branches — including the

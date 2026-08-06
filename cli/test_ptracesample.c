@@ -285,6 +285,19 @@ static int traced_by_us(pid_t tid) {
  * MEASURED — with the trap-restore disabled, every auto_victim check still
  * passed while the process was a corpse. /proc/<pid>/stat's state field is the
  * real answer: 'Z' is dead-and-unreaped, 'X' is exiting. */
+static char proc_state(pid_t pid) {
+    char path[64], buf[512];
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return '?';
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    char *p = strrchr(buf, ')');
+    return (p && p[1] == ' ') ? p[2] : '?';
+}
+
 static int is_alive(pid_t pid) {
     char path[64], buf[512];
     snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
@@ -809,10 +822,93 @@ int main(int argc, char **argv) {
             return 1;
         }
         asmspy_autocand_t cands[8];
-        long before = count_lines_over(fout, 700);
+        long before = count_lines_over(fout, 1200);
 
         job_t job = {0};
         job.pid = fpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        /* SHORT, deliberately. The hazard lives in PHASE 3's armed windows, and
+         * with a 900 ms residency window the whole 700 ms measurement below sat
+         * inside PHASE 1 — before a single byte had been planted. MEASURED: the
+         * check scored 140/140 with the fork-child release disabled entirely,
+         * because nothing was ever armed while it was looking. 400 ms of phase 1
+         * plus phase 3's own bound (also window_ms) fits inside the 1200 ms
+         * windows below, and is still long enough to nominate slow_entry. */
+        job.window_ms = 400;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create\n");
+            kill_victim(fpid, fout);
+            return 1;
+        }
+        long during = count_lines_over(fout, 1200);
+        pthread_join(th, NULL);
+        (void)count_lines_over(fout, 60); /* drain the unread backlog */
+        long after = count_lines_over(fout, 1200);
+
+        printf("# forkhot children completing/1200ms: before=%ld during=%ld "
+               "after=%ld (rc=%d why='%s')\n",
+               before, during, after, job.rc, job.why);
+        CHECK(before > 100, "children were completing before we attached");
+        /* 90%, not 60%. The loose band was the whole reason this check could
+         * not see the follow-up defect: a fork child that reaches phase 3's
+         * generic arrival test is re-planted into the WRONG address space and
+         * released carrying an int3, and 40% child mortality sailed through.
+         * The band is set by the SIZE OF THE DEFECT, not by noise, and it can
+         * be: the fork rate is driven by a 5 ms timer over equal-length windows,
+         * so a healthy run scores EXACTLY 240 every time (measured, three
+         * consecutive runs). Disabling the fork-child release costs 10 of those
+         * 240 — the children forked inside slow_entry's one ~50 ms armed window
+         * — reproducibly, 230 on every run. 60% and 90% and 95% all sailed past
+         * that; 97% sees it, with 7 lines of slack left over. */
+        CHECK(during * 100 >= before * 97,
+              "children forked while an entry was ARMED still complete: a "
+              "child inherits a copy-on-write copy of the int3 and dies of it "
+              "unless PTRACE_O_TRACEFORK is set, its copy restored, and it is "
+              "never mistaken for an ARRIVAL of the target");
+        CHECK(after * 100 >= before * 80,
+              "and the fork rate is intact after detach");
+        CHECK(is_alive(fpid), "the forking victim survived the sampler");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(fpid, fout);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §7  Job control: a ^Z'd target must not be resumed, and must still be   */
+    /*     handed back.                                                       */
+    /*                                                                       */
+    /* PTRACE_SEIZE makes group-stops OURS to end, so a SIGSTOP arriving mid- */
+    /* window is a stop only the sampler can resolve. Two ways to get it      */
+    /* wrong, and the sampler had one of each:                                */
+    /*                                                                       */
+    /*  - treat the LISTENed thread as one whose ptrace-stop we hold, and     */
+    /*    ps_resume_all CONTs a process the user deliberately suspended;      */
+    /*  - keep LISTENing it at teardown, where PTRACE_DETACH is refused ESRCH */
+    /*    (MEASURED with a standalone probe) and the retry re-LISTENs on every */
+    /*    round, so it never converges: 3 x 200 ms burned and a false "could   */
+    /*    not be handed back clean" for a target that is merely stopped.       */
+    /*                                                                       */
+    /* Everything here was previously reasoned and never executed.            */
+    /* --------------------------------------------------------------------- */
+    {
+        int vout = -1;
+        pid_t jpid = spawn_victim(p_sig, "sigload_victim pid=", &vout);
+        if (jpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_sig);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(jpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_sig);
+            kill_victim(jpid, vout);
+            return 1;
+        }
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = jpid;
         job.syms = &syms;
         job.out = cands;
         job.max = 8;
@@ -820,28 +916,154 @@ int main(int argc, char **argv) {
         pthread_t th;
         if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
             fprintf(stderr, "FAIL: pthread_create\n");
-            kill_victim(fpid, fout);
+            kill_victim(jpid, vout);
             return 1;
         }
-        long during = count_lines_over(fout, 700);
-        pthread_join(th, NULL);
-        (void)count_lines_over(fout, 60); /* drain the unread backlog */
-        long after = count_lines_over(fout, 700);
+        /* ^Z it mid-window and HOLD it stopped THROUGH the teardown. Releasing
+         * it before the join (which is what this check did first) means the
+         * thread is no longer in PTRACE_LISTEN when ps_detach_all runs, and the
+         * whole detach-under-LISTEN path — the one that cannot converge — is
+         * never entered. MEASURED: with the early SIGCONT, removing the
+         * teardown's LISTEN suppression changed nothing. */
+        struct timespec nap = {0, 250 * 1000 * 1000};
+        nanosleep(&nap, NULL);
+        kill(jpid, SIGSTOP);
+        nanosleep(&nap, NULL);
+        char st_while = proc_state(jpid);
 
-        printf("# forkhot children completing/700ms: before=%ld during=%ld "
-               "after=%ld (rc=%d why='%s')\n",
-               before, during, after, job.rc, job.why);
-        CHECK(before > 20, "children were completing before we attached");
-        CHECK(during * 100 >= before * 60,
-              "children forked while an entry was ARMED still complete: a "
-              "child inherits a copy-on-write copy of the int3 and dies of it "
-              "unless PTRACE_O_TRACEFORK is set and its copy restored");
-        CHECK(after * 100 >= before * 80,
-              "and the fork rate is intact after detach");
-        CHECK(is_alive(fpid), "the forking victim survived the sampler");
+        long t0 = mono_ms();
+        pthread_join(th, NULL);
+        long joined_ms = mono_ms() - t0;
+        char st_after = proc_state(jpid);
+        kill(jpid, SIGCONT);
+        (void)count_lines_over(vout, 60);
+        long after = sigload_ticks_over(vout, 600);
+
+        printf("# job control: state under SIGSTOP='%c' after detach='%c' "
+               "join=%ldms after=%ld (rc=%d why='%s')\n",
+               st_while, st_after, joined_ms, after, job.rc, job.why);
+
+        CHECK(st_while == 'T' || st_while == 't',
+              "a SIGSTOPped target STAYS stopped under the sampler: "
+              "PTRACE_LISTEN honours the stop the user asked for, and nothing "
+              "may PTRACE_CONT it back to life");
+        CHECK(job.rc >= 0,
+              "a ^Z'd target is not a self-skip and not a damaged one: the "
+              "teardown must interrupt it out of LISTEN and detach, not report "
+              "that it could not be handed back");
+        CHECK(strstr(job.why, "handed back clean") == NULL,
+              "and it is not reported as a target we damaged");
+        CHECK(joined_ms < 3000,
+              "the teardown CONVERGES: re-LISTENing on every detach retry "
+              "burns 3 x 200ms per thread and never reaches a ptrace-stop");
+        CHECK(st_after == 'T' || st_after == 't',
+              "and it is handed back STILL STOPPED — detaching out of "
+              "group-stop leaves the process suspended, exactly as the user "
+              "left it");
+        /* >30, not >50: the window is 600 ms at ~95 Hz, so a full-rate victim
+         * scores ~57 and the first tick can land anywhere in it. The property
+         * under test is "it moves again", not the rate — §3 measures the rate. */
+        CHECK(after > 30, "and the victim is running again after SIGCONT");
+        CHECK(is_alive(jpid), "the job-controlled victim survived");
 
         asmspy_symtab_free(&syms);
-        kill_victim(fpid, fout);
+        kill_victim(jpid, vout);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §8  CONCURRENT arrivals: several threads at ONE armed entry.           */
+    /*                                                                       */
+    /* Every other victim that gets far enough to be armed is single-threaded, */
+    /* so the concurrent half of phase 3 was never executed. Two things live   */
+    /* only here: a thread trapping while another is mid-step, whose stop is   */
+    /* consumed by a pump that is NOT collecting arrivals (it must be rewound  */
+    /* and RELEASED — handing back a SIGTRAP that an int3's si_code makes look */
+    /* like the target's own kills a process with no handler), and a trap      */
+    /* already in flight when the byte is restored.                            */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_hot[256];
+        snprintf(p_hot, sizeof p_hot, "%s/hotthreads_victim", bdir);
+        int hout = -1;
+        pid_t hpid = spawn_victim(p_hot, "hotthreads_victim pid=", &hout);
+        if (hpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s\n", p_hot);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(hpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_hot);
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        asmspy_autocand_t cands[8];
+        long before = count_lines_over(hout, 500);
+
+        job_t job = {0};
+        job.pid = hpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        job.window_ms = 500;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create\n");
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        long during = count_lines_over(hout, 500);
+        pthread_join(th, NULL);
+        (void)count_lines_over(hout, 60);
+        long after = count_lines_over(hout, 500);
+        int n = job.rc;
+
+        printf("# hotthreads: rc=%d beats/500ms before=%ld during=%ld "
+               "after=%ld why='%s'\n",
+               n, before, during, after, job.why);
+        for (int i = 0; i < n && i < 8; i++)
+            printf("#   [%d] %-16s arrivals=%llu first=%lluus\n", i,
+                   cands[i].name ? cands[i].name : "?", cands[i].arrivals,
+                   cands[i].first_us);
+
+        /* PRESENT and CONFIRMED, not RANKED FIRST. Ranking is §2's job, and it
+         * is sound there because the rival entry is a thousand times slower.
+         * Here both `shared_entry` and the leader's `mono_ms` are entered
+         * thousands of times per millisecond, so which one is reached first
+         * after arming is scheduler noise — measured 16us vs 20us, and the
+         * order flips run to run. Asserting a winner between two equally hot
+         * entries would be asserting the noise. What §8 is actually about is
+         * that concurrent arrivals are handled at all. */
+        CHECK(listed(cands, n, "shared_entry"),
+              "the entry every thread arrives at is CONFIRMED on a "
+              "multi-threaded target: several threads trapping at one address "
+              "at once, each rewound, stepped over and re-armed");
+        CHECK(n > 0 && cands[0].arrivals > 0,
+              "and phase 3 really ran here (arrivals were counted)");
+        CHECK(before > 3 && during * 100 >= before * 50,
+              "the target keeps making progress while an entry is armed and "
+              "several threads are trapping on it at once");
+        for (int i = 0; i < n; i++)
+            CHECK(!has_trap_byte(hpid, cands[i].addr),
+                  "no entry is left holding an int3 after concurrent arrivals");
+        {
+            pid_t tids[128];
+            int nt = task_tids(hpid, tids, 128), still = 0;
+            for (int i = 0; i < nt; i++)
+                if (traced_by_us(tids[i]))
+                    still++;
+            CHECK(still == 0, "and every one of its threads was released");
+        }
+        {
+            struct timespec nap = {0, 200 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        CHECK(is_alive(hpid),
+              "the multi-threaded victim survived 200ms of running FREE — "
+              "every thread re-entering the address we armed");
+        CHECK(after > 3, "and it is still making progress");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(hpid, hout);
     }
 
     printf("%d checks, %d failures\n", checks, failures);
