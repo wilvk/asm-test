@@ -3703,20 +3703,43 @@ echo "--info: attachability is measured, not inferred"
 # this lane — no confined process exists here — so it stays covered only by
 # the task's Step 5 manual measurement (a live, confined, refused
 # snapd-desktop-integration process), not by this smoke lane.
-sleep 100 &
-SIBPID=$!
-sleep 0.3
-kill -0 "$SIBPID" 2>/dev/null \
-    || fail "sibling sleep ($SIBPID) is not alive for the --info measured-no check"
-sibinfo=$("$ASM" --info "$SIBPID" 2>&1) || fail "--info on a refused sibling target failed"
-sibattach=$(printf '%s\n' "$sibinfo" | grep -iE 'attach|->')
-printf '%s\n' "$sibinfo" | grep -q 'attach *NO' \
-    || fail "--info must report a MEASURED no for an unrelated same-uid target (got: $sibattach)"
-printf '%s\n' "$sibinfo" | grep -qi 'launch the target from asmspy' \
-    || fail "--info: an unconfined refused target must still offer the launch remedy (got: $sibattach)"
-kill "$SIBPID" 2>/dev/null || true
-wait "$SIBPID" 2>/dev/null || true
-echo "--info: a genuinely refused, unconfined target measures NO and keeps the launch remedy"
+#
+# Guarded on non-root, and NOT a silent self-skip: `make docker-cli`
+# (Dockerfile.cli declares no USER, and mk/cli.mk's `docker run` passes no
+# --user, so that documented local-verify path runs this whole script as UID
+# 0) makes the premise false, not the assertion untestable. As root,
+# pi_verdict's `yama >= 1 && geteuid() != 0` arm this task added never runs
+# AT ALL (geteuid()==0), so every same-uid target -- including this sibling
+# `sleep` -- falls through to the unconditional "same uid, nothing else
+# traces it" success case. That is correct kernel behavior (root bypasses
+# Yama entirely), not a bug: there is no same-uid target root can be refused
+# on, so this specific assertion has nothing left to measure. The CI gate
+# (.github/workflows/ci.yml) runs `make cli-smoke` directly on a bare,
+# non-root runner, where this guard's `else` branch is what actually executes
+# -- root is the exception path here, not the common one.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "--info: SKIPPING the refused-target assertion -- running as root (id -u"
+    echo "  = 0, e.g. under 'make docker-cli': Dockerfile.cli declares no USER)."
+    echo "  Yama's ptrace_scope does not gate root at all, so no same-uid target,"
+    echo "  including a sibling sleep, can be refused here to measure NO against."
+    echo "  This is a fact about root, not a self-skip of the feature: the"
+    echo "  assertion runs for real in the CI lane and any normal (non-root) run."
+else
+    sleep 100 &
+    SIBPID=$!
+    sleep 0.3
+    kill -0 "$SIBPID" 2>/dev/null \
+        || fail "sibling sleep ($SIBPID) is not alive for the --info measured-no check"
+    sibinfo=$("$ASM" --info "$SIBPID" 2>&1) || fail "--info on a refused sibling target failed"
+    sibattach=$(printf '%s\n' "$sibinfo" | grep -iE 'attach|->')
+    printf '%s\n' "$sibinfo" | grep -q 'attach *NO' \
+        || fail "--info must report a MEASURED no for an unrelated same-uid target (got: $sibattach)"
+    printf '%s\n' "$sibinfo" | grep -qi 'launch the target from asmspy' \
+        || fail "--info: an unconfined refused target must still offer the launch remedy (got: $sibattach)"
+    kill "$SIBPID" 2>/dev/null || true
+    wait "$SIBPID" 2>/dev/null || true
+    echo "--info: a genuinely refused, unconfined target measures NO and keeps the launch remedy"
+fi
 
 # A nonexistent pid is refused, not rendered blank — and refused with its OWN
 # exit code (ASMSPY_INFO_EXIT_NO_SUCH_PID = 3, cli/libasmspy.h), not the
