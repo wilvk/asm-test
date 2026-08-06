@@ -49,7 +49,9 @@
  *     target's SIGALRMs and collapsed its throughput ~99% (2 utime ticks and 0
  *     forward-progress lines per 2 s, against 200/93 both at baseline and after
  *     detach). The "~1% cost, no perturbation" figure holds only for a
- *     signal-FREE spinner. See ps_resume_stop in the .c.
+ *     signal-FREE spinner. The re-injection is the ASMSPY_PS_ACT_RESUME_SIGNAL
+ *     cell of the disposition table below, and ps_perform in the .c is the only
+ *     place it is spelled as a syscall.
  *  2. PTRACE_O_TRACECLONE, OR YOU KILL THE USER'S PROCESS. The phase-3 int3 is
  *     shared process text; cli/asmspy_engine.c:2954-2957 spells out what happens
  *     to a thread that was never seized and reaches it — "would take a SIGTRAP
@@ -162,5 +164,121 @@ static inline const char *asmspy_ps_arm_note(int fully_seized) {
                  "trace "
                  "kills the process";
 }
+
+/* ===========================================================================
+ * THE DISPOSITION OF A STOPPED TASK, AS A TOTAL FUNCTION
+ *
+ * Four rounds of fixes to this module each closed every defect they were given
+ * and opened exactly one more Critical of the SAME class, and that class has a
+ * shape: a task the earlier conditions did not describe reached a VERB anyway —
+ * PTRACE_CONT, PTRACE_DETACH, POKETEXT, a plant, a rewind — through the
+ * FALL-THROUGH TAIL of a chain of `if`s.
+ *
+ *   round 0  a thread set / trap address / stopped-state the code did not own
+ *   round 1  a fork child's mm treated as the target's
+ *   round 2  a thread that could not be READ treated as foreign, and released
+ *   round 3  a task of unknown KIND handed our own int3's SIGTRAP: it failed a
+ *            `kind == PS_OWN` arrival gate, fell out of the bottom, and was
+ *            given ps_cont(w, sigtrap_is_app(w) ? SIGTRAP : 0). An int3 reports
+ *            si_code == SI_KERNEL whoever planted it, so that predicate says
+ *            "the target's own" about OURS, and a process with no SIGTRAP
+ *            handler dies of it — un-rewound, so even a swallowed one would
+ *            have resumed at base+1, mid-instruction.
+ *
+ * Every one of those landed in a tail, so the tail is gone. What to do with a
+ * stopped task is now a TOTAL function of two dimensions:
+ *
+ *     WHOSE address space is it in?  asmspy_ps_kind_t    (3 values)
+ *     WHY is it stopped?             asmspy_ps_reason_t (11 values)
+ *
+ * written out as nested switches with NO `default:` label — a `default:`
+ * defeats the exhaustiveness check, which is why -Wswitch-enum is on for this
+ * object too (mk/cli.mk), so that adding one cannot silence it. Both are
+ * -Werror there: a new kind, or a new stop reason, is a COMPILE ERROR at every
+ * site that has not been revisited, not a review finding on round five.
+ *
+ * The function is PURE, so cli/test_ptracesample.c walks all 33 cells and pins
+ * the invariants directly — including the ones no victim can reach.
+ *
+ * The verbs live in exactly one switch too (ps_perform, over asmspy_ps_act_t),
+ * so there is no path from a stop to a verb that is not inside a written case.
+ * =========================================================================== */
+
+/* WHOSE ADDRESS SPACE a tabled task is in. Three states, and the third is the
+ * point: "we could not find out" is not a synonym for either answer. */
+typedef enum {
+    ASMSPY_PS_OWN = 0, /* a thread of the target                            */
+    ASMSPY_PS_FOREIGN, /* a different process (a fork/vfork child)          */
+    ASMSPY_PS_UNKNOWN  /* /proc would not say — never poke, never release   */
+} asmspy_ps_kind_t;
+
+/* WHY a task is in a ptrace-stop. Exits are not here: a task that has exited is
+ * not stopped, has no address space, and is owed no verb — ps_dispatch drops it
+ * before any of this. Everything a waitpid status can otherwise mean IS here,
+ * including the two that only exist because our own instruments generate them
+ * (OUR_STEP, OUR_TRAP) and the one that exists because we could not tell
+ * (TRAP_UNSURE). */
+typedef enum {
+    ASMSPY_PS_R_CLONE = 0,   /* PTRACE_EVENT_CLONE: a new THREAD, same mm     */
+    ASMSPY_PS_R_FORK,        /* PTRACE_EVENT_FORK/VFORK: a new PROCESS        */
+    ASMSPY_PS_R_EVENT_OTHER, /* a ptrace event-stop we never asked for        */
+    ASMSPY_PS_R_JOBCTL,      /* group-stop: ^Z, SIGSTOP, a tty stop           */
+    ASMSPY_PS_R_INTERRUPT,   /* PTRACE_EVENT_STOP that is not job control:    */
+                             /* our own PTRACE_INTERRUPT, or a new task's     */
+    /* attach-stop (both report SIGTRAP — kernel     */
+    /* signal.c:do_jobctl_trap)                      */
+    ASMSPY_PS_R_OUR_STEP,    /* our PTRACE_SINGLESTEP over the entry landed   */
+    ASMSPY_PS_R_OUR_TRAP,    /* stopped AT the entry byte WE armed            */
+    ASMSPY_PS_R_TRAP_UNSURE, /* SIGTRAP, registers unreadable: provenance     */
+                             /* UNKNOWABLE, which is a third answer           */
+    ASMSPY_PS_R_APP_TRAP,    /* SIGTRAP the TARGET generated (si_code says so,
+                              * and it is not at any address we armed)        */
+    ASMSPY_PS_R_STRAY_TRAP,  /* SIGTRAP that is neither: SI_USER/SI_TKILL, an
+                              * unrequested event-trap, a race                */
+    ASMSPY_PS_R_SIGNAL       /* an ordinary signal-delivery-stop              */
+} asmspy_ps_reason_t;
+
+/* WHAT WE DO, and this enum is the complete list of things this module is
+ * allowed to do to a stopped task. ps_perform is the only place any of them is
+ * spelled as a syscall. */
+typedef enum {
+    ASMSPY_PS_ACT_HOLD = 0,      /* stay stopped. NO VERB AT ALL — which is
+                                  * why it is also the value the unreachable
+                                  * tails return: a tail must not act.       */
+    ASMSPY_PS_ACT_RESUME_QUIET,  /* PTRACE_CONT, sig 0 (nothing was pending,
+                                  * or what was pending was OURS)            */
+    ASMSPY_PS_ACT_RESUME_SIGNAL, /* PTRACE_CONT, sig = the pending signal —
+                                  * correction 1: this is the no-op, and
+                                  * swallowing is the intervention           */
+    ASMSPY_PS_ACT_REWIND_RESUME, /* off base+1, then CONT 0, byte left armed  */
+    ASMSPY_PS_ACT_COLLECT,       /* off base+1 and PARKED: phase 3's arrival  */
+    ASMSPY_PS_ACT_CLEAR_AND_RESUME, /* take OUR byte back out of whatever mm
+                                     * this task is in (read-guarded), rewind,
+                                     * resume                                */
+    ASMSPY_PS_ACT_FOLLOW_CHILD,  /* table the cloned thread, then CONT 0      */
+    ASMSPY_PS_ACT_LISTEN,        /* PTRACE_LISTEN: keep the user's own stop   */
+    ASMSPY_PS_ACT_RELEASE,       /* restore its copy, rewind, detach          */
+    ASMSPY_PS_ACT_RELEASE_SIGNAL /* ditto, detaching WITH the pending signal  */
+} asmspy_ps_act_t;
+
+/* The whole table. Defined in the .c (one translation unit compiled with
+ * -Werror=switch), declared here so the test can walk every cell.
+ *
+ * `tearing_down`  the teardown has started: PTRACE_LISTEN must be suppressed or
+ *                 the detach cannot converge (MEASURED: DETACH under LISTEN is
+ *                 refused ESRCH), and a group-stop must be HELD rather than
+ *                 resumed or we restart a process the user suspended.
+ * `is_hold`       this is the task whose stop the caller is waiting for.
+ * `collecting`    the caller is phase 3, counting arrivals at the armed entry.
+ *
+ * THE ONE RULE THE TABLE ENCODES BEYOND THE OBVIOUS: an unknown never
+ * authorises poking, releasing, arming, or continuing-with-a-signal. It costs
+ * coverage (so nothing new is armed), it stays traced (so it cannot meet a trap
+ * untraced), and the single write it does allow — ASMSPY_PS_ACT_CLEAR_AND_RESUME
+ * — is a read-guarded REMOVAL of our own byte, which is correct in every one of
+ * the three address spaces it might be in and is the only alternative to
+ * leaving the task trap-looping on a byte we planted. */
+asmspy_ps_act_t asmspy_ps_decide(asmspy_ps_kind_t kind, asmspy_ps_reason_t why,
+                                 int tearing_down, int is_hold, int collecting);
 
 #endif /* ASMSPY_PTRACESAMPLE_H */

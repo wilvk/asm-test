@@ -68,6 +68,30 @@ $(BUILD)/%.o: cli/%.c cli/libasmspy.h cli/asmspy.h cli/asmspy_graphsort.h \
 $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 $(BUILD)/asmspy_proc.o: $(BUILD)/asmspy_syscall_names.inc
 
+# THE PERF-FREE PICKER'S EXHAUSTIVENESS GATE, and it is a correctness mechanism
+# rather than a style flag.
+#
+# What to do with a stopped tracee is a TOTAL function of (whose address space
+# it is in) x (why it stopped) — asmspy_ps_decide in cli/asmspy_ptracesample.c,
+# written as nested switches with no `default:`. Four rounds of fixes to that
+# file each closed the defects they were given and opened exactly one more of
+# the same class: a task the conditions did not describe fell out of the bottom
+# of an `if` chain and was handed a verb (PTRACE_CONT with a signal, DETACH,
+# POKETEXT) anyway. The last one delivered our OWN int3's SIGTRAP to a process
+# with no handler.
+#
+#   -Werror=switch       a new enumerator with no case is a build failure
+#   -Werror=switch-enum  ... and stays one even if someone adds a `default:`,
+#                        which would otherwise silence -Wswitch entirely
+#
+# Scoped to this object because it is where the tables live; WERROR=1 is only
+# set in CI, and this must fail on a developer's box too. DEMONSTRATED, not
+# asserted: adding a fourth asmspy_ps_kind_t breaks the build at every site that
+# has not been revisited (asmspy_ps_decide, ps_kind_may_poke, ps_kind_may_sample).
+PS_SWITCH_GATE := -Werror=switch -Werror=switch-enum
+$(BUILD)/asmspy_ptracesample.o: CFLAGS += $(PS_SWITCH_GATE)
+$(BUILD)/pic/asmspy_ptracesample.o: CFLAGS += $(PS_SWITCH_GATE)
+
 # asmspy.o is the FRONT END (main, the headless subcommands, the ncurses TUI);
 # the engine it drives is libasmspy below, not a loose object here.
 ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmtrace_ndjson.o

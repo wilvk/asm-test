@@ -884,28 +884,44 @@ int main(int argc, char **argv) {
         job.syms = &syms;
         job.out = cands;
         job.max = 8;
-        /* SHORT, deliberately. The hazard lives in PHASE 3's armed windows, and
-         * with a 900 ms residency window the whole 700 ms measurement below sat
-         * inside PHASE 1 — before a single byte had been planted. MEASURED: the
-         * check scored 140/140 with the fork-child release disabled entirely,
-         * because nothing was ever armed while it was looking. 400 ms of phase 1
-         * plus phase 3's own bound (also window_ms) fits inside the 1200 ms
-         * windows below, and is still long enough to nominate slow_entry. */
-        job.window_ms = 400;
+        /* THE MEASUREMENT WINDOW MUST CONTAIN AN ARMED, LIVE ENTRY, and both
+         * halves of that are hard-won.
+         *
+         * It must overlap PHASE 3: with a 900 ms residency window the whole
+         * 700 ms measurement once sat inside PHASE 1, before a single byte had
+         * been planted, and the check scored 140/140 with the fork-child release
+         * disabled entirely.
+         *
+         * And phase 3 must actually reach `slow_entry`, which is the only entry
+         * here whose armed window stays open long enough for a fork to land in
+         * it — a hot entry collects its four arrivals in microseconds and is
+         * disarmed; a never-entered one holds the full ASMSPY_PS_CONFIRM_MS but
+         * the child never executes it. MEASURED at window_ms = 400: phase 3's
+         * own budget (also window_ms) ran out among the never-entered candidates
+         * first, only __clock_gettime and hot_entry ever confirmed, and this
+         * check missed the release mutation entirely. 900 ms reaches slow_entry;
+         * the `during` window below is widened to span the whole call. */
+        job.window_ms = 900;
         pthread_t th;
         if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
             fprintf(stderr, "FAIL: pthread_create\n");
             kill_victim(fpid, fout);
             return 1;
         }
-        forkhot_gaps_over(fout, 1200, &seen_d, &miss_d);
+        forkhot_gaps_over(fout, 2600, &seen_d, &miss_d);
         pthread_join(th, NULL);
         (void)count_lines_over(fout, 60); /* drain the unread backlog */
         forkhot_gaps_over(fout, 1200, &seen_a, &miss_a);
 
-        printf("# forkhot children/1200ms: before=%ld(gaps %ld) "
-               "during=%ld(gaps %ld) after=%ld(gaps %ld) (rc=%d why='%s')\n",
-               seen_b, miss_b, seen_d, miss_d, seen_a, miss_a, job.rc, job.why);
+        printf(
+            "# forkhot children: before/1200ms=%ld(gaps %ld) "
+            "during+teardown/2600ms=%ld(gaps %ld) after/1200ms=%ld(gaps %ld) "
+            "(rc=%d why='%s')\n",
+            seen_b, miss_b, seen_d, miss_d, seen_a, miss_a, job.rc, job.why);
+        for (int i = 0; i < job.rc && i < 8; i++)
+            printf("#   [%d] %-16s arrivals=%llu first=%lluus\n", i,
+                   cands[i].name ? cands[i].name : "?", cands[i].arrivals,
+                   cands[i].first_us);
         CHECK(seen_b > 100 && miss_b == 0,
               "children were completing before we attached, with an unbroken "
               "sequence — the measurement itself is sound");
@@ -921,7 +937,12 @@ int main(int argc, char **argv) {
          * edge, and no more. No rate band could do this — 60/90/95/97% either
          * tolerated the defect or would trip on a loaded box, because the defect
          * and the drift are the same size. */
-        CHECK(miss_d <= 1,
+        /* `seen_d > 100` is the FLOOR, and without it this check passes under
+         * TOTAL child mortality: forkhot_gaps_over reports missing = 0 when it
+         * saw no `kid=` lines at all (there is no sequence to have a hole in),
+         * so a sampler that killed every child scored a clean 0 gaps. A gap
+         * count is only evidence when there is a sequence to count gaps in. */
+        CHECK(seen_d > 300 && miss_d <= 1,
               "children forked while an entry was ARMED still complete: a "
               "child inherits a copy-on-write copy of the int3 and dies of it "
               "unless PTRACE_O_TRACEFORK is set, its copy restored, and it is "
@@ -1232,6 +1253,224 @@ int main(int argc, char **argv) {
         asmspy_symtab_free(&syms);
         kill_victim(upid, uout);
         unsetenv("ASMSPY_PS_TEST_TGID_FAIL");
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §10  THE DISPOSITION TABLE, WALKED IN FULL.                            */
+    /*                                                                       */
+    /* Four rounds of fixes to this module each closed the defects they were   */
+    /* given and opened exactly one more of the SAME class: a task the         */
+    /* conditions did not describe fell out of the bottom of an `if` chain and */
+    /* was handed a verb anyway. asmspy_ps_decide replaces that chain with a   */
+    /* total function of (kind x reason), and the compiler enforces that every */
+    /* cell is written (-Werror=switch/-switch-enum, mk/cli.mk).               */
+    /*                                                                       */
+    /* What the compiler CANNOT check is what the cells say. These checks are  */
+    /* the policy, stated once and asserted over all 3 x 11 x 8 combinations — */
+    /* including every combination no victim in this tree can produce, which   */
+    /* is exactly where the last four Criticals lived.                        */
+    /* --------------------------------------------------------------------- */
+    {
+        static const asmspy_ps_kind_t KINDS[] = {
+            ASMSPY_PS_OWN, ASMSPY_PS_FOREIGN, ASMSPY_PS_UNKNOWN};
+        static const asmspy_ps_reason_t WHYS[] = {
+            ASMSPY_PS_R_CLONE,       ASMSPY_PS_R_FORK,
+            ASMSPY_PS_R_EVENT_OTHER, ASMSPY_PS_R_JOBCTL,
+            ASMSPY_PS_R_INTERRUPT,   ASMSPY_PS_R_OUR_STEP,
+            ASMSPY_PS_R_OUR_TRAP,    ASMSPY_PS_R_TRAP_UNSURE,
+            ASMSPY_PS_R_APP_TRAP,    ASMSPY_PS_R_STRAY_TRAP,
+            ASMSPY_PS_R_SIGNAL};
+        int cells = 0, bad_range = 0, unknown_acts = 0, foreign_acts = 0,
+            unknown_sig = 0, own_sig = 0;
+        for (unsigned k = 0; k < sizeof KINDS / sizeof *KINDS; k++)
+            for (unsigned r = 0; r < sizeof WHYS / sizeof *WHYS; r++)
+                for (int flags = 0; flags < 8; flags++) {
+                    asmspy_ps_act_t a =
+                        asmspy_ps_decide(KINDS[k], WHYS[r], flags & 1,
+                                         (flags >> 1) & 1, (flags >> 2) & 1);
+                    cells++;
+                    if (a < ASMSPY_PS_ACT_HOLD ||
+                        a > ASMSPY_PS_ACT_RELEASE_SIGNAL)
+                        bad_range++;
+                    if (KINDS[k] == ASMSPY_PS_UNKNOWN) {
+                        /* THE RULE, and the currently-open Critical is a single
+                         * violation of its last clause: an unknown never
+                         * authorises poking, releasing, arming, or
+                         * CONTINUING-WITH-A-SIGNAL. Our own int3 reports
+                         * si_code == SI_KERNEL exactly as the target's own does,
+                         * so "deliver it if it looks like the app's" delivers
+                         * OURS to a process with no handler. */
+                        if (a == ASMSPY_PS_ACT_RELEASE ||
+                            a == ASMSPY_PS_ACT_RELEASE_SIGNAL ||
+                            a == ASMSPY_PS_ACT_COLLECT)
+                            unknown_acts++;
+                        if (a == ASMSPY_PS_ACT_RESUME_SIGNAL)
+                            unknown_sig++;
+                    }
+                    if (KINDS[k] == ASMSPY_PS_FOREIGN &&
+                        a != ASMSPY_PS_ACT_RELEASE &&
+                        a != ASMSPY_PS_ACT_RELEASE_SIGNAL)
+                        foreign_acts++;
+                    if (KINDS[k] == ASMSPY_PS_OWN &&
+                        WHYS[r] == ASMSPY_PS_R_SIGNAL &&
+                        a != ASMSPY_PS_ACT_RESUME_SIGNAL)
+                        own_sig++;
+                }
+        printf("# decision table: %d cells walked\n", cells);
+        CHECK(cells == 264 && bad_range == 0,
+              "every (kind x reason x flags) combination has a written "
+              "disposition -- a total function, not a chain of ifs with a "
+              "fall-through tail");
+        CHECK(
+            unknown_acts == 0,
+            "an unknown NEVER authorises releasing or confirming: it stays "
+            "traced (so it cannot meet our trap untraced) and it never counts "
+            "as an arrival of the target");
+        CHECK(
+            unknown_sig == 0,
+            "an unknown is NEVER continued with a signal -- the open Critical "
+            "was exactly this cell, handing a task of unknown kind our own "
+            "int3's SIGTRAP because SI_KERNEL cannot tell whose int3 it was");
+        CHECK(asmspy_ps_decide(ASMSPY_PS_UNKNOWN, ASMSPY_PS_R_OUR_TRAP, 0, 0,
+                               1) == ASMSPY_PS_ACT_CLEAR_AND_RESUME,
+              "and the one write it does allow is the read-guarded REMOVAL of "
+              "our own byte, which is correct in all three address spaces it "
+              "might be in -- anything else leaves it trap-looping forever");
+        CHECK(foreign_acts == 0,
+              "a fork child is RELEASED at its first stop whatever the stop "
+              "was: never sampled, never poked through, never counted");
+        CHECK(own_sig == 0,
+              "correction 1 holds for every flag combination: a real signal to "
+              "a thread of the target is re-injected, never swallowed");
+        CHECK(asmspy_ps_decide(ASMSPY_PS_OWN, ASMSPY_PS_R_OUR_TRAP, 0, 0, 1) ==
+                      ASMSPY_PS_ACT_COLLECT &&
+                  asmspy_ps_decide(ASMSPY_PS_OWN, ASMSPY_PS_R_OUR_TRAP, 0, 0,
+                                   0) == ASMSPY_PS_ACT_REWIND_RESUME,
+              "our own trap is an ARRIVAL only for the collector; anyone else "
+              "rewinds it and lets it run -- never re-injects it");
+        CHECK(asmspy_ps_decide(ASMSPY_PS_OWN, ASMSPY_PS_R_JOBCTL, 0, 0, 0) ==
+                      ASMSPY_PS_ACT_LISTEN &&
+                  asmspy_ps_decide(ASMSPY_PS_OWN, ASMSPY_PS_R_JOBCTL, 1, 0,
+                                   0) == ASMSPY_PS_ACT_HOLD,
+              "job control is LISTENed while we are working and HELD once the "
+              "teardown starts, where DETACH under LISTEN is refused ESRCH");
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §11  AN UNKNOWN TASK MEETING OUR OWN ARMED int3, and fork+exec.        */
+    /*                                                                       */
+    /* §9 forces EVERY /proc read to fail, which costs coverage at SEIZE time */
+    /* — so the arm gate refuses and phase 3 never plants a byte. The fatal   */
+    /* path therefore sat behind a lever that guaranteed it could not run:    */
+    /* a task of unknown kind EXECUTING our armed trap. It failed the         */
+    /* `kind == PS_OWN` arrival gate, fell through, and was handed            */
+    /* ps_cont(w, sigtrap_is_app(w) ? SIGTRAP : 0) — and an int3 reports      */
+    /* si_code == SI_KERNEL whoever planted it, so that predicate said "the   */
+    /* target's own" about OURS. A process with no SIGTRAP handler dies of it,*/
+    /* un-rewound, so even a swallowed one would resume at base+1.            */
+    /*                                                                       */
+    /* ASMSPY_PS_TEST_TGID_FAIL=armed fails the read ONLY while the trap byte */
+    /* is in the text, which is the scenario the module's own comment cites:  */
+    /* one failed open(2) in a long-lived caller at its fd limit, AFTER the   */
+    /* arm. Every child forked into that window is then unclassifiable, and   */
+    /* forkhot's children run the armed entries immediately.                  */
+    /*                                                                       */
+    /* The victim also runs in EXEC mode, which is the second finding in one  */
+    /* window: an unclassifiable child is never released early, so it is still */
+    /* tabled — carrying a restore address into the PARENT's image — when it  */
+    /* execve()s. A tracer that reads "PEEKTEXT failed" as "we could not tell" */
+    /* then reports fork+exec, the commonest fork shape there is, as a target */
+    /* it DAMAGED.                                                            */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_fork2[256];
+        snprintf(p_fork2, sizeof p_fork2, "%s/forkhot_victim", bdir);
+        setenv("ASMSPY_FORKHOT_EXEC", "1", 1);
+        int fout = -1;
+        pid_t fpid = spawn_victim(p_fork2, "forkhot_victim pid=", &fout);
+        if (fpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s (exec mode)\n", p_fork2);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(fpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s\n", p_fork2);
+            kill_victim(fpid, fout);
+            return 1;
+        }
+        long seen_b = 0, miss_b = 0, seen_d = 0, miss_d = 0;
+        forkhot_gaps_over(fout, 700, &seen_b, &miss_b);
+
+        setenv("ASMSPY_PS_TEST_TGID_FAIL", "armed", 1);
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = fpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        /* LONGER than §6's 400 ms, and phase 3 is why. The lever only fires
+         * while a byte is armed at an entry a thread has already been seen
+         * reaching, and the only such entry here is `slow_entry` — entered every
+         * ~20 ms, so its four arrivals cannot be collected inside
+         * ASMSPY_PS_CONFIRM_MS and the window stays armed for all of it.
+         * MEASURED at window_ms = 400: phase 3's own budget (also window_ms) ran
+         * out among the never-entered candidates before it ever reached
+         * slow_entry, so nothing was armed-and-live and the lever never fired. */
+        job.window_ms = 900;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create\n");
+            kill_victim(fpid, fout);
+            return 1;
+        }
+        /* ONE window spanning the whole call AND its teardown. A child that
+         * cannot be classified is never released early — it stays traced until
+         * the teardown — so its `kid=` line arrives LATE, not never, and a
+         * window that stopped at the join would score a survivor as a hole. */
+        forkhot_gaps_over(fout, 2600, &seen_d, &miss_d);
+        pthread_join(th, NULL);
+        unsetenv("ASMSPY_PS_TEST_TGID_FAIL");
+
+        printf("# unknown-at-our-trap (exec forks, tgid fails WHILE ARMED): "
+               "before=%ld(gaps %ld) during+teardown=%ld(gaps %ld) rc=%d "
+               "why='%s'\n",
+               seen_b, miss_b, seen_d, miss_d, job.rc, job.why);
+        for (int i = 0; i < job.rc && i < 8; i++)
+            printf("#   [%d] %-16s arrivals=%llu first=%lluus\n", i,
+                   cands[i].name ? cands[i].name : "?", cands[i].arrivals,
+                   cands[i].first_us);
+
+        CHECK(seen_b > 30 && miss_b == 0,
+              "fork+exec children were completing before we attached, with an "
+              "unbroken sequence (the measurement is sound)");
+        /* NON-VACUITY. The lever fails a /proc read only while a byte is
+         * actually planted, so a lost-coverage report is direct evidence that a
+         * task really was tabled as UNKNOWN inside an armed window — which is
+         * the whole scenario. Without this the checks below could pass simply
+         * because nothing was ever armed. */
+        CHECK(strstr(job.why, "fully seized") != NULL,
+              "a task really was tabled as unclassifiable WHILE the entry trap "
+              "was armed (otherwise the checks below are vacuous)");
+        CHECK(
+            seen_d > 100 && miss_d == 0,
+            "a task of UNKNOWN kind that executes our armed int3 survives it: "
+            "the byte is taken back out of whatever address space it is in, "
+            "the task is rewound off base+1, and it is NEVER handed the "
+            "SIGTRAP -- si_code says SI_KERNEL for our int3 and for the "
+            "target's own alike");
+        CHECK(job.rc >= 0 && strstr(job.why, "handed back clean") == NULL,
+              "and fork+exec is not reported as damage: after an execve the "
+              "armed address is not mapped, which means our byte is provably "
+              "NOT there -- not that we could not tell");
+        for (int i = 0; i < job.rc && i < 8; i++)
+            CHECK(
+                !has_trap_byte(fpid, cands[i].addr),
+                "no entry is left holding an int3 after the unknown-kind run");
+        CHECK(is_alive(fpid), "the forking victim survived");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(fpid, fout);
+        unsetenv("ASMSPY_FORKHOT_EXEC");
     }
 
     printf("%d checks, %d failures\n", checks, failures);

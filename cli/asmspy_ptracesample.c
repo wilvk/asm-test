@@ -6,12 +6,24 @@
  * shape rather than restating the header.
  *
  * ONE RULE ABOVE ALL OTHERS, because the failure mode is silent and fatal to a
- * process we do not own: every ptrace-stop this file consumes is classified in
- * exactly ONE place, ps_dispatch, and only ps_dispatch decides what signal to
- * resume with. Every other resume in the file is resuming a stop ps_dispatch
- * has already classified as OURS (a PTRACE_INTERRUPT or our own int3), which is
- * why those may pass 0. A second classification site is how the prototype ate
- * 89% of a victim's SIGALRMs. */
+ * process we do not own: every ptrace-stop this file consumes goes through
+ * exactly ONE three-step pipeline, and nothing else in the file may decide what
+ * to do with a tracee.
+ *
+ *   ps_classify   a waitpid status -> asmspy_ps_reason_t. Reads only.
+ *   asmspy_ps_decide  (kind, reason) -> asmspy_ps_act_t. PURE, TOTAL, and a
+ *                 nested switch with no `default:`, so a kind or a reason that
+ *                 nobody has written a disposition for does not compile.
+ *   ps_perform    an act -> the syscalls. The ONLY place in this file that
+ *                 CONTs, DETACHes, LISTENs or POKEs a byte on behalf of a stop.
+ *
+ * That shape is the fix for the class of defect this module shipped four times
+ * running: a task the conditions did not describe fell out of the bottom of an
+ * `if` chain and was handed a verb anyway. See the long note in
+ * asmspy_ptracesample.h. Every other resume in the file (ps_resume_all,
+ * ps_phase1's post-sample CONT) passes sig 0 and is the completion of an
+ * ASMSPY_PS_ACT_HOLD this pipeline already decided on — never a second
+ * classification, which is how the prototype ate 89% of a victim's SIGALRMs. */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -113,10 +125,10 @@
 #define PS_EV_ARRIVED 2 /* a thread reached the armed entry (stays stopped)  */
 #define PS_EV_GONE    3 /* the awaited thread, or the whole target, is gone  */
 
-/* ps_thr_t::kind — WHOSE address space a tabled task is in. */
-#define PS_OWN     0 /* a thread of the target                            */
-#define PS_FOREIGN 1 /* a different process (a fork/vfork child)          */
-#define PS_UNKNOWN 2 /* /proc would not say — never poke, never release   */
+/* ps_thr_t::kind is asmspy_ps_kind_t (ASMSPY_PS_OWN / _FOREIGN / _UNKNOWN),
+ * declared in the header beside the disposition table that is total over it.
+ * It was three #defines on an `int` field, which is exactly what let a fourth
+ * case be added without -Wswitch noticing. */
 
 typedef struct {
     pid_t tid;
@@ -138,13 +150,19 @@ typedef struct {
      * ships in libasmspy.a, so the caller is long-lived and may be at its fd
      * limit) was enough to kill the target.
      *
-     *   PS_OWN     a thread of the target: pokeable, sampleable, never released
-     *   PS_FOREIGN a different process (a fork child): never poked, never
-     *              sampled, released as soon as its copy is restored
-     *   PS_UNKNOWN /proc would not say: never poked, never sampled, and NEVER
-     *              RELEASED — it stays traced, so it cannot die of our byte —
-     *              and it costs COVERAGE, so nothing new is armed either. */
-    int kind;
+     *   ASMSPY_PS_OWN      a thread of the target: pokeable, sampleable, never
+     *                      released early
+     *   ASMSPY_PS_FOREIGN  a different process (a fork child): never poked,
+     *                      never sampled, released as soon as its copy is
+     *                      restored
+     *   ASMSPY_PS_UNKNOWN  /proc would not say: never poked, never sampled, and
+     *                      NEVER RELEASED — it stays traced, so it cannot die of
+     *                      our byte — and it costs COVERAGE, so nothing new is
+     *                      armed either.
+     *
+     * What each of those means for a task that is STOPPED is not decided here or
+     * anywhere near here: it is the kind axis of asmspy_ps_decide's table. */
+    asmspy_ps_kind_t kind;
     /* For a fork child specifically: the entry whose trap BYTE it inherited in
      * its copy-on-write text, and the original word to put back. A child that is
      * released still carrying our int3 dies of SIGTRAP with no tracer — the same
@@ -191,6 +209,25 @@ typedef struct {
     uint64_t bp_base;
     int bp_planted;
     long bp_orig; /* the word POKETEXT overwrote              */
+    /* Has a thread ARRIVED at the entry currently armed?
+     *
+     * Set by ASMSPY_PS_ACT_COLLECT and cleared per CANDIDATE (ps_phase3_one),
+     * NOT per plant: phase 3 re-plants the same address after every arrival, and
+     * the fact being tracked is about the entry, not about one planting of it.
+     *
+     * Read by exactly one thing — ASMSPY_PS_TEST_TGID_FAIL=armed — and it is
+     * here rather than in the test because the fact is only knowable from
+     * inside. The lever exists to reach "a task of unknown kind EXECUTES our
+     * armed int3", and MEASURED, gating it on `bp_planted` alone could not: an
+     * unknown costs coverage, coverage stops the arming loop, so the scenario
+     * gets exactly ONE armed window — and the windows that stay armed longest
+     * are precisely the candidates NOTHING enters (a hot entry collects its four
+     * arrivals in microseconds and is disarmed; a never-entered one holds the
+     * full ASMSPY_PS_CONFIRM_MS). Spending that one window on an entry no task
+     * reaches made the whole check vacuous: 0 of 3 runs reached the path.
+     * Gating on "an arrival has already been observed HERE" spends it on an
+     * entry the target is demonstrably executing. */
+    int bp_arrived;
     /* The LAST address we ever armed, and its original word — never cleared for
      * the life of the call, only overwritten by the next plant.
      *
@@ -266,11 +303,15 @@ static void ps_note(char *why, size_t whylen, const char *msg) {
 }
 
 /* The THREAD GROUP this task belongs to, or -1. The one question that separates
- * "another thread of our target" from "a process that forked out of it". */
-static int ps_tgid_of(pid_t tid);
+ * "another thread of our target" from "a process that forked out of it".
+ * `live_trap` is the test lever's trigger, not an input to the answer — see
+ * ps_tgid_fail_mode. */
+static int ps_tgid_of(pid_t tid, int live_trap);
 /* Detach ONE thread, insisting — defined below, needed by the release path in
- * ps_dispatch, which must not drop a task it has not proved it released. */
-static int ps_detach_one(ps_ctx_t *c, pid_t tid);
+ * ps_perform, which must not drop a task it has not proved it released. `sig`
+ * is delivered as the tracee restarts, and is nonzero ONLY when the stop being
+ * left is a signal-delivery-stop (asmspy_ps_decide's RELEASE_SIGNAL). */
+static int ps_detach_one(ps_ctx_t *c, pid_t tid, int sig);
 
 static int ps_find(ps_ctx_t *c, pid_t tid) {
     for (int i = 0; i < c->n; i++)
@@ -333,12 +374,12 @@ static int ps_add(ps_ctx_t *c, pid_t tid) {
      * gate still passed and an int3 went into text a now-untraced thread was
      * about to execute. An unknown is not a licence to act. */
     if (tid != c->pid) {
-        int tgid = ps_tgid_of(tid);
+        int tgid = ps_tgid_of(tid, c->bp_planted && c->bp_arrived);
         if (tgid < 0) {
-            c->t[c->n].kind = PS_UNKNOWN;
+            c->t[c->n].kind = ASMSPY_PS_UNKNOWN;
             c->covered = 0; /* we cannot prove we hold the thread set */
         } else if (tgid != (int)c->pid) {
-            c->t[c->n].kind = PS_FOREIGN;
+            c->t[c->n].kind = ASMSPY_PS_FOREIGN;
         }
     }
     /* A trap has been armed at some point in this call, so any task not in OUR
@@ -347,7 +388,7 @@ static int ps_add(ps_ctx_t *c, pid_t tid) {
      * dispatched after that even though its mm snapshot predates it. The restore
      * itself is guarded by ps_restore_copy, which writes only if our byte is
      * actually there — so a stale address costs nothing. */
-    if (c->t[c->n].kind != PS_OWN && c->armed_bp) {
+    if (c->t[c->n].kind != ASMSPY_PS_OWN && c->armed_bp) {
         c->t[c->n].copied_bp = c->armed_bp;
         c->t[c->n].copied_orig = c->armed_orig;
         /* A VFORK child SHARES the mm, so this restore disarms the PARENT's
@@ -367,8 +408,9 @@ static void ps_del(ps_ctx_t *c, pid_t tid) {
     c->t[i] = c->t[--c->n]; /* swap-with-last: order is not meaningful here */
 }
 
-/* Resume a stop ps_dispatch has already classified. `sig` is what ps_dispatch
- * decided to deliver — 0 ONLY for a stop that was ours to begin with. */
+/* Resume a stop the pipeline has already classified. `sig` is what
+ * asmspy_ps_decide's cell chose to deliver — 0 ONLY for a stop that was ours to
+ * begin with, or one whose signal an unknown kind forbids us to carry. */
 static void ps_cont(ps_ctx_t *c, pid_t tid, int sig) {
     if (ptrace(PTRACE_CONT, tid, NULL, (void *)(uintptr_t)sig) == 0) {
         int i = ps_find(c, tid);
@@ -393,7 +435,7 @@ static int ps_read_file(const char *path, char *buf, size_t cap) {
     return (int)n;
 }
 
-/* Force ps_tgid_of to fail, so the PS_UNKNOWN path can be reached at all.
+/* Force ps_tgid_of to fail, so the ASMSPY_PS_UNKNOWN path can be reached at all.
  *
  * It is otherwise unreachable from outside: /proc/<tid>/status is readable for
  * any task we have seized, and the real trigger is an fd exhaustion or a
@@ -401,16 +443,35 @@ static int ps_read_file(const char *path, char *buf, size_t cap) {
  * ASMSPY_PS_TEST_CAP above and the engine's ASMSPY_TEST_THR_OOM — and the same
  * justification: the branch is FATAL when it resolves the wrong way (it released
  * a real thread into an armed address space), so "we could only argue about it"
- * is not good enough. */
-static int ps_tgid_fails(void) {
+ * is not good enough.
+ *
+ * TWO MODES, and the second one exists because the first could not reach the
+ * defect it was written for. "1" fails every read, INCLUDING the ones during
+ * ps_seize_all — so coverage is gone before the arm gate and phase 3 never
+ * plants a byte. The whole fatal path (an unknown task EXECUTING our armed
+ * int3) therefore sat behind a lever that guaranteed nothing was ever armed.
+ * "armed" fails a read only while a trap byte is in the target's text AND a
+ * thread has already been seen arriving at it (ps_ctx_t::bp_arrived) — which is
+ * precisely the scenario the module's own comment cites: one failed open(2) in a
+ * long-lived caller at its fd limit, AFTER the arm, at an entry the target is
+ * demonstrably executing. The second half of that condition is not fussiness;
+ * without it the lever fired inside windows nothing ever reaches, and the path
+ * it exists to reach was executed 0 times in 3 runs. See ps_ctx_t::bp_arrived. */
+#define PS_TGID_FAIL_OFF   0
+#define PS_TGID_FAIL_ALL   1
+#define PS_TGID_FAIL_ARMED 2
+static int ps_tgid_fail_mode(void) {
     const char *e = getenv("ASMSPY_PS_TEST_TGID_FAIL");
-    return e && *e && *e != '0';
+    if (!e || !*e || *e == '0')
+        return PS_TGID_FAIL_OFF;
+    return *e == 'a' ? PS_TGID_FAIL_ARMED : PS_TGID_FAIL_ALL;
 }
 
 /* The thread group `tid` belongs to, or -1 when /proc cannot answer. */
-static int ps_tgid_of(pid_t tid) {
+static int ps_tgid_of(pid_t tid, int live_trap) {
     char path[64], buf[1024];
-    if (ps_tgid_fails())
+    int mode = ps_tgid_fail_mode();
+    if (mode == PS_TGID_FAIL_ALL || (mode == PS_TGID_FAIL_ARMED && live_trap))
         return -1;
     snprintf(path, sizeof path, "/proc/%d/status", (int)tid);
     if (ps_read_file(path, buf, sizeof buf) <= 0)
@@ -488,16 +549,46 @@ static int ps_plant(ps_ctx_t *c, pid_t tid, uint64_t base) {
     return 0;
 }
 
+/* MAY WE WRITE THE TARGET'S TEXT THROUGH A TASK OF THIS KIND?
+ *
+ * A switch, not a comparison, and with no `default:` — this and ps_kind_may_
+ * sample below are the two places outside ps_perform where a kind reaches a
+ * verb, so they are the two places a fourth kind must also stop the build. */
+static int ps_kind_may_poke(asmspy_ps_kind_t k) {
+    switch (k) {
+    case ASMSPY_PS_OWN:
+        return 1;
+    case ASMSPY_PS_FOREIGN:
+        return 0; /* its own mm, or a vfork'd one whose clear disarms the parent */
+    case ASMSPY_PS_UNKNOWN:
+        return 0; /* an unknown is not a licence to act */
+    }
+    return 0; /* unreachable while `k` holds an enumerator: -Wswitch is what
+               * keeps it that way, and refusing is the safe value regardless */
+}
+
+/* MAY WE FOLD THIS TASK'S PC INTO THE TARGET'S RESIDENCY HISTOGRAM? */
+static int ps_kind_may_sample(asmspy_ps_kind_t k) {
+    switch (k) {
+    case ASMSPY_PS_OWN:
+        return 1;
+    case ASMSPY_PS_FOREIGN:
+        return 0; /* different process, different code: folding its pc in is a
+                   * lie about the target, and its /proc path is not even ours */
+    case ASMSPY_PS_UNKNOWN:
+        return 0; /* costs one sample; the other direction costs correctness */
+    }
+    return 0; /* unreachable — see ps_kind_may_poke */
+}
+
 /* Can this table entry POKE the target's text? A thread we actually hold in a
  * ptrace-stop, in the target's own address space. Excludes:
  *   - a running thread          (PEEK/POKETEXT are refused, silently)
  *   - a LISTENed thread         (group-stop, not a stop we hold: ESRCH)
- *   - a fork/vfork child        (its own mm, or a shared one we must not clear)
- *   - a task of UNKNOWN kind    (we could not prove which of those it is, and
- *                                an unknown must not authorise a poke)
+ *   - anything ps_kind_may_poke refuses
  */
 static int ps_can_poke(const ps_thr_t *t) {
-    return t->stopped && !t->listening && t->kind == PS_OWN;
+    return t->stopped && !t->listening && ps_kind_may_poke(t->kind);
 }
 
 /* Put the ORIGINAL word back at `base` in `tid`'s address space — but ONLY if
@@ -511,15 +602,26 @@ static int ps_can_poke(const ps_thr_t *t) {
  * acting on an unknown. Reading first also makes the restore idempotent, which
  * is what lets ps_add key the copy off an address that outlives the disarm.
  *
- * 0 = there is nothing of ours there any more (restored, or never was);
+ * 0 = there is nothing of ours there any more (restored, never was, or that
+ *     address does not exist in this task's address space at all);
  * -1 = we could not tell, or could not write. */
 static int ps_restore_copy(pid_t tid, uint64_t base, long orig) {
     if (!base)
         return 0;
     errno = 0;
     long cur = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
-    if (cur == -1 && errno != 0)
-        return -1; /* unreadable: do NOT write into it */
+    if (cur == -1 && errno != 0) {
+        /* NOT MAPPED IS AN ANSWER, and treating it as "could not tell" was a
+         * defect of its own: a fork child that execve'd has a brand new image,
+         * `base` names nothing in it, and PTRACE_PEEKTEXT fails EIO. The old
+         * code returned -1, so the child was kept traced, the teardown counted
+         * it as damage, and the whole call came back -1 "do not trace this
+         * process further" — for fork+exec, the commonest fork shape there is.
+         * A byte in a page that is not mapped is not our int3 by any
+         * definition; there is nothing to undo and nothing to report.
+         * ESRCH (gone, or not stopped) really is "could not tell". */
+        return (errno == EIO || errno == EFAULT) ? 0 : -1;
+    }
 #if defined(__aarch64__)
     if ((cur & 0xffffffffL) != (long)0xd4200000L)
         return 0; /* not our brk: nothing of ours to undo */
@@ -559,33 +661,55 @@ static int ps_unplant(ps_ctx_t *c) {
     return -1;
 }
 
-/* THE SAFETY NET, lifted verbatim in spirit from rgn_rewind_from_bp. On x86 a
- * thread trap-stopped just past the int3 has pc == base+1, which is the MIDDLE
- * of the region's first real instruction once the original byte is back:
- * resuming it there executes garbage in a process we do not own. Every path
- * that sees a stopped thread rewinds it before letting it run. On AArch64 `brk`
- * faults AT base, so there is nothing to rewind and this only confirms the
- * thread really is at our trap.
+/* IS `tid` STOPPED AT THE TRAP WE ARMED AT `base`? A pure READ — it is the
+ * classification half of what used to be one read-compare-write function, split
+ * so that classification cannot mutate a tracee and so the write happens inside
+ * a written case of ps_perform.
  *
- * Returns 1 if `tid` is at the breakpoint (x86: and has been rewound), 0 if it
- * is demonstrably not, and -1 if we COULD NOT TELL — which is a third answer,
- * not a synonym for 0. A caller that flattens -1 into "not at our trap" hands
- * the thread its SIGTRAP back, and an int3 reports si_code == SI_KERNEL whoever
- * planted it, so ours becomes indistinguishable from the target's own and a
- * process with no handler dies of it. */
-static int ps_rewind(pid_t tid, uint64_t base) {
+ * Returns 1 yes, 0 demonstrably not, and -1 if we COULD NOT TELL — a third
+ * answer, not a synonym for 0 (A11). A caller that flattens -1 into "not at our
+ * trap" hands the thread its SIGTRAP back, and an int3 reports si_code ==
+ * SI_KERNEL whoever planted it, so ours becomes indistinguishable from the
+ * target's own and a process with no handler dies of it. The table keeps the
+ * two apart as ASMSPY_PS_R_OUR_TRAP and ASMSPY_PS_R_TRAP_UNSURE. */
+static int ps_trap_where(pid_t tid, uint64_t base) {
     asmspy_regs_t regs;
     if (!base)
         return 0;
     if (asmspy_regs_read(tid, &regs) != 0)
-        return -1; /* cannot classify: see above */
+        return -1;
 #if defined(__aarch64__)
+    /* `brk` faults AT base, so there is nothing to rewind and this is the whole
+     * of the question. */
     return asmspy_reg_pc(&regs) == base;
 #else
+    return asmspy_reg_pc(&regs) == base + 1;
+#endif
+}
+
+/* THE SAFETY NET, lifted verbatim in spirit from rgn_rewind_from_bp. On x86 a
+ * thread trap-stopped just past the int3 has pc == base+1, which is the MIDDLE
+ * of the region's first real instruction once the original byte is back:
+ * resuming it there executes garbage in a process we do not own.
+ *
+ * Idempotent and self-checking: it re-reads the pc and moves it ONLY from
+ * base+1, so calling it on a thread that is not there does nothing. 0 = the
+ * thread is safe to resume, -1 = we could not read or write its registers, in
+ * which case NOTHING may resume it (ps_perform holds it instead). */
+static int ps_rewind(pid_t tid, uint64_t base) {
+    asmspy_regs_t regs;
+    if (!base)
+        return 0;
+#if defined(__aarch64__)
+    (void)regs;
+    return 0; /* faulted AT base: already where it must resume */
+#else
+    if (asmspy_regs_read(tid, &regs) != 0)
+        return -1;
     if (asmspy_reg_pc(&regs) != base + 1)
         return 0;
     asmspy_set_pc(&regs, base);
-    return asmspy_regs_write(tid, &regs) == 0;
+    return asmspy_regs_write(tid, &regs) == 0 ? 0 : -1;
 #endif
 }
 
@@ -602,224 +726,437 @@ static int ps_sigtrap_is_app(pid_t tid) {
 }
 
 /* ------------------------------------------------------------------ */
-/* THE event classifier — correction 1 lives here                      */
+/* THE DISPOSITION PIPELINE — classify, decide, perform                */
 /* ------------------------------------------------------------------ */
 
-/* Classify ONE waitpid result and act on it. `hold` is the tid whose stop the
- * caller wants kept (0 = none); everything else is resumed here.
+/* WHY is this task stopped? A pure READ of the wait status plus, for SIGTRAP
+ * only, two questions the status cannot answer: where the pc is, and what
+ * si_code says. Nothing here writes to a tracee, so a misclassification can
+ * cost a decision but can never itself be the damage.
  *
- * CORRECTION 1. The prototype had no classifier: it waitpid()ed and
- * unconditionally PTRACE_CONTed with sig=0. man 2 ptrace is unambiguous about
- * the cost — "If sig is 0, then a signal is not delivered" — and against a
- * 100 Hz ITIMER_REAL victim that destroyed 89% of the target's SIGALRMs and
- * collapsed its forward progress ~99% (2 utime ticks and 0 progress lines per
- * 2 s, against 200/93 both at baseline and after detach). The reason it shipped
- * is that the identical code costs a SIGNAL-FREE spinner about 1%, so the
- * "~1% overhead, no perturbation" figure was true and meaningless.
+ * CORRECTION 1 starts here. The prototype had no classifier at all: it
+ * waitpid()ed and unconditionally PTRACE_CONTed with sig=0. man 2 ptrace is
+ * unambiguous about the cost — "If sig is 0, then a signal is not delivered" —
+ * and against a 100 Hz ITIMER_REAL victim that destroyed 89% of the target's
+ * SIGALRMs and collapsed its forward progress ~99% (2 utime ticks and 0
+ * progress lines per 2 s, against 200/93 both at baseline and after detach).
+ * The reason it shipped is that the identical code costs a SIGNAL-FREE spinner
+ * about 1%, so the "~1% overhead, no perturbation" figure was true and
+ * meaningless.
  *
- * Under PTRACE_SEIZE the two cases are distinguishable without guessing:
- *   - PTRACE_EVENT_STOP  => a group-stop or OUR PTRACE_INTERRUPT. Nothing was
- *                           being delivered, so resuming with 0 loses nothing.
- *   - event == 0         => a SIGNAL-DELIVERY-stop. WSTOPSIG is a signal that
- *                           the target was about to take, and it is delivered
- *                           by passing it back through PTRACE_CONT.
- * SIGTRAP is the one signal that needs a third question, since it is also how
- * our own trap and our own single-step report: PTRACE_GETSIGINFO's si_code
- * answers it. */
+ * Under PTRACE_SEIZE the cases are distinguishable without guessing:
+ *   - PTRACE_EVENT_STOP  => a group-stop, our own PTRACE_INTERRUPT, or a new
+ *                           task's attach-stop. Nothing is being delivered.
+ *                           (The kernel reports the last two with SIGTRAP and
+ *                           a real group-stop with the stopping signal —
+ *                           kernel/signal.c:do_jobctl_trap — which is what
+ *                           separates JOBCTL from INTERRUPT here.)
+ *   - event == 0         => a SIGNAL-DELIVERY-stop. WSTOPSIG is a signal the
+ *                           target was about to take, and PTRACE_CONT is what
+ *                           delivers it.
+ * SIGTRAP needs the extra questions because it is also how our own trap and our
+ * own single-step report. */
+static asmspy_ps_reason_t ps_classify(ps_ctx_t *c, pid_t w, int st) {
+    int sig = WSTOPSIG(st);
+    int event = (st >> 16) & 0xff;
+
+    if (event == PTRACE_EVENT_CLONE)
+        return ASMSPY_PS_R_CLONE;
+    if (event == PTRACE_EVENT_FORK || event == PTRACE_EVENT_VFORK)
+        return ASMSPY_PS_R_FORK;
+    if (event == PTRACE_EVENT_STOP)
+        return (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+                sig == SIGTTOU)
+                   ? ASMSPY_PS_R_JOBCTL
+                   : ASMSPY_PS_R_INTERRUPT;
+    if (event != 0)
+        /* An event-stop for an option we never set (EXEC, EXIT, SECCOMP). It
+         * cannot be a pending signal, so it has a disposition of its own rather
+         * than being swept into the SIGTRAP arm by accident. */
+        return ASMSPY_PS_R_EVENT_OTHER;
+    if (sig != SIGTRAP)
+        return ASMSPY_PS_R_SIGNAL;
+    if (c->stepping == w)
+        return ASMSPY_PS_R_OUR_STEP;
+    if (c->bp_base) {
+        /* `bp_base`, not `bp_planted`: a thread can be queued at base+1 with its
+         * SIGTRAP not yet consumed AFTER we have already restored the byte
+         * (during phase 3's step-and-rearm, and at the disarm). Collapsing the
+         * two made that thread's trap look like the TARGET'S OWN — si_code is
+         * SI_KERNEL either way — and re-injecting SIGTRAP into a process with no
+         * handler kills it. MEASURED: clone_victim died on every run. */
+        int at = ps_trap_where(w, c->bp_base);
+        if (at > 0)
+            return ASMSPY_PS_R_OUR_TRAP;
+        if (at < 0)
+            return ASMSPY_PS_R_TRAP_UNSURE;
+    }
+    return ps_sigtrap_is_app(w) ? ASMSPY_PS_R_APP_TRAP : ASMSPY_PS_R_STRAY_TRAP;
+}
+
+/* THE TABLE. 3 kinds x 11 reasons, every cell written, no `default:` anywhere —
+ * see the long note in asmspy_ptracesample.h for why this is a switch and not a
+ * chain of `if`s, and mk/cli.mk for the -Werror=switch/-Werror=switch-enum that
+ * turns a missing cell into a build failure.
+ *
+ * Read it as three policies:
+ *
+ *   OWN      the target's own thread. It is sampled, poked, stepped, and its
+ *            signals are re-injected — everything this module does, it does
+ *            here.
+ *   FOREIGN  a different process holding a copy-on-write copy of our byte.
+ *            RELEASE, at the first stop of any kind: restore its copy in its
+ *            own address space, rewind it off base+1, detach. Left as it is it
+ *            dies of a SIGTRAP with no tracer, the same fatality as an unseized
+ *            thread one address space over.
+ *   UNKNOWN  /proc would not say. It never poks, never releases, never arms and
+ *            never continues-with-a-signal. That last cell is the Critical this
+ *            redesign exists for: an unknown at OUR OWN int3 used to fail an
+ *            arrival gate that tested `kind == PS_OWN`, fall out of the bottom
+ *            of the chain, and be handed ps_cont(SIGTRAP) by a predicate that
+ *            reads SI_KERNEL — which is what our int3 reports.
+ */
+asmspy_ps_act_t asmspy_ps_decide(asmspy_ps_kind_t kind, asmspy_ps_reason_t why,
+                                 int tearing_down, int is_hold,
+                                 int collecting) {
+    switch (kind) {
+    /* ---------------------------------------------------------------- */
+    case ASMSPY_PS_OWN:
+        switch (why) {
+        case ASMSPY_PS_R_CLONE:
+            /* CORRECTION 2, the half that makes the option useful: table the
+             * child so the phase-3 int3 in the SHARED text has a tracer when the
+             * new task reaches it. */
+            return ASMSPY_PS_ACT_FOLLOW_CHILD;
+        case ASMSPY_PS_R_FORK:
+            /* A fork/vfork child is deliberately NOT tabled from the parent's
+             * event. It is a different PROCESS; it is classified from /proc and
+             * released at its OWN attach-stop, which it cannot run past. Tabling
+             * it here re-adds a child we may have ALREADY released — ptrace(2)
+             * does not order the two stops — and such an entry never leaves,
+             * because a detached task never reports again. MEASURED against
+             * forkhot_victim: 152 stale tids in a 900 ms window, after which
+             * every teardown walk paid PS_STOP_US per corpse. */
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_EVENT_OTHER:
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_JOBCTL:
+            /* PTRACE_LISTEN leaves the thread stopped — honouring the stop the
+             * user asked for — yet traced. Except during teardown: MEASURED,
+             * PTRACE_DETACH on a LISTENed tracee is refused ESRCH, so the retry
+             * re-LISTENed on every round and never converged. Then HOLD, and
+             * detach out of the group-stop, which leaves the stop in force. */
+            return tearing_down ? ASMSPY_PS_ACT_HOLD : ASMSPY_PS_ACT_LISTEN;
+        case ASMSPY_PS_R_INTERRUPT:
+            return (is_hold || tearing_down) ? ASMSPY_PS_ACT_HOLD
+                                             : ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_OUR_STEP:
+            return ASMSPY_PS_ACT_HOLD; /* phase 3 re-arms and resumes it */
+        case ASMSPY_PS_R_OUR_TRAP:
+            /* The arrival. Whether the byte is still planted decides nothing
+             * here — only whether someone is collecting. */
+            return collecting ? ASMSPY_PS_ACT_COLLECT
+                              : ASMSPY_PS_ACT_REWIND_RESUME;
+        case ASMSPY_PS_R_TRAP_UNSURE:
+            /* A11. We could not read its registers, so we cannot say whose trap
+             * this is. Swallowing costs a target that drives its own
+             * breakpoints one handler run; delivering ours costs it its life. */
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_APP_TRAP:
+            /* The TARGET'S own int3 / hardware breakpoint: delivered, so its
+             * signal machinery runs as it would untraced. */
+            return ASMSPY_PS_ACT_RESUME_SIGNAL;
+        case ASMSPY_PS_R_STRAY_TRAP:
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_SIGNAL:
+            return ASMSPY_PS_ACT_RESUME_SIGNAL; /* CORRECTION 1 */
+        }
+        break;
+    /* ---------------------------------------------------------------- */
+    case ASMSPY_PS_FOREIGN:
+        switch (why) {
+        case ASMSPY_PS_R_CLONE:
+        case ASMSPY_PS_R_FORK:
+        case ASMSPY_PS_R_EVENT_OTHER:
+        case ASMSPY_PS_R_JOBCTL:
+        case ASMSPY_PS_R_INTERRUPT:
+        case ASMSPY_PS_R_OUR_STEP:
+        case ASMSPY_PS_R_OUR_TRAP:
+        case ASMSPY_PS_R_TRAP_UNSURE:
+        case ASMSPY_PS_R_APP_TRAP:
+        case ASMSPY_PS_R_STRAY_TRAP:
+            /* Release at the FIRST stop of any kind, and before the job-control
+             * question in particular: a child's own attach-stop must never be
+             * mistaken for a stop the user asked for. A cloned grandchild and a
+             * grandchild fork are handled the same way, at their own stops.
+             * OUR_STEP and OUR_TRAP are unreachable for a foreign task by
+             * construction — we only step tasks we may poke — but "unreachable"
+             * is what the last four rounds each said about the cell that then
+             * killed something. */
+            return ASMSPY_PS_ACT_RELEASE;
+        case ASMSPY_PS_R_SIGNAL:
+            /* Its OWN signal, and PTRACE_DETACH takes one: delivering it as we
+             * let go is what would have happened had we never been here.
+             * Restarting from a signal-delivery-stop is the only ptrace-stop
+             * where injecting a signal is defined, which is exactly this cell. */
+            return ASMSPY_PS_ACT_RELEASE_SIGNAL;
+        }
+        break;
+    /* ---------------------------------------------------------------- */
+    case ASMSPY_PS_UNKNOWN:
+        switch (why) {
+        case ASMSPY_PS_R_CLONE:
+            /* Tabling the child is not a verb against a tracee, and it is what
+             * keeps the child traced. Its own kind is settled by its own /proc. */
+            return ASMSPY_PS_ACT_FOLLOW_CHILD;
+        case ASMSPY_PS_R_FORK:
+        case ASMSPY_PS_R_EVENT_OTHER:
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_JOBCTL:
+            return tearing_down ? ASMSPY_PS_ACT_HOLD : ASMSPY_PS_ACT_LISTEN;
+        case ASMSPY_PS_R_INTERRUPT:
+            return (is_hold || tearing_down) ? ASMSPY_PS_ACT_HOLD
+                                             : ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_OUR_STEP:
+            return ASMSPY_PS_ACT_HOLD; /* we never step one; hold if we did */
+        case ASMSPY_PS_R_OUR_TRAP:
+            /* THE CRITICAL THIS REDESIGN CLOSES. This task is stopped at a byte
+             * WE put there, and we do not know whose address space it is in.
+             *
+             * Not RESUME_SIGNAL: our int3 reports si_code == SI_KERNEL, so the
+             * old fall-through's "is it the app's own trap?" test said yes about
+             * OURS and delivered SIGTRAP to a process with no handler — and did
+             * not rewind, so even a swallowed one resumed at base+1, in the
+             * middle of an instruction.
+             *
+             * Not COLLECT: an unknown never confirms a candidate.
+             * Not RELEASE: an unknown is never handed back early; it stays
+             * traced, so it cannot meet a trap untraced.
+             * Not plain REWIND_RESUME: the byte is still in whatever text this
+             * task is executing, so it would trap again immediately, forever.
+             *
+             * CLEAR_AND_RESUME is the one disposition that is correct in all
+             * three address spaces at once, and it is only correct because
+             * ps_restore_copy READS BEFORE IT WRITES (A29): same mm — the
+             * candidate disarms early, arrivals lost, nobody dies; a private COW
+             * copy — exactly the restore that copy needed; a re-exec'd image
+             * where our byte is not there — nothing is written at all. */
+            return ASMSPY_PS_ACT_CLEAR_AND_RESUME;
+        case ASMSPY_PS_R_TRAP_UNSURE:
+        case ASMSPY_PS_R_APP_TRAP:
+        case ASMSPY_PS_R_STRAY_TRAP:
+        case ASMSPY_PS_R_SIGNAL:
+            /* SWALLOWED, and this is the one cell where the rule costs the
+             * target something real: a signal that was genuinely this task's own
+             * is destroyed, which is correction 1's own defect in miniature.
+             * The rule is kept anyway, because the alternative is a
+             * continue-with-a-signal for a task we cannot identify, and the
+             * whole class of defect this file has shipped four times is exactly
+             * that. It is bounded: an unknown exists only when /proc is
+             * unreadable for a task we hold, which also costs coverage, so the
+             * sampler is already in its degraded, confirm-nothing mode; and the
+             * leader (tid == pid) is never classified, so a single-threaded
+             * target has no unknowns at all. */
+            return ASMSPY_PS_ACT_RESUME_QUIET;
+        }
+        break;
+    }
+    /* Unreachable while `kind` and `why` hold enumerators, which is what
+     * -Werror=switch/-switch-enum enforces at every call site. HOLD is the only
+     * act that touches nothing: even the impossible tail may not act. */
+    return ASMSPY_PS_ACT_HOLD;
+}
+
+/* PERFORM one act. The only place in this file a stop turns into a syscall.
+ *
+ * Every index is re-resolved from the tid after anything that can pump, because
+ * ps_del swaps-with-last: an index captured before a pump can name a DIFFERENT
+ * task afterwards, or none. That is not hypothetical — the release path used to
+ * hold one across ps_detach_one. */
+static int ps_perform(ps_ctx_t *c, pid_t w, int sig, asmspy_ps_act_t act,
+                      pid_t hold, pid_t *arrived) {
+    switch (act) {
+    case ASMSPY_PS_ACT_HOLD:
+        /* No verb at all: the task stays in the stop we hold, and whoever asked
+         * for it (ps_ensure_stopped, ps_pump, the teardown) resumes or detaches
+         * it later. */
+        return w == hold ? PS_EV_STOPPED : PS_EV_NONE;
+
+    case ASMSPY_PS_ACT_RESUME_QUIET:
+        ps_cont(c, w, 0);
+        return PS_EV_NONE;
+
+    case ASMSPY_PS_ACT_RESUME_SIGNAL:
+        ps_cont(c, w, sig);
+        return PS_EV_NONE;
+
+    case ASMSPY_PS_ACT_REWIND_RESUME:
+        if (ps_rewind(w, c->bp_base) != 0)
+            return PS_EV_NONE; /* could not make it safe to run: HOLD it, and
+                                * let the teardown try again */
+        ps_cont(c, w, 0);
+        return PS_EV_NONE;
+
+    case ASMSPY_PS_ACT_COLLECT:
+        if (ps_rewind(w, c->bp_base) != 0)
+            return PS_EV_NONE; /* as above: never report an arrival we could not
+                                * make resumable — phase 3 would step it from
+                                * base+1, mid-instruction */
+        c->bp_arrived = 1; /* this entry is live — see ps_ctx_t::bp_arrived */
+        if (arrived)
+            *arrived = w;
+        return PS_EV_ARRIVED;
+
+    case ASMSPY_PS_ACT_CLEAR_AND_RESUME:
+        /* Read-guarded: writes only where OUR byte actually is. See the
+         * ASMSPY_PS_UNKNOWN/OUR_TRAP cell. bp_planted is deliberately not
+         * cleared — we do not know whether this cleared the target's own text or
+         * a private copy of it, and a redundant restore later is free while a
+         * skipped one leaks. */
+        ps_restore_copy(w, c->bp_base, c->bp_orig);
+        if (ps_rewind(w, c->bp_base) != 0)
+            return PS_EV_NONE;
+        ps_cont(c, w, 0);
+        return PS_EV_NONE;
+
+    case ASMSPY_PS_ACT_FOLLOW_CHILD: {
+        unsigned long child = 0;
+        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child) {
+            /* Tabled HERE so it is followed even if its own attach-stop is
+             * delayed. Do NOT resume the child from here — its stop surfaces in
+             * this same loop and is handled there. */
+            if (ps_add(c, (pid_t)child) < 0)
+                c->covered = 0; /* a task of the target we cannot follow */
+        }
+        ps_cont(c, w, 0);
+        return PS_EV_NONE;
+    }
+
+    case ASMSPY_PS_ACT_LISTEN: {
+        int i = ps_find(c, w);
+        if (i < 0)
+            return PS_EV_NONE;
+        if (ptrace(PTRACE_LISTEN, w, NULL, NULL) == 0) {
+            /* `listening`, NOT `stopped`: a LISTENed tracee is in group-stop,
+             * which is not a ptrace-stop we hold, so PEEK/POKE/CONT on it all
+             * fail ESRCH. See ps_thr_t. */
+            c->t[i].listening = 1;
+            c->t[i].stopped = 0;
+            return PS_EV_NONE;
+        }
+        /* LISTEN refused: an ordinary resume is wrong for job control but
+         * INFINITELY better than a thread nothing ever resumes, which is the
+         * only other option here. */
+        ps_cont(c, w, 0);
+        return PS_EV_NONE;
+    }
+
+    case ASMSPY_PS_ACT_RELEASE:
+    case ASMSPY_PS_ACT_RELEASE_SIGNAL: {
+        int i = ps_find(c, w);
+        if (i < 0)
+            return PS_EV_NONE;
+        uint64_t cb = c->t[i].copied_bp;
+        long co = c->t[i].copied_orig;
+        /* Restore whatever copy of ours it holds, rewind it off base+1, and hand
+         * it back. Both steps are CHECKED, and the task leaves the table only
+         * once it is provably no longer ours: an earlier version discarded
+         * PTRACE_DETACH's result and ps_del'd regardless, which drops a
+         * possibly-still-seized task out of the table — after which nothing
+         * pumps it and teardown never retries it. A permanently frozen child,
+         * from a return value nobody read. */
+        if (ps_restore_copy(w, cb, co) != 0)
+            return PS_EV_NONE; /* keep it TRACED (so its trap is ours to absorb)
+                                * and stopped; the teardown retries */
+        ps_rewind(w, cb ? cb : c->bp_base);
+        if (ps_detach_one(c, w,
+                          act == ASMSPY_PS_ACT_RELEASE_SIGNAL ? sig : 0) == 0)
+            ps_del(c, w);
+        else {
+            /* still ours: teardown retries. Re-find, because ps_detach_one
+             * pumps and the pump can ps_del another task into this slot. */
+            i = ps_find(c, w);
+            if (i >= 0)
+                c->t[i].stopped = 1;
+        }
+        return PS_EV_NONE;
+    }
+    }
+    /* Unreachable while `act` holds an enumerator. No verb here either. */
+    return PS_EV_NONE;
+}
+
+/* A stop from a task we could not TABLE, because the physical slots are
+ * exhausted (PS_TABLE_SLOTS: the cap plus its headroom, i.e. a >528-task target
+ * that grew past both inside one window).
+ *
+ * This is the ONE disposition that is not in asmspy_ps_decide's table, and it is
+ * outside it for a reason that is itself the rule: with no table entry there is
+ * nowhere to record which address space the task is in, so it HAS no kind. What
+ * is left is the only action that is safe without one. `covered` is already
+ * false, so no FURTHER candidate will arm — but the one armed RIGHT NOW still
+ * is, and releasing an untraced task into an armed address space is the death
+ * described at PS_MAX_THREADS. */
+static int ps_release_untabled(ps_ctx_t *c, pid_t w) {
+    if (c->bp_base) {
+        /* READ BEFORE WRITING (A29), which this path used to be the last place
+         * not to do. It POKETEXTed bp_orig into a task whose address space it
+         * had just finished saying it could not identify — so if that task had
+         * execve'd, or was simply a different image, those were eight bytes of
+         * someone else's text, written on the assumption that a byte we had not
+         * looked at was ours. ps_restore_copy needs no table entry, so nothing
+         * ever justified the raw poke here. Same mm (a thread): the candidate is
+         * disarmed early — arrivals lost, nobody dies. Different mm (a fork
+         * child): exactly the restore it needed. bp_planted is deliberately NOT
+         * cleared, because we do not know which case this was, and a redundant
+         * restore later is free while a skipped one leaks. */
+        ps_restore_copy(w, c->bp_base, c->bp_orig);
+        ps_rewind(w, c->bp_base);
+    }
+    /* AUDIT NOTE (A26): the ONLY PTRACE_DETACH in this file whose result is not
+     * checked and retried, and it is not checked because there is nowhere to
+     * record the task — ps_detach_one works through the table. A failure here
+     * leaves a task seized with nothing pumping it. Left as a documented
+     * residual rather than closed with an untestable second overflow list;
+     * every other release path in the file is checked. */
+    ptrace(PTRACE_DETACH, w, NULL, NULL);
+    return PS_EV_NONE;
+}
+
+/* Consume ONE waitpid result: table it, classify it, decide, act. `hold` is the
+ * tid whose stop the caller wants kept (0 = none).
+ *
+ * There is deliberately no logic here beyond the three calls and the two facts
+ * that precede them. Everything that used to be a chain of `if`s with a
+ * fall-through tail — the tail every one of this module's four Criticals landed
+ * in — is now a cell in a total table. */
 static int ps_dispatch(ps_ctx_t *c, pid_t w, int st, pid_t hold,
                        pid_t *arrived) {
     if (WIFEXITED(st) || WIFSIGNALED(st)) {
+        /* Not a stop: no address space, no kind, no verb owed. */
         ps_del(c, w);
         return PS_EV_GONE;
     }
     if (!WIFSTOPPED(st))
         return PS_EV_NONE;
 
-    int sig = WSTOPSIG(st);
-    int event = (st >> 16) & 0xff;
-
     /* A followed clone's very first stop is where we learn its tid. */
     int idx = ps_add(c, w);
-    if (idx < 0) {
-        /* Physically out of slots. `covered` is already false, so no FURTHER
-         * candidate will arm — but the one armed RIGHT NOW still is, and
-         * releasing an untraced task into an armed address space is the death
-         * described at PS_MAX_THREADS. We cannot table it, so we cannot protect
-         * it; what we CAN do is take the trap out of whichever address space it
-         * is about to run in. Same mm (a thread): the candidate is disarmed
-         * early — arrivals lost, nobody dies. Different mm (a fork child): this
-         * is exactly the restore it needed. bp_planted is deliberately NOT
-         * cleared, because we do not know which case this was, and a redundant
-         * restore later is free while a skipped one leaks. */
-        if (c->bp_base) {
-            ptrace(PTRACE_POKETEXT, w, (void *)(uintptr_t)c->bp_base,
-                   (void *)(uintptr_t)c->bp_orig);
-            ps_rewind(w, c->bp_base);
-        }
-        /* AUDIT NOTE (A26): the ONLY PTRACE_DETACH in this file whose result is
-         * not checked and retried, and it is not checked because there is
-         * nowhere to record the task — the table is physically full, so
-         * ps_detach_one (which works through the table) cannot be used. A
-         * failure here leaves a task seized with nothing pumping it. Reaching
-         * this needs more than PS_TABLE_SLOTS tasks, i.e. a >528-task target
-         * that grew past the cap AND past the headroom inside one window. Left
-         * as a documented residual rather than closed with an untestable second
-         * overflow list; every other release path in the file is checked. */
-        ptrace(PTRACE_DETACH, w, NULL, NULL);
-        return PS_EV_NONE;
-    }
+    if (idx < 0)
+        return ps_release_untabled(c, w);
 
-    /* A FORK CHILD holding a copy-on-write copy of our trap byte. Release it the
-     * moment we can touch it: restore ITS copy in ITS address space, rewind it
-     * off base+1, and detach. Left as it is, it dies of a SIGTRAP with no
-     * tracer — the same fatality as an unseized thread, one address space over.
-     * This runs BEFORE the job-control branch on purpose: a child's own attach
-     * stop must not be mistaken for a stop the user asked for. */
-    if (c->t[idx].kind == PS_FOREIGN) {
-        /* Restore whatever copy of ours it holds, rewind it off base+1, and
-         * hand it back. Both steps are CHECKED, and the task is dropped from
-         * the table only once it is provably no longer ours: the previous
-         * version discarded PTRACE_DETACH's result and ps_del'd regardless,
-         * which drops a possibly-still-seized task out of the table — after
-         * which nothing pumps it and teardown never retries it. A permanently
-         * frozen child, from a return value nobody read. */
-        uint64_t cb = c->t[idx].copied_bp;
-        if (ps_restore_copy(w, cb, c->t[idx].copied_orig) == 0) {
-            ps_rewind(w, cb ? cb : c->bp_base);
-            if (ps_detach_one(c, w) == 0)
-                ps_del(c, w);
-            else
-                c->t[idx].stopped = 1; /* still ours: teardown retries */
-        } else {
-            /* Could not clean it here; keep it TRACED (so its trap is ours to
-             * absorb) and try again at teardown. */
-            c->t[idx].stopped = 1;
-        }
-        return PS_EV_NONE;
-    }
-    /* PS_UNKNOWN falls through deliberately: it is never released early, so it
-     * cannot meet the trap untraced, and ps_add has already dropped `covered` so
-     * nothing further is armed. It is handed back at teardown like any thread. */
-
-    if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
-        event == PTRACE_EVENT_VFORK) {
-        c->t[idx].stopped = 1;
-        /* CORRECTION 2, the half that makes the option useful: table the child
-         * so it is followed and, above all, so the phase-3 int3 in the SHARED
-         * text has a tracer when the new task reaches it. Do NOT resume the
-         * child here — its own attach-stop has not necessarily arrived yet; it
-         * surfaces in this same loop and is handled there. */
-        unsigned long child = 0;
-        if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child &&
-            event == PTRACE_EVENT_CLONE) {
-            /* A THREAD, tabled HERE so it is followed even if its own
-             * attach-stop is delayed. */
-            if (ps_add(c, (pid_t)child) < 0)
-                c->covered = 0; /* a task of the target we cannot follow */
-        }
-        /* A FORK/VFORK child is deliberately NOT tabled here. It is a different
-         * PROCESS; it is classified from /proc and released at its OWN
-         * attach-stop, which it cannot run past. Tabling it here re-adds a child
-         * we may have ALREADY released — ptrace(2) does not order the two stops
-         * — and such an entry never leaves, because a detached task never
-         * reports again. MEASURED against forkhot_victim: the table reached 152
-         * stale tids in a 900 ms window, after which every teardown walk paid
-         * PS_STOP_US per corpse and the run took minutes. */
-        ps_cont(c, w, 0);
-        return PS_EV_NONE;
-    }
-
-    if (event == PTRACE_EVENT_STOP) {
-        /* Job control (^Z, tty stops). PTRACE_LISTEN leaves the thread stopped
-         * — honouring the stop the user asked for — yet traced; PTRACE_CONT
-         * here would resume a process that is supposed to be suspended.
-         *
-         * `listening`, NOT `stopped`: a LISTENed tracee is in group-stop, which
-         * is not a ptrace-stop we hold, so PEEK/POKE/CONT on it all fail ESRCH.
-         * See ps_thr_t. */
-        if ((sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
-             sig == SIGTTOU) &&
-            !c->tearing_down) {
-            if (ptrace(PTRACE_LISTEN, w, NULL, NULL) == 0) {
-                c->t[idx].listening = 1;
-                c->t[idx].stopped = 0;
-            } else {
-                /* LISTEN refused: an ordinary held stop is wrong for job
-                 * control but INFINITELY better than a thread nothing ever
-                 * resumes, which is the only other option here. */
-                c->t[idx].stopped = 1;
-                ps_cont(c, w, 0);
-            }
-            return PS_EV_NONE;
-        }
-        c->t[idx].stopped = 1;
-        c->t[idx].listening = 0;
-        if (w == hold)
-            return PS_EV_STOPPED; /* our PTRACE_INTERRUPT landed */
-        if (c->tearing_down)
-            /* Teardown suppresses PTRACE_LISTEN so the detach can converge, so a
-             * group-stop for a thread we are not waiting on arrives HERE — and
-             * resuming it would restart a process the user deliberately
-             * suspended, which is precisely what the LISTEN branch exists to
-             * prevent. Hold it instead: ps_detach_all detaches from the
-             * group-stop, which leaves the stop in force. */
-            return PS_EV_NONE;
-        ps_cont(c, w, 0);
-        return PS_EV_NONE;
-    }
-
+    /* We hold a ptrace-stop for this task from here until an act ends it. Even a
+     * group-stop reported as an event-stop is one we hold — that is why
+     * PTRACE_LISTEN works on it — and ASMSPY_PS_ACT_LISTEN is what hands it
+     * back. */
     c->t[idx].stopped = 1;
     c->t[idx].listening = 0;
 
-    if (sig == SIGTRAP) {
-        /* our own PTRACE_SINGLESTEP over the entry (phase 3's step-and-rearm) */
-        if (c->stepping == w)
-            return PS_EV_STOPPED;
-        /* OUR entry trap, identified by the pc — and ps_rewind has just made the
-         * thread safe to run again. Whether the byte is still planted decides
-         * only what happens NEXT: a caller collecting arrivals takes it, and
-         * anyone else releases it. What must never happen is falling through to
-         * the re-injection below, because an int3 reports si_code == SI_KERNEL
-         * whoever planted it, and a target with no SIGTRAP handler dies of ours.
-         * MEASURED: that is exactly how clone_victim died. */
-        /* `!foreign` is load-bearing, not defensive. A fork child's COW copy of
-         * our int3 traps at the SAME address, so without this its SIGTRAP is
-         * indistinguishable from an arrival of the target — and phase 3 would
-         * then count it, restore through it, and RE-PLANT through it, into a
-         * different address space. It is released by the foreign branch above
-         * instead. (A foreign task can only reach here at all if it was
-         * classified after its first stop, which ps_add now prevents; the guard
-         * is what makes that a design rather than a race.) */
-        if (c->bp_base && c->t[idx].kind == PS_OWN) {
-            int at = ps_rewind(w, c->bp_base);
-            if (at > 0) {
-                if (arrived) {
-                    *arrived = w;
-                    return PS_EV_ARRIVED;
-                }
-                ps_cont(c, w, 0);
-                return PS_EV_NONE;
-            }
-            if (at < 0) {
-                /* We could not read its registers, so we cannot say whose trap
-                 * this is — and the fall-through below would decide "the
-                 * target's own" and DELIVER it. Swallowing costs a target that
-                 * drives its own breakpoints one handler run; delivering ours
-                 * costs it its life. */
-                ps_cont(c, w, 0);
-                return PS_EV_NONE;
-            }
-        }
-        /* The TARGET'S own int3 / hardware breakpoint: delivered, so its signal
-         * machinery runs as it would untraced. A stray ptrace-synthesised trap
-         * (SI_USER/SI_TKILL) is swallowed. */
-        ps_cont(c, w, ps_sigtrap_is_app(w) ? SIGTRAP : 0);
-        return PS_EV_NONE;
-    }
-
-    /* CORRECTION 1: a real signal, delivered. */
-    ps_cont(c, w, sig);
-    return PS_EV_NONE;
+    asmspy_ps_kind_t kind = c->t[idx].kind;
+    asmspy_ps_reason_t why = ps_classify(c, w, st);
+    asmspy_ps_act_t act = asmspy_ps_decide(kind, why, c->tearing_down,
+                                           w == hold, arrived != NULL);
+    return ps_perform(c, w, WSTOPSIG(st), act, hold, arrived);
 }
 
 /* Pump events until `hold` stops, a thread arrives at the armed entry, `hold`
@@ -890,7 +1227,7 @@ static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid) {
     while (ps_now_us() - t0 < PS_STOP_US) {
         /* `arrived` NULL: this is not an arrival collector. A thread that trips
          * the entry while we are getting `tid` stopped is rewound and RELEASED
-         * inside ps_dispatch rather than parked here. */
+         * inside ps_perform rather than parked here. */
         ps_pump(c, tid, PS_INTR_US, PS_SPIN_US, NULL);
         i = ps_find(c, tid);
         if (i < 0)
@@ -898,7 +1235,7 @@ static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid) {
         if (c->t[i].stopped)
             return 0;
         /* The interrupt can be absorbed by a concurrent signal-delivery-stop
-         * (which ps_dispatch consumed and re-injected); re-issue it. */
+         * (which the pipeline consumed and re-injected); re-issue it. */
         ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
     }
     return -1;
@@ -966,9 +1303,15 @@ static int ps_disarm(ps_ctx_t *c) {
  * thread stayed SEIZED after we returned, with the pump gone. Its next signal
  * then becomes a signal-delivery-stop nobody will ever consume and it hangs
  * PERMANENTLY. Returns 0 (detached, or it exited), -1 (still ours, and stuck). */
-static int ps_detach_one(ps_ctx_t *c, pid_t tid) {
+static int ps_detach_one(ps_ctx_t *c, pid_t tid, int sig) {
     for (int attempt = 0; attempt < PS_DETACH_TRIES; attempt++) {
-        if (ptrace(PTRACE_DETACH, tid, NULL, NULL) == 0)
+        /* `sig` on the FIRST attempt only, and it is nonzero only for
+         * ASMSPY_PS_ACT_RELEASE_SIGNAL — i.e. only when the stop we are leaving
+         * is a signal-delivery-stop, the one ptrace-stop where restarting with a
+         * signal is defined. A retry has already interrupted the tracee out of
+         * that stop, so injecting there would be fabricating a delivery. */
+        if (ptrace(PTRACE_DETACH, tid, NULL,
+                   (void *)(uintptr_t)(attempt == 0 ? sig : 0)) == 0)
             return 0;
         if (ps_ensure_stopped(c, tid) != 0)
             /* ps_ensure_stopped removes a vanished tid; anything else means we
@@ -996,7 +1339,7 @@ static int ps_detach_one(ps_ctx_t *c, pid_t tid) {
  *
  * PTRACE_O_TRACEFORK/VFORK are set for the SAME reason one address space over:
  * a child forked inside an armed window takes a copy-on-write copy of the trap
- * byte and dies of it. They were previously unset while ps_dispatch carried
+ * byte and dies of it. They were previously unset while the classifier carried
  * arms for both events, so the code READ as though forks were handled while the
  * arms were unreachable — a fork-per-request server is a realistic target and
  * the armed windows total ~800 ms.
@@ -1097,8 +1440,14 @@ static int ps_detach_all(ps_ctx_t *c) {
      * set; ps_unplant then has nobody to poke through, reports a leak, and the
      * whole call comes back "could not be handed back clean" — about a process
      * that simply ended, and whose text died with it. Two different facts, and
-     * an operator sent to look for a corrupted process finds nothing. */
-    if (c->n == 0) {
+     * an operator sent to look for a corrupted process finds nothing.
+     *
+     * `covered &&`, because an empty table only means "the target exited" if we
+     * held the WHOLE thread set. Without coverage it can equally mean we dropped
+     * the tasks we knew about while others we never seized are still running —
+     * with our byte possibly still in their text. That is the one case that must
+     * NOT come back clean, and it is the reading the plain `n == 0` gave it. */
+    if (c->covered && c->n == 0) {
         c->bp_base = 0;
         c->bp_planted = 0;
         return 0;
@@ -1130,7 +1479,7 @@ static int ps_detach_all(ps_ctx_t *c) {
     for (int i = 0; i < c->n; i++)
         snap[n++] = c->t[i].tid;
     for (int i = 0; i < n; i++)
-        if (ps_detach_one(c, snap[i]) != 0)
+        if (ps_detach_one(c, snap[i], 0) != 0)
             bad = 1;
 
     c->bp_base = 0;
@@ -1169,7 +1518,7 @@ static void ps_hit(ps_sym_hit_t *h, int *nh, uint64_t start) {
  * coverage, not cost.
  *
  * An interrupt that does not land within PS_INTR_US is dropped rather than
- * retried: it was absorbed by a signal-delivery-stop that ps_dispatch consumed
+ * retried: it was absorbed by a signal-delivery-stop that the pipeline consumed
  * and re-injected, and a statistical sampler owes no particular thread a
  * reading. Returns the number of distinct functions observed. */
 static int ps_phase1(ps_ctx_t *c, const asmspy_symtab_t *syms, long window_ms,
@@ -1192,7 +1541,7 @@ static int ps_phase1(ps_ctx_t *c, const asmspy_symtab_t *syms, long window_ms,
              * folding its pc into this target's histogram would be a lie. Never
              * a LISTENed one either — it is suspended by the user's job control,
              * not by us, and interrupting it would undo that. */
-            if (c->t[i].kind != PS_OWN || c->t[i].listening)
+            if (!ps_kind_may_sample(c->t[i].kind) || c->t[i].listening)
                 continue;
             if (ps_thread_executing(c->pid, c->t[i].tid)) {
                 tid = c->t[i].tid;
@@ -1215,7 +1564,7 @@ static int ps_phase1(ps_ctx_t *c, const asmspy_symtab_t *syms, long window_ms,
                         ps_hit(hits, &nh, s->addr);
                     (*taken)++;
                 }
-                ps_cont(c, tid, 0); /* ours: ps_dispatch classified it */
+                ps_cont(c, tid, 0); /* ours: the pipeline classified it */
             }
         }
 
@@ -1352,6 +1701,10 @@ static void ps_phase2(ps_ctx_t *c, const asmspy_symtab_t *syms,
  * has. The producer arms an int3 at the region entry and waits; "will that fire
  * promptly" is not predicted here, it is MEASURED, with the same primitive. */
 static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
+    c->bp_arrived = 0; /* a NEW candidate: nothing has reached this one yet. Not
+                        * cleared by ps_plant, because phase 3 re-plants the SAME
+                        * address after every arrival and the fact being tracked
+                        * is about the ENTRY, not about one planting of it. */
     ps_stop_all(c);
     if (c->n == 0)
         return;
@@ -1391,13 +1744,26 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
         }
         cd->arrivals++;
 
-        /* `who` is stopped AT base (ps_dispatch rewound it) with the trap byte
-         * still planted. Take the byte out, step ONE instruction, put it back,
-         * release — re-planting BEFORE the step would trap it again at the same
-         * pc, forever. `who` is stopped, so it can restore its own text. */
+        /* `who` is stopped AT base (ps_perform rewound it) with the trap byte
+         * still planted, and it is ASMSPY_PS_OWN — only that cell of the table
+         * yields an arrival, so "can this task poke the target's text" is
+         * answered by construction here rather than by a second check.
+         *
+         * Take the byte out, step ONE instruction, put it back, release —
+         * re-planting BEFORE the step would trap it again at the same pc,
+         * forever.
+         *
+         * CHECKED, and bp_planted is cleared only once the byte is provably out.
+         * The old order cleared the flag FIRST and discarded this poke's return:
+         * a failure left the trap in the text while the bookkeeping said it was
+         * out, so ps_unplant short-circuited, ps_disarm cleared bp_base and
+         * reported clean, and the target died on its next arrival with the
+         * sampler reporting success. That is C2 exactly, one function over. */
+        if (ptrace(PTRACE_POKETEXT, who, (void *)(uintptr_t)cd->addr,
+                   (void *)(uintptr_t)c->bp_orig) != 0)
+            break; /* leave bp_planted set: ps_disarm below owns the retry, and
+                    * reports a leak if it cannot get the byte out either */
         c->bp_planted = 0;
-        ptrace(PTRACE_POKETEXT, who, (void *)(uintptr_t)cd->addr,
-               (void *)(uintptr_t)c->bp_orig);
         if (cd->arrivals < ASMSPY_PS_HIT_BUDGET) {
             c->stepping = who;
             int i = ps_find(c, who);
@@ -1421,7 +1787,7 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
             if (!ps_can_poke(&c->t[wi]) || ps_plant(c, who, cd->addr) != 0)
                 break;
         }
-        ps_cont(c, who, 0); /* ours: ps_dispatch classified this stop */
+        ps_cont(c, who, 0); /* ours: the pipeline classified this stop */
     }
 
     /* Disarm unconditionally, from every exit above — including the ones that
