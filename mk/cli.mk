@@ -83,7 +83,8 @@ ASMSPY_DATAFLOW_OBJS := $(BUILD)/dataflow_ptrace.o $(BUILD)/dataflow.o \
 #
 # This is PACKAGING, not a boundary change. The desktop GUI still never links it
 # (D9) — it reaches the engines only through the `asmspy --serve` subprocess.
-ASMSPY_LIB_OBJS := $(BUILD)/asmspy_engine.o $(BUILD)/asmspy_proc.o
+ASMSPY_LIB_OBJS := $(BUILD)/asmspy_engine.o $(BUILD)/asmspy_proc.o \
+                   $(BUILD)/asmspy_ptracesample.o
 ASMSPY_LIB      := $(BUILD)/libasmspy.a
 
 $(ASMSPY_LIB): $(ASMSPY_LIB_OBJS)
@@ -121,7 +122,14 @@ $(BUILD)/pic/asmspy_proc.o: cli/asmspy_proc.c cli/libasmspy.h \
                             $(BUILD)/.build-flags | $(BUILD)/pic
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
 
+$(BUILD)/pic/asmspy_ptracesample.o: cli/asmspy_ptracesample.c \
+                                    cli/asmspy_ptracesample.h cli/libasmspy.h \
+                                    cli/asmspy_arch.h cli/asmspy_autoregion.h \
+                                    $(BUILD)/.build-flags | $(BUILD)/pic
+	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
+
 ASMSPY_SHLIB_OBJS := $(BUILD)/pic/asmspy_engine.o $(BUILD)/pic/asmspy_proc.o \
+    $(BUILD)/pic/asmspy_ptracesample.o \
     $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)) \
     $(BUILD)/pic/disasm.o $(BUILD)/pic/trace.o \
     $(BUILD)/pic/dataflow.o $(BUILD)/pic/dataflow_operands.o \
@@ -246,6 +254,17 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 # real because IBS-Op samples retired ops — attach_victim's 5Hz hotfn yields ZERO
 # samples in a 400ms window (measured). Compiles via the cli/ .o pattern rule.
 $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# sigload_victim backs the PERF-FREE picker's signal-fidelity check, and it is
+# the only victim here that is busy AND signal-driven. auto_victim cannot do its
+# job: MEASURED, an unconditional PTRACE_CONT(sig=0) in the residency sampler
+# destroyed 89% of a 100 Hz ITIMER_REAL target's SIGALRMs and collapsed its
+# throughput ~99%, while costing a signal-FREE spinner about 1% — i.e. the most
+# destructive thing that sampler can do to a process it does not own is
+# completely invisible against every other victim in this tree. Compiles via the
+# cli/ .o pattern rule.
+$(BUILD)/sigload_victim: $(BUILD)/sigload_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # scenes_victim backs the documented 3D-scene screenshots
@@ -456,6 +475,29 @@ $(BUILD)/test_treefilter: cli/test_treefilter.c cli/asmspy_treefilter.h \
 $(BUILD)/test_autoregion: cli/test_autoregion.c cli/asmspy_autoregion.h \
                           cli/asmspy.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_autoregion.c
+
+# test_ptracesample — the PERF-FREE region picker (cli/asmspy_ptracesample.c).
+# Unlike test_autoregion, which covers the pure RANKING, this one has to be
+# live: the thing under test is what ptrace and /proc can observe about a
+# running process, and every one of its checks pins a defect a prototype
+# actually shipped (residency picks the un-re-enterable function; an
+# unconditional PTRACE_CONT(sig=0) eats the target's signals; a thread cloned
+# after the seize reaches the shared int3 untraced and dies). It spawns its own
+# three victims.
+#
+# Links the sampler TU + the resolver TU (asmspy_proc.o, for asmspy_symtab_*)
+# + disasm.o (asmtest_disas_call_target, phase 2). NOT the engine and NOT
+# ncurses — the picker is meant to stand on its own, and this link line is what
+# keeps it that way. -lstdc++ supplies asmspy_proc.o's __cxa_demangle.
+$(BUILD)/test_ptracesample: cli/test_ptracesample.c \
+                            $(BUILD)/asmspy_ptracesample.o \
+                            $(BUILD)/asmspy_proc.o $(BUILD)/disasm.o \
+                            $(BUILD)/trace.o \
+                            cli/asmspy_ptracesample.h cli/libasmspy.h \
+                            | $(BUILD) $(BUILD)/asmspy_syscall_names.inc
+	$(CC) $(CFLAGS) -Icli -I$(BUILD) -pthread cli/test_ptracesample.c \
+	  $(BUILD)/asmspy_ptracesample.o $(BUILD)/asmspy_proc.o \
+	  $(BUILD)/disasm.o $(BUILD)/trace.o $(CAPSTONE_LIBS) -lstdc++ -o $@
 
 # test_arch — headless unit test for the register/step/watch arch seam
 # (cli/asmspy_arch.h): the per-arch register accessors (pc/sp/ret/lr/syscall-nr)
@@ -671,10 +713,11 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(BUILD)/scenes_victim \
+           $(BUILD)/sigload_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
-           $(BUILD)/test_procinfo \
+           $(BUILD)/test_ptracesample $(BUILD)/test_procinfo \
            $(BUILD)/test_ghash $(BUILD)/test_sha256 $(BUILD)/test_asmtrace \
            $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \

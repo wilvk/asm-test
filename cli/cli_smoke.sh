@@ -39,6 +39,14 @@ echo "--- test_symtab (symbol reverse lookup: gaps, zero-size, boundaries) ---"
 # (Built by the cli-smoke prereqs; it was previously built but never RUN.)
 echo "--- test_autoregion (--auto region picker + hot-edge drill-in decision) ---"
 "$BUILD/test_autoregion" || fail "test_autoregion"
+# The PERF-FREE picker (asmspy_ptrace_sample). This one CANNOT be pure: what is
+# under test is what ptrace + /proc can observe about a live process, on a host
+# where perf_event_open is refused (perf_event_paranoid=4 is Ubuntu's
+# compiled-in default). It spawns its own victims — auto_victim for the
+# residency-vs-entry disagreement, sigload_victim for signal re-injection,
+# clone_victim for post-seize thread following.
+echo "--- test_ptracesample (perf-free region picker: residency -> calls -> int3) ---"
+"$BUILD/test_ptracesample" "$BUILD" || fail "test_ptracesample"
 # libasmspy stands on its own: this binary links the engine LIBRARY and neither
 # asmspy.o nor ncurses, so it is the only check that would catch the engine
 # quietly depending on the CLI front end. It spawns its own victim.

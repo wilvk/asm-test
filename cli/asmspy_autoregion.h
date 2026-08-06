@@ -68,16 +68,17 @@
  * — an ordering dependency the desktop's vm_compat.cpp had to pin by hand. */
 #include "libasmspy.h"
 
-/* One ranked candidate region: a function whose ENTRY was observed being branched
- * to. `addr`/`size` are what the data-flow engine takes as (base, len). */
-typedef struct {
-    uint64_t addr;               /* the symbol's entry == the region base     */
-    uint64_t size;               /* its extent == the region len (always >0)  */
-    const char *name;            /* borrowed from the symtab                  */
-    const char *module;          /* borrowed; may be NULL                     */
-    unsigned long long arrivals; /* entry samples, SUMMED over all call sites */
-    unsigned sites;              /* distinct call sites seen arriving here    */
-} asmspy_autocand_t;
+/* asmspy_autocand_t — the ranked candidate region — now lives in libasmspy.h
+ * (included above), NOT here. It moved when the perf-free ptrace picker landed:
+ * that sampler is a real .c with its entry point declared in libasmspy.h beside
+ * the resolver whose symbols it ranks, and it RETURNS these. Declaring it there
+ * while the type lived here would have made libasmspy.h include this header,
+ * which already includes libasmspy.h — a cycle that compiles only when the
+ * includer happens to pull one of the two in first. That exact ordering
+ * dependency is the one the include note above records having already been bitten
+ * by once (desktop/src/vm_compat.cpp had to pin it by hand), so the type went to
+ * the header everything else here already depends on rather than the cycle being
+ * re-created deliberately. */
 
 /* What the caller must tell us about an address. Passed as a callback so this
  * header stays pure: the real resolver (asmspy_resolve: ELF -> JIT -> refresh)

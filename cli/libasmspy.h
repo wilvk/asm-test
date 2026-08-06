@@ -388,6 +388,88 @@ int asmspy_jitmap_refresh(asmspy_jitmap_t *j);
 const asmspy_sym_t *asmspy_jitmap_at(const asmspy_jitmap_t *j, uint64_t addr);
 void asmspy_jitmap_free(asmspy_jitmap_t *j);
 
+/* ------------------------------------------------------------------ */
+/* --auto region candidates + the perf-free ptrace picker              */
+/*                                                                     */
+/* One ranked candidate region: a function whose ENTRY was observed    */
+/* being arrived at. `addr`/`size` are what the data-flow engine takes */
+/* as (base, len). Produced by all three --auto samplers — the AMD     */
+/* IBS-Op entry-edge rank, the software-clock residency rank (both     */
+/* cli/asmspy_autoregion.h, pure) and asmspy_ptrace_sample below — so  */
+/* the walk that consumes them (asmspy_autoregion_walk) does not need  */
+/* to know which one it is holding.                                    */
+/*                                                                     */
+/* It lives HERE rather than in asmspy_autoregion.h because the ptrace */
+/* picker's entry point is declared in this header and returns these;  */
+/* the other way round is a header cycle (asmspy_autoregion.h already  */
+/* includes this file for asmspy_sample_edge_t).                        */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    uint64_t addr;               /* the symbol's entry == the region base     */
+    uint64_t size;               /* its extent == the region len (always >0)  */
+    const char *name;            /* borrowed from the symtab                  */
+    const char *module;          /* borrowed; may be NULL                     */
+    unsigned long long arrivals; /* entry samples, SUMMED over all call sites */
+    /* How many distinct CALL SITES name this entry. Each producer fills it from
+     * the evidence it actually has: the IBS entry-edge rank counts sampled
+     * arriving edges; the ptrace picker counts DIRECT call instructions found
+     * in the bodies it watched running (0 means the candidate came from
+     * residency alone). The software-clock residency rank has no call-site
+     * evidence at all and reuses the field for distinct sampled offsets inside
+     * the body — see asmspy_autoregion.h, which documents that reuse. */
+    unsigned sites;
+    /* Microseconds from arming this candidate's entry breakpoint to the FIRST
+     * arrival — the ptrace picker's RANKING KEY, and 0 from the two pure ranks
+     * above, which have no such observation to offer.
+     *
+     * It is a field rather than an implementation detail because a censored
+     * count TIES: with a per-candidate hit budget, measured, a tiny hot callee
+     * (50 arrivals) tied exactly with libc's sched_yield (50 arrivals), and the
+     * only tie-break left was residency — the metric the entry rule exists to
+     * replace. Time-to-first separated them 105 us vs 6125 us. A consumer that
+     * re-sorted this list by `arrivals` would therefore throw the answer away,
+     * so the key it was actually ranked on travels with it. */
+    unsigned long long first_us;
+} asmspy_autocand_t;
+
+/* Sample a target's hot ENTRY arrivals using ONLY ptrace and /proc — no
+ * perf_event_open anywhere in the path. This is the third rung of the --auto
+ * sampler chain (asmspy_autoregion_sampler_next), and the only one that runs on
+ * a stock host: the other two share src/ibs_backend.c's perf open, which
+ * kernel.perf_event_paranoid = 4 — Ubuntu's compiled-in default — refuses.
+ *
+ * Three phases, because residency alone is measurably the WRONG answer: a
+ * ~997 Hz PTRACE_INTERRUPT residency histogram, widened by the DIRECT-call
+ * targets of the functions it shortlists, then CONFIRMED by an int3 at each
+ * candidate entry. Only candidates actually observed being entered come back.
+ * cli/asmspy_ptracesample.h carries the full design note and the measurements.
+ *
+ *   pid        the target (its leader; every thread is seized)
+ *   syms       the resolver output the candidates are named from. Borrowed:
+ *              `name`/`module` in `out` point INTO it, so it must outlive the
+ *              caller's use of the results.
+ *   module     substring filter, NULL/"" for everything (the --module= rule)
+ *   out/max    the ranked candidates, best first
+ *   window_ms  the residency window; <= 0 means ASMSPY_PS_DEFAULT_WINDOW_MS
+ *   why        filled with a self-skip reason on a negative return; with a
+ *              DEGRADATION note (e.g. no Capstone) on a non-negative one; and,
+ *              on an EMPTY window, with which stage came up empty — "nothing
+ *              qualified" has several causes and they send an operator to
+ *              different places. Set to "" when there is nothing to say.
+ *              May be NULL.
+ *
+ * Returns the candidate count, 0 for a window that observed nothing (a RETRY,
+ * not a verdict — asmspy_autoregion_chain_advance deliberately does not walk
+ * the sampler chain on this), or <0 for a self-skip with `why` filled.
+ *
+ * ptrace is per-thread (see the note at the top of this header): this call
+ * seizes, samples and detaches entirely on the calling thread, and it consumes
+ * waitpid(-1, __WALL) events while it runs, so the caller must not reap
+ * children concurrently on that same thread. */
+int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
+                         const char *module, asmspy_autocand_t *out, int max,
+                         int window_ms, char *why, size_t whylen);
+
 /* The single resolution chokepoint for the whole-process single-step engines:
  * try the ELF symtab first, then the JIT map; on a double-miss refresh the
  * perf-map (rate-limited via `jit->miss_budget`, so an unmapped/non-JIT target
