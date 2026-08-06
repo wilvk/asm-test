@@ -801,7 +801,7 @@ emitted per candidate attempted, between `started` and the terminal event.
 
 | `pick` field | Type | Meaning |
 |---|---|---|
-| `sampler` | str | `"ibs-op"` or `"sw-clock"` — which sampler actually ran, after `"auto"` resolved. |
+| `sampler` | str | `"ibs-op"`, `"sw-clock"` or `"ptrace-pc"` (2026-08-06 Task 7) — which sampler actually ran, after `"auto"` resolved. |
 | `evidence` | str | `"entry"`, `"residency"`, or `"idle"` — **the load-bearing field**, see below. |
 | `func` | str | The chosen function's name (or `"0x…"`). |
 | `base` / `len` | u64 | The region handed to the capture engine. |
@@ -813,7 +813,8 @@ emitted per candidate attempted, between `started` and the terminal event.
 decoration.** The capture engine arms a breakpoint at the region's *entry* and
 waits for a thread to arrive, so the only evidence of the right *type* is a
 direct observation of that same event — an IBS-Op branch whose target is a
-symbol's start. That is `"entry"`.
+symbol's start, or (`ptrace-pc`) an int3 planted at that same start actually
+being hit. Both are `"entry"`.
 
 `"residency"` is the portable fallback: a software-clock PC histogram says a
 function was *executing*, which is a different claim. A function entered once
@@ -823,6 +824,35 @@ can never fire again — the rule's known failure shape. So a client showing a
 events with rising `attempt` are the server walking the ranked candidates after
 a `REGION_NEVER_RAN`, which is a genuine refusal about *that candidate* and not
 a fact about the target.
+
+**`"ptrace-pc"` (Task 7): entry evidence with no `perf_event_open` anywhere in
+the path.** It exists because `kernel.perf_event_paranoid=4` — Ubuntu's
+compiled-in default — refuses the syscall both `ibs-op` and `sw-clock` share,
+so on a stock host neither ever produces a pick. This sampler sits entirely on
+ptrace + `/proc`: a residency survey (the same weak rule as `sw-clock`) widened
+by each shortlisted function's *direct call targets* (a residency winner is
+usually the wrong answer whose callee is the right one), then — the step that
+earns the `"entry"` grade — an int3 planted at every candidate's start, with
+only the ones actually observed being hit surviving. `weight` is the arrival
+count seen during that confirmation window (small and deliberately capped, not
+a statistical sample count) and `sites` is the number of direct `call`
+instructions found naming that entry (0 for a candidate reached only via the
+residency survey, i.e. never seen called from anywhere the sampler watched).
+
+The confirmation step is also a *safety* gate, not only an evidence one: the
+int3 is one byte of shared process text, so arming it is only safe once every
+task of the target is known to be traced (a `PTRACE_SEIZE` refused, a thread
+cap hit, or an unreadable `/proc` all make that unprovable). When it cannot be
+proven, the sampler hands back its residency-only candidates *unconfirmed* —
+but the server never puts those on the wire as a pick: an unconfirmed batch is
+treated as an ordinary sampler self-skip instead (the same `ncand < 0` shape
+`ibs-op`/`sw-clock` already report on a refusal), ending the session with the
+sampler-unavailable skip reason rather than a `pick`. `ptrace-pc` is the last
+rung of the `"auto"` chain (`ibs-op` → `sw-clock` → `ptrace-pc`), so this is
+the chain's final refusal, not a fallback to a fourth sampler. A `pick` event
+whose `sampler` is `"ptrace-pc"` is therefore always genuinely confirmed —
+there is no `"ptrace-pc"` + `"residency"` combination on the wire, by
+construction, not by convention.
 
 `"idle"` (39 T3) is the third value, and it is **not a pick** — it is an empty
 sample window reported on this same channel: the sampler ran and *nothing*

@@ -2849,12 +2849,19 @@ typedef enum {
     SAMPLER_AUTO = 0,
     SAMPLER_IBS = 1,
     SAMPLER_SW = 2,
+    SAMPLER_PTRACE =
+        3, /* Task 7: the perf-free picker (asmspy_ptrace_sample) */
 } sampler_mode_t;
 
 /* Display label for the wire/stderr — T5's chain needs to NAME which sampler
  * is active (the initial pick, and each one a refusal walks past), not just
  * pick it. Kept OUT of asmspy_autoregion.h: that header stays pure (no I/O,
  * not even a string constant meant for a terminal), and this is reporting. */
+/* T7: the WIRE/stderr name is "ptrace-pc", not the CLI's "--sampler=ptrace" —
+ * the two vocabularies are deliberately different (see the T5/T7 plan note):
+ * ibs-op/sw-clock are already output-shaped names distinct from their
+ * --sampler=ibs/sw input spellings, and at least one desktop consumer keys on
+ * the emitted string verbatim (hotedges.cpp: `v.sampler != "ibs-op"`). */
 static const char *asmspy_sampler_label(asmspy_sampler_t s) {
     switch (s) {
     case ASMSPY_SMP_IBS:
@@ -2862,7 +2869,7 @@ static const char *asmspy_sampler_label(asmspy_sampler_t s) {
     case ASMSPY_SMP_SW:
         return "sw-clock";
     case ASMSPY_SMP_PTRACE:
-        return "ptrace";
+        return "ptrace-pc";
     case ASMSPY_SMP_NONE:
     default:
         return "none";
@@ -2871,16 +2878,19 @@ static const char *asmspy_sampler_label(asmspy_sampler_t s) {
 
 /* The evidence-grade label the wire protocol carries (asmtrace-schema.md): the
  * client renders "entry" and "residency" differently because they ARE
- * different-strength evidence (asmspy_autoregion.h's header note). Task 7's
- * ptrace sampler has not defined its own grade yet, so it reports "?" rather
- * than guessing one on its behalf. */
+ * different-strength evidence (asmspy_autoregion.h's header note). T7: the
+ * ptrace sampler's phase 3 (asmspy_ptracesample.h) is a DIRECT int3-arrival
+ * observation, the same event type IBS-Op's entry-edge rule reports on, so it
+ * grades "entry" too — but auto_pick_ptrace only ever returns a pick that
+ * reached that phase (an unconfirmed batch is refused as a self-skip, never
+ * surfaced), so every pick this label is attached to earned the grade. */
 static const char *asmspy_sampler_rule_label(asmspy_sampler_t s) {
     switch (s) {
     case ASMSPY_SMP_IBS:
+    case ASMSPY_SMP_PTRACE:
         return "entry";
     case ASMSPY_SMP_SW:
         return "residency";
-    case ASMSPY_SMP_PTRACE:
     case ASMSPY_SMP_NONE:
     default:
         return "?";
@@ -2892,14 +2902,18 @@ static const char *asmspy_sampler_rule_label(asmspy_sampler_t s) {
  * print their OWN reason from inside auto_pick/auto_pick_sw the moment they
  * refuse (so a chain walk is visible step by step, not just at the end); this
  * is what lets the site that gives up ALSO report the reason for the specific
- * rung it gave up on, including ptrace, which has no probe of its own yet to
- * print anything. */
+ * rung it gave up on. Ptrace (T7) is the same shape: auto_pick_ptrace already
+ * printed the SPECIFIC why (asmspy_ptrace_sample's `why`, or the arm-gate note
+ * when a pick came back unconfirmed) to stderr the moment it refused; this is
+ * only the generic fallback for a client that never saw that line (the serve
+ * wire's skip_note has no per-attempt stderr feed, same as IBS/sw there). */
 static const char *asmspy_sampler_unavail_reason(asmspy_sampler_t s) {
     switch (s) {
     case ASMSPY_SMP_SW:
         return asmtest_swclock_unavail_reason();
     case ASMSPY_SMP_PTRACE:
-        return "no ptrace sampler yet (Task 7)";
+        return "the perf-free ptrace picker found no entry it could confirm "
+               "(see the per-attempt reason already reported)";
     case ASMSPY_SMP_IBS:
     case ASMSPY_SMP_NONE:
     default:
@@ -3006,6 +3020,88 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
     return nout;
 }
 
+/* T7: the PERF-FREE pick. asmspy_ptrace_sample (cli/asmspy_ptracesample.c)
+ * does residency -> call-target expansion -> int3 arrival confirmation using
+ * only ptrace + /proc, so this is the one sampler that answers on THIS host
+ * (kernel.perf_event_paranoid=4 refuses perf_event_open for both IBS and the
+ * software clock — docs/getting-started/host-setup.md). Same contract shape
+ * as auto_pick / auto_pick_sw: >0 candidates written, 0 for an empty window
+ * (a retry — asmspy_autoregion_chain_advance must not treat it as a refusal),
+ * <0 for a self-skip with the reason already on stderr.
+ *
+ * THE GATE. asmspy_ptrace_sample can hand back candidates it did NOT confirm:
+ * when it cannot prove it owns the whole thread set (a seize refused, a thread
+ * cap hit, an unreadable /proc), phase 3's int3 is unsafe to arm at all — one
+ * unseized task reaching shared process text takes a SIGTRAP with no tracer
+ * and DIES (asmspy_engine.c:2954-2957, cited in asmspy_ptracesample.h's THE
+ * ARM GATE) — so it returns the phase-1+2 candidates UNRANKED and UNDROPPED
+ * instead, with the arm-gate note appended to `why` (asmspy_ps_arm_note).
+ * Arming one of those here would be exactly the hang/kill this module exists
+ * to prevent.
+ *
+ * The detector is a FIELD guarantee, not a string match on `why`:
+ * ps_phase3_one clamps a real arrival's first_us to >=1 specifically "because
+ * a 0 would read as not measured in the output struct" (asmspy_ptracesample.c,
+ * the phase-3 arrival branch), and a candidate that never reached phase 3
+ * never touches first_us at all, leaving it at its zero initializer. So
+ * `arrivals == 0 && first_us == 0` on the top (best-ranked-or-not) candidate
+ * is unconfirmed by construction — the exact predicate Task 6's own
+ * test_ptracesample.c uses externally (its capped-seize case, `confirmed =
+ * arrivals > 0 || first_us > 0`) to prove the SAME gate on the producer side.
+ * Checking cands[0] alone is enough because confirmation is all-or-nothing per
+ * call: the phase-3 loop either runs over every candidate (each getting a
+ * real first_us) or is skipped entirely (asmspy_ptrace_sample's
+ * `covered_before` gate), so a mixed batch cannot occur. */
+static int auto_pick_ptrace(pid_t pid, const asmspy_symtab_t *t,
+                            const char *module, auto_cand_copy *out,
+                            int max_out, int window_ms) {
+    asmspy_autocand_t cands[AUTO_MAX_CANDS];
+    char why[256] = "";
+    int nc = asmspy_ptrace_sample(pid, t, module, cands, AUTO_MAX_CANDS,
+                                  window_ms, why, sizeof why);
+    if (nc < 0) {
+        fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                why[0] ? why : "the ptrace sampler refused");
+        return -1;
+    }
+    if (nc == 0) {
+        fprintf(stderr,
+                "--auto[ptrace-pc]: no function was observed being ENTERED in "
+                "pid %d (%d ms%s%s): %s\n"
+                "  name a function explicitly, or widen --module=\n",
+                (int)pid, window_ms, module ? ", --module=" : "",
+                module ? module : "", why[0] ? why : "nothing qualified");
+        return 0;
+    }
+    /* THE GATE (see the function doc above). */
+    if (cands[0].arrivals == 0 && cands[0].first_us == 0) {
+        fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                why[0] ? why
+                       : "the ptrace picker could not confirm its candidates "
+                         "(the thread set was not fully seized)");
+        return -1;
+    }
+    int nout = 0;
+    for (int i = 0; i < nc && nout < max_out; i++, nout++) {
+        out[nout].base = cands[i].addr;
+        out[nout].len = (size_t)cands[i].size;
+        out[nout].weight = cands[i].arrivals;
+        out[nout].sites = cands[i].sites;
+        snprintf(out[nout].name, sizeof out[nout].name, "%s",
+                 cands[i].name ? cands[i].name : "?");
+    }
+    fprintf(stderr,
+            "--auto[ptrace-pc]: %s [%s] — %llu entry sample%s from %u call "
+            "site%s (of %d candidate%s in %d ms, CONFIRMED by int3 arrival, "
+            "no perf); up to %d will be tried\n",
+            cands[0].name ? cands[0].name : "?",
+            cands[0].module ? cands[0].module : "?", cands[0].arrivals,
+            cands[0].arrivals == 1 ? "" : "s", cands[0].sites,
+            cands[0].sites == 1 ? "" : "s", nc, nc == 1 ? "" : "s", window_ms,
+            nout);
+    return nout;
+}
+
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
@@ -3043,9 +3139,10 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
          * AMD host where AUTO would always prefer IBS). */
         int ibs_substrate = asmtest_ibs_available();
         int chain_auto = sampler == SAMPLER_AUTO;
-        asmspy_sampler_t smp = sampler == SAMPLER_IBS ? ASMSPY_SMP_IBS
-                               : sampler == SAMPLER_SW
-                                   ? ASMSPY_SMP_SW
+        asmspy_sampler_t smp = sampler == SAMPLER_IBS  ? ASMSPY_SMP_IBS
+                               : sampler == SAMPLER_SW ? ASMSPY_SMP_SW
+                               : sampler == SAMPLER_PTRACE
+                                   ? ASMSPY_SMP_PTRACE
                                    : asmspy_autoregion_sampler_next(
                                          ASMSPY_SMP_NONE, ibs_substrate);
         char tried[64] = "";
@@ -3068,13 +3165,9 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                 else if (smp == ASMSPY_SMP_IBS)
                     ncand = auto_pick(pid, &t, module, cands, AUTO_TRIES,
                                       window_ms);
-                else { /* ASMSPY_SMP_PTRACE: Task 7's sampler, not wired up
-                        * yet — a clean, quiet self-skip, same shape as IBS
-                        * with no substrate today. */
-                    fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
-                            asmspy_sampler_unavail_reason(smp));
-                    ncand = -1;
-                }
+                else /* ASMSPY_SMP_PTRACE (Task 7): the perf-free picker. */
+                    ncand = auto_pick_ptrace(pid, &t, module, cands, AUTO_TRIES,
+                                             window_ms);
                 if (ncand != 0 ||
                     asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
                         ASMSPY_WALK_ADVANCE)
@@ -4086,9 +4179,10 @@ static size_t serve_params_json(char *dst, size_t cap,
             "\"%s\",\"ms\":%d,\"steps\":%s,\"mem\":%s,\"blame\":%s,"
             "\"statediff\":%s,\"fpregs\":%s,\"continuous\":%s}",
             p->max, em,
-            p->sampler == SAMPLER_IBS
-                ? "ibs"
-                : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
+            p->sampler == SAMPLER_IBS      ? "ibs"
+            : p->sampler == SAMPLER_SW     ? "sw"
+            : p->sampler == SAMPLER_PTRACE ? "ptrace"
+                                           : "auto",
             serve_auto_window_ms(p), p->steps ? "true" : "false",
             p->mem ? "true" : "false", p->blame ? "true" : "false",
             p->statediff ? "true" : "false", p->fpregs ? "true" : "false",
@@ -4197,9 +4291,10 @@ static void serve_run_engine(serve_session_t *s) {
          * window, and never when the operator forced a specific sampler. */
         int ibs_substrate = asmtest_ibs_available();
         int chain_auto = p->sampler == SAMPLER_AUTO;
-        asmspy_sampler_t smp_id = p->sampler == SAMPLER_IBS ? ASMSPY_SMP_IBS
-                                  : p->sampler == SAMPLER_SW
-                                      ? ASMSPY_SMP_SW
+        asmspy_sampler_t smp_id = p->sampler == SAMPLER_IBS  ? ASMSPY_SMP_IBS
+                                  : p->sampler == SAMPLER_SW ? ASMSPY_SMP_SW
+                                  : p->sampler == SAMPLER_PTRACE
+                                      ? ASMSPY_SMP_PTRACE
                                       : asmspy_autoregion_sampler_next(
                                             ASMSPY_SMP_NONE, ibs_substrate);
         /* The sampler + rule labels the client renders (asmtrace-schema.md, Serve
@@ -4233,10 +4328,12 @@ static void serve_run_engine(serve_session_t *s) {
                 else if (smp_id == ASMSPY_SMP_IBS)
                     ncand = auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES,
                                       window_ms);
-                else /* ASMSPY_SMP_PTRACE: Task 7's sampler, not wired up yet —
-                      * a clean, quiet self-skip (its reason surfaces below,
-                      * in skip_note, exactly like IBS/sw's). */
-                    ncand = -1;
+                else /* ASMSPY_SMP_PTRACE (Task 7): the perf-free picker; an
+                      * unconfirmed pick is refused INSIDE auto_pick_ptrace
+                      * and comes back here as an ordinary self-skip (< 0),
+                      * surfacing below in skip_note exactly like IBS/sw's. */
+                    ncand = auto_pick_ptrace(p->pid, &s->syms, mod, cands,
+                                             AUTO_TRIES, window_ms);
                 if (ncand != 0 ||
                     asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
                         ASMSPY_WALK_ADVANCE)
@@ -4793,10 +4890,13 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             p->sampler = SAMPLER_IBS;
         else if (strcmp(c, "sw") == 0)
             p->sampler = SAMPLER_SW;
+        else if (strcmp(c, "ptrace") == 0)
+            p->sampler = SAMPLER_PTRACE;
         else if (strcmp(c, "auto") == 0)
             p->sampler = SAMPLER_AUTO;
         else {
-            *why = "\"sampler\" must be \"ibs\", \"sw\" or \"auto\"";
+            *why =
+                "\"sampler\" must be \"ibs\", \"sw\", \"ptrace\" or \"auto\"";
             return -1;
         }
     }
@@ -8677,7 +8777,7 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--window=<ms>] "
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw|ptrace] [--window=<ms>] "
         "[--steps] "
         "[--mem] [--blame] [--statediff] [--fpregs] [--continuous]  "
         "scoped "
@@ -8699,7 +8799,10 @@ static int usage(const char *argv0) {
         "function the target is most often ENTERING right now, sampled out of "
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
         "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
-        "residency is not entry evidence) — --sampler= forces one of the two, "
+        "residency is not entry evidence; on ANY host, a ptrace+/proc sampler "
+        "that CONFIRMS each candidate's entry with an int3 before it is used, "
+        "needing no perf_event_open at all) — --sampler= forces one of the "
+        "three, "
         "--window=<ms> sizes each sample window (default 400; an empty window "
         "is "
         "retried, not a verdict), --module=<m> scopes the pick, and --auto "
@@ -9013,8 +9116,10 @@ int main(int argc, char **argv) {
                     sampler = SAMPLER_IBS;
                 else if (strcmp(argv[i] + 10, "sw") == 0)
                     sampler = SAMPLER_SW;
+                else if (strcmp(argv[i] + 10, "ptrace") == 0)
+                    sampler = SAMPLER_PTRACE;
                 else
-                    return bad_arg("sampler (ibs|sw)", argv[i] + 10);
+                    return bad_arg("sampler (ibs|sw|ptrace)", argv[i] + 10);
             } else if (strncmp(argv[i], "--window=", 9) == 0) {
                 long w = 0;
                 if (parse_count(argv[i] + 9, &w) != 0 || w <= 0 || w > 60000)

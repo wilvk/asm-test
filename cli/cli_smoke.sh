@@ -789,62 +789,61 @@ fi
 #
 # The picker AND the candidate walk are unit-tested on every host
 # (build/test_autoregion, incl. the pure asmspy_autoregion_walk cases 39 T1 adds).
-# THIS block covers only the wiring, and it self-skips off AMD IBS — real hardware,
-# a legitimate gate per CLAUDE.md. `make docker-cli-ibs` is the lane that runs it.
-echo "--- asmspy --dataflow --auto (pick the hot ENTRY, no symbol given) ---"
+#
+# 2026-08-06 plan, Task 7. This block used to self-skip whenever the sampler was
+# unavailable -- which is ALWAYS in the plain docker-cli lane, because Docker's
+# default seccomp profile blocks perf_event_open. Per CLAUDE.md, a test that can
+# only ever self-skip is not a test. The ptrace sampler needs no perf, so this
+# now RUNS here, and a skip is a failure. `--sampler=ptrace` is forced (rather
+# than bare `--auto`) because the bare form's own T5 chain-walk prints IBS's and
+# sw's OWN "# SKIP --dataflow --auto:" lines on its way to ptrace on this very
+# host -- text this same grep would misread as the WHOLE call self-skipping even
+# though the chain ultimately picked for real. Forcing the sampler sidesteps
+# that; the chain-walk itself (IBS refused -> sw refused -> ptrace picks) is
+# verified live, not by this grep (task-7-report.md, Step 4).
+echo "--- asmspy --dataflow --auto --sampler=ptrace (perf-free entry pick, no symbol given) ---"
 "$BUILD/auto_victim" 2>"$BUILD/auto_victim.log" &
 UVPID=$!
 sleep 1
 kill -0 "$UVPID" 2>/dev/null || fail "auto_victim did not start"
 set +e
-auout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto 2>&1); aurc=$?
+auout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto --sampler=ptrace 2>&1); aurc=$?
 set -e
-[ "$aurc" -eq 124 ] && fail "--dataflow --auto hung"
-if printf '%s\n' "$auout" | grep -q '^# SKIP --dataflow --auto'; then
-    printf '%s\n' "$auout" | grep '^# SKIP' | sed 's/^/  /'
-    # 39 T2: a self-skip must NAME a real reason (perf / the substrate), never
-    # pass green with an empty one — the --sample lesson, and the same guard the
-    # sw leg below carries. This is the DEFAULT/IBS leg's version: on this lane
-    # the sampler open is refused (seccomp / paranoid), and the skip must SAY so
-    # rather than land an empty reason on exactly the host where it matters.
-    printf '%s\n' "$auout" | grep -qE '^# SKIP --dataflow --auto: .*perf' \
-        || fail "--auto self-skip with an empty/vague reason (the --sample lesson): $auout"
-    echo "  (sampler unavailable — --auto self-skipped WITH a real reason; assertions NOT run. Use make docker-cli-ibs)"
-else
-    [ "$aurc" -eq 0 ] || fail "--dataflow --auto exited $aurc: $auout"
-    # THE assertion: the callee, not the residency winner.
-    printf '%s\n' "$auout" | grep -q 'entered_often' \
-        || fail "--auto did not pick entered_often: $auout"
-    # THE CONTROL, and the whole reason the fixture has two functions: the rival
-    # rule's answer must be ABSENT. grind_forever has no entry edge at all (it was
-    # entered before we attached), so a picker that names it is ranking residency.
-    printf '%s\n' "$auout" | grep -q 'grind_forever' \
-        && fail "--auto picked grind_forever — that is the RESIDENCY winner, and an entry breakpoint there can never fire"
-    # Never called => never observed => never picked.
-    printf '%s\n' "$auout" | grep -q 'quiet_helper' \
-        && fail "--auto named quiet_helper, which is never called"
-    # It must actually TRACE the pick, not just name it — the point is the data flow.
-    printf '%s\n' "$auout" | grep -q 'data flow — entered_often' \
-        || fail "--auto picked but did not capture: $auout"
-    printf '%s\n' "$auout" | grep -qE '#0 .*endbr64|#0 .*\+0x' \
-        || fail "--auto: no value trace from the auto-picked region"
-    # The provenance line must report real evidence, not a guess.
-    printf '%s\n' "$auout" | grep -qE '\-\-auto: entered_often \[auto_victim\] — [0-9]+ entry samples' \
-        || fail "--auto: no entry-sample provenance: $auout"
-    echo "  --auto picked + traced entered_often (grind_forever correctly rejected)"
+[ "$aurc" -eq 124 ] && fail "--dataflow --auto --sampler=ptrace hung"
+printf '%s\n' "$auout" | grep -q '^# SKIP' \
+    && fail "the ptrace sampler needs no perf and must not self-skip: $auout"
+[ "$aurc" -eq 0 ] || fail "--dataflow --auto --sampler=ptrace exited $aurc: $auout"
+# THE assertion: the callee, not the residency winner (auto_victim's shape is the test).
+printf '%s\n' "$auout" | grep -q 'entered_often' \
+    || fail "--auto --sampler=ptrace must pick the ARRIVED-AT function (auto_victim's shape is the test): $auout"
+# THE CONTROL: grind_forever has no entry edge at all (entered before we
+# attached, never again), so a picker that names it is ranking residency, not
+# confirmed entry arrival -- exactly the hazard this sampler's phase 3 exists
+# to reject.
+printf '%s\n' "$auout" | grep -q 'grind_forever' \
+    && fail "--auto --sampler=ptrace picked grind_forever -- that is the RESIDENCY winner, and an entry breakpoint there can never fire"
+# Never called => never observed arriving => never picked.
+printf '%s\n' "$auout" | grep -q 'quiet_helper' \
+    && fail "--auto --sampler=ptrace named quiet_helper, which is never called"
+# It must actually TRACE the pick, not just name it — the point is the data flow.
+printf '%s\n' "$auout" | grep -q 'data flow — entered_often' \
+    || fail "--auto --sampler=ptrace picked but did not capture: $auout"
+printf '%s\n' "$auout" | grep -qE '#0 .*endbr64|#0 .*\+0x' \
+    || fail "--auto --sampler=ptrace: no value trace from the auto-picked region"
+echo "--dataflow --auto --sampler=ptrace: picked the hot entry with no perf (grind_forever/quiet_helper correctly rejected)"
 
-    # --module= scopes the pick. A module that matches nothing must REFUSE
-    # transparently rather than fall back to a wrong region.
-    set +e
-    amout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto --module=no_such_module 2>&1); amrc=$?
-    set -e
-    [ "$amrc" -eq 124 ] && fail "--auto --module hung"
-    printf '%s\n' "$amout" | grep -q 'no function was observed being ENTERED' \
-        || fail "--auto --module=no_such_module should refuse transparently, got: $amout"
-    printf '%s\n' "$amout" | grep -q 'entered_often' \
-        && fail "--auto --module=no_such_module still picked entered_often (the filter does not filter)"
-    echo "  --auto --module= filters the pick (and refuses transparently when empty)"
-fi
+# --module= scopes the ptrace pick too, same contract as ibs/sw: a module that
+# matches nothing must REFUSE transparently rather than fall back to a wrong
+# region.
+set +e
+amout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto --sampler=ptrace --module=no_such_module 2>&1); amrc=$?
+set -e
+[ "$amrc" -eq 124 ] && fail "--auto --sampler=ptrace --module hung"
+printf '%s\n' "$amout" | grep -q 'no function was observed being ENTERED' \
+    || fail "--auto --sampler=ptrace --module=no_such_module should refuse transparently, got: $amout"
+printf '%s\n' "$amout" | grep -q 'entered_often' \
+    && fail "--auto --sampler=ptrace --module=no_such_module still picked entered_often (the filter does not filter)"
+echo "  --auto --sampler=ptrace --module= filters the pick (and refuses transparently when empty)"
 # The victim must survive being sampled + traced.
 sleep 1
 kill -0 "$UVPID" 2>/dev/null || fail "auto_victim died under --dataflow --auto"
