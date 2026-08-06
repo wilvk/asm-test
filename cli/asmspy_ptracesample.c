@@ -387,7 +387,18 @@ static int ps_add(ps_ctx_t *c, pid_t tid) {
      * `bp_base`: bp_base is cleared at each disarm, and this task's stop may be
      * dispatched after that even though its mm snapshot predates it. The restore
      * itself is guarded by ps_restore_copy, which writes only if our byte is
-     * actually there — so a stale address costs nothing. */
+     * actually there — so a stale address costs nothing.
+     *
+     * RESIDUAL, recorded rather than closed (alongside A26): `armed_bp` is read
+     * at INSERT time, so it can be NEWER than the byte this task actually
+     * inherited if a re-plant lands between the fork and the child's first stop.
+     * The restore would then look for a trap at an address the child never
+     * copied, find none (ps_restore_copy reads first), and leave the inherited
+     * one in place. What makes it not bite is that every plant is preceded by
+     * ps_stop_all, whose pump drains the pending attach-stops first — so the
+     * child is tabled before the next address exists. Closing it properly needs
+     * a per-task snapshot taken at fork time, which is the ordering ptrace(2)
+     * does not define and which this module has already been burned by twice. */
     if (c->t[c->n].kind != ASMSPY_PS_OWN && c->armed_bp) {
         c->t[c->n].copied_bp = c->armed_bp;
         c->t[c->n].copied_orig = c->armed_orig;
@@ -945,19 +956,37 @@ asmspy_ps_act_t asmspy_ps_decide(asmspy_ps_kind_t kind, asmspy_ps_reason_t why,
         case ASMSPY_PS_R_TRAP_UNSURE:
         case ASMSPY_PS_R_APP_TRAP:
         case ASMSPY_PS_R_STRAY_TRAP:
-        case ASMSPY_PS_R_SIGNAL:
-            /* SWALLOWED, and this is the one cell where the rule costs the
-             * target something real: a signal that was genuinely this task's own
-             * is destroyed, which is correction 1's own defect in miniature.
-             * The rule is kept anyway, because the alternative is a
-             * continue-with-a-signal for a task we cannot identify, and the
-             * whole class of defect this file has shipped four times is exactly
-             * that. It is bounded: an unknown exists only when /proc is
-             * unreadable for a task we hold, which also costs coverage, so the
-             * sampler is already in its degraded, confirm-nothing mode; and the
-             * leader (tid == pid) is never classified, so a single-threaded
-             * target has no unknowns at all. */
+            /* SWALLOWED. These are the cells the "an unknown never continues
+             * with a signal" rule is actually about, and the signal in question
+             * is always SIGTRAP — the one signal whose PROVENANCE is genuinely
+             * unknowable here, because our own int3 and the target's own report
+             * the identical si_code (SI_KERNEL). Delivering costs the task its
+             * life if the trap was ours; swallowing costs a target that drives
+             * its own breakpoints one handler run. */
             return ASMSPY_PS_ACT_RESUME_QUIET;
+        case ASMSPY_PS_R_SIGNAL:
+            /* RE-INJECTED, and this cell is deliberately NOT grouped with its
+             * neighbours above.
+             *
+             * ps_classify returns ASMSPY_PS_R_SIGNAL only for `event == 0 &&
+             * sig != SIGTRAP` — an ordinary signal-delivery-stop — and THIS
+             * MODULE NEVER SENDS A SIGNAL TO ANY TRACEE. So a signal arriving
+             * here is provably not ours in any of the three address spaces this
+             * task might be in, and whose address space it is in does not enter
+             * into it. Re-injecting is the NO-OP: it is what would have happened
+             * had we never attached. Swallowing is the intervention.
+             *
+             * This cell first shipped as a swallow, on a blanket reading of the
+             * rule, and that was a regression: the module's own named triggers
+             * for an unclassifiable task (fd pressure in a long-lived caller, a
+             * transient /proc read failure) make EVERY non-leader thread
+             * UNKNOWN, `kind` is sticky for the whole call, and phase 1 still
+             * runs its full window over the target. That is correction 1's
+             * 89%-SIGALRM-loss scenario at full scale, inflicted on a target
+             * whose only offence was that we could not name it. Losing coverage
+             * degrades OUR measurement; it is not a licence to degrade the
+             * target's signal stream. */
+            return ASMSPY_PS_ACT_RESUME_SIGNAL;
         }
         break;
     }
@@ -1267,12 +1296,40 @@ static void ps_stop_all(ps_ctx_t *c) {
     }
 }
 
+/* Undo ps_stop_all: end the stops WE caused, and only those.
+ *
+ * THROUGH THE DECISION, not around it. Every task this walks was stopped by our
+ * own PTRACE_INTERRUPT, which ps_classify calls ASMSPY_PS_R_INTERRUPT, so asking
+ * the table what that stop is owed is not a re-classification — it is the same
+ * question the pump already answered for the same stop, and it keeps this the
+ * completion of an ASMSPY_PS_ACT_HOLD rather than a second opinion.
+ *
+ * It also fixes a real hole. The old form resumed any `stopped && !listening`
+ * entry regardless of kind, which contradicted the one case that deliberately
+ * leaves a task stopped: ASMSPY_PS_ACT_RELEASE, when the restore could not be
+ * completed, marks a FOREIGN task "still ours, the teardown retries" — and this
+ * walk then CONTed it anyway, with sig 0, ending a signal-delivery-stop and
+ * destroying another process's signal. The table says RELEASE for that task, and
+ * RELEASE is not something to do from here (it detaches, and it can pump), so
+ * the honest reading of a non-RESUME_QUIET answer is: not mine to resume.
+ *
+ * An UNKNOWN task IS resumed here, because the table says RESUME_QUIET for it —
+ * leaving one stopped for the rest of phase 3 would freeze a task that may well
+ * be a thread of the target, which is the freeze correction 1's second half
+ * measured, in slow motion. */
 static void ps_resume_all(ps_ctx_t *c) {
-    for (int i = 0; i < c->n; i++)
+    for (int i = 0; i < c->n; i++) {
         /* NOT the listening ones: PTRACE_CONT on a group-stopped tracee either
          * fails or, worse, resumes a process the user deliberately suspended. */
-        if (c->t[i].stopped && !c->t[i].listening)
-            ps_cont(c, c->t[i].tid, 0); /* ours: see the file-header rule */
+        if (!c->t[i].stopped || c->t[i].listening)
+            continue;
+        if (asmspy_ps_decide(c->t[i].kind, ASMSPY_PS_R_INTERRUPT,
+                             c->tearing_down, 0,
+                             0) != ASMSPY_PS_ACT_RESUME_QUIET)
+            continue;
+        ps_cont(c, c->t[i].tid, 0); /* sig 0: completing a HOLD, never a
+                                     * delivery — see the file-header rule */
+    }
 }
 
 /* Stop everything, take the trap byte out, rewind anyone parked at base+1, and

@@ -91,6 +91,13 @@ $(BUILD)/asmspy_proc.o: $(BUILD)/asmspy_syscall_names.inc
 PS_SWITCH_GATE := -Werror=switch -Werror=switch-enum
 $(BUILD)/asmspy_ptracesample.o: CFLAGS += $(PS_SWITCH_GATE)
 $(BUILD)/pic/asmspy_ptracesample.o: CFLAGS += $(PS_SWITCH_GATE)
+# ... and fold the gate into the build-knob sentinel (Makefile:312), because a
+# target-specific CFLAGS addition is invisible to it: GNU make compares mtimes,
+# not recipe text, so weakening or removing the gate would otherwise leave the
+# object built WITH it sitting there looking fresh — a build that still passes
+# because it is the old build. This file is included at Makefile:1003, after
+# BUILD_FLAGS is defined, so the append lands.
+BUILD_FLAGS += $(PS_SWITCH_GATE)
 
 # asmspy.o is the FRONT END (main, the headless subcommands, the ncurses TUI);
 # the engine it drives is libasmspy below, not a loose object here.

@@ -925,6 +925,36 @@ int main(int argc, char **argv) {
         CHECK(seen_b > 100 && miss_b == 0,
               "children were completing before we attached, with an unbroken "
               "sequence — the measurement itself is sound");
+        /* NON-VACUITY, ASSERTED RATHER THAN PRINTED, and this check exists
+         * because the fact it pins has silently stopped being true three times.
+         *
+         * The gap count below can only catch anything if phase 3 armed an entry
+         * the CHILDREN actually execute, inside the measured window. Only
+         * `slow_entry` qualifies: the parent enters it about every 20 ms, so its
+         * four arrivals cannot be collected inside ASMSPY_PS_CONFIRM_MS and the
+         * window stays armed for all of it — while a hot entry is disarmed in
+         * microseconds and a never-entered one holds its full slice but is never
+         * reached by anyone. Whether phase 3 gets that far depends on how many
+         * never-entered candidates precede it, i.e. on the victim's `main()`
+         * staying lean and on window_ms staying wide. Both are conventions.
+         * MEASURED, twice: at window_ms = 400 only __clock_gettime and hot_entry
+         * ever confirmed and this section missed the fork-child mutation
+         * entirely, and adding four @plt call sites to the victim's main() did
+         * the same thing again. Printing `slow_entry arrivals=2` is not a test;
+         * this is. */
+        {
+            int armed_live = 0;
+            for (int i = 0; i < job.rc && i < 8; i++)
+                if (cands[i].name && strcmp(cands[i].name, "slow_entry") == 0 &&
+                    cands[i].arrivals > 0)
+                    armed_live = 1;
+            CHECK(
+                armed_live,
+                "phase 3 confirmed slow_entry INSIDE the measured window — "
+                "the only entry whose armed window stays open long enough for "
+                "a fork to land in it, and therefore the only thing that "
+                "makes the gap count below a detector rather than a printout");
+        }
         /* 90%, not 60%. The loose band was the whole reason this check could
          * not see the follow-up defect: a fork child that reaches phase 3's
          * generic arrival test is re-planted into the WRONG address space and
@@ -1281,7 +1311,7 @@ int main(int argc, char **argv) {
             ASMSPY_PS_R_APP_TRAP,    ASMSPY_PS_R_STRAY_TRAP,
             ASMSPY_PS_R_SIGNAL};
         int cells = 0, bad_range = 0, unknown_acts = 0, foreign_acts = 0,
-            unknown_sig = 0, own_sig = 0;
+            unknown_sig = 0, unknown_quiet = 0, own_sig = 0;
         for (unsigned k = 0; k < sizeof KINDS / sizeof *KINDS; k++)
             for (unsigned r = 0; r < sizeof WHYS / sizeof *WHYS; r++)
                 for (int flags = 0; flags < 8; flags++) {
@@ -1293,19 +1323,35 @@ int main(int argc, char **argv) {
                         a > ASMSPY_PS_ACT_RELEASE_SIGNAL)
                         bad_range++;
                     if (KINDS[k] == ASMSPY_PS_UNKNOWN) {
-                        /* THE RULE, and the currently-open Critical is a single
-                         * violation of its last clause: an unknown never
-                         * authorises poking, releasing, arming, or
-                         * CONTINUING-WITH-A-SIGNAL. Our own int3 reports
-                         * si_code == SI_KERNEL exactly as the target's own does,
-                         * so "deliver it if it looks like the app's" delivers
-                         * OURS to a process with no handler. */
+                        /* THE RULE, and the Critical this round opened with was
+                         * a single violation of its last clause: an unknown
+                         * never authorises poking, releasing, arming, or
+                         * CONTINUING-WITH-A-SIGNAL. */
                         if (a == ASMSPY_PS_ACT_RELEASE ||
                             a == ASMSPY_PS_ACT_RELEASE_SIGNAL ||
                             a == ASMSPY_PS_ACT_COLLECT)
                             unknown_acts++;
-                        if (a == ASMSPY_PS_ACT_RESUME_SIGNAL)
+                        /* THE SIGTRAP FAMILY ONLY, and the narrowing is the
+                         * point rather than a weakening. What is unknowable
+                         * about a SIGTRAP is its PROVENANCE: our own int3 and
+                         * the target's own report the identical si_code
+                         * (SI_KERNEL), so "deliver it if it looks like the
+                         * app's" delivers OURS to a process with no handler.
+                         * An ordinary signal-delivery-stop carries no such
+                         * ambiguity — this module never sends a signal to any
+                         * tracee, so the signal is provably not ours whatever
+                         * address space the task is in, and re-injecting it is
+                         * the no-op while swallowing it is the intervention.
+                         * The next check pins that half. */
+                        if (a == ASMSPY_PS_ACT_RESUME_SIGNAL &&
+                            (WHYS[r] == ASMSPY_PS_R_OUR_TRAP ||
+                             WHYS[r] == ASMSPY_PS_R_TRAP_UNSURE ||
+                             WHYS[r] == ASMSPY_PS_R_APP_TRAP ||
+                             WHYS[r] == ASMSPY_PS_R_STRAY_TRAP))
                             unknown_sig++;
+                        if (WHYS[r] == ASMSPY_PS_R_SIGNAL &&
+                            a != ASMSPY_PS_ACT_RESUME_SIGNAL)
+                            unknown_quiet++;
                     }
                     if (KINDS[k] == ASMSPY_PS_FOREIGN &&
                         a != ASMSPY_PS_ACT_RELEASE &&
@@ -1326,11 +1372,24 @@ int main(int argc, char **argv) {
             "an unknown NEVER authorises releasing or confirming: it stays "
             "traced (so it cannot meet our trap untraced) and it never counts "
             "as an arrival of the target");
-        CHECK(
-            unknown_sig == 0,
-            "an unknown is NEVER continued with a signal -- the open Critical "
-            "was exactly this cell, handing a task of unknown kind our own "
-            "int3's SIGTRAP because SI_KERNEL cannot tell whose int3 it was");
+        CHECK(unknown_sig == 0,
+              "an unknown is NEVER handed a SIGTRAP: that is the signal whose "
+              "provenance is unknowable, because SI_KERNEL cannot tell OUR "
+              "int3 from the target's own, and the round-4 Critical was "
+              "exactly this cell delivering ours to a process with no handler");
+        /* THE OTHER HALF, and it is a correction of the rule rather than an
+         * application of it. Swallowing here is not caution, it is correction
+         * 1's own 89%-SIGALRM-loss defect aimed at a target whose only offence
+         * is that /proc would not name one of its threads -- and `kind` is
+         * sticky for the whole call, so every non-leader thread loses every
+         * signal for the duration. This module never sends a signal to a
+         * tracee, so a signal-delivery-stop is provably not ours in any of the
+         * three address spaces; re-injecting is the no-op. */
+        CHECK(unknown_quiet == 0,
+              "but an ordinary signal-delivery-stop IS re-injected even for a "
+              "task we cannot name: we never send a signal to a tracee, so it "
+              "is provably the task's own, and swallowing it -- not delivering "
+              "it -- is the intervention");
         CHECK(asmspy_ps_decide(ASMSPY_PS_UNKNOWN, ASMSPY_PS_R_OUR_TRAP, 0, 0,
                                1) == ASMSPY_PS_ACT_CLEAR_AND_RESUME,
               "and the one write it does allow is the read-guarded REMOVAL of "
