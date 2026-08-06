@@ -8,8 +8,14 @@
 // RECORDING's provenance and says so.
 #include "imgui.h"
 
+#include <cerrno>
 #include <climits>
 #include <cstring>
+#include <fstream> // cap_perf_paranoid_note — quoting the sysctl, never deciding from it
+
+#include <linux/perf_event.h> // struct perf_event_attr — the measured perf probe
+#include <sys/syscall.h>      // __NR_perf_event_open
+#include <unistd.h>           // ::syscall / ::close
 
 #include "capview.h"
 #include "ui/doors.h"
@@ -26,6 +32,21 @@ extern "C" {
 #endif
 
 namespace asmdesk {
+
+// The sysctl, quoted for the OPERATOR, not consulted for the decision.
+static std::string cap_perf_paranoid_note() {
+    std::ifstream f("/proc/sys/kernel/perf_event_paranoid");
+    int v = 0;
+    if (!(f >> v))
+        return std::string();
+    if (v <= 2)
+        return std::string(); // not what refused us; do not misdirect
+    return " — kernel.perf_event_paranoid=" + std::to_string(v) +
+           " (>2 refuses every unprivileged perf_event_open; the sampler "
+           "`auto` "
+           "uses to pick a region needs <=2, or CAP_PERFMON on the asmspy "
+           "binary)";
+}
 
 void cap_probe(CapState &s) {
     s.probed = true;
@@ -54,6 +75,46 @@ void cap_probe(CapState &s) {
                            asmtest_ibs_skip_reason(),
                            asmtest_ibs_unavail_reason(), s.native_only);
 #endif
+
+    // The measured perf verdict. ONE syscall, the cheapest event there is,
+    // self-monitoring: PERF_TYPE_SOFTWARE/PERF_COUNT_SW_CPU_CLOCK on pid 0.
+    //
+    // Deliberately OUTSIDE the ASMTEST_DESKTOP_CAN_PROBE guard above: unlike the
+    // cascade/IBS rows, this needs no engine object on the link line at all --
+    // perf_event_open is a bare syscall behind three system headers -- so it
+    // runs in the render-only viewer and the headless tests exactly as it does
+    // in the full app, instead of leaving perf_ok/perf_reason unset wherever the
+    // engine is not linked.
+    //
+    // Sound in the REFUSAL direction only. A success here does NOT prove a
+    // foreign-pid open will succeed -- that carries an extra
+    // PTRACE_MODE_READ_REALCREDS check -- so a caller may say "perf is locked
+    // down" on a false, and must not say "the sampler will work" on a true.
+    //
+    // The paranoid sysctl is read only to EXPLAIN the errno, never to decide:
+    // CAP_PERFMON overrides it, so deciding from it would refuse a mode that
+    // works on a properly-granted host.
+    {
+        struct perf_event_attr pe;
+        std::memset(&pe, 0, sizeof pe);
+        pe.size = sizeof pe;
+        pe.type = PERF_TYPE_SOFTWARE;
+        pe.config = PERF_COUNT_SW_CPU_CLOCK;
+        pe.disabled = 1;
+        pe.exclude_kernel = 1;
+        pe.exclude_hv = 1;
+        long fd = ::syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+        if (fd >= 0) {
+            ::close((int)fd);
+            s.perf_ok = true;
+            s.perf_reason.clear();
+        } else {
+            s.perf_ok = false;
+            s.perf_reason = std::string("perf_event_open refused (") +
+                            std::strerror(errno) + ")" +
+                            cap_perf_paranoid_note();
+        }
+    }
 }
 
 void draw_capability_panel(CapState &s, const Recording *loaded) {

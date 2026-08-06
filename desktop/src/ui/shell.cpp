@@ -4743,6 +4743,18 @@ void draw_shell(ShellState &s) {
                 s.inspect.want_open_connect = true;
         }
     }
+    // 2026-08-06 plan, Task 3 (M10): probe the moment a live host is actually up,
+    // not only on the first draw of the capability panel -- which lives under a
+    // collapsed-by-default "Details" section, so on a fresh session it may never
+    // draw at all, leaving every host fact CapState carries (including the
+    // measured perf verdict cap_probe now takes) permanently unset. inspect_connect
+    // has several call sites (the auto-connect above, the Connect pane's button, an
+    // attach/launch full-detail) all inside inspect_door.cpp, which knows nothing
+    // of CapState -- so this is a per-frame check on the RESULT (host_started)
+    // rather than a wrapper around every call site. `!s.caps.probed` makes it
+    // idempotent: it fires exactly once per session, the first frame a host is up.
+    if (s.inspect.host_started && !s.caps.probed)
+        cap_probe(s.caps);
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through
     // the ONE writer so the timeline / slice / Loom / Scrubber animate together.

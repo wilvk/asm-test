@@ -72,6 +72,14 @@ struct CapState {
     std::vector<cap_row> rows;
     bool probed = false;
     bool native_only = false;
+
+    // Whether perf_event_open ACTUALLY opens on this host, measured once at connect
+    // with the cheapest possible event. `perf_reason` is the errno's own text when
+    // it does not. This is NOT asmtest_ibs_available(), which is a CPUID/sysfs
+    // SUBSTRATE probe that reports available on a host where every perf_event_open
+    // returns EACCES -- the exact defect this field exists to fix.
+    bool perf_ok = false;
+    std::string perf_reason;
 };
 
 // The Author door's state. `source` is a std::string used as an ImGui text

@@ -1363,8 +1363,27 @@ $(BUILD)/desktop_test_walkthrough: \
 # capview_remedy REUSES the inspect_door attach_verdict remedy map so the two
 # panels never give divergent advice. inspect.o references only libc/libstdc++
 # (no engine, no session object), so the pure closure holds.
+#
+# 2026-08-06 plan, Task 3: the test now drives the real cap_probe (not just the
+# pure capview_build it wraps), so it needs capability_panel.o itself. That TU's
+# ASMTEST_DESKTOP_CAN_PROBE-gated half (the engine cascade rows) compiles out
+# here exactly as it does in the render-only viewer (the macro is app-tree-only,
+# see the capability_panel.o rule below) — what remains needing linking is
+# draw_capability_panel's ImGui + draw_banner (ui/flow.o, vw/canvas_draw.o,
+# DESKTOP_TEST_DOC for the Recording it renders, DESKTOP_TEST_IG), same set
+# test_fidelity already links for the same draw_banner. The NEW perf probe
+# itself (cap_probe's syscall block) needs none of that — see the "outside the
+# guard" note in capability_panel.cpp — but the test also calls
+# asmtest_ibs_available() directly (to prove the two probes may disagree), which
+# needs ibs_backend.o + debug.o: a self-contained producer with no Capstone/PT/
+# OpenCSD decoders (native-trace.mk's test_ibs links the identical pair).
 $(BUILD)/desktop_test_capview: $(BUILD)/desktop/test/t/test_capview.o \
-    $(BUILD)/desktop/test/src/capview.o $(BUILD)/desktop/test/lv/inspect.o
+    $(BUILD)/desktop/test/src/capview.o $(BUILD)/desktop/test/lv/inspect.o \
+    $(BUILD)/desktop/test/ui/capability_panel.o \
+    $(BUILD)/desktop/test/ui/flow.o \
+    $(BUILD)/desktop/test/vw/canvas_draw.o \
+    $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG) \
+    $(BUILD)/ibs_backend.o $(BUILD)/debug.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # author_vm.o maps engine STRUCTS, never calls engine functions, so the Author

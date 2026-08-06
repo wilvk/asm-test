@@ -12,6 +12,11 @@
 
 #include "capview.h"
 #include "live/inspect.h" // remedy_command — the copy-pasteable fix a remedy names
+#include "ui/doors.h" // CapState, cap_probe — Task 3's measured perf verdict
+
+extern "C" {
+#include "asmtest_ibs.h" // asmtest_ibs_available — the SUBSTRATE probe cap_probe must disagree with
+}
 
 using namespace asmdesk;
 
@@ -298,6 +303,35 @@ int main() {
             if (r.kind == cap_kind::backend && !r.available)
                 check("remedy/verbatim-reason-kept", !r.reason.empty(),
                       "a demoted negative must keep its verbatim reason");
+    }
+
+    // 2026-08-06 plan, Task 3: the probe must answer "will perf open", not
+    // "does this CPU have IBS". asmtest_ibs_available() is CPUID + a sysfs
+    // access() -- it reports available on a host where every perf_event_open
+    // returns EACCES, which is the default Ubuntu configuration.
+    {
+        CapState s;
+        cap_probe(s);
+        check("cap/probed", s.probed, "cap_probe must mark itself run");
+        check(
+            "cap/perf-verdict-has-a-reason",
+            s.perf_ok || !s.perf_reason.empty(),
+            "a refused perf must carry the errno's own text -- that string is "
+            "the only thing that names the remedy (a sysctl, a capability)");
+        // The load-bearing one: the two probes must be allowed to DISAGREE. On
+        // an AMD box with perf locked down, the substrate is present and the
+        // syscall is refused, and a preflight that cannot tell them apart will
+        // promise a mode that emits nothing. Asserted as a real implication on
+        // THIS host, where the disagreement is the measured state — not as a
+        // comment. On a host where perf does open, the implication is vacuously
+        // true and the check still cannot fire wrongly.
+        check(
+            "cap/perf-is-not-the-substrate-probe",
+            !(asmtest_ibs_available() && !s.perf_ok) || !s.perf_reason.empty(),
+            "the substrate probe says IBS is present and the syscall was "
+            "refused — the two MUST be separate fields, and the refusal must "
+            "carry its reason; assigning perf_ok from asmtest_ibs_available() "
+            "reproduces the exact defect this field exists to fix");
     }
 
     // --- determinism ------------------------------------------------------
