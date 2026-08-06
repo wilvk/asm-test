@@ -2,7 +2,7 @@
   "system": {
     "box_id": "gh-macos-latest",
     "os": "macos",
-    "os_version": "macOS 26.4",
+    "os_version": "macOS 26.5.2",
     "arch": "arm64",
     "cpu": "Apple M1 (Virtual)",
     "uarch": "unknown",
@@ -10,8 +10,8 @@
     "cc": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "5391eef",
-    "timestamp": "2026-07-25T08:58:23Z"
+    "commit": "d6df6de",
+    "timestamp": "2026-08-06T09:36:55Z"
   },
   "features": [
     {
@@ -183,5 +183,4 @@
       "insns_truth": null
     }
   ]
-}
 }
