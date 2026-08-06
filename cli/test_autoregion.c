@@ -510,6 +510,29 @@ int main(void) {
           "is stronger than residency, and this task changes the fallback, "
           "not the preference");
 
+    /* 2026-08-06 plan, Task 5 fix (coordinator review): asmspy_autoregion_chain_advance
+     * pins WHEN the chain walks, separate from asmspy_autoregion_sampler_next's
+     * WHICH. Both call sites used to inline `ncand >= 0 || !chain_auto` as
+     * their break condition -- a single `>=` -> `>` typo (or a re-widened
+     * window-loop guard) would silently let an EMPTY window advance the
+     * chain, and every check above would stay green, since they only cover
+     * ORDER, never WHEN. */
+    CHECK(asmspy_autoregion_chain_advance(-1, 1) != 0,
+          "chain_advance: a self-skip (ncand < 0) advances when AUTO");
+    CHECK(asmspy_autoregion_chain_advance(0, 1) == 0,
+          "chain_advance: an empty window (ncand == 0) does NOT advance -- "
+          "the window loop retries the SAME sampler instead");
+    CHECK(asmspy_autoregion_chain_advance(1, 1) == 0,
+          "chain_advance: a real pick (ncand > 0) does NOT advance -- "
+          "nothing is left to do");
+    CHECK(asmspy_autoregion_chain_advance(-1, 0) == 0,
+          "chain_advance: an explicit --sampler=ibs/sw never advances, even "
+          "on a self-skip");
+    CHECK(asmspy_autoregion_chain_advance(0, 0) == 0,
+          "chain_advance: explicit sampler, empty window -> never advances");
+    CHECK(asmspy_autoregion_chain_advance(1, 0) == 0,
+          "chain_advance: explicit sampler, real pick -> never advances");
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

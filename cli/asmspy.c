@@ -3094,8 +3094,13 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
             /* Advance ONLY on a self-skip (ncand < 0). An empty window
              * (ncand == 0) already got its fair, bounded retry above and is a
              * verdict about the TARGET, not the sampler — it must not also
-             * change sampler. An explicit --sampler=ibs/sw never walks. */
-            if (ncand >= 0 || !chain_auto)
+             * change sampler. An explicit --sampler=ibs/sw never walks. Routed
+             * through the pure, unit-tested predicate rather than inlined here
+             * a second time (review, 2026-08-06): the two call sites used to
+             * carry independent copies of this comparison, and a `>=` -> `>`
+             * typo in either would have silently reintroduced the bug this
+             * task exists to fix while test_autoregion stayed green. */
+            if (!asmspy_autoregion_chain_advance(ncand, chain_auto))
                 break;
             asmspy_sampler_t next =
                 asmspy_autoregion_sampler_next(smp, ibs_substrate);
@@ -4250,8 +4255,10 @@ static void serve_run_engine(serve_session_t *s) {
                      "%s%s", tried[0] ? ", " : "", smp);
             /* Advance ONLY on a self-skip; an empty window is a verdict about
              * the TARGET, not the sampler, and an explicit --sampler=ibs/sw
-             * never walks (see the comment above). */
-            if (ncand >= 0 || !chain_auto)
+             * never walks (see the comment above). Routed through the same
+             * pure predicate cmd_dataflow uses (review, 2026-08-06) so this
+             * comparison cannot drift independently at the two call sites. */
+            if (!asmspy_autoregion_chain_advance(ncand, chain_auto))
                 break;
             asmspy_sampler_t next =
                 asmspy_autoregion_sampler_next(smp_id, ibs_substrate);

@@ -425,6 +425,28 @@ asmspy_autoregion_sampler_next(asmspy_sampler_t tried, int ibs_substrate) {
     }
 }
 
+/* Should the chain advance to the next sampler? This is the OTHER half of the
+ * chain decision, and the one review found the most likely to drift: it used
+ * to be inlined as `ncand >= 0 || !chain_auto` at both call sites, where a
+ * single `>=` -> `>` typo (or a re-widened window-loop guard) would silently
+ * let an EMPTY window advance the chain, and asmspy_autoregion_sampler_next's
+ * own tests would keep passing 57/57 -- they cover ORDER, not WHEN to walk it.
+ * Extracted so both call sites route through one comparison instead of two
+ * copies that can disagree.
+ *
+ * Only a SELF-SKIP (ncand < 0) is a refusal. ncand == 0 is an empty WINDOW --
+ * the sampler RAN and nothing qualified -- which the window loop above this
+ * one already retries against the SAME sampler; letting it also switch
+ * samplers here would silently change the evidence grade (entry vs residency)
+ * mid-capture, which is exactly the defect this task exists to fix in the
+ * other direction (never trying a second sampler at all). ncand > 0 is a real
+ * pick: nothing left to do. An explicit --sampler=ibs/sw (chain_auto == 0)
+ * never advances, no matter what ncand says -- forcing one means getting
+ * exactly that one. */
+static inline int asmspy_autoregion_chain_advance(int ncand, int chain_auto) {
+    return chain_auto && ncand < 0;
+}
+
 /* Resolve ONE selected hot edge to a drillable region. Tries to_addr (where
  * control went), then from_addr; an endpoint qualifies only if it resolves AND
  * has size > 0 (the zero-size vacuity rule above). Returns 0 and fills
