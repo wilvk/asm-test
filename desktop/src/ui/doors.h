@@ -409,6 +409,16 @@ struct InspectState {
     bool sample_available = false;
     bool want_defaulted = false;
 
+    // 2026-08-06 plan, Task 4: the same measured perf verdict CapState::perf_ok/
+    // perf_reason/perf_probed carry, copied here every frame (shell.cpp, beside
+    // where it recomputes CapState::perf_probed) so mode_host_blocked can be
+    // driven from InspectState alone — the door's pure functions (inspect_sweep_
+    // blocked) take no CapState and must not gain one just to read three fields.
+    // perf_probed=false is the safe default: an unprobed host blocks nothing.
+    bool perf_ok = false;
+    std::string perf_reason;
+    bool perf_probed = false;
+
     // The live Observer deck (08-observer-views.md) over this session's
     // recording. It is the SAME deck the replay tabs draw, rebuilt as the
     // recording grows — which is what makes "every view renders identically

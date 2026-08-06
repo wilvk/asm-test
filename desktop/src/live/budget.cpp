@@ -207,6 +207,33 @@ bool mode_needs_region(LiveMode m) {
 
 const char *mode_jack_reason(LiveMode m) { return row_for(m)->why; }
 
+std::string mode_host_blocked(LiveMode want, bool perf_probed, bool perf_ok,
+                              const std::string &perf_reason) {
+    // Only a MEASURED refusal may grey a control (see the header). Not asking
+    // is not a refusal, and CAP_PERFMON on the asmspy binary overrides the
+    // sysctl -- so an unprobed host, or a host we could not probe, blocks
+    // nothing and says so elsewhere.
+    if (!perf_probed || perf_ok)
+        return std::string();
+    // Exactly the two modes whose capture depends on the out-of-band sampler.
+    // Every other mode is pure ptrace: MEASURED emitting its full stream on
+    // this host, with perf refused, over a named region. Greying them would
+    // hide the only path that still works.
+    if (want != LiveMode::Auto && want != LiveMode::Sample)
+        return std::string();
+    const char *what =
+        want == LiveMode::Auto
+            ? "`auto` picks its region with the out-of-band sampler, so with "
+              "perf refused it records ZERO events (not an empty pane — no "
+              "capture at all)"
+            : "`sample` IS the out-of-band sampler";
+    return std::string(what) + ": " +
+           (perf_reason.empty() ? std::string("perf_event_open was refused")
+                                : perf_reason) +
+           ". Name a region and use `dataflow` or `trace` instead — those are "
+           "pure ptrace and run here.";
+}
+
 namespace {
 // aarch64 goes by several spellings on the wire (uname `aarch64`, some
 // producers `arm64`); match either so the kill-hazard clause is not silently

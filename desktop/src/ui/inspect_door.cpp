@@ -258,9 +258,26 @@ const std::vector<LiveMode> &inspect_sweep_legs(const InspectState &s) {
 // forward on purpose: the decision is what can be wrong, and it is tested there
 // against no live target at all.
 std::string inspect_sweep_blocked(const InspectState &s) {
-    return sweep_blocked(s.host_started, s.selected_pid > 0,
-                         s.record_session && s.record_path[0] != '\0',
-                         s.sweep_running, !s.active.empty());
+    const std::string base =
+        sweep_blocked(s.host_started, s.selected_pid > 0,
+                      s.record_session && s.record_path[0] != '\0',
+                      s.sweep_running, !s.active.empty());
+    if (!base.empty())
+        return base;
+    // 2026-08-06 plan, Task 4: refuse a sweep whose FIRST leg cannot run on
+    // this host. inspect_sweep_poll calls send_start directly and bypasses
+    // inspect_request_start entirely, so gating only the patch-bay Start
+    // button would not gate a sweep — this is the one place that does. An
+    // auto-led sweep (no region named) leads with `auto`, which needs the
+    // out-of-band sampler; a scoped sweep leads with `tree`, which does not,
+    // so mode_host_blocked is "" for it and this never fires. Either way, a
+    // sweep whose leading leg cannot capture is three captures that change
+    // nothing.
+    const std::vector<LiveMode> &legs = inspect_sweep_legs(s);
+    if (legs.empty())
+        return std::string();
+    return mode_host_blocked(legs.front(), s.perf_probed, s.perf_ok,
+                             s.perf_reason);
 }
 
 void inspect_sweep_start(InspectState &s) {
@@ -686,23 +703,30 @@ void draw_patch_bay(InspectState &s) {
         // single-step modes there — never a hidden refusal, always a stated one,
         // with the reason in the tooltip.
         const bool hazard = mode_arm64_blocking_hazard(m, s.target_arch);
-        if (hazard)
+        // 2026-08-06 plan, Task 4: the second refusal a jack can carry — not a
+        // kernel fact about THIS pair of modes, but a measured fact about
+        // THIS host (perf_event_open refused, so auto/sample cannot capture).
+        // Composed beside viz_line, never inside it: viz_line also feeds the
+        // hover tooltip below and mirrors mode_visualizations, neither of
+        // which is a host fact.
+        const std::string host_why =
+            mode_host_blocked(m, s.perf_probed, s.perf_ok, s.perf_reason);
+        if (hazard || !host_why.empty())
             ImGui::BeginDisabled(true);
         if (ImGui::RadioButton(mode_name(m), s.want == m))
             s.want = m;
-        if (hazard)
+        if (hazard || !host_why.empty())
             ImGui::EndDisabled();
         if (ImGui::IsItemHovered()) {
             // The tooltip names what the jack does AND what the mode lets you see
             // (R11), so a pick is not a leap of faith.
-            std::string viz = viz_line(m);
+            std::string tip =
+                std::string(mode_jack_reason(m)) + "\n\nshows: " + viz_line(m);
             if (hazard)
-                ImGui::SetTooltip("%s\n\nshows: %s\n\narm64: %s",
-                                  mode_jack_reason(m), viz.c_str(),
-                                  mode_perturb_warning(m, s.target_arch).c_str());
-            else
-                ImGui::SetTooltip("%s\n\nshows: %s", mode_jack_reason(m),
-                                  viz.c_str());
+                tip += "\n\narm64: " + mode_perturb_warning(m, s.target_arch);
+            if (!host_why.empty())
+                tip += "\n\nthis host: " + host_why;
+            ImGui::SetTooltip("%s", tip.c_str());
         }
         first_jack = false;
     }
@@ -1601,10 +1625,25 @@ void draw_launch_pane(InspectState &s) {
         if (!first_launch_mode)
             flow_same_line(flow_radio_w(mode_name(m)));
         first_launch_mode = false;
+        // 2026-08-06 plan, Task 4: this picker applied no host gate at all —
+        // `sample` (the one kLaunchModes entry the out-of-band sampler needs)
+        // would sit selectable next to a `perf_event_open` refusal that makes
+        // it record zero events. Same shape as the patch bay's, greyed with
+        // its reason in the tooltip.
+        const std::string host_why =
+            mode_host_blocked(m, s.perf_probed, s.perf_ok, s.perf_reason);
+        if (!host_why.empty())
+            ImGui::BeginDisabled(true);
         if (ImGui::RadioButton(mode_name(m), s.want == m))
             s.want = m;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", mode_jack_reason(m));
+        if (!host_why.empty())
+            ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            std::string tip = mode_jack_reason(m);
+            if (!host_why.empty())
+                tip += std::string("\n\nthis host: ") + host_why;
+            ImGui::SetTooltip("%s", tip.c_str());
+        }
     }
     if (!is_launch_mode(s.want))
         // The picker defaults to whatever budget_least_perturbing chose

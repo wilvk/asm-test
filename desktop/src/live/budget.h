@@ -168,6 +168,19 @@ std::string sweep_plan(bool have_region, long max_events);
 std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
                           bool already_sweeping, bool jack_held);
 
+// --- the host-capability gate (2026-08-06 plan, Task 4) ---------------------
+//
+// why `want` cannot run on THIS host, or "" when nothing is known to stop it.
+// Pure over the probed facts, so test_budget pins it against no live host at
+// all.
+//
+// `perf_probed` is what separates "measured refusal" from "not asked": only a
+// MEASURED refusal may grey a mode. An unprobed host yields "" -- a note
+// elsewhere, never a disabled control, because a control greyed on a guess is
+// indistinguishable from a broken build.
+std::string mode_host_blocked(LiveMode want, bool perf_probed, bool perf_ok,
+                              const std::string &perf_reason);
+
 struct BudgetDecision {
     bool allowed = true;
     // Set when !allowed: the mode already holding the jack, and prose naming

@@ -4776,6 +4776,14 @@ void draw_shell(ShellState &s) {
     // grey or allow `auto` from a guess about the wrong machine.
     s.caps.perf_probed =
         s.inspect.host_started && s.inspect.ssh_host[0] == '\0';
+    // Task 4: hand the same three facts to InspectState, right where they are
+    // computed. mode_host_blocked's three callers in inspect_door.cpp
+    // (inspect_sweep_blocked, draw_patch_bay, draw_launch_pane) each take an
+    // InspectState, never a CapState — so its inputs live where they already
+    // reach, rather than threading CapState through the door as well.
+    s.inspect.perf_ok = s.caps.perf_ok;
+    s.inspect.perf_reason = s.caps.perf_reason;
+    s.inspect.perf_probed = s.caps.perf_probed;
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through
     // the ONE writer so the timeline / slice / Loom / Scrubber animate together.
