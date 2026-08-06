@@ -82,6 +82,22 @@ void inspect_disconnect(InspectState &s) {
     s.ptslice_ran = false;
 }
 
+// 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1b): every site
+// that asks "can THIS mode run on the measured host?" was repeating
+// mode_host_blocked's three InspectState-carried arguments
+// (perf_probed/perf_ok/perf_reason) verbatim — nine call sites once Finding
+// 1's fire-time backstops landed. One thin wiring helper each for "the mode
+// about to fire" (s.want, the common case) and "some OTHER mode" (a sweep
+// leg, a queued want) — the decision itself stays in budget.h's
+// mode_host_blocked, tested there against no live host; this is only DRY
+// plumbing, so it carries no comment of its own beyond this one.
+std::string inspect_host_why(const InspectState &s, LiveMode m) {
+    return mode_host_blocked(m, s.perf_probed, s.perf_ok, s.perf_reason);
+}
+std::string inspect_host_why(const InspectState &s) {
+    return inspect_host_why(s, s.want);
+}
+
 bool inspect_request_start(InspectState &s) {
     // An illegal tree filter must never reach the wire — the deleted
     // obs_tree_start_command self-guarded exactly this way (it returned "" on a
@@ -102,8 +118,7 @@ bool inspect_request_start(InspectState &s) {
     // greyed Start button; this is what protects every OTHER caller — the
     // perturb "Start anyway", the attach path, a future caller — from firing
     // a capture MEASURED to record zero events.
-    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
-             .empty())
+    if (!inspect_host_why(s).empty())
         return false;
     // The perturbation gate (T5, F22), now scoped to the ONE unrecoverable case.
     // A single-stepping mode always dirties the traced page and perturbs timing —
@@ -183,8 +198,7 @@ bool inspect_request_launch(InspectState &s) {
     // radio being greyed does not stop `s.want` already holding it (carried
     // over from Capture mode, or a stale selection from before a reconnect
     // changed the measured verdict).
-    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
-             .empty())
+    if (!inspect_host_why(s).empty())
         return false;
     if (mode_arm64_blocking_hazard(s.want, s.target_arch) &&
         !s.perturb_confirmed) {
@@ -299,8 +313,7 @@ std::string inspect_sweep_blocked(const InspectState &s) {
     const std::vector<LiveMode> &legs = inspect_sweep_legs(s);
     if (legs.empty())
         return std::string();
-    return mode_host_blocked(legs.front(), s.perf_probed, s.perf_ok,
-                             s.perf_reason);
+    return inspect_host_why(s, legs.front());
 }
 
 void inspect_sweep_start(InspectState &s) {
@@ -375,6 +388,25 @@ bool inspect_sweep_poll(InspectState &s) {
     // The SAME jack rule the Queue obeys — a sweep may never bypass the budget.
     if (s.awaiting_started || !budget_queue_ready(leg, s.active))
         return false;
+
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1a): a SIXTH
+    // direct-`send_start` site. inspect_sweep_blocked only checks the FIRST
+    // leg, at ARM time — draw_patch_bay calls this poll BEFORE the "Capture
+    // every substrate" button handler each frame, so the frame that arms a
+    // sweep can never be the frame that fires leg 0; the earliest send_start
+    // is the NEXT frame's poll. perf_probed/perf_ok are recomputed every
+    // frame and never latched, so the probe can resolve to "measured
+    // refused" in that one-frame gap (or on any later leg, after a reconnect
+    // changes the verdict mid-sweep). Re-check at FIRE time and follow the
+    // sweep's own convention just below: STOP and say which leg and why,
+    // never fire a doomed capture and blame it on the operator.
+    const std::string host_why = inspect_host_why(s, leg);
+    if (!host_why.empty()) {
+        s.sweep_running = false;
+        s.sweep_note = "sweep stopped before its `" +
+                       std::string(mode_name(leg)) + "` leg: " + host_why;
+        return false;
+    }
 
     // An auto-led sweep's scoped leg inherits the region the auto leg picked.
     // If the auto leg found none — the sampler was refused (perf locked down),
@@ -528,8 +560,7 @@ void inspect_confirm_swap(InspectState &s) {
     // symmetry as the tree-filter check just above — this function sends
     // `start` directly rather than through inspect_request_start, so it needs
     // its OWN copy of the host-capability backstop rather than inheriting one.
-    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
-             .empty())
+    if (!inspect_host_why(s).empty())
         return;
     // Stopping someone else's capture is a real consequence, which is why this
     // is a separate, explicit action rather than something inspect_request_start
@@ -554,6 +585,33 @@ void inspect_arm_queue(InspectState &s) {
     // when the jack frees; re-reading the picker at fire time would attach whatever
     // mode/region/filter the user has since moved to. This freezes what was queued.
     s.queued_params = inspect_start_params(s);
+}
+
+// The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
+// never an auto-swap, because budget_queue_ready is true only when the jack is
+// genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
+// never bypassed.
+//
+// 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): a THIRD
+// direct-`send_start` site, alongside inspect_request_start/launch and the
+// swap confirm above — Queue can only be ARMED while `can` holds (host not
+// blocked at arm time, see draw_patch_bay's Queue button), but the jack frees
+// LATER, on its own schedule; re-check the host verdict at FIRE time rather
+// than trusting a snapshot that may now be stale.
+//
+// (Coordinator review Finding 3a): extracted out of draw_patch_bay into its
+// own function — like inspect_sweep_poll — so it is a named, headlessly-
+// testable site rather than logic inline in an ImGui draw function.
+bool inspect_queue_poll(InspectState &s) {
+    if (!s.has_queued || !budget_queue_ready(s.queued_want, s.active) ||
+        !inspect_host_why(s, s.queued_want).empty())
+        return false;
+    s.session.send_start(mode_name(s.queued_want), s.selected_pid,
+                         s.queued_params);
+    s.active.push_back(s.queued_want);
+    s.awaiting_started = true; // 39 T5: the queued start is in flight
+    s.has_queued = false;
+    return true;
 }
 
 namespace {
@@ -739,8 +797,7 @@ void draw_patch_bay(InspectState &s) {
         // Composed beside viz_line, never inside it: viz_line also feeds the
         // hover tooltip below and mirrors mode_visualizations, neither of
         // which is a host fact.
-        const std::string host_why =
-            mode_host_blocked(m, s.perf_probed, s.perf_ok, s.perf_reason);
+        const std::string host_why = inspect_host_why(s, m);
         if (hazard || !host_why.empty())
             ImGui::BeginDisabled(true);
         if (ImGui::RadioButton(mode_name(m), s.want == m))
@@ -852,27 +909,12 @@ void draw_patch_bay(InspectState &s) {
     // mode held the jack; free views were never on it.
     inspect_reconcile_self_end(s, s.session.status());
 
-    // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
-    // never an auto-swap, because budget_queue_ready is true only when the jack is
-    // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
-    // never bypassed. Polled here, before we render the state below.
-    //
-    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): a THIRD
-    // direct-`send_start` site, alongside inspect_request_start/launch and the
-    // swap confirm above — Queue can only be ARMED while `can` holds (host not
-    // blocked at arm time, see draw_patch_bay's Queue button), but the jack
-    // frees LATER, on its own schedule; re-check the host verdict at FIRE time
-    // rather than trusting a snapshot that may now be stale.
-    if (s.has_queued && budget_queue_ready(s.queued_want, s.active) &&
-        mode_host_blocked(s.queued_want, s.perf_probed, s.perf_ok,
-                          s.perf_reason)
-            .empty()) {
-        s.session.send_start(mode_name(s.queued_want), s.selected_pid,
-                             s.queued_params);
-        s.active.push_back(s.queued_want);
-        s.awaiting_started = true; // 39 T5: the queued start is in flight
-        s.has_queued = false;
-    }
+    // The Queue path (23 T3): a queued want starts the MOMENT the jack frees.
+    // Polled here, before we render the state below, so a queued want sees a
+    // freed jack in the same frame. inspect_queue_poll (doors.h) carries the
+    // rule and the host-capability re-check; drawn out to its own function
+    // (coordinator review Finding 3a) so it is headlessly testable.
+    inspect_queue_poll(s);
 
     // 59 T1: the substrate sweep, polled on the same freed jack and after the
     // Queue — an explicitly queued want is the operator's own next choice and
@@ -902,8 +944,7 @@ void draw_patch_bay(InspectState &s) {
     // not be Swappable/Queueable either (both reuse `can` below), and a stale
     // `want` left over from before a reconnect changed the measured verdict
     // must grey the SAME buttons the radio does, not just the radio.
-    const std::string host_why =
-        mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason);
+    const std::string host_why = inspect_host_why(s);
     const bool can = s.host_started && s.selected_pid > 0 && has_region &&
                      tree_err.empty() && host_why.empty();
     const LiveControls ctl =
@@ -1683,8 +1724,7 @@ void draw_launch_pane(InspectState &s) {
         // would sit selectable next to a `perf_event_open` refusal that makes
         // it record zero events. Same shape as the patch bay's, greyed with
         // its reason in the tooltip.
-        const std::string host_why =
-            mode_host_blocked(m, s.perf_probed, s.perf_ok, s.perf_reason);
+        const std::string host_why = inspect_host_why(s, m);
         if (!host_why.empty())
             ImGui::BeginDisabled(true);
         if (ImGui::RadioButton(mode_name(m), s.want == m))
@@ -1728,8 +1768,7 @@ void draw_launch_pane(InspectState &s) {
     // host cannot run it, but says nothing about `s.want` already holding it
     // (carried over from Capture mode). Gate the button on it too, with the
     // reason surfaced the same way the blank-command case already is.
-    const std::string launch_host_why =
-        mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason);
+    const std::string launch_host_why = inspect_host_why(s);
     ImGui::BeginDisabled(s.launch_cmd[0] == '\0' || !launch_host_why.empty());
     if (ImGui::Button("Launch & trace"))
         inspect_launch_full_detail(s);

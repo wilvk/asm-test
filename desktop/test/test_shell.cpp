@@ -2266,6 +2266,43 @@ int main() {
               "sequence");
     }
 
+    // --- 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1a/3a): a
+    // SIXTH direct-send_start site — inspect_sweep_poll. inspect_sweep_blocked
+    // only checks the FIRST leg, at ARM time, and draw_patch_bay polls the
+    // sweep BEFORE the button that arms one, so the earliest a leg can fire is
+    // the frame AFTER arm — an ordinary sequence in which perf_probed/perf_ok
+    // (recomputed every frame, never latched) can flip in the gap.
+    {
+        InspectState sw;
+        sw.host_started = true;
+        sw.selected_pid = 1;
+        sw.record_session = true;
+        std::snprintf(sw.record_path, sizeof sw.record_path, "%s",
+                      "/tmp/sweep-host-blocked.asmtrace");
+        inspect_sweep_start(sw); // no region named -> auto-led, leg 0 = auto
+        check("sweep/poll/armed", sw.sweep_running, "the sweep armed");
+        // The measured verdict turns against `auto` in the gap between arm
+        // and this poll.
+        sw.perf_probed = true;
+        sw.perf_ok = false;
+        sw.perf_reason = "perf_event_open refused (Permission denied)";
+        check("sweep/poll/host-blocked-stops-not-fires",
+              !inspect_sweep_poll(sw) && !sw.sweep_running && sw.active.empty(),
+              "leg 0 (`auto`) cannot fire on a host where perf is MEASURED "
+              "refused — the poll must STOP the sweep, not send a doomed "
+              "start and blame the operator for it");
+        // "stopped" AND the leg name together — not just the leg name alone,
+        // which a FIRED leg's own note ("sweep: leg 1/3 (auto)") would also
+        // contain, making the check blind to exactly the mutation it exists
+        // to catch (verified: mutating the check above alone left this one
+        // green, because both notes name `auto`).
+        check("sweep/poll/host-blocked-names-the-leg",
+              sw.sweep_note.find("stopped") != std::string::npos &&
+                  sw.sweep_note.find("auto") != std::string::npos,
+              "the stop note must name which leg it stopped at, the same "
+              "convention the no-region-picked stop already follows");
+    }
+
     // --- region gap: inspect_start_params attaches a scoped region ONLY for the
     // scoped modes (trace/dataflow) and picks base+len vs func by the spec shape.
     // A whole-process mode and `auto` send none — so the door never blocks Start on
@@ -2442,6 +2479,31 @@ int main() {
               "a queued whole-process mode carries no params, as its Start would");
     }
 
+    // --- 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1/3a): the
+    // Queue-fire backstop. inspect_queue_poll (extracted out of draw_patch_bay
+    // so it is headlessly testable) re-checks the host verdict at FIRE time —
+    // Queue can only be ARMED while the host permits it, but the jack frees
+    // LATER, on its own schedule, and perf_probed/perf_ok can flip in the gap.
+    {
+        InspectState is;
+        is.host_started = true;
+        is.selected_pid = 4242;
+        is.want = LiveMode::Auto;
+        inspect_arm_queue(is); // armed while the host verdict was unprobed
+        check("queue/armed", is.has_queued, "the queue armed");
+        // The jack is free (active empty, so budget_queue_ready holds), but
+        // perf now measures refused — the arm-time snapshot must not be
+        // trusted at fire time.
+        is.perf_probed = true;
+        is.perf_ok = false;
+        is.perf_reason = "perf_event_open refused (Permission denied)";
+        check("queue/host-blocked-does-not-fire",
+              !inspect_queue_poll(is) && is.has_queued && is.active.empty(),
+              "`auto` cannot fire from Queue on a host where perf is "
+              "MEASURED refused — the queued want must stay queued rather "
+              "than fire a doomed capture");
+    }
+
     // --- 39 T5: the self-end reconcile frees the ptrace jack no user action
     // would (a one-shot `auto` that "starts then stops"). inspect_reconcile_self_
     // end keys on LiveStatus::sessions_ended; an in-flight start (awaiting_started,
@@ -2568,6 +2630,29 @@ int main() {
                   is.active[0] == LiveMode::Tree,
               "a legal tree filter completes the swap: blocker stopped, tree "
               "the sole active jack");
+    }
+
+    // --- 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1/3a): the
+    // SAME symmetry test as the tree-filter block above, for the host-
+    // capability backstop inspect_confirm_swap carries independently (it
+    // sends `start` directly, never through inspect_request_start).
+    {
+        InspectState is;
+        is.host_started = true;
+        is.selected_pid = 4242;
+        is.want = LiveMode::Auto;
+        is.active.push_back(LiveMode::Log); // a blocker holds the jack
+        is.swap_pending = true;
+        is.perf_probed = true;
+        is.perf_ok = false;
+        is.perf_reason = "perf_event_open refused (Permission denied)";
+        inspect_confirm_swap(is);
+        check("swap/host-blocked-no-op",
+              is.swap_pending && is.active.size() == 1 &&
+                  is.active[0] == LiveMode::Log,
+              "`auto` cannot fire via Swap on a host where perf is MEASURED "
+              "refused — the blocker must stay and the confirm must stay up, "
+              "exactly like the illegal-tree-filter case above");
     }
 
     // --- Processes double-click / right-click: the "full detail" attach. It

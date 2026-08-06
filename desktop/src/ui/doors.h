@@ -480,6 +480,16 @@ void inspect_confirm_swap(InspectState &s);
 // drives it.
 void inspect_arm_queue(InspectState &s);
 
+// Per-frame: fire the queued want the MOMENT the jack is free and the host
+// still permits it (budget_queue_ready AND mode_host_blocked, re-checked at
+// FIRE time rather than trusted from the arm-time snapshot — the jack can
+// free itself long after Queue was armed). Returns true if it fired.
+// Extracted out of draw_patch_bay (2026-08-06 plan, Task 4 fix, coordinator
+// review Finding 3a) so this — like inspect_sweep_poll below — is a named,
+// headlessly-testable function instead of inline ImGui-adjacent logic;
+// test_shell drives it directly.
+bool inspect_queue_poll(InspectState &s);
+
 // The serve `start` params for the current want: a scoped region (func name or
 // base+len, parse_region_spec) for trace/dataflow, plus `steps:true` when the
 // register ring is armed on a dataflow/auto capture; empty for the whole-process
