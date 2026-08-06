@@ -105,7 +105,16 @@ bool mode_arm64_blocking_hazard(LiveMode m, const std::string &arch);
 // reports it available, otherwise the lightest ptrace mode (`log` — it streams
 // syscalls without single-stepping, unlike `stream`/`trace`/`dataflow`). A pure
 // choice over the resolved capability model, so test_budget pins it.
-LiveMode budget_least_perturbing(bool sample_available);
+//
+// 2026-08-06 plan, Task 4 fix (coordinator review, Finding 2): `sample_available`
+// is a SUBSTRATE fact (CPUID/sysfs — IBS hardware exists) and says nothing about
+// PERMISSION — the exact gap CapState::perf_ok exists to close (a host can have
+// IBS silicon and still refuse every perf_event_open, measured on this box). So
+// `perf_probed`/`perf_ok` are threaded through here too, via mode_host_blocked,
+// rather than defaulting to a mode that would record zero events on the very
+// first Start.
+LiveMode budget_least_perturbing(bool sample_available, bool perf_probed,
+                                 bool perf_ok);
 
 // --- the substrate sweep (59 T1) --------------------------------------------
 //

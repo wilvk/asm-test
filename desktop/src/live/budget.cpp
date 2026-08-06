@@ -263,12 +263,22 @@ bool mode_arm64_blocking_hazard(LiveMode m, const std::string &arch) {
     return mode_uses_ptrace(m) && is_arm64(arch);
 }
 
-LiveMode budget_least_perturbing(bool sample_available) {
+LiveMode budget_least_perturbing(bool sample_available, bool perf_probed,
+                                 bool perf_ok) {
     // `sample` reads out of band (mode_uses_ptrace==false) and perturbs nothing;
     // it is the least-perturbing substrate when the host has AMD IBS. Otherwise
     // the lightest ptrace mode: `log` streams syscalls without single-stepping,
     // so it dirties no page, unlike `stream`/`trace`/`dataflow`/`tree`/`graph`.
-    return sample_available ? LiveMode::Sample : LiveMode::Log;
+    //
+    // Task 4 fix (Finding 2): `sample_available` alone is not enough — reuse
+    // mode_host_blocked (the same predicate the picker greys a mode with) to
+    // ask whether THIS host's measured perf verdict would actually refuse
+    // `sample`. `perf_reason` is passed empty: only emptiness of the return is
+    // read here, never its text, so the real reason is never needed.
+    const bool sample_host_blocked =
+        !mode_host_blocked(LiveMode::Sample, perf_probed, perf_ok, "").empty();
+    return (sample_available && !sample_host_blocked) ? LiveMode::Sample
+                                                      : LiveMode::Log;
 }
 
 BudgetDecision budget_can_start(LiveMode want,

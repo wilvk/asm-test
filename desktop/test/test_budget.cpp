@@ -249,12 +249,27 @@ int main(void) {
 
         // The least-perturbing default: sample where the host has IBS, else the
         // lightest ptrace mode (log — it does not single-step).
-        check("default/sample-when-available",
-              budget_least_perturbing(true) == sample,
-              "with IBS the default is the out-of-band sampler");
+        check("default/sample-when-available-unprobed",
+              budget_least_perturbing(true, false, false) == sample,
+              "with IBS and an unprobed host, the default is the sampler -- "
+              "an unprobed host blocks nothing (see mode_host_blocked)");
+        check("default/sample-when-available-and-perf-ok",
+              budget_least_perturbing(true, true, true) == sample,
+              "with IBS and a MEASURED working perf, the default is the "
+              "out-of-band sampler");
         check("default/log-otherwise",
-              budget_least_perturbing(false) == log,
+              budget_least_perturbing(false, false, false) == log,
               "without IBS the default is the lightest ptrace mode (log)");
+        // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 2): THE
+        // regression this task exists to close. IBS hardware present
+        // (sample_available) is a SUBSTRATE fact and says nothing about
+        // PERMISSION -- a host can have the silicon and still MEASURE every
+        // perf_event_open refused (this box does). Defaulting to `sample`
+        // there would fire and record ZERO events on the very first Start.
+        check("default/log-when-sample-would-be-host-blocked",
+              budget_least_perturbing(true, true, false) == log,
+              "IBS hardware present does not mean perf_event_open works -- "
+              "the default must fall back to a mode that actually captures");
         check("default/log-does-not-single-step", mode_uses_ptrace(log),
               "log holds the jack (streams syscalls) but does not single-step");
     }

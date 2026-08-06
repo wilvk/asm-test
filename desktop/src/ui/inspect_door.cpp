@@ -91,6 +91,20 @@ bool inspect_request_start(InspectState &s) {
     if (s.want == LiveMode::Tree &&
         !obs_tree_filter_error(s.observer.filter).empty())
         return false;
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): the SAME
+    // backstop discipline mode_arm64_blocking_hazard already gets below —
+    // greying the patch-bay radio only stops a CLICK from picking a blocked
+    // mode, it says nothing about `s.want` already holding one.
+    // inspect_attach_full_detail force-sets `auto` on every double-click and
+    // calls straight through to this function, and a stale `want` can survive
+    // a reconnect that changes the measured verdict (local -> remote ->
+    // local). The draw path recomputes and shows this same string next to a
+    // greyed Start button; this is what protects every OTHER caller — the
+    // perturb "Start anyway", the attach path, a future caller — from firing
+    // a capture MEASURED to record zero events.
+    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
+             .empty())
+        return false;
     // The perturbation gate (T5, F22), now scoped to the ONE unrecoverable case.
     // A single-stepping mode always dirties the traced page and perturbs timing —
     // a nuisance, and no longer worth a second click (Start just starts). But on
@@ -162,6 +176,15 @@ bool inspect_request_launch(InspectState &s) {
         return false;
     if (s.want == LiveMode::Tree &&
         !obs_tree_filter_error(s.observer.filter).empty())
+        return false;
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): the same
+    // backstop as inspect_request_start above — `sample` is the one
+    // kLaunchModes entry the out-of-band sampler needs, and the Launch pane's
+    // radio being greyed does not stop `s.want` already holding it (carried
+    // over from Capture mode, or a stale selection from before a reconnect
+    // changed the measured verdict).
+    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
+             .empty())
         return false;
     if (mode_arm64_blocking_hazard(s.want, s.target_arch) &&
         !s.perturb_confirmed) {
@@ -501,6 +524,13 @@ void inspect_confirm_swap(InspectState &s) {
     if (s.want == LiveMode::Tree &&
         !obs_tree_filter_error(s.observer.filter).empty())
         return;
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): the same
+    // symmetry as the tree-filter check just above — this function sends
+    // `start` directly rather than through inspect_request_start, so it needs
+    // its OWN copy of the host-capability backstop rather than inheriting one.
+    if (!mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason)
+             .empty())
+        return;
     // Stopping someone else's capture is a real consequence, which is why this
     // is a separate, explicit action rather than something inspect_request_start
     // does on the user's behalf.
@@ -736,10 +766,14 @@ void draw_patch_bay(InspectState &s) {
     // Least-perturbing default (T5): steer the picker off a single-step mode
     // toward the lightest substrate the host supports. `sample_available` is set
     // by the shell from the capability probe; false under the null backend, where
-    // Log is already the default.
+    // Log is already the default. Task 4 fix (Finding 2): also threaded through
+    // perf_probed/perf_ok, so a host with IBS hardware but perf MEASURED
+    // refused does not default to a mode that fires and records nothing on
+    // the very first Start.
     if (!s.want_defaulted) {
         s.want_defaulted = true;
-        s.want = budget_least_perturbing(s.sample_available);
+        s.want = budget_least_perturbing(s.sample_available, s.perf_probed,
+                                         s.perf_ok);
     }
     // `continuous` follows the mode until the operator sets it themselves: an
     // `auto` capture re-arms by default, a named region does not.
@@ -822,7 +856,17 @@ void draw_patch_bay(InspectState &s) {
     // never an auto-swap, because budget_queue_ready is true only when the jack is
     // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
     // never bypassed. Polled here, before we render the state below.
-    if (s.has_queued && budget_queue_ready(s.queued_want, s.active)) {
+    //
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): a THIRD
+    // direct-`send_start` site, alongside inspect_request_start/launch and the
+    // swap confirm above — Queue can only be ARMED while `can` holds (host not
+    // blocked at arm time, see draw_patch_bay's Queue button), but the jack
+    // frees LATER, on its own schedule; re-check the host verdict at FIRE time
+    // rather than trusting a snapshot that may now be stale.
+    if (s.has_queued && budget_queue_ready(s.queued_want, s.active) &&
+        mode_host_blocked(s.queued_want, s.perf_probed, s.perf_ok,
+                          s.perf_reason)
+            .empty()) {
         s.session.send_start(mode_name(s.queued_want), s.selected_pid,
                              s.queued_params);
         s.active.push_back(s.queued_want);
@@ -852,8 +896,16 @@ void draw_patch_bay(InspectState &s) {
     const LiveStatus &st = s.session.status();
     const bool running =
         s.session.growing() != nullptr || st.state == LiveState::Running;
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): fold the
+    // host-capability gate into `can` the same way the tree filter and the
+    // missing region already are — a config that cannot legally Start must
+    // not be Swappable/Queueable either (both reuse `can` below), and a stale
+    // `want` left over from before a reconnect changed the measured verdict
+    // must grey the SAME buttons the radio does, not just the radio.
+    const std::string host_why =
+        mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason);
     const bool can = s.host_started && s.selected_pid > 0 && has_region &&
-                     tree_err.empty();
+                     tree_err.empty() && host_why.empty();
     const LiveControls ctl =
         live_controls(can, running, s.operator_paused, !s.active.empty());
 
@@ -865,12 +917,13 @@ void draw_patch_bay(InspectState &s) {
         // The tree-filter case sits before the region one: a `tree` needs no
         // region, so has_region is already true — tree_err is the only thing left
         // that can hold Start. The inline red error says WHAT is wrong; this says
-        // WHERE to fix it.
-        const char *why = !s.host_started     ? "connect a serve host first"
+        // WHERE to fix it. host_why is last: `can` requires all four of the
+        // earlier conditions, so if none of them tripped, this one did.
+        const char *why = !s.host_started       ? "connect a serve host first"
                           : s.selected_pid <= 0 ? "select a process first"
                           : !tree_err.empty()   ? "fix the tree filter above"
-                                                : "name a region above, or pick "
-                                                  "`auto`";
+                          : !has_region ? "name a region above, or pick `auto`"
+                                        : host_why.c_str();
         // Measured before it is drawn, and wrapped when it will not fit: in the
         // docked right rail this sentence is wider than the whole pane, let
         // alone what is left of Start's line.
@@ -1670,13 +1723,23 @@ void draw_launch_pane(InspectState &s) {
     }
 
     ImGui::Spacing();
-    ImGui::BeginDisabled(s.launch_cmd[0] == '\0');
+    // 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1): the SAME
+    // fold as the patch bay's `can` — the radio above greys `sample` when the
+    // host cannot run it, but says nothing about `s.want` already holding it
+    // (carried over from Capture mode). Gate the button on it too, with the
+    // reason surfaced the same way the blank-command case already is.
+    const std::string launch_host_why =
+        mode_host_blocked(s.want, s.perf_probed, s.perf_ok, s.perf_reason);
+    ImGui::BeginDisabled(s.launch_cmd[0] == '\0' || !launch_host_why.empty());
     if (ImGui::Button("Launch & trace"))
         inspect_launch_full_detail(s);
     ImGui::EndDisabled();
     if (s.launch_cmd[0] == '\0') {
         flow_same_line(flow_text_w("(enter a command first)"));
         ImGui::TextDisabled("(enter a command first)");
+    } else if (!launch_host_why.empty()) {
+        flow_same_line(flow_text_w(launch_host_why.c_str()));
+        ImGui::TextDisabled("%s", launch_host_why.c_str());
     }
 }
 

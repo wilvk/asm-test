@@ -2631,6 +2631,74 @@ int main() {
               "on x86 the perturb nuisance no longer gates Start — it starts");
     }
 
+    // --- 2026-08-06 plan, Task 4 fix (coordinator review, Finding 1/3): the
+    // host-capability gate must refuse to FIRE, not merely grey a radio — a
+    // greyed radio only stops a CLICK from picking a blocked mode; it has no
+    // bearing on `s.want` already holding one. This is the backstop's own
+    // test, exactly the "the guarantee never rests on a UI gate alone" idiom
+    // the tree-filter block above already pins for inspect_request_start.
+    {
+        InspectState hb; // perf MEASURED refused on this host; want = auto
+        hb.host_started = true;
+        hb.selected_pid = 7;
+        hb.want = LiveMode::Auto;
+        hb.perf_probed = true;
+        hb.perf_ok = false;
+        hb.perf_reason = "perf_event_open refused (Permission denied)";
+        check("start/host-blocked-refused",
+              !inspect_request_start(hb) && hb.active.empty(),
+              "`auto` cannot fire on a host where perf is MEASURED refused — "
+              "it would record ZERO events, and this backstop must hold even "
+              "though the radio is greyed for the SAME reason");
+
+        // An unprobed host (not yet connected, or a remote/ssh session) must
+        // block NOTHING — a stale or wrong-machine verdict must never refuse
+        // a Start on a guess (mode_host_blocked's own header comment).
+        InspectState hu;
+        hu.host_started = true;
+        hu.selected_pid = 7;
+        hu.want = LiveMode::Auto;
+        hu.perf_probed = false; // not asked (or asked about the wrong host)
+        hu.perf_ok = false;
+        hu.perf_reason = "perf_event_open refused (Permission denied)";
+        check("start/unprobed-host-not-blocked",
+              inspect_request_start(hu) && hu.active.size() == 1,
+              "an unprobed host must not refuse a Start — it has not measured "
+              "anything about the machine that will actually run asmspy");
+
+        // The double-click path: inspect_attach_full_detail force-sets `auto`
+        // unconditionally, so a stale/measured-blocked verdict must survive
+        // the force-set rather than being bypassed by it. Pre-set
+        // host_started so the attach does not need to dial a real connect
+        // (mirrors the ax/ix pattern above).
+        InspectState ha;
+        ha.host_started = true;
+        ha.perf_probed = true;
+        ha.perf_ok = false;
+        ha.perf_reason = "perf_event_open refused (Permission denied)";
+        inspect_attach_full_detail(ha, 4242);
+        check("attach/host-blocked-does-not-fire",
+              ha.want == LiveMode::Auto && ha.selected_pid == 4242 &&
+                  ha.active.empty(),
+              "a double-click still selects the pid and `auto` (so the "
+              "operator sees WHY the radio and Start are greyed), but must "
+              "not have fired a start that records nothing");
+
+        // The Launch path carries the identical backstop — `sample` is the
+        // one kLaunchModes entry the sampler needs.
+        InspectState hl;
+        hl.host_started = true;
+        std::snprintf(hl.launch_cmd, sizeof hl.launch_cmd, "/bin/true");
+        hl.want = LiveMode::Sample;
+        hl.perf_probed = true;
+        hl.perf_ok = false;
+        hl.perf_reason = "perf_event_open refused (Permission denied)";
+        check("launch/host-blocked-refused",
+              !inspect_request_launch(hl) && hl.active.empty(),
+              "`sample` cannot fire from Launch on a host where perf is "
+              "MEASURED refused — the launch backstop must hold too");
+    }
+
     // --- docs/internal/archive/gui/45-launch-and-window-target.md T3/T4: the Launch
     // pane's "Launch & trace" — mirrors the full-detail attach block above,
     // but there is no pid until the host names one. ---------------------------
