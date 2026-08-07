@@ -23,6 +23,18 @@ echo "--- test_ghash (graph table index: forced-collision probe/grow) ---"
 "$BUILD/test_ghash" || fail "test_ghash"
 echo "--- test_sha256 (code-header routine-identity digest vs FIPS vectors) ---"
 "$BUILD/test_sha256" || fail "test_sha256"
+# src/xstate_hi16.h decides whether the live producer may read ymm16-31 at all.
+# The input that matters most — the Hi16_ZMM component ENUMERATED by the part but
+# never ENABLED by the OS (clearcpuid=avx512f, or a hypervisor masking XCR0) —
+# cannot be produced on a running host, and gating on CPUID(0xd,0).EAX there
+# returns a kernel-zeroed hole as if it were measured register bytes. So it is
+# pinned as a pure function. x86-only (mk/cli.mk gates the binary on CLI_ARCH).
+if [ -x "$BUILD/test_hi16" ]; then
+    echo "--- test_hi16 (upper-sixteen xstate gate: XCR0, not the CPUID bit) ---"
+    "$BUILD/test_hi16" || fail "test_hi16"
+else
+    echo "# SKIP test_hi16: x86-only (this host is $(uname -m)); no XSAVE Hi16_ZMM component exists here."
+fi
 echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
 "$BUILD/test_jitdump" || fail "test_jitdump"
 echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
@@ -790,8 +802,12 @@ echo "  target survived the timeout path + settle"
 # refusal is the correct answer — nothing to install, so per CLAUDE.md it is
 # recorded and skipped. A skip that fired on EVERY host would be the opposite:
 # it would make this lane decorative. The authority is the victim's own
-# __builtin_cpu_supports("avx512f") — the same predicate the producer's CPUID
-# probe answers to — so guard and feature can never disagree about the reason.
+# __builtin_cpu_supports("avx512f"), which is the same predicate the producer
+# answers to — both require the AVX-512 state group ENABLED IN XCR0, not merely
+# enumerated by CPUID. test_hi16's live-parity check above asserts that agreement
+# on this host rather than leaving it a claim in a comment; it was NOT true of the
+# first cut, which gated on CPUID(0xd,0).EAX and so would have read a
+# `clearcpuid=avx512f` machine's kernel-zeroed hole as measured register bytes.
 echo "--- asmspy --dataflow evex_victim (upper sixteen vector regs, ymm16-31) ---"
 if [ "${DF_AVAIL:-1}" != 1 ]; then
     echo "# SKIP ymm16-31: the data-flow value producer is unavailable here (it"
@@ -810,8 +826,14 @@ else
     if grep -q '^# SKIP evex_victim' "$evlog"; then
         sed 's/^/  /' "$evlog"
         echo "  (hardware gate: recorded, not worked around — the producer's own"
-        echo "   CPUID(0xd) probe reaches the same verdict and declines cleanly.)"
+        echo "   OSXSAVE+XGETBV probe reaches the same verdict and declines cleanly,"
+        echo "   which test_hi16's live-parity check asserts.)"
         wait "$EVPID" 2>/dev/null || true
+        # EVPID is SHARED with the exit_victim legs further down, whose comment
+        # states the convention: cleared once each leg returns. Leaving a reaped
+        # pid set would keep it in the EXIT/INT/TERM trap's kill list for the rest
+        # of the run, so a later fail() would signal whatever recycled that pid.
+        EVPID=""
     else
         kill -0 "$EVPID" 2>/dev/null \
             || fail "ymm16-31: evex_victim died at startup: $(cat "$evlog")"
@@ -894,6 +916,7 @@ else
         rm -f "$evrec" "$evgap"
         kill "$EVPID" 2>/dev/null || true
         wait "$EVPID" 2>/dev/null || true
+        EVPID="" # shared with the exit_victim legs below — see the note above
     fi
     rm -f "$evlog"
 fi

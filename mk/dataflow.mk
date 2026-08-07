@@ -80,7 +80,12 @@ $(BUILD)/dataflow_resume.o: src/dataflow_resume.c include/asmtest_valtrace.h \
 # a value-trace PRODUCER is a tier, not part of the shared sink API (its test re-declares
 # the entry points, like the emulator producer). Needs Capstone (the operand enumerator);
 # off Linux x86-64 / without Capstone it compiles to an ENOSYS stub.
-$(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c \
+# src/xstate_hi16.h is listed because this lane has NO -MMD header tracking (the
+# desktop lane does; the C lane spells its prerequisites out). Measured the hard
+# way: a mutation to that header produced a binary that still behaved like the
+# unmutated one, because the object was never rebuilt. A stale object here is a
+# producer that reads the vector file by a rule the source no longer states.
+$(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c src/xstate_hi16.h \
                             include/asmtest_valtrace.h include/asmtest_trace.h \
                             include/asmtest_codeimage.h \
                             $(BUILD)/.build-flags | $(BUILD)
@@ -129,7 +134,8 @@ $(BUILD)/pic/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtra
 # cflags as the static $(BUILD)/dataflow_ptrace.o above; without Capstone / off
 # Linux x86-64 the file's own #if compiles it to ENOSYS stubs, so this object
 # exists on every host and the lib always links.
-$(BUILD)/pic/dataflow_ptrace.o: src/dataflow_ptrace.c include/asmtest_valtrace.h \
+$(BUILD)/pic/dataflow_ptrace.o: src/dataflow_ptrace.c src/xstate_hi16.h \
+                                include/asmtest_valtrace.h \
                                 include/asmtest_codeimage.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
 

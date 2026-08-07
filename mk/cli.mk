@@ -307,13 +307,21 @@ $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 # the file's own guard runs on plain baseline code. Compiles via the cli/ .o
 # pattern rule.
 ifeq ($(CLI_ARCH),x86_64)
-CLI_EVEX_VICTIM := $(BUILD)/evex_victim
+CLI_EVEX_VICTIM := $(BUILD)/evex_victim $(BUILD)/test_hi16
 else
 CLI_EVEX_VICTIM :=
 endif
 
 $(BUILD)/evex_victim: $(BUILD)/evex_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
+
+# test_hi16 pins src/xstate_hi16.h's decision about WHETHER the upper sixteen are
+# readable — the one input that matters most (component enumerated by the part but
+# never enabled by the OS) cannot be produced on a running host, so it is tested as
+# a pure function instead of via a capture. Header-only, so -Isrc and nothing to
+# link; same shape as test_sha256 against cli/asmtrace_sha256.h.
+$(BUILD)/test_hi16: cli/test_hi16.c src/xstate_hi16.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -o $@ cli/test_hi16.c
 
 # sigload_victim backs the PERF-FREE picker's signal-fidelity check, and it is
 # the only victim here that is busy AND signal-driven. auto_victim cannot do its

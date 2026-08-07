@@ -143,7 +143,6 @@ typedef struct {
 
 #include <asm/prctl.h> /* ARCH_SET_GS */
 #include <capstone/capstone.h>
-#include <cpuid.h> /* __get_cpuid_count: the Hi16_ZMM xstate offset (dfp_hi16_off) */
 #include <dirent.h> /* /proc/<pid>/task enumeration (Increment 4 worker targeting) */
 #include <elf.h> /* NT_X86_XSTATE */
 #include <errno.h>
@@ -159,6 +158,8 @@ typedef struct {
 #include <sys/wait.h>
 #include <time.h> /* CLOCK_MONOTONIC: the entry-wait deadline (dfp_elapsed_ms) */
 #include <unistd.h>
+
+#include "xstate_hi16.h" /* asmtest_hi16_probe: where ymm16-31 live, and whether they do */
 
 /* Hard backstop on TOTAL steps (prologue/libc to the region entry, plus the region):
  * bounds wall time if the tracee never enters or never leaves [code, code+len). */
@@ -362,41 +363,32 @@ static uint16_t vec_width(uint32_t reg) {
     return 0;
 }
 
-/* Bytes per register in the Hi16_ZMM component: it saves the FULL 512-bit zmm16..31,
- * so ymm16 is the first 32 bytes of its slot and xmm16 the first 16. Measured on this
- * host (CPUID(0xd,7): size 1024 = 16 x 64, offset 1408). */
-#define DFP_HI16_STRIDE 64
-
-/* Byte offset of zmm16's slot within the NT_X86_XSTATE image, or 0 when this CPU has
- * no upper sixteen at all.
+/* Byte offset of zmm16's slot within the NT_X86_XSTATE image, or 0 when this machine has
+ * no readable upper sixteen.
  *
  * Component 2 (AVX / YMM_Hi128) sits at the architecturally FIXED offset 576, which is
  * why read_ymm below can hardcode it. Component 7 (Hi16_ZMM) has no such guarantee: the
  * standard-format offset is enumerated per-CPU in CPUID(0xd,7).EBX and must be read,
  * not assumed. Measured here (Ryzen 9 9950X): 1408, after component 5 (opmask, 832) and
- * component 6 (ZMM_Hi256, 896). A hardcoded 1408 would be a latent misread on any part
+ * component 6 (ZMM_Hi256, 896). A hardcoded 1408 would be a latent misread on a part
  * that lays its components out differently.
  *
- * CPUID(0xd,0).EAX bit 7 is the gate: it reports the components XCR0 can enable, and the
- * ptrace image only carries what XCR0 enabled. Clear bit -> no avx512f -> 0, and every
- * caller then declines rather than inventing bytes. That is a HARDWARE gate (CLAUDE.md):
- * there is nothing to install that would put ymm16-31 on a CPU that lacks them.
+ * The gate itself — and WHY it reads XCR0 rather than CPUID(0xd,0).EAX, which would
+ * accept a `clearcpuid=avx512f` boot and hand back a kernel-zeroed hole as data — is in
+ * src/xstate_hi16.h beside the pure decision it documents. cli/test_hi16.c pins that
+ * decision against combinations this host cannot boot into.
  *
  * Probed once and cached, unlocked, because every way the cache can race is safe. Two
- * threads both running the probe store the SAME value (CPUID is a pure function of the
- * part). A thread that observed `probed` before `off` reads 0 and DECLINES — which
- * records value_valid:false, the honest "not measured", never a fabricated value. The
- * failure mode of this race is a lost measurement, not a wrong one. */
+ * threads both running the probe store the SAME value (CPUID and XGETBV are pure
+ * functions of the machine). A thread that observed `probed` before `off` reads 0 and
+ * DECLINES — which records value_valid:false, the honest "not measured", never a
+ * fabricated value. The failure mode of this race is a lost measurement, not a wrong one. */
 static size_t dfp_hi16_off(void) {
     static int probed = 0;
     static size_t off = 0;
     if (probed)
         return off;
-    unsigned a = 0, b = 0, c = 0, d = 0;
-    if (__get_cpuid_count(0xd, 0, &a, &b, &c, &d) && (a & (1u << 7)) &&
-        __get_cpuid_count(0xd, 7, &a, &b, &c, &d) &&
-        a >= 16 * DFP_HI16_STRIDE && b != 0)
-        off = (size_t)b;
+    off = asmtest_hi16_probe();
     probed = 1;
     return off;
 }
@@ -420,7 +412,7 @@ static int dfp_read_hi16(pid_t pid, int idx, uint8_t *out, size_t n) {
     if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_X86_XSTATE, &iov) !=
         0)
         return 0;
-    const size_t o = base + (size_t)(idx - 16) * DFP_HI16_STRIDE;
+    const size_t o = base + (size_t)(idx - 16) * ASMTEST_HI16_STRIDE;
     if (iov.iov_len < o + n)
         return 0; /* short image: the component was not delivered */
     memcpy(out, xs + o, n);
@@ -2490,10 +2482,13 @@ static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s) {
          * first 32 are ymm[i]. All-or-nothing: one short read and the whole high
          * half is unusable, since a partly-filled snapshot would diff garbage. */
         const size_t hb = dfp_hi16_off();
-        if (hb != 0 && iov.iov_len >= hb + 16 * DFP_HI16_STRIDE) {
-            for (int i = 16; i < 32; i++)
-                memcpy(s->ymm[i], xs + hb + (size_t)(i - 16) * DFP_HI16_STRIDE,
-                       32);
+        if (hb != 0 && iov.iov_len >= hb + 16 * ASMTEST_HI16_STRIDE) {
+            for (int i = 16; i < 32; i++) {
+                /* Same shape as the low half's `o` above, so the two loops read
+                 * as the one operation they are — only the base and stride differ. */
+                const size_t o = hb + (size_t)(i - 16) * ASMTEST_HI16_STRIDE;
+                memcpy(s->ymm[i], xs + o, 32);
+            }
             s->have_hi = 1;
         }
     } else {
