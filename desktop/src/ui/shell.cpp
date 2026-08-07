@@ -934,6 +934,12 @@ scene3d::Atmosphere scene_atmosphere_for_tier(FidelityTier tier) {
 // that could drift apart would not be that. Generous — a golden-sized terrain
 // never degrades on either.
 static const uint64_t kSceneCellBudget = 200000;
+// See shell.h for the full rationale (961ac363's ambiguity-gate fix and why a
+// shared, tested function replaces two independently-inlined translations).
+std::string shell_prism_guest(const Streams &a) {
+    return space::opcode_guest_from_arch(a.arch);
+}
+
 // --- T1-T5 (59-standalone-scenes): the non-plane substrates ----------------
 // Weave the four pure models. Called once per weave, from the SAME lazy block
 // the plane models are built in — a recording whose 3D tab is never opened
@@ -956,17 +962,10 @@ static void shell_weave_standalone(SceneView &sv, const Recording &r,
         std::find(sv.prism_regs.begin(), sv.prism_regs.end(), sv.prism_reg) ==
             sv.prism_regs.end())
         sv.prism_reg = sv.prism_regs.front();
-    // a.arch is the recording's RAW header value ("x86_64"/"aarch64", per
-    // doc/recording.cpp) but lane_width_class's ambiguity gate
-    // (space::mnemonic_class) matches its `guest` argument EXACTLY against
-    // "x86"/"arm64" — passing a.arch straight through made the gate a
-    // silent no-op for every real recording (found during the 2026-08-08
-    // revised T5 task; harmless today only because no ambiguous mnemonic is
-    // also in kLaneWidths). Translate through the SAME function the opcode
-    // terrain already uses for `build_opcode_terrain` below, rather than a
-    // second copy of the same translation.
-    sv.prism = scene3d::build_lane_prism(a.df, sv.prism_reg,
-                                         space::opcode_guest_from_arch(a.arch));
+    // shell_prism_guest is the shared translation the reg-picker combo below
+    // also calls — see shell.h for why this must be ONE function, not two
+    // independently-inlined copies.
+    sv.prism = scene3d::build_lane_prism(a.df, sv.prism_reg, shell_prism_guest(a));
     // T2: two recordings. With no B side there is nothing to diverge FROM —
     // stated by the availability note below, never drawn as an empty scene.
     if (b != nullptr)
@@ -1233,11 +1232,10 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
                     std::snprintf(rl, sizeof rl, "reg %u", rid);
                     if (ImGui::Selectable(rl, rid == sv.prism_reg)) {
                         sv.prism_reg = rid;
-                        // Same translation as the initial weave above (and
-                        // for the same reason): a.arch is raw, the
-                        // ambiguity gate needs "x86"/"arm64" exactly.
-                        v = scene3d::build_lane_prism(
-                            a.df, rid, space::opcode_guest_from_arch(a.arch));
+                        // Same shell_prism_guest call as the initial weave
+                        // above — the ONE place this translation lives.
+                        v = scene3d::build_lane_prism(a.df, rid,
+                                                       shell_prism_guest(a));
                     }
                 }
                 ImGui::EndCombo();
@@ -1248,7 +1246,7 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
         // Only a genuine Unknown write means an axis was inferred -- that is
         // the one case that earns the warning colour (2026-08-08 revised
         // Task 3: the prism used to disclaim this for a bulk move too, which
-        // was the false claim — 7 of blend_tile's 11 wide writes).
+        // was the false claim — 6 of blend_tile's 11 wide writes).
         if (!v.width_note.empty())
             ImGui::TextColored(dt_warn_col(), "%s", v.width_note.c_str());
         // A NoLaneSemantics write has no element width to know -- a fact,

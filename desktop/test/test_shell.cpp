@@ -4071,6 +4071,42 @@ int main() {
               "two Transports at different rates must diverge");
     }
 
+    // === 2026-08-07 plan, final-review Finding 1: the lane-prism ambiguity
+    // gate's guest string must be translated at BOTH shell.cpp call sites,
+    // and the check must be able to observe a regression at either one ======
+    //
+    // 961ac363 fixed a real bug (both build_lane_prism call sites passed the
+    // recording's raw a.arch, "x86_64", where space::mnemonic_class needs
+    // exactly "x86"), but the check that shipped with it
+    // (test_standalone.cpp's T5/width/guest-string-must-be-translated-...)
+    // exercises only space::opcode_guest_from_arch, space::mnemonic_class and
+    // lane_width_class directly. None of those is what shell.cpp actually
+    // calls — reverting either call site back to raw a.arch left every test
+    // in the tree green. shell_prism_guest is the fix for THAT: it is the
+    // one function both call sites now route through (shell.cpp:968,1238),
+    // so there is no longer a separate "call site" translation to drift out
+    // of sync with what this test observes.
+    {
+        Streams a;
+        a.arch = "x86_64";
+        check("prism/guest-is-translated-for-the-ambiguity-gate",
+              shell_prism_guest(a) == "x86",
+              "Streams::arch carries the recording's raw header value "
+              "(\"x86_64\"), but the ambiguity gate inside build_lane_prism "
+              "(space::mnemonic_class) matches guest EXACTLY against \"x86\" "
+              "— shell_weave_standalone and the reg-picker combo both call "
+              "through this one helper, so a translation regression here is "
+              "a regression at both call sites at once");
+
+        Streams arm;
+        arm.arch = "aarch64";
+        check("prism/guest-translation-is-real-not-a-constant",
+              shell_prism_guest(arm) == "arm64",
+              "if shell_prism_guest hard-coded \"x86\" the check above would "
+              "still pass — this pins that it is a genuine per-arch "
+              "translation (space::opcode_guest_from_arch), not a literal");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

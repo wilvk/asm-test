@@ -663,6 +663,23 @@ void shell_restore_workspace(ShellState &s, const WorkspaceState &ws);
 const Streams *shell_a(const ShellState &s);
 const Streams *shell_b(const ShellState &s);
 
+// The ONE translation both build_lane_prism call sites in shell.cpp need:
+// Streams::arch is the recording's RAW header value ("x86_64"/"aarch64", per
+// doc/recording.cpp), but lane_width_class's ambiguity gate
+// (space::mnemonic_class) matches its `guest` argument EXACTLY against
+// "x86"/"arm64" — the same translation build_opcode_terrain already applies
+// via space::opcode_guest_from_arch. Before 961ac363 both call sites passed
+// a.arch straight through, making the gate a silent no-op for every real
+// recording; that fix inlined the same translation at both sites rather than
+// sharing it, so the shipped check (test_standalone.cpp's
+// T5/width/guest-string-...) could assert the translator and the gate
+// separately but never observe either call site — revert one and every test
+// stayed green. Non-static and declared here so test_shell can assert the
+// shared logic directly against a Streams whose arch is "x86_64": with only
+// ONE place this translation lives, testing it here is testing both call
+// sites at once, rather than trusting them to stay in sync by inspection.
+std::string shell_prism_guest(const Streams &a);
+
 // 40 T2: resolve + apply the dataflow pass recording `i`'s views show. df_pass[i]
 // < 0 follows the LATEST pass (the live default); >= 0 pins one. Sets the cached
 // streams[i].df to the chosen pass (a no-op when following latest — decode_streams
