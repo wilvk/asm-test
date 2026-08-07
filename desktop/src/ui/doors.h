@@ -562,6 +562,21 @@ void inspect_sweep_cancel(InspectState &s);
 // so a sweep can never bypass the budget.
 bool inspect_sweep_poll(InspectState &s);
 
+// The completion note's decode half (2026-08-06 plan, Task 12; M13). The pure
+// scorer (live/budget.h's sweep_result_note) takes counts and prose only —
+// this is where the counts come from, walking EVERY completed leg in
+// s.session.recordings() rather than trusting the leg count. Exposed (not
+// static) so test_shell can drive it against a session built purely from
+// feed_line, with no ImGui frame and no live host.
+std::string inspect_sweep_result_note(const InspectState &s);
+
+// The routine name a missing prism is blamed on (M13: the routine, not the
+// capture) — the last real `auto` pick's `func`, or the operator's own typed
+// symbol for a scoped sweep that never sampled. "" when neither is known (a
+// hand-typed base+len names no routine). Exposed for the same reason as
+// inspect_sweep_pick_region: test_shell drives it directly off notes/region.
+std::string inspect_sweep_picked_name(const InspectState &s);
+
 // Apply the per-mode default for `continuous` (see InspectState::continuous):
 // ON for `auto`, off for every other mode. Applied once per entry into a mode —
 // draw_patch_bay calls it each frame, inspect_attach_full_detail calls it after

@@ -177,6 +177,40 @@ std::string sweep_plan(bool have_region, long max_events);
 std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
                           bool already_sweeping, bool jack_held);
 
+// The sweep's COMPLETION note (2026-08-06 plan, Task 12; M13).
+//
+// The note this replaced fired on `sweep_at >= legs.size()` alone and named
+// all four substrates unconditionally — "every leg captured" is a fact about
+// the LOOP, not about what those legs wrote. The SIMD lane prism in
+// particular is data-dependent on the picked routine's OWN instructions, not
+// on the capture succeeding: measured with byte-identical capture flags,
+// 8-11 prism writes over scenes_victim's blend_tile, 0 over auto_victim's
+// entered_often, 0 over scenes_victim's sort_batch. A note that promises a
+// prism a scalar routine was never going to write sends the operator hunting
+// for a scene that cannot exist — and every leg still ran cleanly.
+//
+// Score against what LANDED, not against the leg count. The caller (the
+// door) decodes the four flags from s.session.recordings() — every completed
+// leg, of either sweep shape — and this stays the pure half: booleans in,
+// prose out, so test_budget pins the wording with no session, no engine, no
+// live target at all.
+//
+// `plane`/`stack`/`ribbon`/`prism` mirror the four 3D-pane substrates (59
+// T1): the address plane (`codeimage`), the invocation stack (a `coverage`
+// block set), the module excursion ribbon (`call` events) and the SIMD lane
+// prism (wide `df_step.ops` writes). An absent plane/stack/ribbon means a
+// leg's own events never arrived — a capture fact, named with the event kind
+// it needed. An absent prism is the ONE substrate this function will not
+// blame on the capture: `picked` is the routine the sweep actually stepped
+// (the auto leg's pick, or the operator's own named function), and the
+// reason names IT ("`<picked>` writes no vector registers"), because a
+// completed capture over a scalar routine is not a defect. `picked` may be
+// "" (a hand-named base+len region carries no symbol) and the reason then
+// falls back to "the routine it captured" rather than printing empty
+// backticks.
+std::string sweep_result_note(bool plane, bool stack, bool ribbon, bool prism,
+                              const std::string &picked);
+
 // --- the host-capability gate (2026-08-06 plan, Task 4) ---------------------
 //
 // why `want` cannot run on THIS host, or "" when nothing is known to stop it.

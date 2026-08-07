@@ -625,6 +625,163 @@ int main(void) {
               "two different leg lists must not print the same plan");
     }
 
+    // 2026-08-06 plan, Task 12 (M13): the completion note is scored against
+    // what LANDED, decoded from real recordings — never a fixed four-substrate
+    // claim keyed only on the leg count. sweep_result_note is the pure scorer;
+    // the door (test_shell) drives the decode from s.session.recordings().
+    {
+        const std::string marker = "Not this time";
+
+        // Split a note into its "claims landed" half and its "names what did
+        // not, and why" half. A note with nothing absent has no marker at
+        // all, and the whole string is the landed half.
+        auto landed_half = [&](const std::string &note) {
+            size_t p = note.find(marker);
+            return p == std::string::npos ? note : note.substr(0, p);
+        };
+        auto absent_half = [&](const std::string &note) {
+            size_t p = note.find(marker);
+            return p == std::string::npos ? std::string() : note.substr(p);
+        };
+
+        // All four landed: nothing absent, every label claimed, and the
+        // measured defect's own routine name must not leak in when it is not
+        // needed.
+        {
+            std::string note =
+                sweep_result_note(true, true, true, true, "blend_tile");
+            check("note/all-landed/no-absent-marker",
+                  note.find(marker) == std::string::npos,
+                  "every substrate present must produce no absent clause: "
+                  "got \"" +
+                      note + "\"");
+            for (const char *label :
+                 {"address plane", "invocation stack",
+                  "module excursion ribbon", "SIMD lane prism"})
+                check("note/all-landed/names-it",
+                      note.find(label) != std::string::npos,
+                      std::string("a fully-landed sweep must name `") + label +
+                          "`: got \"" + note + "\"");
+        }
+
+        // THE measured defect, reproduced directly: identical capture (plane/
+        // stack/ribbon all true — every leg completed and wrote its events),
+        // prism false because the picked routine is scalar. The note must
+        // still claim the three real substrates, must NOT claim the prism,
+        // and must name the ROUTINE — not the capture — as the reason.
+        {
+            std::string note =
+                sweep_result_note(true, true, true, false, "entered_often");
+            std::string landed = landed_half(note);
+            std::string absent = absent_half(note);
+            check("note/prism-absent/still-claims-plane",
+                  landed.find("address plane") != std::string::npos,
+                  "a leg that DID write codeimage must still be named landed: "
+                  "got \"" +
+                      note + "\"");
+            check("note/prism-absent/still-claims-stack",
+                  landed.find("invocation stack") != std::string::npos,
+                  "got \"" + note + "\"");
+            check("note/prism-absent/still-claims-ribbon",
+                  landed.find("module excursion ribbon") != std::string::npos,
+                  "got \"" + note + "\"");
+            check("note/prism-absent/does-not-claim-it",
+                  landed.find("SIMD lane prism") == std::string::npos,
+                  "the prism must not be named among what landed when it did "
+                  "not: got \"" +
+                      note + "\"");
+            check("note/prism-absent/names-it-somewhere",
+                  absent.find("SIMD lane prism") != std::string::npos,
+                  "the absence must still be SAID, with a reason, never "
+                  "silently dropped: got \"" +
+                      note + "\"");
+            check("note/prism-absent/names-the-routine",
+                  absent.find("entered_often") != std::string::npos,
+                  "M13: the reason must name the PICKED ROUTINE, not the "
+                  "capture — got \"" +
+                      note + "\"");
+            check("note/prism-absent/does-not-blame-the-capture",
+                  absent.find("capture failed") == std::string::npos &&
+                      absent.find("capture did not") == std::string::npos,
+                  "the capture completed fine; only the routine's own "
+                  "instructions decide the prism — got \"" +
+                      note + "\"");
+        }
+
+        // Every substrate is independently absent-able with its own reason —
+        // not just the prism. Sweeping one flag false at a time over an
+        // otherwise-all-true note must move exactly that label from the
+        // landed half to the absent half, with SOME reason attached (never a
+        // bare omission).
+        {
+            struct Case {
+                const char *label;
+                std::string note;
+            };
+            Case cases[] = {
+                {"address plane",
+                 sweep_result_note(false, true, true, true, "blend_tile")},
+                {"invocation stack",
+                 sweep_result_note(true, false, true, true, "blend_tile")},
+                {"module excursion ribbon",
+                 sweep_result_note(true, true, false, true, "blend_tile")},
+            };
+            for (const Case &c : cases) {
+                std::string landed = landed_half(c.note);
+                std::string absent = absent_half(c.note);
+                check(
+                    (std::string("note/one-absent/") + c.label).c_str(),
+                    landed.find(c.label) == std::string::npos &&
+                        absent.find(c.label) != std::string::npos,
+                    std::string("`") + c.label +
+                        "` must move to the absent half, named with a reason, "
+                        "when its own flag is false: got \"" +
+                        c.note + "\"");
+                // The other three stay claimed — one false flag must not
+                // erase the substrates that DID land.
+                for (const char *other :
+                     {"address plane", "invocation stack",
+                      "module excursion ribbon", "SIMD lane prism"}) {
+                    if (other == std::string(c.label))
+                        continue;
+                    check("note/one-absent/others-still-landed",
+                          landed.find(other) != std::string::npos,
+                          std::string("`") + other +
+                              "` was true and must stay in the landed half "
+                              "even though `" +
+                              c.label + "` was false: got \"" + c.note + "\"");
+                }
+            }
+        }
+
+        // Nothing landed at all: every substrate absent, each with its own
+        // reason, and the note must not claim a single one of them.
+        {
+            std::string note =
+                sweep_result_note(false, false, false, false, "sort_batch");
+            std::string landed = landed_half(note);
+            for (const char *label :
+                 {"address plane", "invocation stack",
+                  "module excursion ribbon", "SIMD lane prism"})
+                check("note/none-landed/claims-nothing",
+                      landed.find(label) == std::string::npos,
+                      std::string("`") + label +
+                          "` is false and must not be claimed landed: got \"" +
+                          note + "\"");
+        }
+
+        // An empty `picked` (a hand-typed base+len region carries no symbol)
+        // must fall back to plain prose rather than printing empty backticks.
+        {
+            std::string note = sweep_result_note(true, true, true, false, "");
+            check("note/prism-absent/empty-picked-no-dangling-backticks",
+                  note.find("``") == std::string::npos,
+                  "an unknown routine name must fall back to prose, not empty "
+                  "backticks: got \"" +
+                      note + "\"");
+        }
+    }
+
     // 2026-08-06 plan, Task 4: a mode the host cannot run is refused BEFORE
     // Start. `auto` and `sample` are the two that need the out-of-band sampler;
     // every other mode is pure ptrace and runs with perf locked down -- which is

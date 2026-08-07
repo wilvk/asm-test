@@ -17,6 +17,8 @@
 
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
 #include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
+#include "scene3d/standalone.h" // lane_prism_any — the sweep note's prism decode (Task 12)
+#include "space/terrain.h" // regions_from_codeimage — the sweep note's plane decode (Task 12)
 #include "ui/doors.h"
 #include "ui/fidelity.h" // the graded fidelity vocabulary (23 T1)
 #include "ui/filter.h" // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
@@ -384,20 +386,90 @@ static std::string inspect_sweep_adopt_pick(InspectState &s) {
     return spec;
 }
 
+// --- the completion note's DECODE half (2026-08-06 plan, Task 12; M13) ------
+// budget.h's sweep_result_note is pure counts-in/prose-out; this is where the
+// counts come from. ORs each substrate across EVERY completed leg in
+// s.session.recordings() — a sweep's legs each land in their own Recording
+// (sweep_blocked's own reason for --record), so no single leg carries all
+// four: the scoped shape's ribbon comes from `tree`, its prism from
+// `dataflow`. "present" means "some leg wrote it", never "the last leg did".
+//
+// Each predicate mirrors the SAME builder view_presence.cpp's Scene3D gate
+// reads (scene3d_has_invocation / scene3d_has_module_ribbon / lane_prism_any /
+// regions_from_codeimage) rather than a fresh by_kind check, so this can never
+// disagree with the pane about whether a leg actually filled it.
+static void inspect_sweep_landed(const InspectState &s, bool *plane,
+                                 bool *stack, bool *ribbon, bool *prism) {
+    *plane = *stack = *ribbon = *prism = false;
+    for (const Recording &r : s.session.recordings()) {
+        if (!*plane)
+            *plane = !space::regions_from_codeimage(r).empty();
+        if (!*ribbon)
+            *ribbon = !obs_tree_build(r).rows.empty();
+        if (!*stack) {
+            RegionView rv = obs_region_build(r);
+            for (const RegionInvocation &inv : rv.invocations)
+                if (!inv.blocks.empty()) {
+                    *stack = true;
+                    break;
+                }
+        }
+        if (!*prism)
+            *prism = scene3d::lane_prism_any(decode_streams(r).df);
+    }
+}
+
+// The routine to name when the prism is absent (M13: the reason, not the
+// capture). An auto-led sweep samples one — the LAST real (non-idle-window)
+// pick's `func`, the same walk inspect_sweep_pick_region already does for the
+// region itself, kept separate because the func name and the base+len spec
+// serve different callers (pick_region_spec's own comment: a name would
+// re-resolve against a possibly-duplicated symbol, which is fine for DISPLAY
+// but wrong for re-arming a capture). A scoped sweep never samples, so its
+// only name is whatever the operator TYPED, and only when that was a symbol —
+// a bare base+len names no routine.
+std::string inspect_sweep_picked_name(const InspectState &s) {
+    std::string name;
+    for (const LiveNote &n : s.session.notes()) {
+        AutoPick p;
+        if (n.kind != "session" || !parse_auto_pick(n.body, &p))
+            continue;
+        if (pick_is_idle_window(p) || p.func.empty())
+            continue;
+        name = p.func; // keep walking: the LAST real pick is the one captured
+    }
+    if (!name.empty())
+        return name;
+    uint64_t base = 0, len = 0;
+    if (s.region[0] != '\0' && !parse_region_spec(s.region, &base, &len))
+        return s.region; // a typed base+len names no routine; leave it ""
+    return std::string();
+}
+
+// The completion note itself: decode, then hand the counts to the pure
+// scorer. Kept as its own function (not inlined into the poll) so test_shell
+// can drive it directly against a session built from feed_line, with no ImGui
+// frame and no live host.
+std::string inspect_sweep_result_note(const InspectState &s) {
+    bool plane, stack, ribbon, prism;
+    inspect_sweep_landed(s, &plane, &stack, &ribbon, &prism);
+    return sweep_result_note(plane, stack, ribbon, prism,
+                             inspect_sweep_picked_name(s));
+}
+
 bool inspect_sweep_poll(InspectState &s) {
     if (!s.sweep_running)
         return false;
     const std::vector<LiveMode> &legs = inspect_sweep_legs(s);
     if (s.sweep_at >= legs.size()) {
         s.sweep_running = false;
-        s.sweep_note =
-            "sweep complete — every leg captured. Disconnect, then File > Open "
-            "the recorded file: that ONE recording carries the call tree, the "
-            "region trace and the wide register writes together, so the 3D "
-            "pane offers the address plane, the invocation stack, the module "
-            "excursion ribbon and the SIMD lane prism. The divergence "
-            "worldline needs a SECOND recording — sweep again and attach it "
-            "with `d`.";
+        // 2026-08-06 plan, Task 12 (M13): every leg completing is a fact
+        // about the LOOP, not about what those legs wrote — the old note
+        // named all four substrates unconditionally and the SIMD lane prism
+        // is data-dependent on the routine the sampler picked (measured: 8-11
+        // writes over blend_tile, 0 over entered_often, byte-identical
+        // flags). Score against what actually landed instead.
+        s.sweep_note = inspect_sweep_result_note(s);
         return false;
     }
     const LiveMode leg = legs[s.sweep_at];

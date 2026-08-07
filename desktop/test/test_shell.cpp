@@ -2303,6 +2303,219 @@ int main() {
               "convention the no-region-picked stop already follows");
     }
 
+    // --- 2026-08-06 plan, Task 12 (M13): the completion note is scored
+    // against what LANDED, not against the leg count. The old note fired on
+    // `sweep_at >= legs.size()` alone and named all four substrates
+    // unconditionally; the SIMD lane prism is data-dependent on the picked
+    // ROUTINE (measured: 8-11 writes over blend_tile, 0 over entered_often,
+    // byte-identical capture flags) — reproduce that here through the REAL
+    // decode path (space::regions_from_codeimage / obs_tree_build /
+    // obs_region_build / decode_streams+lane_prism_any), not the pure
+    // scorer's own unit tests (test_budget), which cannot see the door's
+    // wiring at all.
+    {
+        // inspect_sweep_picked_name in isolation first: the name a missing
+        // prism gets blamed on has TWO sources, and they must not be
+        // confused. An auto pick's OWN func wins over a typed region — the
+        // auto-adopted region field holds a base+len spec (pick_region_spec's
+        // own comment: a name would re-resolve against a possibly-duplicated
+        // symbol), which names no routine at all.
+        InspectState pn;
+        check("sweep/picked-name/nothing-yet",
+              inspect_sweep_picked_name(pn).empty(),
+              "no pick, no typed region — there is no routine to name");
+        std::snprintf(pn.region, sizeof pn.region, "%s", "0x1000:64");
+        check("sweep/picked-name/base-len-names-nothing",
+              inspect_sweep_picked_name(pn).empty(),
+              "a bare base+len is not a symbol — naming it as \"the routine\" "
+              "would be a fabrication parse_region_spec itself would reject "
+              "as a func");
+        std::snprintf(pn.region, sizeof pn.region, "%s", "entered_often");
+        check("sweep/picked-name/typed-symbol-is-the-name",
+              inspect_sweep_picked_name(pn) == "entered_often",
+              "a scoped sweep never samples — the operator's own typed "
+              "symbol IS the routine name");
+        pn.session.feed_line(
+            R"J({"k":"session","state":"pick","mode":"auto","pick":{"sampler":)J"
+            R"J("ibs-op","evidence":"idle","func":"(idle window)","base":0,)J"
+            R"J("len":0,"attempt":1,"of":1}})J");
+        check("sweep/picked-name/idle-window-does-not-override",
+              inspect_sweep_picked_name(pn) == "entered_often",
+              "an idle window observed nothing — it must not blot out the "
+              "typed region's name");
+        // A DIFFERENT name than the typed region, so a decoder that (wrongly)
+        // kept reading the region field instead of the pick would be caught
+        // here rather than passing by coincidence.
+        pn.session.feed_line(
+            R"({"k":"session","state":"pick","mode":"auto","pick":{"sampler":)"
+            R"("ibs-op","evidence":"entry","func":"second_ranked","base":8192,)"
+            R"("len":96,"attempt":1,"of":1}})");
+        {
+            const std::string got = inspect_sweep_picked_name(pn);
+            const std::string why =
+                "once the sampler names a routine that is THE name — even "
+                "though the region field still reads \"entered_often\" "
+                "(typed, never adopted here): got \"" +
+                got + "\"";
+            check("sweep/picked-name/real-pick-wins-over-typed-region",
+                  got == "second_ranked", why.c_str());
+        }
+
+        static const char *kHdr =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy",)"
+            R"("version":"1.1.0"},"provenance":{"backend":"ptrace-dataflow",)"
+            R"("exact":true,"trust":"exact"},"arch":"x86_64"})";
+        auto feed_leg = [&](LiveSession &sess, const char *mode,
+                            const std::vector<std::string> &body_lines) {
+            sess.feed_line(std::string(R"({"k":"cmd","cmd":"start","mode":")") +
+                           mode + "\"}");
+            sess.feed_line(std::string(R"({"k":"session","state":"started",)") +
+                           R"("mode":")" + mode +
+                           R"(","pid":4242,"params":{}})");
+            sess.feed_line(kHdr);
+            sess.feed_line(R"({"k":"codeimage","base":4096,"len":256,)"
+                           R"("version":1})");
+            for (const std::string &l : body_lines)
+                sess.feed_line(l);
+            sess.feed_line(R"({"k":"end","events":1})");
+            sess.feed_line(
+                R"({"k":"session","state":"stopped","reason":"max"})");
+        };
+
+        // THE measured defect, reproduced end to end: a scoped (named-region)
+        // sweep whose three legs (tree/trace/dataflow) all completed and each
+        // wrote real events — the routine is just scalar, so the dataflow
+        // leg's op carries no `wide` write.
+        {
+            InspectState is;
+            is.host_started = true;
+            is.selected_pid = 4242;
+            is.record_session = true;
+            std::snprintf(is.record_path, sizeof is.record_path, "%s",
+                          "/tmp/sweep-complete-scalar.asmtrace");
+            std::snprintf(is.region, sizeof is.region, "%s", "entered_often");
+            is.sweep_have_region = true;
+            is.sweep_running = true;
+            is.sweep_at = sweep_legs(true).size(); // every leg already ran
+
+            feed_leg(is.session, "tree",
+                     {R"({"k":"call","tid":1,"depth":0,"addr":4096,)"
+                      R"("name":"entered_often","module":"auto_victim"})"});
+            feed_leg(is.session, "trace",
+                     {R"({"k":"trace","off":0,"basis":"rel"})",
+                      R"({"k":"coverage","blocks":[0],"basis":"rel"})"});
+            feed_leg(is.session, "dataflow",
+                     {R"({"k":"df_step","step":0,"off":0,"disasm":"inc eax",)"
+                      R"("ops":[{"space":"reg","reg":35,"size":4,"write":true,)"
+                      R"("value_valid":true,"value":41}]})"});
+            check("sweep/complete/scalar/three-legs-recorded",
+                  is.session.recordings().size() == 3,
+                  "the fixture must land exactly the three scoped legs");
+
+            bool fired = inspect_sweep_poll(is);
+            check("sweep/complete/scalar/poll-stops-not-fires",
+                  !fired && !is.sweep_running,
+                  "the completion arm stops the sweep — there is no fourth "
+                  "leg to fire");
+
+            size_t marker = is.sweep_note.find("Not this time");
+            std::string landed = marker == std::string::npos
+                                     ? is.sweep_note
+                                     : is.sweep_note.substr(0, marker);
+            std::string absent = marker == std::string::npos
+                                     ? std::string()
+                                     : is.sweep_note.substr(marker);
+            const std::string why_plane =
+                "codeimage rode along on every leg — got \"" + is.sweep_note +
+                "\"";
+            check("sweep/complete/scalar/claims-plane",
+                  landed.find("address plane") != std::string::npos,
+                  why_plane.c_str());
+            const std::string why_stack =
+                "the trace leg wrote a real coverage block set — got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/scalar/claims-stack",
+                  landed.find("invocation stack") != std::string::npos,
+                  why_stack.c_str());
+            const std::string why_ribbon =
+                "the tree leg wrote a real call event — got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/scalar/claims-ribbon",
+                  landed.find("module excursion ribbon") != std::string::npos,
+                  why_ribbon.c_str());
+            const std::string why_prism =
+                "M13: the dataflow leg's only op carried no `wide` write — "
+                "the note must not claim the prism landed: got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/scalar/does-not-claim-the-prism",
+                  landed.find("SIMD lane prism") == std::string::npos,
+                  why_prism.c_str());
+            const std::string why_reason =
+                "the reason must name the ROUTINE the sweep captured, not "
+                "the capture itself — got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/scalar/names-the-routine-not-the-capture",
+                  absent.find("entered_often") != std::string::npos,
+                  why_reason.c_str());
+        }
+
+        // The AUTO-LED shape: the picked routine's name comes from the pick
+        // event, and the region field (once the auto leg's hand-off adopts
+        // it) holds base+len, NOT the name — this is the one path where the
+        // two could be confused, so it is exercised here rather than assumed
+        // from the isolated inspect_sweep_picked_name checks above.
+        {
+            InspectState is;
+            is.host_started = true;
+            is.selected_pid = 4242;
+            is.record_session = true;
+            std::snprintf(is.record_path, sizeof is.record_path, "%s",
+                          "/tmp/sweep-complete-auto.asmtrace");
+            is.sweep_have_region = false;
+            is.sweep_running = true;
+            is.sweep_at =
+                sweep_legs(false).size(); // auto -> tree -> trace, done
+
+            // The auto leg: samples, picks `entered_often`, then captures
+            // dataflow over it — codeimage + df_step, per doors.h's own
+            // description of what an `auto` capture records.
+            is.session.feed_line(
+                R"({"k":"session","state":"pick","mode":"auto","pick":{)"
+                R"("sampler":"ibs-op","evidence":"entry","func":)"
+                R"("entered_often","base":4096,"len":64,"attempt":1,"of":1}})");
+            feed_leg(is.session, "auto",
+                     {R"({"k":"df_step","step":0,"off":0,"disasm":"inc eax",)"
+                      R"("ops":[{"space":"reg","reg":35,"size":4,"write":true,)"
+                      R"("value_valid":true,"value":41}]})"});
+            // The hand-off: region now holds the pick's base+len, same as
+            // inspect_sweep_adopt_pick would leave it — NOT the func name.
+            std::snprintf(is.region, sizeof is.region, "%s", "0x1000:40");
+            feed_leg(is.session, "tree",
+                     {R"({"k":"call","tid":1,"depth":0,"addr":4096,)"
+                      R"("name":"entered_often","module":"auto_victim"})"});
+            feed_leg(is.session, "trace",
+                     {R"({"k":"trace","off":0,"basis":"rel"})",
+                      R"({"k":"coverage","blocks":[0],"basis":"rel"})"});
+
+            bool fired = inspect_sweep_poll(is);
+            check("sweep/complete/auto/poll-stops-not-fires",
+                  !fired && !is.sweep_running, "no fourth leg to fire");
+
+            size_t marker = is.sweep_note.find("Not this time");
+            std::string absent = marker == std::string::npos
+                                     ? std::string()
+                                     : is.sweep_note.substr(marker);
+            const std::string why =
+                "the region field holds base+len once adopted — the routine "
+                "name must come from the PICK, not that spec: got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/auto/names-the-pick-not-the-region-spec",
+                  absent.find("entered_often") != std::string::npos &&
+                      absent.find("0x1000:40") == std::string::npos,
+                  why.c_str());
+        }
+    }
+
     // --- region gap: inspect_start_params attaches a scoped region ONLY for the
     // scoped modes (trace/dataflow) and picks base+len vs func by the spec shape.
     // A whole-process mode and `auto` send none — so the door never blocks Start on

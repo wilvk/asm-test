@@ -194,6 +194,69 @@ std::string sweep_blocked(bool host_started, bool have_pid, bool recording,
     return "";
 }
 
+namespace {
+// Join with ", " between interior items and " and " before the last — plain
+// English, not a bare bullet dump, because this reads as prose in the door.
+std::string join_and(const std::vector<std::string> &items) {
+    std::string s;
+    for (size_t i = 0; i < items.size(); i++) {
+        if (i == 0)
+            s = items[i];
+        else if (i + 1 == items.size())
+            s += " and " + items[i];
+        else
+            s += ", " + items[i];
+    }
+    return s;
+}
+} // namespace
+
+std::string sweep_result_note(bool plane, bool stack, bool ribbon, bool prism,
+                              const std::string &picked) {
+    // The prism's OWN reason names the routine (M13): the other three are
+    // absent only when a leg's events never arrived on the wire — a fact
+    // about the capture, so they keep the event-kind reason. See budget.h for
+    // the measurement (8-11 writes over blend_tile, 0 over entered_often,
+    // byte-identical flags) that is why the prism cannot share that wording.
+    const std::string prism_who =
+        picked.empty() ? "the routine it captured" : "`" + picked + "`";
+    struct Row {
+        bool present;
+        const char *label;
+        std::string absent_reason;
+    };
+    const Row rows[] = {
+        {plane, "the address plane", "no `codeimage` events landed"},
+        {stack, "the invocation stack", "no `coverage` block set landed"},
+        {ribbon, "the module excursion ribbon", "no `call` events landed"},
+        {prism, "the SIMD lane prism",
+         prism_who + " writes no vector registers — the capture ran fine, the "
+                     "routine just has nothing wide to record"},
+    };
+
+    std::vector<std::string> landed, absent;
+    for (const Row &r : rows) {
+        if (r.present)
+            landed.push_back(r.label);
+        else
+            absent.push_back(std::string(r.label) + " (" + r.absent_reason +
+                             ")");
+    }
+
+    std::string msg = "sweep complete — ";
+    msg += landed.empty() ? "every leg ran, but no substrate landed this run"
+                          : join_and(landed) + " landed";
+    msg += ".";
+    if (!absent.empty())
+        // "Not this time" is the load-bearing marker test_budget splits on:
+        // never claim a substrate past this point.
+        msg += " Not this time: " + join_and(absent) + ".";
+    msg += " Disconnect, then File > Open the recorded file to see what "
+           "landed together. The divergence worldline needs a SECOND "
+           "recording — sweep again and attach it with `d`.";
+    return msg;
+}
+
 bool mode_uses_ptrace(LiveMode m) { return row_for(m)->ptrace; }
 
 bool mode_needs_region(LiveMode m) {
