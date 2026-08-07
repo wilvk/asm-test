@@ -468,10 +468,12 @@ void StandaloneRenderer::build_prism(const LanePrismScene &s) {
                 // shape, not a captured value.
                 line(x + 0.5f * xw, 0.0f, z, x + 0.5f * xw, h, z, col);
             }
-            // A lane boundary tick, only where the width is RECORDED. Where
-            // it is the default, no boundary is drawn at all — the model's
-            // width_note says why, and a drawn boundary would look measured.
-            if (w.lane_width_recorded && w.lane_bytes > 1 &&
+            // A lane boundary tick, only where the width is KNOWN (one of the
+            // four measured LanesN verdicts, 2026-08-08 revised plan). For
+            // NoLaneSemantics/Unknown, no boundary is drawn at all — the
+            // model's no_lane_note/width_note say why, and a drawn boundary
+            // would look measured either way.
+            if (prism_width_known(w.width) && w.lane_bytes > 1 &&
                 bi % w.lane_bytes == 0)
                 line(x, 0.0f, z - 0.01f, x, 1.05f, z - 0.01f, kWhite);
             hit(x + 0.5f * xw, h, z, index);

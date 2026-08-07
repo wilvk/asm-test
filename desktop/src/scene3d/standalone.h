@@ -289,13 +289,48 @@ RibbonDrill ribbon_pick_link(const ModuleRibbonScene &s, const std::string &rec,
 // T5 — SIMD lane prism
 // ===========================================================================
 
-// The default lane width when the recording does not state one — 16 byte
-// lanes, LABELLED as a default (prism_default_note()). ValRec::size is the
-// TOTAL operand width, so `pshufb` (byte lanes) and `paddd` (dword lanes) are
-// indistinguishable from the data; defaulting silently would be an inference
-// dressed as a measurement.
+// THREE verdicts for a write's element width, not two (2026-08-08 revised
+// plan). The old two-way "recorded or not" conflated "this operand has no
+// element width at all" (a bulk move: movdqa/movaps/movd/..., 7 of
+// blend_tile's 11 wide register writes -- cli/scenes_victim.c:82, see the
+// task report for why 11 and not the originally-stated 12) with "the table
+// does not name this mnemonic" (an honest guess) -- and disclaimed BOTH as
+// inferred. Only the second is actually inferred; collapsing them made the
+// HUD disclaim a guess it never made, for the MAJORITY of writes on the
+// plan's own demo routine.
+enum class PrismWidth : uint8_t {
+    Lanes1,          // the table names a 1-byte element width (measured)
+    Lanes2,          // the table names a 2-byte element width (measured)
+    Lanes4,          // the table names a 4-byte element width (measured)
+    Lanes8,          // the table names an 8-byte element width (measured)
+    NoLaneSemantics, // a bulk move: nothing to know, so nothing was guessed
+    Unknown,         // the table does not name this mnemonic: an honest guess
+};
+// True for the four LanesN verdicts. The renderer's lane-boundary tick is a
+// MEASUREMENT only when this holds; NoLaneSemantics and Unknown share the
+// same default geometry (kPrismDefaultLaneBytes) for two different reasons,
+// and this predicate is what tells "draw the tick" from "don't" apart.
+bool prism_width_known(PrismWidth w);
+// The pure classifier: mnemonic (+ 54 T4's ambiguity gate) -> verdict. Reads
+// only the disassembly text and the guest, exactly like the two-way
+// lane_width_for it replaces -- Capstone 5.0.1 carries no x86 element width
+// (probed empirically at this task's premise check, not read from headers),
+// so there is nothing to add here from the wire, only a truer label for what
+// the mnemonic table already knows and does not know.
+PrismWidth lane_width_class(const std::string &disasm,
+                            const std::string &guest);
+
+// The default lane width used for geometry when a write's verdict is NOT one
+// of the four LanesN cases above -- 1 byte, so a defaulted write still draws
+// bar-per-byte rather than one giant bar. ValRec::size is the TOTAL operand
+// width, so without the mnemonic table `pshufb` (byte lanes) and `paddd`
+// (dword lanes) would be indistinguishable from the data; defaulting
+// silently would be an inference dressed as a measurement. NoLaneSemantics
+// and Unknown share this default GEOMETRY for two different REASONS, which
+// is exactly why they get two different HUD notes rather than one.
 inline constexpr uint32_t kPrismDefaultLaneBytes = 1;
-const char *prism_default_note();
+const char *prism_default_note();  // Unknown: the axis really was guessed
+const char *prism_no_lanes_note(); // NoLaneSemantics: nothing to guess
 
 struct LaneByte {
     uint8_t value = 0;
@@ -317,16 +352,27 @@ struct PrismWrite {
     // a [wide] WIREFRAME, never zero bars.
     bool wireframe = false;
     uint32_t lane_bytes = kPrismDefaultLaneBytes;
-    // false => lane_bytes is the DEFAULT above, and the scene must say so.
-    bool lane_width_recorded = false;
+    // Replaces the old two-way `lane_width_recorded` bool -- that name no
+    // longer exists anywhere in this tree, because a bool could not state
+    // WHICH of the two non-measured reasons applied. See PrismWidth above.
+    PrismWidth width = PrismWidth::Unknown;
     std::vector<LaneByte> bytes; // in memory order, as decoded
 };
 
 struct LanePrismScene {
     uint32_t reg_id = 0; // the Capstone register id this prism is of
     std::vector<PrismWrite> writes; // ascending by step
-    // Present whenever ANY write fell back to the default lane width.
+    // Present whenever ANY write is a genuine Unknown -- the axis really was
+    // inferred for that write. NEVER set by a NoLaneSemantics write alone:
+    // that is a fact (no element width exists to know), not a guess, so it
+    // gets no_lane_note below instead of sharing this disclaimer.
     std::string width_note;
+    // Present whenever ANY write is a NoLaneSemantics bulk move. This is
+    // information, not a disclaimer -- there was nothing to infer for these
+    // writes (7 of blend_tile's 11 wide register writes), so it must read
+    // differently from width_note above, not as a milder version of the
+    // same warning.
+    std::string no_lane_note;
     std::string note; // why the prism is empty, when it is
     uint32_t wireframes = 0;
     uint32_t hollow = 0;

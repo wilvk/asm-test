@@ -573,10 +573,15 @@ RibbonDrill ribbon_pick_link(const ModuleRibbonScene &s, const std::string &rec,
 // ===========================================================================
 
 const char *prism_default_note() {
-    return "element width not recorded: ValRec.size is the TOTAL operand "
-           "width, so `pshufb` (byte lanes) and `paddd` (dword lanes) are "
-           "indistinguishable from the data. Showing the DEFAULT 16 byte-"
-           "lanes; a lane boundary here is a default, not a measurement.";
+    return "element width UNKNOWN: this mnemonic is not in the table, so the "
+           "byte-lane geometry shown here is an INFERRED axis, not a "
+           "measurement.";
+}
+
+const char *prism_no_lanes_note() {
+    return "this operand has no element width to know: a bulk move copies "
+           "bytes, it does not divide them into lanes. The geometry below is "
+           "a rendering default, not an inferred measurement.";
 }
 
 uint32_t prism_byte_hue(uint8_t value) {
@@ -591,6 +596,22 @@ uint32_t prism_byte_hue(uint8_t value) {
 
 namespace {
 
+// The bulk-move family (2026-08-08 revised plan): measured over blend_tile
+// (cli/scenes_victim.c:82), movdqa x5 and movd x1 account for 6 of its 11
+// wide register writes, and EVERY one of them genuinely has no element width
+// -- a straight byte copy, not an array of same-sized lanes. movdqu/movaps/
+// movups/movq complete the family by the same reasoning (movaps appears in
+// blend_tile too, but only as the trailing STORE, which writes memory, not a
+// register, so is_prism_write never counts it -- see the task report for the
+// arithmetic this corrects). This is a fact about the operand, so it is
+// checked unconditionally, before and independent of the ambiguity gate
+// below: whether mnemonic_class also calls movd/movq a GPR<->vector
+// ambiguity is a different axis (OpClass) from this one (does this operand
+// have lanes at all), and the answer here does not change either way.
+const char *const kBulkMoveFamily[] = {
+    "movdqa", "movdqu", "movaps", "movups", "movd", "movq",
+};
+
 // The one place a lane width may be widened past the default, and only where
 // the mnemonic is unambiguous. Deliberately SHORT: every entry is a mnemonic
 // whose element width is part of its name. Anything not here keeps the
@@ -602,37 +623,124 @@ struct LaneWidthRule {
 };
 const LaneWidthRule kLaneWidths[] = {
     // x86 SSE/AVX integer packed ops whose suffix names the element width.
-    {"paddb", 1},  {"psubb", 1},  {"pshufb", 1}, {"pcmpeqb", 1},
-    {"paddw", 2},  {"psubw", 2},  {"pcmpeqw", 2}, {"pshufhw", 2},
+    {"paddb", 1},
+    {"psubb", 1},
+    {"pshufb", 1},
+    {"pcmpeqb", 1},
+    {"paddw", 2},
+    {"psubw", 2},
+    {"pcmpeqw", 2},
+    {"pshufhw", 2},
     {"pshuflw", 2},
-    {"paddd", 4},  {"psubd", 4},  {"pslld", 4},  {"psrld", 4},
-    {"pcmpeqd", 4}, {"pshufd", 4}, {"pmulld", 4},
-    {"paddq", 8},  {"psubq", 8},  {"psllq", 8},  {"psrlq", 8},
+    {"paddd", 4},
+    {"psubd", 4},
+    {"pslld", 4},
+    {"psrld", 4},
+    {"pcmpeqd", 4},
+    {"pshufd", 4},
+    {"pmulld", 4},
+    {"paddq", 8},
+    {"psubq", 8},
+    {"psllq", 8},
+    {"psrlq", 8},
     {"pcmpeqq", 8},
+    // The interleave family (2026-08-08 revised plan): the ONE genuine table
+    // gap the measurement found. punpckldq unambiguously interleaves 4-byte
+    // lanes -- it reads two registers and interleaves their lanes, which is
+    // exactly the per-element behaviour this table exists to record, unlike
+    // the bulk moves above. Neither Capstone nor the table named it before.
+    {"punpcklbw", 1},
+    {"punpckhbw", 1},
+    {"punpcklwd", 2},
+    {"punpckhwd", 2},
+    {"punpckldq", 4},
+    {"punpckhdq", 4},
+    {"punpcklqdq", 8},
+    {"punpckhqdq", 8},
 };
 
-// The recorded element width for one write, or 0 for "not recorded".
-uint32_t lane_width_for(const std::string &disasm, const std::string &guest) {
-    const std::string tok = lower(first_token(disasm));
-    if (tok.empty())
-        return 0;
-    // 54 T4's ambiguity flag is the GATE, not a second opinion: a mnemonic
-    // that classifier calls ambiguous (a GPR<->vector move, a float<->int
-    // conversion) never subdivides, whatever its spelling suggests.
-    const space::MnemonicClass mc = space::mnemonic_class(tok, guest);
-    if (mc.ambiguous)
-        return 0;
-    // The AVX `v` prefix names the same element width as its SSE original.
-    std::string base = tok;
-    if (base.size() > 1 && base[0] == 'v')
-        base = base.substr(1);
-    for (const LaneWidthRule &r : kLaneWidths)
-        if (base == r.mnemonic)
-            return r.bytes;
-    return 0;
+// kLaneWidths only ever stores 1/2/4/8 (every SSE/AVX integer element width
+// here is a power of two up to the qword), so this covers every value the
+// table can produce; the unreached fallback keeps a future non-power-of-two
+// entry from silently claiming a false "known" width.
+PrismWidth prism_width_of_bytes(uint32_t bytes) {
+    switch (bytes) {
+    case 1:
+        return PrismWidth::Lanes1;
+    case 2:
+        return PrismWidth::Lanes2;
+    case 4:
+        return PrismWidth::Lanes4;
+    case 8:
+        return PrismWidth::Lanes8;
+    }
+    return PrismWidth::Unknown;
+}
+
+// The geometry stride for a verdict: prism_width_of_bytes's inverse for the
+// four known cases, kPrismDefaultLaneBytes for the other two -- still a
+// sensible rendering choice for NoLaneSemantics/Unknown, just never dressed
+// up as a measurement (see the two notes in the header).
+uint32_t prism_geometry_bytes(PrismWidth w) {
+    switch (w) {
+    case PrismWidth::Lanes1:
+        return 1;
+    case PrismWidth::Lanes2:
+        return 2;
+    case PrismWidth::Lanes4:
+        return 4;
+    case PrismWidth::Lanes8:
+        return 8;
+    case PrismWidth::NoLaneSemantics:
+    case PrismWidth::Unknown:
+        break;
+    }
+    return kPrismDefaultLaneBytes;
 }
 
 } // namespace
+
+bool prism_width_known(PrismWidth w) {
+    switch (w) {
+    case PrismWidth::Lanes1:
+    case PrismWidth::Lanes2:
+    case PrismWidth::Lanes4:
+    case PrismWidth::Lanes8:
+        return true;
+    case PrismWidth::NoLaneSemantics:
+    case PrismWidth::Unknown:
+        return false;
+    }
+    return false;
+}
+
+PrismWidth lane_width_class(const std::string &disasm,
+                            const std::string &guest) {
+    const std::string tok = lower(first_token(disasm));
+    if (tok.empty())
+        return PrismWidth::Unknown;
+    // The AVX `v` prefix names the same element width/semantics as its SSE
+    // original, for both checks below.
+    std::string base = tok;
+    if (base.size() > 1 && base[0] == 'v')
+        base = base.substr(1);
+
+    for (const char *m : kBulkMoveFamily)
+        if (base == m)
+            return PrismWidth::NoLaneSemantics;
+
+    // 54 T4's ambiguity flag is the GATE for what remains, not a second
+    // opinion: a mnemonic that classifier calls ambiguous (a float<->int
+    // conversion, e.g.) never subdivides, whatever its spelling suggests.
+    const space::MnemonicClass mc = space::mnemonic_class(tok, guest);
+    if (mc.ambiguous)
+        return PrismWidth::Unknown;
+
+    for (const LaneWidthRule &r : kLaneWidths)
+        if (base == r.mnemonic)
+            return prism_width_of_bytes(r.bytes);
+    return PrismWidth::Unknown;
+}
 
 std::vector<uint32_t> lane_prism_registers(const DataflowStream &df) {
     std::set<uint32_t> regs;
@@ -646,7 +754,8 @@ LanePrismScene build_lane_prism(const DataflowStream &df, uint32_t reg_id,
                                 const std::string &guest) {
     LanePrismScene s;
     s.reg_id = reg_id;
-    bool any_default = false;
+    bool any_no_lanes = false;
+    bool any_unknown = false;
     for (const ValRec &v : df.recs) {
         if (!is_prism_write(v) || v.reg != reg_id)
             continue;
@@ -658,11 +767,12 @@ LanePrismScene build_lane_prism(const DataflowStream &df, uint32_t reg_id,
         w.insn_off = v.step < df.insn_off.size() ? df.insn_off[v.step] : 0;
         w.disasm = v.step < df.disasm.size() ? df.disasm[v.step] : std::string();
 
-        const uint32_t recorded = lane_width_for(w.disasm, guest);
-        w.lane_bytes = recorded != 0 ? recorded : kPrismDefaultLaneBytes;
-        w.lane_width_recorded = recorded != 0;
-        if (!w.lane_width_recorded)
-            any_default = true;
+        w.width = lane_width_class(w.disasm, guest);
+        w.lane_bytes = prism_geometry_bytes(w.width);
+        if (w.width == PrismWidth::NoLaneSemantics)
+            any_no_lanes = true;
+        else if (w.width == PrismWidth::Unknown)
+            any_unknown = true;
 
         if (v.bytes.empty() ||
             (w.lane_bytes > 1 && v.bytes.size() % w.lane_bytes != 0)) {
@@ -685,8 +795,15 @@ LanePrismScene build_lane_prism(const DataflowStream &df, uint32_t reg_id,
                  "only a producer that serialises the `bytes` field emits";
         return s;
     }
-    if (any_default)
+    // Two different notes for two different facts (2026-08-08 revised plan):
+    // width_note disclaims an actual guess (Unknown); no_lane_note states a
+    // fact that was never a guess (NoLaneSemantics). A scene can carry
+    // either, neither, or both -- movdqa and an unrecognised mnemonic can
+    // coexist in one register's write history.
+    if (any_unknown)
         s.width_note = prism_default_note();
+    if (any_no_lanes)
+        s.no_lane_note = prism_no_lanes_note();
     return s;
 }
 
@@ -700,14 +817,39 @@ std::string lane_prism_dump(const LanePrismScene &s) {
         out += "note: " + s.note + "\n";
     if (!s.width_note.empty())
         out += "width: " + s.width_note + "\n";
+    if (!s.no_lane_note.empty())
+        out += "no-lanes: " + s.no_lane_note + "\n";
     out += "writes: " + std::to_string(s.writes.size()) +
            " wireframe=" + std::to_string(s.wireframes) +
            " hollow=" + std::to_string(s.hollow) + "\n";
     for (const PrismWrite &w : s.writes) {
-        out += "  z=" + std::to_string(w.z) + " step=" + std::to_string(w.step) +
-               " size=" + std::to_string(w.size) + " lane_bytes=" +
-               std::to_string(w.lane_bytes) +
-               (w.lane_width_recorded ? "(recorded)" : "(default)");
+        // A one-word tag per verdict, not just "recorded"/"default" -- the
+        // whole point of the three-way split is that a reader (this dump
+        // included) can tell a bulk move's default from an unknown's guess.
+        const char *tag = "(unknown)";
+        switch (w.width) {
+        case PrismWidth::Lanes1:
+            tag = "(known:1)";
+            break;
+        case PrismWidth::Lanes2:
+            tag = "(known:2)";
+            break;
+        case PrismWidth::Lanes4:
+            tag = "(known:4)";
+            break;
+        case PrismWidth::Lanes8:
+            tag = "(known:8)";
+            break;
+        case PrismWidth::NoLaneSemantics:
+            tag = "(no-lanes)";
+            break;
+        case PrismWidth::Unknown:
+            break;
+        }
+        out += "  z=" + std::to_string(w.z) +
+               " step=" + std::to_string(w.step) +
+               " size=" + std::to_string(w.size) +
+               " lane_bytes=" + std::to_string(w.lane_bytes) + tag;
         if (w.wireframe)
             out += " WIREFRAME";
         if (!w.value_valid)

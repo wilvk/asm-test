@@ -1123,12 +1123,20 @@ static bool shell_standalone_pick(const SceneView &sv, const std::string &rec,
             return false;
         const scene3d::PrismWrite &w = sv.prism.writes[order[i].write];
         const scene3d::LaneByte &b = w.bytes[order[i].byte];
+        // THREE verdicts, not the old two (2026-08-08 revised plan): a bulk
+        // move (NoLaneSemantics) has no element width to disclaim, so it
+        // gets its own short suffix rather than sharing "(default lane
+        // width)" with a genuine guess (Unknown) -- that sharing was the
+        // false claim this task fixes.
+        const char *suffix = w.width == scene3d::PrismWidth::NoLaneSemantics
+                                 ? " (no lane semantics)"
+                             : w.width == scene3d::PrismWidth::Unknown
+                                 ? " (default lane width)"
+                                 : "";
         char buf[128];
-        std::snprintf(buf, sizeof buf,
-                      "byte[%llu] = 0x%02x at step %u%s",
+        std::snprintf(buf, sizeof buf, "byte[%llu] = 0x%02x at step %u%s",
                       static_cast<unsigned long long>(order[i].byte),
-                      static_cast<unsigned>(b.value), w.step,
-                      w.lane_width_recorded ? "" : " (default lane width)");
+                      static_cast<unsigned>(b.value), w.step, suffix);
         *what = buf;
         *link = scene3d::prism_pick_link(sv.prism, rec, i);
         return true;
@@ -1223,8 +1231,17 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
         }
         if (!v.note.empty())
             ImGui::TextColored(dt_warn_col(), "%s", v.note.c_str());
+        // Only a genuine Unknown write means an axis was inferred -- that is
+        // the one case that earns the warning colour (2026-08-08 revised
+        // Task 3: the prism used to disclaim this for a bulk move too, which
+        // was the false claim — 7 of blend_tile's 11 wide writes).
         if (!v.width_note.empty())
             ImGui::TextColored(dt_warn_col(), "%s", v.width_note.c_str());
+        // A NoLaneSemantics write has no element width to know -- a fact,
+        // not a guess, so it reads in the same neutral tone as the caption
+        // below rather than the warning above it.
+        if (!v.no_lane_note.empty())
+            ImGui::TextColored(dt_dim_col(), "%s", v.no_lane_note.c_str());
         ImGui::TextColored(dt_dim_col(),
                            "%zu write(s) · %u wireframe (bytes not captured — "
                            "never zeros) · %u hollow (value_valid false)",

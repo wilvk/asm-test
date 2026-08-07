@@ -517,22 +517,39 @@ int main() {
         check("T5/hue: the hash is stable across calls",
               prism_byte_hue(0x41) == prism_byte_hue(0x41),
               "prism_byte_hue is not a pure function");
-        // Element width: pshufb/movdqa are NOT in the unambiguous table, so
-        // both default and the note is present.
-        check("T5/width: the default is used", !p.writes[0].lane_width_recorded &&
-                                                   p.writes[0].lane_bytes ==
-                                                       kPrismDefaultLaneBytes,
-              "an unlisted mnemonic invented an element width");
-        check("T5/width: 16 byte-lanes by default",
+        // Element width (2026-08-08 revised plan): movdqa is a BULK MOVE --
+        // NoLaneSemantics, not a disclaimed default; there is no element
+        // width to know, so it must not raise width_note (the Unknown
+        // disclaimer). pshufb, by contrast, IS in the unambiguous table
+        // (byte lanes) and always has been -- this fixture predates that
+        // table entry, so pin what it actually resolves to now instead of
+        // repeating the stale "both default" claim.
+        check("T5/width: a bulk move has no lane semantics, not a default",
+              p.writes[0].width == PrismWidth::NoLaneSemantics &&
+                  p.writes[0].lane_bytes == kPrismDefaultLaneBytes,
+              "movdqa (a bulk move) was not classified NoLaneSemantics");
+        check("T5/width: 16 byte-lanes is the RENDERING default, not a claim",
               p.writes[0].bytes.size() / p.writes[0].lane_bytes == 16,
               "the default is not 16 byte-lanes");
-        check("T5/width: the label is present whenever the default is used",
-              !p.width_note.empty() &&
-                  p.width_note.find("element width not recorded") !=
-                      std::string::npos,
-              "'" + p.width_note + "'");
+        check("T5/width: pshufb is in the table and resolves to byte lanes",
+              p.writes[1].width == PrismWidth::Lanes1 &&
+                  p.writes[1].lane_bytes == 1,
+              "pshufb is in kLaneWidths as 1-byte lanes; it must not share "
+              "movdqa's NoLaneSemantics verdict");
+        check("T5/width: no_lane_note fires here, NOT width_note",
+              !p.no_lane_note.empty() && p.width_note.empty(),
+              "a NoLaneSemantics write (movdqa) must raise no_lane_note, "
+              "never the Unknown disclaimer (width_note) -- got "
+              "width_note='" +
+                  p.width_note + "' no_lane_note='" + p.no_lane_note + "'");
 
-        // An UNAMBIGUOUS mnemonic subdivides; an ambiguous one does not.
+        // A mnemonic IN the table subdivides; movq does not -- but now for a
+        // more precise reason than "ambiguous, so abstain": movq is
+        // unconditionally in the bulk-move family (it has no element width
+        // whether or not THIS use is the GPR<->vector form mnemonic_class
+        // calls ambiguous, 54 T4). lane_width_class checks the bulk-move
+        // family BEFORE that ambiguity gate even runs, so movq never reaches
+        // it.
         {
             std::string d = kHdr;
             d += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"paddd "
@@ -546,16 +563,21 @@ int main() {
             const Streams ds = decode_streams(mk_rec(d));
             const LanePrismScene q = build_lane_prism(ds.df, 17, "x86");
             check("T5/width: paddd subdivides to 32-bit lanes",
-                  q.writes.size() == 2 && q.writes[0].lane_width_recorded &&
+                  q.writes.size() == 2 &&
+                      q.writes[0].width == PrismWidth::Lanes4 &&
                       q.writes[0].lane_bytes == 4,
                   "paddd did not resolve to dword lanes");
-            check("T5/width: an AMBIGUOUS mnemonic does not subdivide",
-                  !q.writes[1].lane_width_recorded &&
+            check("T5/width: movq is a bulk move, not a disclaimed guess",
+                  q.writes[1].width == PrismWidth::NoLaneSemantics &&
                       q.writes[1].lane_bytes == kPrismDefaultLaneBytes,
-                  "movq (a GPR<->vector move, flagged ambiguous by 54 T4) "
-                  "invented an element width");
-            check("T5/width: the note still rides the default write",
-                  !q.width_note.empty(), "a defaulted write was unlabelled");
+                  "movq (also ambiguous per 54 T4) must classify "
+                  "NoLaneSemantics, not Unknown -- the bulk-move family check "
+                  "runs first");
+            check("T5/width: the no-lanes note rides movq, not the Unknown "
+                  "disclaimer",
+                  !q.no_lane_note.empty() && q.width_note.empty(),
+                  "movq is a fact (no lanes), not a guess -- it must not "
+                  "raise width_note");
         }
 
         // Absent bytes -> a [wide] WIREFRAME, never zero bars.
@@ -703,6 +725,163 @@ int main() {
         check("T5/writes: the survivor is the write",
               s.writes.empty() || s.writes[0].step == 0,
               "the surviving record must be the write, not the read");
+    }
+
+    // =====================================================================
+    // T5 (2026-08-08 revised plan) — THREE width verdicts, not two
+    // =====================================================================
+    //
+    // Measured over blend_tile (cli/scenes_victim.c:82, re-verified against a
+    // fresh capture during this task): of its 11 wide REGISTER writes -- see
+    // the task report for why this is 11 and not the brief's stated 12 -- the
+    // table names 4 and misses 7. Of those 7, ALL SEVEN are bulk moves
+    // (movdqa x5, movd x1) with no element width to know; there is no
+    // "movaps" register write anywhere in this function (its one movaps is
+    // the trailing store to memory, which is a REG READ + MEM WRITE, not a
+    // register write, so is_prism_write correctly never counts it). Drawing
+    // 1-byte lanes and saying "we guessed" about a bulk move is a false
+    // claim, and it was the majority case (7 of 11 writes).
+    {
+        // A lane-bearing op the table has always known: measured, no guess.
+        check("T5/width/known-lane-op",
+              lane_width_class("paddd xmm0, xmm1", "x86_64") ==
+                  PrismWidth::Lanes4,
+              "paddd has 4-byte lanes and the table has always known it");
+
+        // A bulk move: NOT a guess, and not 1-byte lanes -- it has no lanes.
+        // This is 5 of blend_tile's 11 writes (movdqa) by itself.
+        check("T5/width/bulk-move-has-no-lanes",
+              lane_width_class("movdqa xmm2, xmmword ptr [rip + 0x2cde]",
+                               "x86_64") == PrismWidth::NoLaneSemantics,
+              "a bulk move has no element width to know, so the prism must "
+              "say that rather than disclaim a guess it never made");
+
+        // The real table gap the measurement found: unambiguously 4-byte
+        // lanes (it interleaves two registers' dwords), and the ONE mnemonic
+        // among blend_tile's misses that is not a bulk move.
+        check("T5/width/punpckldq-is-4",
+              lane_width_class("punpckldq xmm0, xmm1", "x86_64") ==
+                  PrismWidth::Lanes4,
+              "punpckldq unambiguously interleaves 4-byte lanes; it was the "
+              "ONE genuine table miss blend_tile exercises");
+
+        // Something the table really cannot classify stays an honest unknown
+        // -- collapsing this into NoLaneSemantics is what the mutation test
+        // below (and the unknown-stays-unknown name) checks does NOT happen.
+        check("T5/width/unknown-stays-unknown",
+              lane_width_class("someverynewinsn xmm0, xmm1", "x86_64") ==
+                  PrismWidth::Unknown,
+              "an instruction the table does not name is not the same as one "
+              "with no lanes -- collapsing the two is what this task fixes");
+
+        // The rest of the punpck family the table gained, spot-checked at
+        // each width the brief specifies.
+        check("T5/width/punpck-family-widths",
+              lane_width_class("punpckhdq xmm0, xmm1", "x86_64") ==
+                      PrismWidth::Lanes4 &&
+                  lane_width_class("punpcklwd xmm0, xmm1", "x86_64") ==
+                      PrismWidth::Lanes2 &&
+                  lane_width_class("punpckhbw xmm0, xmm1", "x86_64") ==
+                      PrismWidth::Lanes1 &&
+                  lane_width_class("punpcklqdq xmm0, xmm1", "x86_64") ==
+                      PrismWidth::Lanes8,
+              "the punpck* family's four widths were not all filled in");
+
+        // Every bulk-move spelling blend_tile's comment names, plus the two
+        // the brief adds that this routine happens not to exercise (movdqu,
+        // movups) -- all six must share ONE verdict, not five-plus-a-guess.
+        check("T5/width/bulk-move-family-is-complete",
+              lane_width_class("movaps xmm0, xmm1", "x86_64") ==
+                      PrismWidth::NoLaneSemantics &&
+                  lane_width_class("movups xmm0, xmm1", "x86_64") ==
+                      PrismWidth::NoLaneSemantics &&
+                  lane_width_class("movdqu xmm0, xmm1", "x86_64") ==
+                      PrismWidth::NoLaneSemantics &&
+                  lane_width_class("movd xmm0, eax", "x86_64") ==
+                      PrismWidth::NoLaneSemantics,
+              "movaps/movups/movdqu/movd must all be NoLaneSemantics, the "
+              "same as movdqa/movq");
+
+        // prism_width_known is the renderer's own predicate (standalone_gl.cpp's
+        // lane-boundary tick): true for exactly the four measured widths.
+        check("T5/width/known-predicate-matches-the-four-lane-widths",
+              prism_width_known(PrismWidth::Lanes1) &&
+                  prism_width_known(PrismWidth::Lanes2) &&
+                  prism_width_known(PrismWidth::Lanes4) &&
+                  prism_width_known(PrismWidth::Lanes8) &&
+                  !prism_width_known(PrismWidth::NoLaneSemantics) &&
+                  !prism_width_known(PrismWidth::Unknown),
+              "prism_width_known must be true for the four LanesN verdicts "
+              "only -- a lane-boundary tick drawn for the other two would "
+              "look like a measurement it is not");
+    }
+
+    // ---- T5 (revised plan): the SCENE-level split, not just the classifier -
+    //
+    // The HUD reads LanePrismScene::width_note / no_lane_note, not the pure
+    // classifier above -- so the split has to be proven at THAT level too.
+    // A scene where every write is Known must raise NEITHER note; one where
+    // every write is a bulk move must raise no_lane_note and NOT width_note
+    // (the opposite of today's behaviour, which is the whole defect); and a
+    // scene mixing a genuine Unknown with a bulk move must raise BOTH,
+    // independently and with different text.
+    {
+        // All-known: paddd alone. Neither note is a fact worth stating.
+        std::string k = kHdr;
+        k += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"paddd "
+             "xmm0, xmm1\",\"ops\":[{\"space\":\"reg\",\"reg\":5,\"size\":16,"
+             "\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":"
+             "\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+        const LanePrismScene known =
+            build_lane_prism(decode_streams(mk_rec(k)).df, 5, "x86_64");
+        check("T5/width-scene/all-known-raises-no-note",
+              known.writes.size() == 1 &&
+                  known.writes[0].width == PrismWidth::Lanes4 &&
+                  known.width_note.empty() && known.no_lane_note.empty(),
+              "a lane-bearing op the table names needs NO disclaimer at all "
+              "-- got width_note='" +
+                  known.width_note + "' no_lane_note='" + known.no_lane_note +
+                  "'");
+
+        // Mixed: paddd (Known) + movaps (NoLaneSemantics) + an unrecognised
+        // mnemonic (Unknown), one register's write history.
+        std::string m = kHdr;
+        m += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"paddd "
+             "xmm0, xmm1\",\"ops\":[{\"space\":\"reg\",\"reg\":9,\"size\":16,"
+             "\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":"
+             "\"000102030405060708090a0b0c0d0e0f\"}]}\n";
+        m += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"disasm\":\"movaps "
+             "xmm0, xmm2\",\"ops\":[{\"space\":\"reg\",\"reg\":9,\"size\":16,"
+             "\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":"
+             "\"101112131415161718191a1b1c1d1e1f\"}]}\n";
+        m += "{\"k\":\"df_step\",\"step\":2,\"off\":8,\"disasm\":"
+             "\"someverynewinsn xmm0, xmm3\",\"ops\":[{\"space\":\"reg\","
+             "\"reg\":9,\"size\":16,\"write\":true,\"value_valid\":true,"
+             "\"wide\":true,\"bytes\":\"202122232425262728292a2b2c2d2e2f\"}]"
+             "}\n";
+        const LanePrismScene mix =
+            build_lane_prism(decode_streams(mk_rec(m)).df, 9, "x86_64");
+        check("T5/width-scene/three-writes-three-verdicts",
+              mix.writes.size() == 3 &&
+                  mix.writes[0].width == PrismWidth::Lanes4 &&
+                  mix.writes[1].width == PrismWidth::NoLaneSemantics &&
+                  mix.writes[2].width == PrismWidth::Unknown,
+              "paddd/movaps/someverynewinsn did not land in their three "
+              "distinct verdicts");
+        check("T5/width-scene/both-notes-fire-independently",
+              !mix.width_note.empty() && !mix.no_lane_note.empty() &&
+                  mix.width_note != mix.no_lane_note,
+              "a scene with one Unknown write and one NoLaneSemantics write "
+              "must carry BOTH notes, with DIFFERENT text -- got "
+              "width_note='" +
+                  mix.width_note + "' no_lane_note='" + mix.no_lane_note + "'");
+        // The Known write's own geometry is unaffected by its neighbours'
+        // verdicts -- lane_bytes stays the measured 4, not pulled to the
+        // default by the OTHER writes' fallback.
+        check("T5/width-scene/known-write-keeps-its-own-lane-bytes",
+              mix.writes[0].lane_bytes == 4,
+              "a Known write's lane_bytes must not be affected by a sibling "
+              "write's verdict");
     }
 
     if (failures) {
