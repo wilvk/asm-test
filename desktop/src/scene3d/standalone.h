@@ -291,13 +291,15 @@ RibbonDrill ribbon_pick_link(const ModuleRibbonScene &s, const std::string &rec,
 
 // THREE verdicts for a write's element width, not two (2026-08-08 revised
 // plan). The old two-way "recorded or not" conflated "this operand has no
-// element width at all" (a bulk move: movdqa/movaps/movd/..., 7 of
-// blend_tile's 11 wide register writes -- cli/scenes_victim.c:82, see the
-// task report for why 11 and not the originally-stated 12) with "the table
-// does not name this mnemonic" (an honest guess) -- and disclaimed BOTH as
-// inferred. Only the second is actually inferred; collapsing them made the
-// HUD disclaim a guess it never made, for the MAJORITY of writes on the
-// plan's own demo routine.
+// element width at all" (a bulk move: movdqa/movd/..., 6 of blend_tile's 11
+// wide register writes -- cli/scenes_victim.c:82; movaps also appears in
+// blend_tile but only as the trailing memory STORE, which is_prism_write
+// never counts as a register write, so it is not among these 6 -- see the
+// final-review report for the arithmetic this corrects, 7 was wrong) with
+// "the table does not name this mnemonic" (an honest guess) -- and
+// disclaimed BOTH as inferred. Only the second is actually inferred;
+// collapsing them made the HUD disclaim a guess it never made, for the
+// MAJORITY of writes on the plan's own demo routine.
 enum class PrismWidth : uint8_t {
     Lanes1,          // the table names a 1-byte element width (measured)
     Lanes2,          // the table names a 2-byte element width (measured)
@@ -369,7 +371,7 @@ struct LanePrismScene {
     std::string width_note;
     // Present whenever ANY write is a NoLaneSemantics bulk move. This is
     // information, not a disclaimer -- there was nothing to infer for these
-    // writes (7 of blend_tile's 11 wide register writes), so it must read
+    // writes (6 of blend_tile's 11 wide register writes), so it must read
     // differently from width_note above, not as a milder version of the
     // same warning.
     std::string no_lane_note;

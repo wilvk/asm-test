@@ -734,15 +734,21 @@ int main() {
     // =====================================================================
     //
     // Measured over blend_tile (cli/scenes_victim.c:82, re-verified against a
-    // fresh capture during this task): of its 11 wide REGISTER writes -- see
-    // the task report for why this is 11 and not the brief's stated 12 -- the
-    // table names 4 and misses 7. Of those 7, ALL SEVEN are bulk moves
+    // fresh capture during this task, and again independently via `objdump
+    // --disassemble=blend_tile build/scenes_victim` during the final-plan
+    // review): of its 11 wide REGISTER writes -- see the task report for why
+    // this is 11 and not the brief's stated 12 -- the table names 4
+    // (pshufd x2, paddd, psubd) and misses 7. Of those 7, SIX are bulk moves
     // (movdqa x5, movd x1) with no element width to know; there is no
     // "movaps" register write anywhere in this function (its one movaps is
     // the trailing store to memory, which is a REG READ + MEM WRITE, not a
-    // register write, so is_prism_write correctly never counts it). Drawing
-    // 1-byte lanes and saying "we guessed" about a bulk move is a false
-    // claim, and it was the majority case (7 of 11 writes).
+    // register write, so is_prism_write correctly never counts it). The
+    // seventh, punpckldq, is the ONE genuine table gap (pinned below) --
+    // unlike the other six it DOES have lanes, so an earlier draft of this
+    // comment calling it a seventh bulk move was itself a small instance of
+    // the defect this task fixes. Drawing 1-byte lanes and saying "we
+    // guessed" about a bulk move is a false claim, and it was the majority
+    // case (6 of 11 writes).
     {
         // A lane-bearing op the table has always known: measured, no guess.
         check("T5/width/known-lane-op",
@@ -924,6 +930,66 @@ int main() {
               "-- \"x86_64\" (a real recording's raw arch) never trips the "
               "ambiguity gate; opcode_guest_from_arch(\"x86_64\") must "
               "resolve to \"x86\" before it reaches lane_width_class");
+    }
+
+    // ---- 2026-08-08 final-plan review, Finding 3: the AVX-512
+    // masking-granularity family (vmovdqu8/16/32/64, vmovdqa32/64) --------
+    //
+    // Task 4 (ymm16-31) made this population reachable for the first time:
+    // cli/evex_victim.c's evex_hot emits unmasked `vmovdqu64`, and G8's real
+    // motivating case (glibc's __memmove_evex_unaligned_erms tail) uses a
+    // REAL `{k}` mask with vmovdqu8. Before this fix both landed in Unknown
+    // (stripped of 'v', "movdqu64" matches neither kBulkMoveFamily nor
+    // kLaneWidths), raising the "INFERRED axis" warning for a case that is
+    // usually, like the plain SSE moves, not inferred at all.
+    //
+    // The ruling: UNMASKED is a bulk byte copy (identical effect to the SSE
+    // spelling, so NoLaneSemantics); MASKED is genuinely per-element at the
+    // suffix's granularity, so the suffix IS the lane width. Confirmed
+    // empirically which one Capstone's text lets us tell apart -- see the
+    // task report for the standalone-harness transcript this is measured
+    // from, reproduced in kEvexMaskGranularity's comment.
+    {
+        // Unmasked: no `{k` anywhere in the disasm text -> bulk copy, same
+        // bucket as movdqa/movdqu, NOT a guess.
+        check("T5/width/evex-unmasked-movdqu64-has-no-lanes",
+              lane_width_class("vmovdqu64 ymm16, ymm17", "x86_64") ==
+                  PrismWidth::NoLaneSemantics,
+              "an unmasked vmovdqu64 writes every byte unconditionally -- "
+              "identical in effect to movdqu -- so it is a bulk copy, not an "
+              "inferred axis; this is what cli/evex_victim.c's evex_hot "
+              "actually emits");
+        check("T5/width/evex-unmasked-movdqa32-has-no-lanes",
+              lane_width_class("vmovdqa32 zmm1, zmm2", "x86_64") ==
+                  PrismWidth::NoLaneSemantics,
+              "vmovdqa32 unmasked is likewise a straight copy -- the 32 "
+              "suffix names masking granularity, not an element operation, "
+              "and there is no mask here to apply it");
+
+        // Masked: Capstone renders the mask as a trailing "{k<n>}" token
+        // (space-separated from the register) -- confirmed empirically, not
+        // assumed. The suffix now genuinely is the lane width.
+        check("T5/width/evex-masked-movdqu64-is-8",
+              lane_width_class("vmovdqu64 ymm16 {k1}, ymm17", "x86_64") ==
+                  PrismWidth::Lanes8,
+              "masked, which qwords land is a real per-element decision -- "
+              "the 64 suffix is the lane width here, unlike the unmasked "
+              "case above");
+        check("T5/width/evex-masked-zeroing-still-counts-as-masked",
+              lane_width_class("vmovdqu64 ymm16 {k1} {z}, ymm17", "x86_64") ==
+                  PrismWidth::Lanes8,
+              "a zeroing-masked form ({k1}{z}) is still masked -- the "
+              "trailing {z} must not hide the {k1} substring search");
+        check("T5/width/evex-masked-movdqu8-is-1",
+              lane_width_class("vmovdqu8 zmm1 {k2}, zmm2", "x86_64") ==
+                  PrismWidth::Lanes1,
+              "vmovdqu8's masking granularity is a single byte -- this is "
+              "the exact shape glibc's EVEX memmove tail uses (G8)");
+        check("T5/width/evex-masked-movdqa32-is-4",
+              lane_width_class("vmovdqa32 zmm1 {k4}, zmm2", "x86_64") ==
+                  PrismWidth::Lanes4,
+              "vmovdqa32 masked is 4-byte granularity -- the aligned sibling "
+              "of movdqu32, same rule");
     }
 
     if (failures) {

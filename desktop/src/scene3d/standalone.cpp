@@ -612,6 +612,42 @@ const char *const kBulkMoveFamily[] = {
     "movdqa", "movdqu", "movaps", "movups", "movd", "movq",
 };
 
+// The AVX-512 masking-granularity family (2026-08-08 final-plan review,
+// Finding 3): vmovdqu8/16/32/64 and vmovdqa32/64 -- what Task 4's
+// cli/evex_victim.c emits (`vmovdqu64`) and what glibc's
+// __memmove_evex_unaligned_erms tail uses (`vmovdqu8` under a real `{k}`
+// mask, G8) -- were newly VISIBLE once Task 4 let the producer read
+// ymm16-31, and land in Unknown: stripped of their `v`, "movdqu64" matches
+// neither kBulkMoveFamily (exact string compare) nor kLaneWidths, so they hit
+// the honest-guess fallback and raise the warning-coloured "INFERRED axis"
+// note for a case that, like the SSE moves above, usually has nothing to
+// infer.
+//
+// The numeric suffix is NOT an element width by itself -- confirmed
+// empirically (a standalone Capstone 5.0.1 harness disassembling `as`-
+// assembled bytes, this task's report has the transcript), not assumed:
+//   unmasked:        "vmovdqu64 ymm16, ymm17"        -- no `{k` anywhere
+//   masked (k1):     "vmovdqu64 ymm16 {k1}, ymm17"   -- masked
+//   masked+zero:     "vmovdqu64 ymm16 {k1} {z}, ymm17"
+// UNMASKED, every element passes through unconditionally, so the write is a
+// straight byte copy with the identical effect as the SSE spelling -- the
+// suffix says nothing observable about the result, which is why this table
+// is consulted before it, not folded into it (the verdict depends on more
+// than the mnemonic). MASKED, which bytes of the destination get overwritten
+// genuinely depends on the suffix's granularity, so it IS the lane width
+// there. Capstone renders the mask as a trailing `{k<n>}` token (space-
+// separated from the register, per the transcript above), which is why the
+// check below is a substring search over the FULL disasm text rather than a
+// second mnemonic-table lookup.
+struct EvexMaskGranularity {
+    const char *mnemonic; // post-'v'-strip, as kBulkMoveFamily's entries are
+    uint32_t bytes;       // the masking granularity IF a `{k}` mask is present
+};
+const EvexMaskGranularity kEvexMaskGranularity[] = {
+    {"movdqu8", 1}, {"movdqu16", 2}, {"movdqu32", 4}, {"movdqu64", 8},
+    {"movdqa32", 4}, {"movdqa64", 8},
+};
+
 // The one place a lane width may be widened past the default, and only where
 // the mnemonic is unambiguous. Deliberately SHORT: every entry is a mnemonic
 // whose element width is part of its name. Anything not here keeps the
@@ -728,6 +764,19 @@ PrismWidth lane_width_class(const std::string &disasm,
     for (const char *m : kBulkMoveFamily)
         if (base == m)
             return PrismWidth::NoLaneSemantics;
+
+    // The AVX-512 masking-granularity family: a fact about the operand, like
+    // kBulkMoveFamily above, so also checked unconditionally and before the
+    // ambiguity gate -- but the verdict needs the full disasm text, not just
+    // the mnemonic, since UNMASKED (no `{k` anywhere) is the bulk-copy case
+    // and MASKED is the one case where the numeric suffix really is the lane
+    // width. See kEvexMaskGranularity's comment for the Capstone transcript
+    // this is measured from.
+    for (const EvexMaskGranularity &r : kEvexMaskGranularity)
+        if (base == r.mnemonic)
+            return disasm.find("{k") != std::string::npos
+                       ? prism_width_of_bytes(r.bytes)
+                       : PrismWidth::NoLaneSemantics;
 
     // 54 T4's ambiguity flag is the GATE for what remains, not a second
     // opinion: a mnemonic that classifier calls ambiguous (a float<->int
