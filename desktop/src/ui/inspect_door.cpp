@@ -259,6 +259,22 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     // host applies its own default (AUTO_WINDOW_MS).
     if (s.want == LiveMode::Auto && s.window_ms > 0)
         params["ms"] = s.window_ms;
+    // 2026-08-06 plan, Task 8 (M12): `insns` is UNCONDITIONAL on the dataflow
+    // single-step engines — without it a dataflow capture carries no `trace`
+    // stream, and dt_diff_build cannot align a pair on trace-or-coverage, so two
+    // otherwise-perfect captures are simply undiffable. `mem`/`statediff` stay
+    // the operator's opt-in (their cost is stated on the checkboxes below, not
+    // defaulted here): `mem` feeds the address plane's data layers, every reader
+    // of which in desktop/src/space/ is dead on a capture that omits it;
+    // `statediff` is what gives the divergence scene its ribs (measured
+    // ribs=20 armed vs ribs=0 from the GUI-reachable shape before this).
+    if (s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) {
+        params["insns"] = true;
+        if (s.want_mem)
+            params["mem"] = true;
+        if (s.want_statediff)
+            params["statediff"] = true;
+    }
     // The tree filter (depth/focus/module/tid/follow) rides this same Start — the
     // patch bay owns tree config now, so the one Start carries it. obs_tree_start_
     // params omits any field left at its default, exactly as the wire expects. To
@@ -860,6 +876,21 @@ void draw_patch_bay(InspectState &s) {
     if (s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) {
         ImGui::Checkbox("record the register ring (--steps → live Scrubber)",
                         &s.steps);
+        // 2026-08-06 plan, Task 8 (M12): `mem`/`statediff`, OPT-IN and priced —
+        // unlike --steps above, both add real per-event cost, so each checkbox
+        // states it rather than letting the operator discover it from a slower
+        // capture. `insns` needs no checkbox: it is unconditional for these two
+        // modes (inspect_start_params), because without it a dataflow capture
+        // has no `trace` stream and dt_diff_build cannot align a pair at all.
+        ImGui::Checkbox(
+            "record memory accesses (mem → the address plane's data layers) "
+            "— one `mem` event per memory access",
+            &s.want_mem);
+        ImGui::Checkbox(
+            "record register deltas (statediff → the divergence scene's ribs) "
+            "— forces the register ring on, one statediff + one regstate per "
+            "step",
+            &s.want_statediff);
         // 35 T4: keep re-arming the same region until Stop, into one growing
         // recording (the Scrubber follows the latest invocation live). One start
         // fires; the once-per-session perturb confirm is not re-asked per pass.

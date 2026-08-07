@@ -260,6 +260,19 @@ struct InspectState {
     // turn it off; sent as `steps:true` in the start params.
     bool steps = true;
 
+    // 2026-08-06 plan, Task 8 (M12): two more flags the serve host has always
+    // honoured (cli/asmspy.c's `mem`/`statediff` in serve_parse_start) that the
+    // GUI never sent — measured: grep -c '"insns"|"mem"|"statediff"|"fpregs"'
+    // over this door returned 0. Both are OPT-IN, unlike `steps` above, because
+    // both have a real cost: `mem` adds one `mem` event per memory access over
+    // the whole capture window, and `statediff` forces the register ring on
+    // (server-side `p->steps = 1`) and adds one statediff + one regstate per
+    // step — against a sweep leg hard-capped at only 400 (sweep_max below), that
+    // is up to 800 extra events for one leg. The capture-pane checkboxes state
+    // both costs; see inspect_start_params for where they reach the wire.
+    bool want_mem = false;
+    bool want_statediff = false;
+
     // CONTINUOUS capture (35 T4): the dataflow/auto engine re-arms the same scoped
     // region and keeps capturing until Stop, appending each invocation into one
     // growing recording delimited by `df_invocation` markers (the Scrubber shows

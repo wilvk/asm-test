@@ -2320,8 +2320,17 @@ int main() {
         check("cap/log no region", inspect_start_params(is).empty(),
               "a whole-process mode must send empty start params");
         is.want = LiveMode::Auto;
-        check("cap/auto no region", inspect_start_params(is).empty(),
-              "auto samples its own region — no region params");
+        // 2026-08-06 plan, Task 8: no longer `.empty()` — auto now ALSO carries
+        // `insns` unconditionally (it is itself a dataflow engine, doors.h's own
+        // "the auto leg ... is itself the dataflow engine"), so this narrows to
+        // what the comment above actually claims: no REGION key, insns or not.
+        {
+            nlohmann::json ap = inspect_start_params(is);
+            check("cap/auto no region",
+                  !ap.contains("base") && !ap.contains("func") &&
+                      !ap.contains("len"),
+                  "auto samples its own region — no region params");
+        }
         is.want = LiveMode::Dataflow;
         nlohmann::json p = inspect_start_params(is);
         check("cap/dataflow base+len",
@@ -2451,6 +2460,56 @@ int main() {
                   tp.value("module", std::string()) == "libc" &&
                   !tp.contains("steps") && !tp.contains("continuous"),
               "tree + filter -> {depth,focus,module} on the wire, no ring");
+    }
+
+    // 2026-08-06 plan, Task 8: three flags the serve host honours and the GUI
+    // never sent. `insns` is unconditional for the dataflow engines -- without
+    // it a dataflow capture emits no `trace` stream, and dt_diff_build cannot
+    // align a pair, so two perfect captures are undiffable.
+    {
+        InspectState is;
+        is.want = LiveMode::Dataflow;
+        std::snprintf(is.region, sizeof is.region, "%s", "hotfn");
+        check("cap/dataflow sends insns",
+              inspect_start_params(is).value("insns", false),
+              "a dataflow capture must carry its instruction stream, or the "
+              "Diff and the 3D canvas have nothing to align");
+        is.want = LiveMode::Log;
+        check("cap/log ignores insns",
+              !inspect_start_params(is).contains("insns"),
+              "a whole-process mode single-steps nothing");
+        is.want = LiveMode::Dataflow;
+        is.want_mem = true;
+        check("cap/mem is opt-in", inspect_start_params(is).value("mem", false),
+              "`mem` feeds the address plane's data layers");
+        is.want_statediff = true;
+        nlohmann::json p = inspect_start_params(is);
+        check("cap/statediff is opt-in", p.value("statediff", false),
+              "`statediff` is what gives the divergence scene its ribs");
+
+        // `auto` is the SAME dataflow engine under another name (doors.h:
+        // "the auto leg ... is itself the dataflow engine") -- insns must
+        // reach it too, or an auto-led sweep leg is still undiffable.
+        InspectState au;
+        au.want = LiveMode::Auto;
+        check("cap/auto sends insns too",
+              inspect_start_params(au).value("insns", false),
+              "auto is a dataflow engine with a picked-not-typed region; it "
+              "needs the same trace stream to be diffable");
+
+        // Mutation guard: `mem`/`statediff` must NOT be a hidden default. If
+        // either leaked out unconditionally (the same bug this task fixes for
+        // `insns`, but in the wrong direction), a bare dataflow capture would
+        // silently pay the statediff cost (forces the register ring on server
+        // side, cli/asmspy.c) on every single Start.
+        InspectState fresh;
+        fresh.want = LiveMode::Dataflow;
+        std::snprintf(fresh.region, sizeof fresh.region, "%s", "hotfn");
+        nlohmann::json fp = inspect_start_params(fresh);
+        check("cap/mem off by default", !fp.contains("mem"),
+              "an un-ticked capture must not pay mem's per-access cost");
+        check("cap/statediff off by default", !fp.contains("statediff"),
+              "an un-ticked capture must not force the register ring on");
     }
 
     // --- Swap/Queue must carry the same params as the direct Start. Routing tree
