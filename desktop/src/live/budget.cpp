@@ -133,7 +133,15 @@ std::vector<const char *> mode_visualizations(LiveMode m) {
         // "Observer" here is what closed that pane.
         return {"Observer (call tree)", "3D overview"};
     case LiveMode::Graph:
-        return {"Observer (call graph)"};
+        // Deliberately EMPTY, and the SECOND mode allowed to be (test_budget
+        // pins which). A `graph` capture records `graph` events, and nothing
+        // in this build reads them: there is no by_kind("graph") consumer in
+        // desktop/src — views/graph_nav.cpp navigates an existing model, it
+        // does not decode the wire kind. This row promised "Observer (call
+        // graph)" until 2026-08-07; that facet does not exist. Naming one here
+        // is the promise-what-you-cannot-fill defect the sample/log/trace/
+        // stream rows lost in the 2026-08-05 plan.
+        return {};
     case LiveMode::Procs:
         return {"Observer (process tree)"};
     case LiveMode::Sample:

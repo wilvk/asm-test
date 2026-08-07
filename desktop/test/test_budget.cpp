@@ -328,23 +328,26 @@ int main(void) {
                               "` must appear exactly once in the picker order");
         }
 
-        // Every mode advertises at least one visualization — EXCEPT `stream`,
-        // whose `stream` events no view in this build reads (there is no
-        // by_kind("stream") consumer anywhere in desktop/src, and
-        // observer_has_any does not count them). An empty list is that fact
-        // stated, and the picker renders it as a sentence. Pinning WHICH mode
-        // may be empty is a stronger contract than "all non-empty": it fails
-        // both if stream grows a phantom entry and if any other mode loses its
-        // real ones.
+        // Every mode advertises at least one visualization — EXCEPT `stream`
+        // and `graph` (2026-08-07 plan, Task 2: `graph` was the row nobody
+        // re-checked when sample/log/trace/stream lost this same promise in
+        // 2026-08-05), whose events no view in this build reads (there is no
+        // by_kind("stream") or by_kind("graph") consumer anywhere in
+        // desktop/src, and observer_has_any does not count them). An empty
+        // list is that fact stated, and the picker renders it as a sentence.
+        // Pinning WHICH modes may be empty is a stronger contract than "all
+        // non-empty": it fails both if a third mode goes empty and if stream
+        // or graph regains a phantom entry that nothing reads.
         for (LiveMode m : modes) {
             const bool empty = mode_visualizations(m).empty();
-            const bool is_stream = mode_name(m) == std::string("stream");
-            check("viz/empty-only-stream", empty == is_stream,
+            const std::string name = mode_name(m);
+            const bool may_be_empty = name == "stream" || name == "graph";
+            check("viz/empty-only-stream-or-graph", empty == may_be_empty,
                   std::string("mode `") + mode_name(m) + "` " +
-                      (empty ? "names no visualization, but only `stream` may "
-                               "— every other mode fills something"
-                             : "names a visualization, but `stream` events "
-                               "have no reader in this build"));
+                      (empty ? "names no visualization, but only `stream`/"
+                               "`graph` may — every other mode fills something"
+                             : "names a visualization, but `stream`/`graph` "
+                               "events have no reader in this build"));
         }
 
         // A statistical sampler cannot offer an EXACT Loom or Scrubber (it never
@@ -845,6 +848,31 @@ int main(void) {
               mode_host_blocked(s, false, false, why).empty(),
               "an unprobed host must block nothing: we have not asked, and "
               "CAP_PERFMON on the asmspy binary overrides the sysctl anyway");
+    }
+
+    // 2026-08-07 plan, Task 2: `graph` advertised a facet with no consumer.
+    // grep finds no by_kind("graph") reader anywhere in desktop/src —
+    // views/graph_nav.cpp is navigation over an existing model, not a reader
+    // of the wire kind. `stream` already returns {} for exactly this reason
+    // (budget.cpp's own comment); `graph` was the row nobody re-checked.
+    {
+        LiveMode g;
+        check("viz/graph/known", mode_from_name("graph", &g), "graph parses");
+        check("viz/graph/promises-nothing", mode_visualizations(g).empty(),
+              "a `graph` capture records `graph` events and nothing in this "
+              "build reads them, so naming a view here is the same "
+              "promise-what-you-cannot-fill defect the other rows lost");
+
+        // The control, so this cannot be made green by emptying every row:
+        // the modes that DO fill something must still say so.
+        LiveMode t, a;
+        mode_from_name("tree", &t);
+        mode_from_name("auto", &a);
+        check("viz/tree/still-promises", !mode_visualizations(t).empty(),
+              "`tree` fills the Observer's call-tree facet and the 3D "
+              "overview — emptying it would hide a real capability");
+        check("viz/auto/still-promises", !mode_visualizations(a).empty(),
+              "`auto` fills the whole exact deck");
     }
 
     if (failures) {
