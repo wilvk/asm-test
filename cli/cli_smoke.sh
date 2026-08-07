@@ -850,6 +850,93 @@ kill -0 "$UVPID" 2>/dev/null || fail "auto_victim died under --dataflow --auto"
 kill "$UVPID" 2>/dev/null || true
 rm -f "$BUILD/auto_victim.log"
 
+# THE UNCONFIRMED-PICK GATE (auto_pick_ptrace's "THE GATE", cli/asmspy.c) must
+# refuse the WHOLE batch whenever asmspy_ptrace_sample could not prove full
+# thread-set coverage -- whether coverage was never there to begin with
+# (ASMSPY_PS_TEST_CAP, a seize capped below the target's real thread count) or
+# was LOST MID-LOOP, after some candidates already carried a REAL phase-3
+# measurement (ASMSPY_PS_TEST_LOSE_AFTER, cli/asmspy_ptracesample.c).
+#
+# The mid-loop case is the one review found the gate's first cut blind to: a
+# check that only inspects cands[0]'s own arrivals/first_us sees genuinely
+# non-zero data there (candidate 0 WAS confirmed, before coverage dropped) and
+# never trips, so the whole unranked batch -- including a tail that never ran
+# through phase 3 at all -- gets reported "CONFIRMED by int3 arrival" and
+# walked with evidence:"entry". That is exactly the "arm an int3 at a PLT
+# stub and hang" hazard this module exists to prevent, just relocated past
+# the first candidate. The fix gates on the producer's own authoritative
+# verdict (asmspy_ps_arm_note's UNCONFIRMED sentence, appended to `why` iff
+# `confirmed` is false for the WHOLE call) instead of any one candidate's
+# fields. Both levers are test-only and completely inert unless set.
+echo "--- asmspy --dataflow --auto --sampler=ptrace: an unconfirmed batch must never be armed ---"
+GLOG="$BUILD/tid_victim_gate.log"
+: > "$GLOG"
+"$BUILD/tid_victim" 2>"$GLOG" &
+GVPID=$!
+# Same barrier as the --tid filter block above: wait for both workers to
+# report in, so the picker has more than one real candidate to work with.
+GATID=""; GBTID=""
+_i=0
+while [ "$_i" -lt 100 ]; do
+    GATID=$(sed -n 's/^alpha tid=\([0-9][0-9]*\).*/\1/p' "$GLOG" | head -1)
+    GBTID=$(sed -n 's/^beta tid=\([0-9][0-9]*\).*/\1/p' "$GLOG" | head -1)
+    [ -n "$GATID" ] && [ -n "$GBTID" ] && break
+    _i=$((_i + 1))
+    sleep 0.1
+done
+kill -0 "$GVPID" 2>/dev/null || fail "tid_victim (gate check) did not start"
+[ -n "$GATID" ] && [ -n "$GBTID" ] \
+    || fail "tid_victim (gate check) did not report both worker tids"
+
+# Case 1: coverage never there at all (the shape ASMSPY_PS_TEST_CAP always
+# provoked, already covered manually before this task's review -- landed
+# here so it is asserted, not just described).
+set +e
+g1out=$(ASMSPY_PS_TEST_CAP=2 timeout 15 "$ASM" --dataflow "$GVPID" --auto \
+    --sampler=ptrace --max=50 2>&1)
+g1rc=$?
+set -e
+[ "$g1rc" -eq 124 ] && fail "--auto --sampler=ptrace (ASMSPY_PS_TEST_CAP=2) hung"
+[ "$g1rc" -eq 0 ] \
+    || fail "--auto --sampler=ptrace (ASMSPY_PS_TEST_CAP=2) exited $g1rc: $g1out"
+printf '%s\n' "$g1out" | grep -q '^# SKIP' \
+    || fail "an immediately-unconfirmed batch (ASMSPY_PS_TEST_CAP=2) must self-skip, not arm: $g1out"
+printf '%s\n' "$g1out" | grep -q 'UNCONFIRMED' \
+    || fail "the self-skip must carry the producer's own UNCONFIRMED reason, not a guessed one: $g1out"
+printf '%s\n' "$g1out" | grep -q 'CONFIRMED by int3 arrival' \
+    && fail "ASMSPY_PS_TEST_CAP=2 must never be reported CONFIRMED: $g1out"
+kill -0 "$GVPID" 2>/dev/null \
+    || fail "tid_victim died under an ASMSPY_PS_TEST_CAP=2 gate probe"
+
+# Case 2: coverage LOST MID-LOOP, after candidate 0 already got a real
+# phase-3 measurement -- THE REVIEW CRITICAL this block exists to close.
+# ASMSPY_PS_TEST_CAP cannot provoke this shape (it never lets phase 3 start
+# at all, so nothing has a first_us yet); this lever drops coverage from
+# INSIDE the confirm loop, right after candidate 0 is measured for real, so a
+# cands[0]-only check would see genuine data and wrongly pass.
+set +e
+g2out=$(ASMSPY_PS_TEST_LOSE_AFTER=0 timeout 15 "$ASM" --dataflow "$GVPID" \
+    --auto --sampler=ptrace --max=50 2>&1)
+g2rc=$?
+set -e
+[ "$g2rc" -eq 124 ] && fail "--auto --sampler=ptrace (ASMSPY_PS_TEST_LOSE_AFTER=0) hung"
+[ "$g2rc" -eq 0 ] \
+    || fail "--auto --sampler=ptrace (ASMSPY_PS_TEST_LOSE_AFTER=0) exited $g2rc: $g2out"
+printf '%s\n' "$g2out" | grep -q '^# SKIP' \
+    || fail "a batch that lost coverage MID-LOOP must self-skip WHOLE, even though candidate 0 was genuinely confirmed first: $g2out"
+printf '%s\n' "$g2out" | grep -q 'UNCONFIRMED' \
+    || fail "the mid-loop self-skip must carry the producer's own UNCONFIRMED reason: $g2out"
+printf '%s\n' "$g2out" | grep -q 'CONFIRMED by int3 arrival' \
+    && fail "a mid-loop coverage loss must never be reported CONFIRMED, even with a genuinely-confirmed cands[0] (the exact bug review found): $g2out"
+printf '%s\n' "$g2out" | grep -q 'data-flow capture of' \
+    && fail "an unconfirmed batch must never reach the capture engine: $g2out"
+kill -0 "$GVPID" 2>/dev/null \
+    || fail "tid_victim died under an ASMSPY_PS_TEST_LOSE_AFTER=0 gate probe"
+
+echo "  --auto --sampler=ptrace refuses an unconfirmed batch WHOLE: both when coverage was never there (ASMSPY_PS_TEST_CAP) and when it was lost mid-loop after a genuinely-confirmed prefix (ASMSPY_PS_TEST_LOSE_AFTER)"
+kill "$GVPID" 2>/dev/null || true
+rm -f "$GLOG"
+
 # --sampler=sw: the PORTABLE --auto path (software-clock residency rule +
 # candidate walk; asmspy-plan §H). auto_victim's residency winner IS
 # grind_forever by construction, so when this runs for real the walk is what
