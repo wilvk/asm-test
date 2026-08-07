@@ -8,12 +8,16 @@
  *   blend_tile()   SSE work on a 16-byte tile. The dataflow producer decodes its
  *                  XMM operands into WIDE value records (>8 bytes, carried in
  *                  the `bytes` field), which is the LanePrism scene's only
- *                  input. The mnemonics are chosen so lane_width_for() can name
- *                  the element width from the disassembly — a mnemonic it
- *                  cannot classify degrades every write to a default lane width.
- *                  Its ENTRY is also arrived at constantly, which is what an
- *                  --trace region capture needs: a routine entered once yields
- *                  one invocation, and one invocation is not a scene.
+ *                  input. Most of its writes are bulk moves (movdqa/movd) that
+ *                  lane_width_class() correctly reports as having no element
+ *                  width to know; paddd/psubd/pshufd/punpckldq are the ones
+ *                  with a real, table-named lane width (2026-08-08 revised T5:
+ *                  lane_width_for() no longer exists — see scene3d/
+ *                  standalone.h's PrismWidth for the three-way verdict that
+ *                  replaced its two-way "recorded or not"). Its ENTRY is also
+ *                  arrived at constantly, which is what an --trace region
+ *                  capture needs: a routine entered once yields one
+ *                  invocation, and one invocation is not a scene.
  *
  *   worker()       Three threads descending through walk_heap/sort_batch/mix_math
  *                  into libc and libm. The ModuleRibbon scene's lanes are tids,

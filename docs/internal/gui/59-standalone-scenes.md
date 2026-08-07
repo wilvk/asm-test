@@ -286,6 +286,17 @@ manipulation no current view looks into, since the loom folds sub-registers into
    the disassembly mnemonic is unambiguous — reusing
    [54](54-3d-catalog-phase0-plumbing.md) T4's ambiguity flag rather than a second
    guess.
+   **SUPERSEDED 2026-08-08** (2026-08-07 `3d-data-capture-gaps` plan, revised Task
+   3 — this contract is no longer what ships): a single default-and-label
+   conflated "this operand has no element width to know" with "the table does not
+   name this mnemonic", disclaiming both as inferred. The shipped form is a
+   **three-way** verdict (`PrismWidth` in `standalone.h`): a measured
+   `Lanes{1,2,4,8}`; a bulk move (`movdqa`/`movd`/...) with genuinely no element
+   width (`NoLaneSemantics`) — the MAJORITY of writes on this doc's own demo
+   routine, `scenes_victim.c`'s `blend_tile` — which is a fact, not a guess, and
+   gets no disclaimer; and a genuine `Unknown` guess, the only case still
+   disclaimed. The geometry fallback is **1** byte-lane
+   (`kPrismDefaultLaneBytes`), not 16.
 5. `bytes` absent or of odd length → a `[wide]` wireframe, never zero bytes.
    `value_valid == false` → hollow.
 6. Drill-in: pick → timeline/slice at that step (the exact hex) plus disasm at
@@ -300,6 +311,12 @@ lane move; an unambiguous `paddd` subdivides to 32-bit lanes and an ambiguous
 mnemonic does not; an empty `bytes` renders the wireframe and no zero bars;
 `value_valid == false` renders hollow; the "element width not recorded" label is
 present whenever the default is used.
+**SUPERSEDED 2026-08-08**: there is no single "element width not recorded"
+label to test for — `test_standalone.cpp`'s T5 checks instead pin the three
+`PrismWidth` verdicts separately, and at the scene level pin that a known lane
+width raises neither HUD note, a bulk move raises `no_lane_note` (information,
+not a disclaimer), and only a genuine `Unknown` raises `width_note` (the one
+that reads as a disclaimer).
 
 **Done when.** A vector register's internal behaviour is inspectable, and every
 lane boundary the scene draws is either recorded or labelled as a default.
