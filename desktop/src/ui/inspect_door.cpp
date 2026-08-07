@@ -397,7 +397,17 @@ static std::string inspect_sweep_adopt_pick(InspectState &s) {
 // Each predicate mirrors the SAME builder view_presence.cpp's Scene3D gate
 // reads (scene3d_has_invocation / scene3d_has_module_ribbon / lane_prism_any /
 // regions_from_codeimage) rather than a fresh by_kind check, so this can never
-// disagree with the pane about whether a leg actually filled it.
+// disagree with the pane about whether a leg actually filled it. The stack
+// clause in particular mirrors scene3d_has_invocation's own EARLY refusal
+// (view_presence.cpp): a leg that mixed "rel"/absolute bases sets
+// RegionView::basis_error, but obs_region_build does NOT retroactively clear
+// the blocks it already appended before the mismatch was seen (region.cpp's
+// note_basis fires per-event, mid-walk) — so a mixed-basis leg can have
+// non-empty invocation blocks AND a set basis_error at once. Skipping that
+// guard would let this decoder claim the stack landed on a leg whose own
+// pane shows a refusal card instead of a scene: the exact over-promising
+// this task exists to remove, reached through a mixed basis instead of a
+// scalar routine.
 static void inspect_sweep_landed(const InspectState &s, bool *plane,
                                  bool *stack, bool *ribbon, bool *prism) {
     *plane = *stack = *ribbon = *prism = false;
@@ -408,11 +418,12 @@ static void inspect_sweep_landed(const InspectState &s, bool *plane,
             *ribbon = !obs_tree_build(r).rows.empty();
         if (!*stack) {
             RegionView rv = obs_region_build(r);
-            for (const RegionInvocation &inv : rv.invocations)
-                if (!inv.blocks.empty()) {
-                    *stack = true;
-                    break;
-                }
+            if (rv.basis_error.empty())
+                for (const RegionInvocation &inv : rv.invocations)
+                    if (!inv.blocks.empty()) {
+                        *stack = true;
+                        break;
+                    }
         }
         if (!*prism)
             *prism = scene3d::lane_prism_any(decode_streams(r).df);

@@ -2514,6 +2514,75 @@ int main() {
                       absent.find("0x1000:40") == std::string::npos,
                   why.c_str());
         }
+
+        // Coordinator review (2026-08-06 plan, Task 12, Important): the stack
+        // predicate must mirror scene3d_has_invocation's OWN early refusal —
+        // a MIXED "rel"/absolute basis sets RegionView::basis_error, but
+        // obs_region_build does not retroactively clear the blocks it already
+        // appended before the mismatch was seen (region.cpp's note_basis
+        // fires per-event, mid-walk), so a leg can have non-empty invocation
+        // blocks AND a set basis_error at once. Without the guard this
+        // decoder would claim the stack landed on a leg whose OWN pane shows
+        // a refusal card instead of a scene — the exact over-promising this
+        // task exists to remove, reached through a mixed basis instead of a
+        // scalar routine.
+        {
+            InspectState is;
+            is.host_started = true;
+            is.selected_pid = 4242;
+            is.record_session = true;
+            std::snprintf(is.record_path, sizeof is.record_path, "%s",
+                          "/tmp/sweep-complete-mixed-basis.asmtrace");
+            std::snprintf(is.region, sizeof is.region, "%s", "blend_tile");
+            is.sweep_have_region = true;
+            is.sweep_running = true;
+            is.sweep_at = sweep_legs(true).size(); // every leg already ran
+
+            feed_leg(is.session, "tree",
+                     {R"({"k":"call","tid":1,"depth":0,"addr":4096,)"
+                      R"("name":"blend_tile","module":"scenes_victim"})"});
+            // The trace leg: a `rel` insn, then an `abs` insn BEFORE the
+            // closing coverage — note_basis sees the mismatch mid-invocation,
+            // sets basis_error, and the invocation still closes with BOTH
+            // offsets in its block set (non-empty).
+            feed_leg(is.session, "trace",
+                     {R"({"k":"trace","off":0,"basis":"rel"})",
+                      R"({"k":"trace","off":100,"basis":"abs"})",
+                      R"({"k":"coverage","blocks":[0,100],"basis":"abs"})"});
+            feed_leg(
+                is.session, "dataflow",
+                {R"({"k":"df_step","step":0,"off":0,"disasm":"paddd)"
+                 R"( xmm0, xmm1","ops":[{"space":"reg","reg":30,"size":16,)"
+                 R"("write":true,"wide":true,"value_valid":false}]})"});
+
+            auto rv_check = obs_region_build(is.session.recordings()[1]);
+            check("sweep/complete/mixed-basis/fixture-has-the-trap",
+                  !rv_check.basis_error.empty() &&
+                      !rv_check.invocations.empty() &&
+                      !rv_check.invocations[0].blocks.empty(),
+                  "the fixture itself must reproduce the trap (non-empty "
+                  "blocks alongside a set basis_error) or this test proves "
+                  "nothing");
+
+            bool fired = inspect_sweep_poll(is);
+            check("sweep/complete/mixed-basis/poll-stops-not-fires",
+                  !fired && !is.sweep_running, "no fourth leg to fire");
+
+            size_t marker = is.sweep_note.find("Not this time");
+            std::string landed = marker == std::string::npos
+                                     ? is.sweep_note
+                                     : is.sweep_note.substr(0, marker);
+            const std::string why =
+                "a mixed-basis leg's own pane shows a REFUSAL card "
+                "(scene3d_has_invocation returns false on a set "
+                "basis_error) — the note must not claim the invocation "
+                "stack landed just because inv.blocks happened to be "
+                "non-empty: got \"" +
+                is.sweep_note + "\"";
+            check("sweep/complete/mixed-basis/does-not-claim-the-stack",
+                  landed.find("invocation stack") == std::string::npos,
+                  why.c_str());
+        }
     }
 
     // --- region gap: inspect_start_params attaches a scoped region ONLY for the
