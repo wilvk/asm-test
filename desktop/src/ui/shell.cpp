@@ -4781,9 +4781,37 @@ void draw_shell(ShellState &s) {
     // (inspect_sweep_blocked, draw_patch_bay, draw_launch_pane) each take an
     // InspectState, never a CapState — so its inputs live where they already
     // reach, rather than threading CapState through the door as well.
-    s.inspect.perf_ok = s.caps.perf_ok;
-    s.inspect.perf_reason = s.caps.perf_reason;
-    s.inspect.perf_probed = s.caps.perf_probed;
+    //
+    // BUT NOT FROM cap_probe (2026-08-06 final review, finding 8). That syscall
+    // runs in THIS process, and perf permission is a property of the process,
+    // not of the machine: docs/getting-started/host-setup.md rung 2 grants
+    // CAP_PERFMON to the asmspy INODE, and file capabilities land on execve. So
+    // on a correctly capped host the desktop's own perf_event_open fails while
+    // `asmspy --sample` works, and greying `sample` on it would advise the
+    // operator to grant a capability they have already granted. A local probe
+    // can only ever be a POSITIVE signal about a different binary.
+    //
+    // The verdict that may BLOCK therefore comes from the binary that would
+    // run: `asmspy --info <pid> --json` now measures perf_event_open in its own
+    // process and reports it as `host.perf_ok`, and the details-pane runner
+    // latches it (ProcInfoRunner::host_perf_*). Until one has landed,
+    // perf_probed stays false and nothing is blocked — the safe direction, and
+    // in the GUI's own flow the operator selects a process (which is what fires
+    // the probe) before there is anything to start.
+    //
+    // ssh_host is still required for the same reason as before: procinfo.cpp's
+    // spawn deliberately probes LOCALLY even when a remote session is
+    // configured, so its verdict is about the wrong machine then.
+    const bool local_session =
+        s.inspect.host_started && s.inspect.ssh_host[0] == '\0';
+    s.inspect.perf_probed = local_session && s.inspect.details.host_perf_probed;
+    s.inspect.perf_ok = s.inspect.details.host_perf_ok;
+    // The desktop's own probe still supplies the paranoid-sysctl remedy text
+    // when the binary reported no reason of its own; the binary's is preferred,
+    // because it is the one that measured the refusal.
+    s.inspect.perf_reason = !s.inspect.details.host_perf_why.empty()
+                                ? s.inspect.details.host_perf_why
+                                : s.caps.perf_reason;
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through
     // the ONE writer so the timeline / slice / Loom / Scrubber animate together.

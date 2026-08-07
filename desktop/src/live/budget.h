@@ -221,6 +221,21 @@ std::string sweep_result_note(bool plane, bool stack, bool ribbon, bool prism,
 // MEASURED refusal may grey a mode. An unprobed host yields "" -- a note
 // elsewhere, never a disabled control, because a control greyed on a guess is
 // indistinguishable from a broken build.
+//
+// TWO NARROWINGS from the 2026-08-06 final review, and both are about the same
+// mistake -- refusing on a fact that does not imply the refusal:
+//
+//  - `sample` is now the ONLY mode this blocks (finding 2). `auto`'s sampler
+//    chain ends in a perf-free ptrace region picker, so a perf refusal says
+//    nothing about it; blocking it greyed the branch's headline deliverable on
+//    exactly the host the branch exists for.
+//  - the verdict fed in must be MEASURED BY THE asmspy BINARY, not by the
+//    desktop process (finding 8). perf permission travels with file
+//    capabilities, which land on execve: after the setup ladder's `setcap
+//    cap_perfmon+ep`, the desktop's own perf_event_open still fails while
+//    asmspy's succeeds. desktop/src/ui/shell.cpp therefore feeds these
+//    arguments from `asmspy --info --json`'s `host.perf_ok`, and leaves
+//    perf_probed false until that verdict exists.
 std::string mode_host_blocked(LiveMode want, bool perf_probed, bool perf_ok,
                               const std::string &perf_reason);
 

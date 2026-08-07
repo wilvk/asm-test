@@ -322,12 +322,15 @@ std::string inspect_sweep_blocked(const InspectState &s) {
     // 2026-08-06 plan, Task 4: refuse a sweep whose FIRST leg cannot run on
     // this host. inspect_sweep_poll calls send_start directly and bypasses
     // inspect_request_start entirely, so gating only the patch-bay Start
-    // button would not gate a sweep — this is the one place that does. An
-    // auto-led sweep (no region named) leads with `auto`, which needs the
-    // out-of-band sampler; a scoped sweep leads with `tree`, which does not,
-    // so mode_host_blocked is "" for it and this never fires. Either way, a
-    // sweep whose leading leg cannot capture is three captures that change
-    // nothing.
+    // button would not gate a sweep — this is the one place that does. A sweep
+    // whose leading leg cannot capture is three captures that change nothing.
+    //
+    // In practice this no longer fires for EITHER sweep shape, and that is the
+    // fix rather than an oversight (2026-08-06 final review, finding 2): a
+    // scoped sweep leads with `tree` and an auto-led sweep leads with `auto`,
+    // and neither needs perf — `auto`'s chain ends in the perf-free ptrace
+    // picker. The call stays because mode_host_blocked is the host gate, not a
+    // perf gate: whatever it comes to refuse next, a sweep must refuse too.
     const std::vector<LiveMode> &legs = inspect_sweep_legs(s);
     if (legs.empty())
         return std::string();

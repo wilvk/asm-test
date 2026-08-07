@@ -48,11 +48,22 @@ static std::string cap_perf_paranoid_note() {
         return std::string();
     if (v <= 2)
         return std::string(); // not what refused us; do not misdirect
+    // What this sentence must NOT say (2026-08-06 final review, finding 2): it
+    // used to name `auto` as the casualty and offer only "needs <=2, or
+    // CAP_PERFMON". `auto` is not a casualty — its sampler chain ends in a
+    // perf-free ptrace region picker that runs here — and leading with a
+    // host-wide sysctl relax pushes the operator at the remedy rung 0 of
+    // docs/getting-started/host-setup.md warns against, past the free one this
+    // branch shipped. This string is stored in perf_reason and embedded in
+    // mode_host_blocked's refusal, so it is the one sentence a blocked operator
+    // reads: it names the free remedy first, and the privileged one second and
+    // scoped to the binary.
     return " — kernel.perf_event_paranoid=" + std::to_string(v) +
-           " (>2 refuses every unprivileged perf_event_open; the sampler "
-           "`auto` "
-           "uses to pick a region needs <=2, or CAP_PERFMON on the asmspy "
-           "binary)";
+           " (>2 refuses every unprivileged perf_event_open, so the "
+           "out-of-band IBS/sw-clock samplers cannot run). `auto` needs none "
+           "of them — it falls through to a perf-free ptrace region picker. "
+           "For `sample`: `sudo setcap cap_perfmon+ep` on the asmspy binary, "
+           "or lower the sysctl to <=2 host-wide.";
 }
 
 void cap_probe(CapState &s) {

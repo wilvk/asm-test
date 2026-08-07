@@ -3929,6 +3929,33 @@ wait "$F3PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 echo "--- --info (attach-free process snapshot) ---"
 
+# `host.perf_ok` — perf_event_open MEASURED IN THIS BINARY (2026-08-06 final
+# review, finding 8).
+#
+# WHY IT CANNOT BE MEASURED ANYWHERE ELSE. perf permission travels with FILE
+# CAPABILITIES, and those land on execve: docs/getting-started/host-setup.md
+# rung 2 is `setcap cap_perfmon+ep` on the asmspy INODE. The desktop GUI used
+# to run the same syscall in its OWN process and grey `sample` on the answer,
+# so on a correctly capped host it refused a mode that works and advised
+# granting a capability already granted. This key is the channel that fixes it,
+# and desktop/src/live/procinfo.cpp keys "probed" on its PRESENCE — so deleting
+# the emitter silently returns the GUI to blocking nothing, with no other
+# symptom. Asserted here, against the real binary, for that reason.
+ihost=$("$ASM" --info $$ --json 2>/dev/null | grep '"k":"procinfo"')
+printf '%s\n' "$ihost" | grep -q '"host":{"perf_ok":\(true\|false\)' \
+    || fail "--info --json carries no measured host.perf_ok — the GUI's only source for the asmspy binary's OWN perf verdict"
+# A refusal must NAME itself; a success must not invent a reason. Both
+# directions, so neither lane can pass on a vacuous string.
+if printf '%s\n' "$ihost" | grep -q '"host":{"perf_ok":false'; then
+    printf '%s\n' "$ihost" | grep -q '"perf_why":"perf_event_open refused' \
+        || fail "--info --json reports host.perf_ok false with no reason — the one text that names the remedy"
+    echo "  --info --json: perf refused FOR THIS BINARY, and it says why"
+else
+    printf '%s\n' "$ihost" | grep -q '"perf_why":""' \
+        || fail "--info --json reports host.perf_ok true but carries a reason anyway"
+    echo "  --info --json: perf opens for this binary (no reason, correctly empty)"
+fi
+
 # Against OUR OWN shell — a target this smoke usually holds no ptrace
 # permission for under ptrace_scope=1. NOTE: a clean exit here does NOT by
 # itself prove --info never attached (a failed attach is not fatal to any

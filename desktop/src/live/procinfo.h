@@ -118,6 +118,23 @@ struct ProcInfo {
     std::vector<PiChild> children;
     bool children_truncated = false;
     bool budget_exceeded = false;
+
+    // --- `host`: facts about the asmspy PROCESS, not about the target -------
+    //
+    // 2026-08-06 final review, finding 8. perf permission is a property of the
+    // process, not of the machine: docs/getting-started/host-setup.md rung 2
+    // grants CAP_PERFMON to the asmspy INODE, and file capabilities land on
+    // execve — so the desktop's own perf_event_open (capability_panel.cpp's
+    // cap_probe) can fail on a host where `asmspy --sample` works, and greying
+    // a mode on it advises granting a capability already granted. This is the
+    // same syscall measured inside the binary that will actually run.
+    //
+    // `host_probed` is false for a recording written before the key existed, or
+    // by any producer that does not emit it. Nothing may be blocked on that:
+    // absence is "not asked", never "refused".
+    bool host_probed = false;
+    bool host_perf_ok = false;
+    std::string host_perf_why;
 };
 
 // Decode the single `procinfo` event of `r`. A recording without one yields
@@ -238,6 +255,21 @@ struct ProcInfoRunner {
     // recently used, not sit at its original insertion position forever.
     std::vector<std::pair<std::pair<long, uint64_t>, ProcInfoCacheEntry>> cache;
     static constexpr size_t kCacheCap = 32;
+
+    // --- the asmspy BINARY's own perf verdict, LATCHED ----------------------
+    //
+    // Copied out of every successful probe and NOT cleared on a selection
+    // change, because it is a fact about the binary rather than about the
+    // target: `shown` is reset to a blank ProcInfo the moment the operator
+    // clicks a different row, and a verdict that blinked out with it would
+    // make the mode gate flicker for no reason the operator could see.
+    //
+    // It IS cleared when asmspy_path changes: a different binary is a
+    // different inode with different file capabilities, which is the whole
+    // mechanism this measures (finding 8).
+    bool host_perf_probed = false;
+    bool host_perf_ok = false;
+    std::string host_perf_why;
 
     ~ProcInfoRunner();
 };

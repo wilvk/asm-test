@@ -124,6 +124,67 @@ int main() {
         }
     }
 
+    // --- 2026-08-06 final review: THE CAPABILITY HAND-OFF, through draw_shell.
+    //
+    // This is the seam the review named as deletable with a fully green suite:
+    // shell.cpp is the ONLY producer of InspectState::perf_probed/perf_ok/
+    // perf_reason, and with those three lines removed every host gate in the
+    // door goes inert and nothing notices. It is also where finding 8 lands —
+    // the verdict must come from the asmspy BINARY's own measurement
+    // (ProcInfoRunner::host_perf_*, decoded from `asmspy --info --json`), never
+    // from cap_probe's syscall in THIS process, which measures a different
+    // executable's capabilities.
+    {
+        auto frame = [&](ShellState &st) {
+            io.DisplaySize = ImVec2(1280, 720);
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            draw_shell(st);
+            ImGui::Render();
+        };
+        const std::string why = "perf_event_open refused for the asmspy binary "
+                                "itself (Permission denied)";
+        s.inspect.host_started = true;
+        s.inspect.ssh_host[0] = '\0';
+        s.inspect.details.host_perf_probed = true;
+        s.inspect.details.host_perf_ok = false;
+        s.inspect.details.host_perf_why = why;
+        frame(s);
+        check("caps/handoff-probed", s.inspect.perf_probed,
+              "a local session with a verdict FROM THE BINARY must mark the "
+              "door probed — otherwise every host gate is permanently inert");
+        check("caps/handoff-verdict", !s.inspect.perf_ok,
+              "and carry the verdict itself");
+        check("caps/handoff-reason", s.inspect.perf_reason == why,
+              "and the binary's own sentence verbatim, since it is what the "
+              "mode refusal embeds");
+
+        // NO VERDICT FROM THE BINARY -> NOT PROBED. This is finding 8's whole
+        // point: the desktop's own perf_event_open may well have failed (it
+        // does on this box), and blocking on that would grey `sample` on a
+        // host where `setcap cap_perfmon+ep` has already been applied to the
+        // asmspy inode.
+        s.inspect.details.host_perf_probed = false;
+        frame(s);
+        check("caps/no-binary-verdict-blocks-nothing", !s.inspect.perf_probed,
+              "without a measurement from the binary that will RUN, the door "
+              "must block nothing — a local probe measures the wrong "
+              "executable's file capabilities");
+
+        // A remote session's local probe describes the wrong MACHINE, which is
+        // the pre-existing half of the same rule.
+        s.inspect.details.host_perf_probed = true;
+        std::snprintf(s.inspect.ssh_host, sizeof s.inspect.ssh_host, "%s",
+                      "build-box");
+        frame(s);
+        check("caps/remote-session-not-probed", !s.inspect.perf_probed,
+              "asmspy runs on another box for an ssh session, and the details "
+              "probe deliberately stays local");
+        s.inspect.ssh_host[0] = '\0';
+        s.inspect.host_started = false;
+        s.inspect.details.host_perf_probed = false;
+    }
+
     // A verbatim open error must surface (never a silent no-op).
     {
         std::string err;
@@ -2281,26 +2342,42 @@ int main() {
                       "/tmp/sweep-host-blocked.asmtrace");
         inspect_sweep_start(sw); // no region named -> auto-led, leg 0 = auto
         check("sweep/poll/armed", sw.sweep_running, "the sweep armed");
-        // The measured verdict turns against `auto` in the gap between arm
-        // and this poll.
+        // The measured perf verdict turns REFUSED in the gap between arm and
+        // this poll — and the auto-led sweep must still run (2026-08-06 final
+        // review, finding 2). This was the pin that greyed "Capture every
+        // substrate" on the exact host class the branch exists for.
         sw.perf_probed = true;
         sw.perf_ok = false;
         sw.perf_reason = "perf_event_open refused (Permission denied)";
-        check("sweep/poll/host-blocked-stops-not-fires",
-              !inspect_sweep_poll(sw) && !sw.sweep_running && sw.active.empty(),
-              "leg 0 (`auto`) cannot fire on a host where perf is MEASURED "
-              "refused — the poll must STOP the sweep, not send a doomed "
-              "start and blame the operator for it");
-        // "stopped" AND the leg name together — not just the leg name alone,
-        // which a FIRED leg's own note ("sweep: leg 1/3 (auto)") would also
-        // contain, making the check blind to exactly the mutation it exists
-        // to catch (verified: mutating the check above alone left this one
-        // green, because both notes name `auto`).
-        check("sweep/poll/host-blocked-names-the-leg",
-              sw.sweep_note.find("stopped") != std::string::npos &&
-                  sw.sweep_note.find("auto") != std::string::npos,
-              "the stop note must name which leg it stopped at, the same "
-              "convention the no-region-picked stop already follows");
+        check("sweep/poll/auto-led-sweep-runs-with-perf-refused",
+              inspect_sweep_poll(sw) && sw.sweep_running &&
+                  sw.active.size() == 1 && sw.active[0] == LiveMode::Auto,
+              "leg 0 (`auto`) MUST fire on a perf-locked-down host — its "
+              "sampler chain ends in a perf-free ptrace region picker");
+        // WHAT IS NO LONGER TESTED HERE, said out loud. This block used to
+        // also pin "a host-blocked leg 0 STOPS the sweep and names the leg".
+        // After finding 2 that case is UNREACHABLE through the sweep API:
+        // sweep_legs yields `auto` (no region) or `tree` (region named), and
+        // neither needs perf, so inspect_sweep_blocked's host arm cannot fire
+        // for any sweep the door can build. The arm stays as a backstop for
+        // whatever mode_host_blocked comes to refuse next, and the stop/naming
+        // machinery it shares is still covered by the no-region-picked stop
+        // below. Fabricating a `sample`-led sweep to keep a green check would
+        // be testing a shape the product cannot produce.
+        InspectState sa; // a fresh, armable state on the same refused host
+        sa.host_started = true;
+        sa.selected_pid = 1;
+        sa.record_session = true;
+        std::snprintf(sa.record_path, sizeof sa.record_path, "%s",
+                      "/tmp/sweep-armable.asmtrace");
+        sa.perf_probed = true;
+        sa.perf_ok = false;
+        sa.perf_reason = "perf_event_open refused (Permission denied)";
+        check("sweep/arm/auto-led-sweep-armable-with-perf-refused",
+              inspect_sweep_blocked(sa).empty(),
+              "\"Capture every substrate\" must be offerable on a "
+              "perf-locked-down host — refusing it there was the branch's own "
+              "deliverable turned off at the one host it was built for");
     }
 
     // --- 2026-08-06 plan, Task 12 (M13): the completion note is scored
@@ -2841,7 +2918,11 @@ int main() {
         InspectState is;
         is.host_started = true;
         is.selected_pid = 4242;
-        is.want = LiveMode::Auto;
+        // `sample`, not `auto` — see the start/host-blocked-refused block:
+        // after the final review's finding 2 it is the only mode a measured
+        // perf refusal blocks, so it is the only one that can exercise this
+        // backstop at all.
+        is.want = LiveMode::Sample;
         inspect_arm_queue(is); // armed while the host verdict was unprobed
         check("queue/armed", is.has_queued, "the queue armed");
         // The jack is free (active empty, so budget_queue_ready holds), but
@@ -2852,7 +2933,7 @@ int main() {
         is.perf_reason = "perf_event_open refused (Permission denied)";
         check("queue/host-blocked-does-not-fire",
               !inspect_queue_poll(is) && is.has_queued && is.active.empty(),
-              "`auto` cannot fire from Queue on a host where perf is "
+              "`sample` cannot fire from Queue on a host where perf is "
               "MEASURED refused — the queued want must stay queued rather "
               "than fire a doomed capture");
     }
@@ -2993,7 +3074,9 @@ int main() {
         InspectState is;
         is.host_started = true;
         is.selected_pid = 4242;
-        is.want = LiveMode::Auto;
+        // `sample`: the only mode a measured perf refusal still blocks (final
+        // review, finding 2). See start/host-blocked-refused.
+        is.want = LiveMode::Sample;
         is.active.push_back(LiveMode::Log); // a blocker holds the jack
         is.swap_pending = true;
         is.perf_probed = true;
@@ -3003,7 +3086,7 @@ int main() {
         check("swap/host-blocked-no-op",
               is.swap_pending && is.active.size() == 1 &&
                   is.active[0] == LiveMode::Log,
-              "`auto` cannot fire via Swap on a host where perf is MEASURED "
+              "`sample` cannot fire via Swap on a host where perf is MEASURED "
               "refused — the blocker must stay and the confirm must stay up, "
               "exactly like the illegal-tree-filter case above");
     }
@@ -3076,18 +3159,40 @@ int main() {
     // test, exactly the "the guarantee never rests on a UI gate alone" idiom
     // the tree-filter block above already pins for inspect_request_start.
     {
-        InspectState hb; // perf MEASURED refused on this host; want = auto
+        InspectState hb; // perf MEASURED refused on this host; want = sample
         hb.host_started = true;
         hb.selected_pid = 7;
-        hb.want = LiveMode::Auto;
+        // `sample` and not `auto` (2026-08-06 final review, finding 2):
+        // `sample` IS the out-of-band sampler and has no fallback, so it is the
+        // only mode a measured perf refusal still speaks to. The gate itself is
+        // unchanged and this is still its own test.
+        hb.want = LiveMode::Sample;
         hb.perf_probed = true;
         hb.perf_ok = false;
         hb.perf_reason = "perf_event_open refused (Permission denied)";
         check("start/host-blocked-refused",
               !inspect_request_start(hb) && hb.active.empty(),
-              "`auto` cannot fire on a host where perf is MEASURED refused — "
+              "`sample` cannot fire on a host where perf is MEASURED refused — "
               "it would record ZERO events, and this backstop must hold even "
               "though the radio is greyed for the SAME reason");
+
+        // THE BRANCH'S HEADLINE DELIVERABLE, at the fire path. `auto` on the
+        // SAME measured-refused host must START: its sampler chain ends in a
+        // perf-free ptrace region picker, and refusing here greyed Start on
+        // exactly the host the branch exists to support.
+        InspectState hp;
+        hp.host_started = true;
+        hp.selected_pid = 7;
+        hp.want = LiveMode::Auto;
+        hp.perf_probed = true;
+        hp.perf_ok = false;
+        hp.perf_reason = "perf_event_open refused (Permission denied)";
+        check("start/auto-fires-with-perf-refused",
+              inspect_request_start(hp) && hp.active.size() == 1 &&
+                  hp.active[0] == LiveMode::Auto,
+              "`auto` MUST start on a perf-locked-down host — the chain falls "
+              "through to the perf-free ptrace picker, and the same capture by "
+              "hand is the transcript host-setup.md rung 1 prints");
 
         // An unprobed host (not yet connected, or a remote/ssh session) must
         // block NOTHING — a stale or wrong-machine verdict must never refuse
@@ -3095,7 +3200,7 @@ int main() {
         InspectState hu;
         hu.host_started = true;
         hu.selected_pid = 7;
-        hu.want = LiveMode::Auto;
+        hu.want = LiveMode::Sample;
         hu.perf_probed = false; // not asked (or asked about the wrong host)
         hu.perf_ok = false;
         hu.perf_reason = "perf_event_open refused (Permission denied)";
@@ -3105,22 +3210,22 @@ int main() {
               "anything about the machine that will actually run asmspy");
 
         // The double-click path: inspect_attach_full_detail force-sets `auto`
-        // unconditionally, so a stale/measured-blocked verdict must survive
-        // the force-set rather than being bypassed by it. Pre-set
-        // host_started so the attach does not need to dial a real connect
-        // (mirrors the ax/ix pattern above).
+        // unconditionally. That force-set is now the FIRING case, not the
+        // blocked one — a perf-refused host is exactly where a double-click
+        // must land a capture. Pre-set host_started so the attach does not
+        // need to dial a real connect (mirrors the ax/ix pattern above).
         InspectState ha;
         ha.host_started = true;
         ha.perf_probed = true;
         ha.perf_ok = false;
         ha.perf_reason = "perf_event_open refused (Permission denied)";
         inspect_attach_full_detail(ha, 4242);
-        check("attach/host-blocked-does-not-fire",
+        check("attach/full-detail-fires-with-perf-refused",
               ha.want == LiveMode::Auto && ha.selected_pid == 4242 &&
-                  ha.active.empty(),
-              "a double-click still selects the pid and `auto` (so the "
-              "operator sees WHY the radio and Start are greyed), but must "
-              "not have fired a start that records nothing");
+                  ha.active.size() == 1 && ha.active[0] == LiveMode::Auto,
+              "double-clicking a process on a perf-locked-down host must "
+              "CAPTURE — this is the path the whole branch was built for, and "
+              "it used to fire nothing at all");
 
         // The Launch path carries the identical backstop — `sample` is the
         // one kLaunchModes entry the sampler needs.

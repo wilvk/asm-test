@@ -544,6 +544,73 @@ int main() {
               "a hidden pane kept spawning");
     }
 
+    // --- 2026-08-06 final review, finding 8: `host` — the PROBING BINARY'S own
+    // perf verdict, not the machine's and not this process's.
+    //
+    // perf permission travels with FILE CAPABILITIES, which land on execve. The
+    // setup ladder's rung 2 is `setcap cap_perfmon+ep` on the asmspy inode, so
+    // after it `asmspy --sample` works while the desktop's own perf_event_open
+    // still fails — and the desktop used to grey `sample` on its own failure,
+    // advising the operator to grant a capability they had already granted. The
+    // verdict that may block therefore has to come over this wire.
+    {
+        ProcInfo h = load("procinfo_host_perf.asmtrace");
+        check("host/parsed", h.valid, h.parse_error);
+        check("host/probed", h.host_probed,
+              "a recording carrying host.perf_ok must decode as PROBED — "
+              "without this the desktop falls back to its own process's "
+              "syscall, which measures the wrong binary");
+        check("host/verdict", !h.host_perf_ok,
+              "the fixture's measured verdict is a refusal and must survive "
+              "the decode");
+        check("host/why-carried",
+              h.host_perf_why.find("asmspy binary itself") != std::string::npos,
+              "the binary's own reason must cross verbatim — it is the text "
+              "the mode refusal embeds, and the one that names the remedy: " +
+                  h.host_perf_why);
+        // ABSENCE IS NOT REFUSAL. The identical fixture WITHOUT the key (they
+        // differ in nothing else) must leave host_probed false, so an older
+        // asmspy — or any producer that never emitted it — blocks nothing.
+        ProcInfo n = load("procinfo_full.asmtrace");
+        check("host/absent-is-not-probed", n.valid && !n.host_probed,
+              "a producer that emits no host object has no opinion; treating "
+              "its silence as a refusal would grey a mode nobody measured");
+    }
+
+    // --- and the runner LATCHES it, because it is a fact about the binary
+    // rather than about the target: `shown` is blanked on every selection
+    // change, and a verdict that blinked out with it would make the mode gate
+    // flicker. It IS dropped when asmspy_path changes — a different inode has
+    // different file capabilities, which is the whole mechanism.
+    {
+        ProcInfoRunner run;
+        run.asmspy_path =
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_host_perf.sh";
+        const long fpid = load("procinfo_host_perf.asmtrace").pid;
+        procinfo_tick(run, fpid, 0.0);
+        for (int i = 0; i < 200 && !run.host_perf_probed; i++) {
+            procinfo_tick(run, fpid, 0.30 + 0.01 * i);
+            ::usleep(1000);
+        }
+        check("host/runner-latched", run.host_perf_probed && !run.host_perf_ok,
+              "the runner must keep the binary's verdict: " +
+                  procinfo_status(run));
+        // A selection change blanks `shown`; the verdict must survive it.
+        procinfo_tick(run, fpid + 1, 5.0);
+        check("host/survives-a-selection-change",
+              run.host_perf_probed && !run.host_perf_ok &&
+                  !procinfo_current(run).valid,
+              "the target changed, the BINARY did not — a verdict that blinks "
+              "out with the snapshot makes the mode gate flicker for no "
+              "reason the operator can see");
+        // A path change is a different binary: back to "not asked".
+        run.asmspy_path = "/some/other/asmspy";
+        procinfo_tick(run, fpid + 1, 6.0);
+        check("host/dropped-on-a-path-change", !run.host_perf_probed,
+              "CAP_PERFMON is granted per inode, so a verdict about the old "
+              "binary says nothing about the new one");
+    }
+
     // A child that never exits is killed and SAYS it timed out.
     {
         ProcInfoRunner run;

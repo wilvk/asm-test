@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <linux/perf_event.h> /* --info --json: the host's MEASURED perf verdict */
 #include <locale.h>
 #include <ncurses.h>
 #include <pthread.h>
@@ -35,6 +36,7 @@
 #include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
 #include <sys/prctl.h> /* PR_(GET|SET)_DUMPABLE: restore after a file-cap execve, M16 */
 #include <sys/ptrace.h> /* doc 45: serve_launch_target's PTRACE_TRACEME/DETACH */
+#include <sys/syscall.h> /* __NR_perf_event_open — measured in THIS binary, M8 */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <sys/un.h>
 #include <sys/wait.h> /* doc 45: serve_launch_target's waitpid for the exec-stop */
@@ -8564,6 +8566,51 @@ static int bad_arg(const char *what, const char *got) {
  *
  * Addresses are emitted as hex STRINGS — a JSON number is a double in many
  * readers, which silently rounds a 64-bit pointer. */
+/* CAN **THIS BINARY** OPEN A PERF EVENT? One syscall, the cheapest event there
+ * is, self-monitoring: PERF_TYPE_SOFTWARE/PERF_COUNT_SW_CPU_CLOCK on pid 0.
+ *
+ * IT HAS TO BE MEASURED HERE, and that is the whole point (2026-08-06 final
+ * review, finding 8). The desktop runs the identical syscall in its OWN process
+ * (desktop/src/ui/capability_panel.cpp) and greys modes on the answer — but
+ * perf permission is not a property of the host, it is a property of the
+ * PROCESS: docs/getting-started/host-setup.md rung 2 tells the operator to
+ * `setcap cap_perfmon+ep` the asmspy INODE, and file capabilities land on
+ * execve. So on a correctly capped host the desktop's probe fails, `asmspy
+ * --sample` works, and the GUI greys the mode while advising the operator to
+ * grant a capability they have already granted. A local probe can only ever be
+ * a POSITIVE signal about the binary that will actually run; a refusal has to
+ * come from that binary, and this is it.
+ *
+ * Sound in the refusal direction only, for the reason the desktop's copy states:
+ * a success here does not prove a FOREIGN-pid open will succeed (that carries an
+ * extra PTRACE_MODE_READ_REALCREDS check). The paranoid sysctl is not consulted
+ * at all — CAP_PERFMON overrides it, which is exactly the case this exists for.
+ * 1 = opened, 0 = refused with `why` filled from errno. */
+static int info_perf_verdict(char *why, size_t whylen) {
+    struct perf_event_attr pe;
+    memset(&pe, 0, sizeof pe);
+    pe.size = sizeof pe;
+    pe.type = PERF_TYPE_SOFTWARE;
+    pe.config = PERF_COUNT_SW_CPU_CLOCK;
+    pe.disabled = 1;
+    pe.exclude_kernel = 1;
+    pe.exclude_hv = 1;
+    long fd = syscall(__NR_perf_event_open, &pe, 0, -1, -1, 0);
+    if (fd >= 0) {
+        close((int)fd);
+        if (why && whylen)
+            why[0] = '\0';
+        return 1;
+    }
+    if (why && whylen)
+        snprintf(why, whylen,
+                 "perf_event_open refused for the asmspy binary itself (%s) — "
+                 "the out-of-band samplers (IBS, sw-clock) cannot run; the "
+                 "perf-free ptrace picker still can",
+                 strerror(errno));
+    return 0;
+}
+
 static int info_emit_json(const asmspy_procinfo_t *pi, const char *record,
                           int to_stdout) {
     rec_t rec;
@@ -8739,6 +8786,19 @@ static int info_emit_json(const asmspy_procinfo_t *pi, const char *record,
     APP("],\"children_truncated\":%s,\"budget_exceeded\":%s",
         pi->children_truncated ? "true" : "false",
         pi->budget_exceeded ? "true" : "false");
+
+    /* `host` — facts about THE PROCESS DOING THE PROBING, not about the target.
+     * A separate object because that distinction is the whole reason it is here
+     * (info_perf_verdict): a caller that wants to know whether the out-of-band
+     * samplers can run must ask the binary that would run them, and this is the
+     * only channel where a GUI already spawns it. */
+    {
+        char pw[256];
+        int pok = info_perf_verdict(pw, sizeof pw);
+        asmtrace_escape(e1, sizeof e1, pw);
+        APP(",\"host\":{\"perf_ok\":%s,\"perf_why\":\"%s\"}",
+            pok ? "true" : "false", e1);
+    }
 #undef APP
 
     if (overflow) {

@@ -232,6 +232,20 @@ ProcInfo procinfo_parse(const Recording &r) {
     p.children_truncated = body.value("children_truncated", false);
     p.budget_exceeded = body.value("budget_exceeded", false);
 
+    // `host` — the probing BINARY's own capability verdict (finding 8). Keyed
+    // on PRESENCE, not on the value: a producer that never emitted this key has
+    // no opinion, and defaulting host_perf_ok to false would manufacture a
+    // refusal nobody measured — the same failure the maps_readable field above
+    // documents, in the other direction.
+    if (body.contains("host") && body["host"].is_object()) {
+        const json &h = body["host"];
+        if (h.contains("perf_ok")) {
+            p.host_probed = true;
+            p.host_perf_ok = h.value("perf_ok", false);
+            p.host_perf_why = h.value("perf_why", std::string());
+        }
+    }
+
     return p;
 }
 
@@ -486,6 +500,13 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
         r.last_asmspy_path_seen = r.asmspy_path;
         r.fail_count = 0;
         r.next_retry_at = -1;
+        // A different binary is a different inode with different file
+        // capabilities, and CAP_PERFMON is granted per inode — so the latched
+        // verdict is about a binary that is no longer the one we would run
+        // (finding 8). Back to "not asked", which blocks nothing.
+        r.host_perf_probed = false;
+        r.host_perf_ok = false;
+        r.host_perf_why.clear();
     }
     if (selected_pid != r.want_pid) {
         r.want_pid = selected_pid;
@@ -645,6 +666,15 @@ void procinfo_tick(ProcInfoRunner &r, long selected_pid, double now_s) {
                     r.rates = procinfo_rates(r.prev, r.shown);
                     r.last_ok_at = now_s;
                     cache_put(r, got, now_s);
+                    // LATCH the binary's own perf verdict (finding 8). Only
+                    // when the producer actually carried one: an older asmspy
+                    // emits no `host` key, and treating its silence as a
+                    // refusal would grey a mode nobody measured.
+                    if (got.host_probed) {
+                        r.host_perf_probed = true;
+                        r.host_perf_ok = got.host_perf_ok;
+                        r.host_perf_why = got.host_perf_why;
+                    }
                     r.status = "attach-free (no ptrace)";
                     succeeded = true;
                 }

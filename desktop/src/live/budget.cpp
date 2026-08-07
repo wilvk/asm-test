@@ -278,23 +278,30 @@ std::string mode_host_blocked(LiveMode want, bool perf_probed, bool perf_ok,
     // nothing and says so elsewhere.
     if (!perf_probed || perf_ok)
         return std::string();
-    // Exactly the two modes whose capture depends on the out-of-band sampler.
-    // Every other mode is pure ptrace: MEASURED emitting its full stream on
-    // this host, with perf refused, over a named region. Greying them would
-    // hide the only path that still works.
-    if (want != LiveMode::Auto && want != LiveMode::Sample)
+    // `sample` ONLY, and the narrowing is the point (2026-08-06 final review,
+    // finding 2). `auto` was blocked here too, and that was TRUE when this
+    // predicate was written at Task 4 and FALSE from Task 5 onward: the sampler
+    // chain now falls through IBS -> sw-clock -> the perf-free ptrace picker
+    // (cli/asmspy_ptracesample.c), which issues no perf_event_open at all, and
+    // Task 7 wired it as the last rung of `auto`. The GUI sends no `sampler`
+    // key, so serve_parse_start leaves SAMPLER_AUTO and the chain reaches that
+    // rung — MEASURED on a stock Ubuntu host at perf_event_paranoid=4, which is
+    // the host this whole branch exists to support, and whose successful
+    // transcript docs/getting-started/host-setup.md rung 1 prints.
+    //
+    // So blocking `auto` greyed the radio, Start, Swap, Queue and the auto-led
+    // substrate sweep on exactly the host where the capture works, and sent the
+    // operator to the pre-branch workaround. `sample` IS the out-of-band
+    // sampler; it has no fallback, so it is the one mode a measured refusal
+    // still speaks to.
+    if (want != LiveMode::Sample)
         return std::string();
-    const char *what =
-        want == LiveMode::Auto
-            ? "`auto` picks its region with the out-of-band sampler, so with "
-              "perf refused it records ZERO events (not an empty pane — no "
-              "capture at all)"
-            : "`sample` IS the out-of-band sampler";
-    return std::string(what) + ": " +
+    return std::string("`sample` IS the out-of-band sampler: ") +
            (perf_reason.empty() ? std::string("perf_event_open was refused")
                                 : perf_reason) +
-           ". Name a region and use `dataflow` or `trace` instead — those are "
-           "pure ptrace and run here.";
+           ". `auto` still works here — its sampler chain ends in a perf-free "
+           "ptrace region picker — and `dataflow`/`trace` over a named region "
+           "are pure ptrace.";
 }
 
 namespace {

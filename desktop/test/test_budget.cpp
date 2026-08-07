@@ -782,11 +782,12 @@ int main(void) {
         }
     }
 
-    // 2026-08-06 plan, Task 4: a mode the host cannot run is refused BEFORE
-    // Start. `auto` and `sample` are the two that need the out-of-band sampler;
-    // every other mode is pure ptrace and runs with perf locked down -- which is
-    // measured, not assumed: a `dataflow` capture over a named region emits its
-    // full stream on a host where every perf_event_open returns EACCES.
+    // 2026-08-06 plan, Task 4, NARROWED by the final review (finding 2): a mode
+    // the host cannot run is refused BEFORE Start -- and after Tasks 5 and 7
+    // that is `sample` ALONE. `auto`'s sampler chain falls through IBS ->
+    // sw-clock -> a perf-free ptrace region picker, so a perf refusal says
+    // nothing about it; every other mode is pure ptrace and runs with perf
+    // locked down, which is measured, not assumed.
     {
         const std::string why = "perf_event_open refused (Permission denied)";
         LiveMode a, s, d, t, l;
@@ -796,37 +797,52 @@ int main(void) {
         mode_from_name("trace", &t);
         mode_from_name("log", &l);
 
-        check(
-            "host/auto-blocked-when-perf-refused",
-            !mode_host_blocked(a, true, false, why).empty(),
-            "`auto` picks its region with an out-of-band sampler; with perf "
-            "refused it records ZERO events, and offering it is a promise the "
-            "host cannot keep");
-        check("host/auto-reason-carries-the-remedy",
-              mode_host_blocked(a, true, false, why).find("perf_event_open") !=
+        // THE REGRESSION THIS FILE EXISTS TO CATCH NOW. The inverse of what it
+        // pinned before: the branch taught `auto` to capture with no perf at
+        // all, and blocking it here greyed the radio, Start, Swap, Queue and
+        // the auto-led sweep on exactly the host that capture was built for --
+        // while the same capture by hand succeeded, in a transcript this
+        // branch's own docs print as evidence.
+        check("host/auto-NOT-blocked-when-perf-refused",
+              mode_host_blocked(a, true, false, why).empty(),
+              "`auto` must NOT be refused on a perf-locked-down host: its "
+              "sampler chain ends in a perf-free ptrace region picker, which "
+              "is the whole point of the 2026-08-06 branch");
+        check("host/sample-blocked",
+              !mode_host_blocked(s, true, false, why).empty(),
+              "`sample` IS the out-of-band sampler, and it has no fallback");
+        // NOT find("perf_event_open") -- the fallback literal in
+        // mode_host_blocked contains that word too, so that check passed even
+        // when the reason was dropped (the review called it a clean tautology).
+        // Assert the caller's OWN string survives.
+        check("host/sample-reason-carries-the-measured-text",
+              mode_host_blocked(s, true, false, why).find(why) !=
                   std::string::npos,
               "the refusal must carry the producer's own reason verbatim -- it "
               "is the only text that names the fix");
-        check("host/sample-blocked",
-              !mode_host_blocked(s, true, false, why).empty(),
-              "`sample` IS the out-of-band sampler");
+        // And it must point at the path that still works, or a blocked
+        // operator reads a dead end.
+        check("host/sample-reason-names-the-working-path",
+              mode_host_blocked(s, true, false, why).find("`auto`") !=
+                  std::string::npos,
+              "the one sentence a blocked operator reads must name the mode "
+              "that DOES capture here");
 
-        for (LiveMode m : {d, t, l})
-            check("host/ptrace-modes-unaffected",
+        for (LiveMode m : {a, d, t, l})
+            check("host/non-sample-modes-unaffected",
                   mode_host_blocked(m, true, false, why).empty(),
                   std::string("`") + mode_name(m) +
-                      "` is pure ptrace and was MEASURED working with perf "
-                      "locked down; refusing it would hide the one path that "
-                      "still captures on a stock host");
+                      "` needs no perf_event_open; refusing it would hide a "
+                      "path that captures on a stock host");
 
         check("host/perf-ok-blocks-nothing",
-              mode_host_blocked(a, true, true, "").empty(),
+              mode_host_blocked(s, true, true, "").empty(),
               "a host whose perf opens blocks nothing");
         // THE rule that keeps this honest: only a MEASURED refusal may grey a
         // control. An unprobed host is a note somewhere else, never a disabled
         // radio -- a control greyed on a guess reads as a broken build.
         check("host/unprobed-blocks-nothing",
-              mode_host_blocked(a, false, false, why).empty(),
+              mode_host_blocked(s, false, false, why).empty(),
               "an unprobed host must block nothing: we have not asked, and "
               "CAP_PERFMON on the asmspy binary overrides the sysctl anyway");
     }
