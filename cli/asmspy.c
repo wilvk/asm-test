@@ -3039,24 +3039,47 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
  * Arming one of those here would be exactly the hang/kill this module exists
  * to prevent.
  *
- * The detector is a FIELD guarantee, not a string match on `why`:
- * ps_phase3_one clamps a real arrival's first_us to >=1 specifically "because
- * a 0 would read as not measured in the output struct" (asmspy_ptracesample.c,
- * the phase-3 arrival branch), and a candidate that never reached phase 3
- * never touches first_us at all, leaving it at its zero initializer. So
- * `arrivals == 0 && first_us == 0` on the top (best-ranked-or-not) candidate
- * is unconfirmed by construction — the exact predicate Task 6's own
- * test_ptracesample.c uses externally (its capped-seize case, `confirmed =
- * arrivals > 0 || first_us > 0`) to prove the SAME gate on the producer side.
- * Checking cands[0] alone is enough because confirmation is all-or-nothing per
- * call: the phase-3 loop either runs over every candidate (each getting a
- * real first_us) or is skipped entirely (asmspy_ptrace_sample's
- * `covered_before` gate), so a mixed batch cannot occur. */
+ * MUST gate on `why`, NOT on cands[0]'s fields (2026-08-06 T7 review found the
+ * field version UNSOUND). The tempting version — cands[0].arrivals == 0 &&
+ * cands[0].first_us == 0 — is correct only for the case ASMSPY_PS_TEST_CAP
+ * provokes: coverage lost BEFORE phase 3 ever starts, so nothing has a
+ * first_us yet. But asmspy_ptracesample.c's phase-3 loop
+ * (`for (i = 0; i < ncand && ... && c.covered; i++)`) can also lose coverage
+ * MID-LOOP — a thread cloned mid-window pushing the table past its cap, an
+ * unreadable /proc, a table-full follow failure — and ps_phase3_one does not
+ * itself consult `c.covered`, so cands[0..i] already carry REAL arrivals and
+ * first_us from before the loss. A cands[0]-only check sees that real data,
+ * never trips, and the whole batch — including later candidates that never
+ * ran through phase 3 at all — gets reported "CONFIRMED" and walked with
+ * evidence:"entry". That is precisely the "arm an int3 at a PLT stub" hazard
+ * this module exists to prevent, just relocated to a later candidate.
+ *
+ * The producer's own authoritative flag is `confirmed = covered_before &&
+ * c.covered` (post-loop re-read, asmspy_ptrace_sample), and its ONLY external
+ * expression is `why`: asmspy_ps_arm_note's sentence — which contains the
+ * literal word UNCONFIRMED — is appended via ps_note (append-only, never
+ * cleared) if and only if `confirmed` is false, regardless of which prefix of
+ * candidates got real phase-3 data first. That is the same substring
+ * cli/test_ptracesample.c itself checks for (`strstr(why, "UNCONFIRMED")` /
+ * `strstr(why, "fully seized")`) to pin this exact note from outside the
+ * producer, so this is a precedented, not improvised, detector — grep the
+ * ONE fact the module actually computed instead of re-deriving a weaker proxy
+ * from data that can be genuinely real for a prefix of a still-unconfirmed
+ * batch. (A dedicated boolean out-param on asmspy_ptrace_sample would remove
+ * even this string dependency; not added here — see the task's report for
+ * why it was left as a follow-up rather than done under this fix.) */
 static int auto_pick_ptrace(pid_t pid, const asmspy_symtab_t *t,
                             const char *module, auto_cand_copy *out,
                             int max_out, int window_ms) {
     asmspy_autocand_t cands[AUTO_MAX_CANDS];
-    char why[256] = "";
+    /* 512, not 256: the worst case that matters here appends BOTH the
+     * Capstone-missing note (~78 bytes) and the arm-gate note (~193 bytes,
+     * "UNCONFIRMED" sitting near its middle) with a "; " separator between —
+     * comfortably short of 256 on its own, but this buffer is also reused
+     * for messages that layer a THIRD note on top (the empty-window "no
+     * candidate was reached" text), and there is no reason to run any of
+     * this close to a truncation boundary the gate below now depends on. */
+    char why[512] = "";
     int nc = asmspy_ptrace_sample(pid, t, module, cands, AUTO_MAX_CANDS,
                                   window_ms, why, sizeof why);
     if (nc < 0) {
@@ -3073,8 +3096,11 @@ static int auto_pick_ptrace(pid_t pid, const asmspy_symtab_t *t,
                 module ? module : "", why[0] ? why : "nothing qualified");
         return 0;
     }
-    /* THE GATE (see the function doc above). */
-    if (cands[0].arrivals == 0 && cands[0].first_us == 0) {
+    /* THE GATE (see the function doc above): gate on the producer's own
+     * authoritative verdict, carried in `why`, never on a candidate's own
+     * fields — those can be genuinely non-zero for a PREFIX of an otherwise
+     * unconfirmed batch. */
+    if (strstr(why, "UNCONFIRMED") != NULL) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 why[0] ? why
                        : "the ptrace picker could not confirm its candidates "

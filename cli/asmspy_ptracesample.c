@@ -338,6 +338,28 @@ static int ps_read_cap(void) {
     return (cap <= 0 || cap > PS_MAX_THREADS) ? PS_MAX_THREADS : cap;
 }
 
+/* A second TEST LEVER, alongside ps_read_cap: ASMSPY_PS_TEST_LOSE_AFTER=<i>
+ * forces `covered` false immediately after phase 3 finishes candidate index
+ * <i> (0-based) -- simulating a thread cloned mid-window that pushes the
+ * table past its cap AFTER some candidates were already confirmed for real,
+ * rather than ASMSPY_PS_TEST_CAP's "never covered from the start".
+ *
+ * That distinction is load-bearing, not a nicety (2026-08-06 T7 review): a run
+ * that loses coverage PART-WAY still has cands[0..i] carrying genuine
+ * arrivals/first_us from before the loss, so a caller that infers
+ * "confirmed" from cands[0]'s fields alone sees real data and never learns
+ * the batch is unconfirmed -- exactly the case ASMSPY_PS_TEST_CAP cannot
+ * provoke (it never lets the loop start at all) and the one this lever
+ * exists to make demonstrable on demand instead of waiting on a race against
+ * a real cloning victim. Unset = never triggers (real behaviour). */
+static int ps_read_lose_after(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_LOSE_AFTER");
+    if (!e || !*e)
+        return -1;
+    long v = strtol(e, NULL, 10);
+    return v >= 0 ? (int)v : -1;
+}
+
 /* Add `tid`, or find it.
  *
  * Two different limits, and conflating them is what made a followed clone get
@@ -1996,6 +2018,7 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
         long per_us = ASMSPY_PS_CONFIRM_MS * 1000L;
         long long t3_end = ps_now_us() + (long long)window_ms * 1000;
         int nconf = 0;
+        int lose_after = ps_read_lose_after(); /* test lever, see its doc */
         for (int i = 0; i < ncand && c.n > 0 && !c.leaked && c.covered; i++) {
             /* Stop early once the window's worth of confirming has been spent
              * AND there is already an answer to give. The HARD bound is the loop
@@ -2009,6 +2032,14 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
             ps_phase3_one(&c, &cands[i], per_us);
             if (cands[i].arrivals > 0)
                 nconf++;
+            /* TEST-ONLY (ASMSPY_PS_TEST_LOSE_AFTER): drop coverage right after
+             * candidate `i` got its real phase-3 measurement, so cands[0..i]
+             * carry genuine arrivals/first_us while the rest of the batch
+             * never gets vetted -- the partial-confirmation shape a caller
+             * must still refuse in full (2026-08-06 T7 review). Inert
+             * (lose_after == -1) in real runs. */
+            if (i == lose_after)
+                c.covered = 0;
         }
     }
     /* Coverage is re-read AFTER the loop, not only before it. A task cloned

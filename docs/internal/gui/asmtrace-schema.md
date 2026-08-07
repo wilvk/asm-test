@@ -842,17 +842,33 @@ residency survey, i.e. never seen called from anywhere the sampler watched).
 The confirmation step is also a *safety* gate, not only an evidence one: the
 int3 is one byte of shared process text, so arming it is only safe once every
 task of the target is known to be traced (a `PTRACE_SEIZE` refused, a thread
-cap hit, or an unreadable `/proc` all make that unprovable). When it cannot be
-proven, the sampler hands back its residency-only candidates *unconfirmed* —
-but the server never puts those on the wire as a pick: an unconfirmed batch is
+cap hit, or an unreadable `/proc` all make that unprovable *from the start*
+— and coverage can equally be LOST mid-window, e.g. a thread cloned while
+phase 3 is still confirming earlier candidates). Either way the sampler hands
+back its residency-only candidates *unconfirmed*. A run that loses coverage
+partway is the sharper case: the candidates confirmed before the loss carry
+genuinely real arrival data, so a consumer that infers "confirmed" from any
+single candidate's own fields can be fooled into treating the *whole* batch —
+including the tail that never reached phase 3 at all — as safe to use. The
+producer only ever answers this with ONE authoritative fact for the whole
+call (`confirmed`, computed once, after the loop, from coverage held both
+before AND after it), never per candidate, and its only externally visible
+form is the arm-gate sentence appended to the picker's `why` output. The CLI
+gates on exactly that sentence, not on any candidate's `weight`/arrival
+count, which is why the invariant below holds for the batch as a whole and
+not merely for its first element.
+
+The server never puts an unconfirmed batch on the wire as a pick: it is
 treated as an ordinary sampler self-skip instead (the same `ncand < 0` shape
 `ibs-op`/`sw-clock` already report on a refusal), ending the session with the
 sampler-unavailable skip reason rather than a `pick`. `ptrace-pc` is the last
 rung of the `"auto"` chain (`ibs-op` → `sw-clock` → `ptrace-pc`), so this is
 the chain's final refusal, not a fallback to a fourth sampler. A `pick` event
 whose `sampler` is `"ptrace-pc"` is therefore always genuinely confirmed —
-there is no `"ptrace-pc"` + `"residency"` combination on the wire, by
-construction, not by convention.
+there is no `"ptrace-pc"` + `"residency"` combination on the wire — *provided*
+the CLI keeps gating on the producer's own verdict rather than reintroducing
+a per-candidate shortcut; see `cli/asmspy.c`'s `auto_pick_ptrace` doc comment
+for the mid-window-loss case that makes the shortcut unsound.
 
 `"idle"` (39 T3) is the third value, and it is **not a pick** — it is an empty
 sample window reported on this same channel: the sampler ran and *nothing*
