@@ -240,6 +240,35 @@ typedef struct {
     uint64_t armed_bp;
     long armed_orig;
     pid_t stepping; /* the tid whose PTRACE_SINGLESTEP we await */
+
+    /* TEST INSTRUMENTATION for the three shapes the levers manufacture, and the
+     * reason it lives here rather than in the test: each one is a fact only the
+     * inside knows, and without it every check built on those levers would pass
+     * just as happily on a run where the window caught nobody. That is the
+     * hollowing this suite has been bitten by four times.
+     *
+     *   in_drain      set only while ps_drain is consuming;
+     *   drain_traps   OUR traps reaped by that drain — the queued arrival the
+     *                 disarm would otherwise have carried past bp_base;
+     *   late_traps    OUR traps recognised through armed_bp with bp_base
+     *                 already cleared — the residual the fallback exists for;
+     *   late_detached tasks detached on a SECOND or later teardown pass, i.e.
+     *                 tabled after a pass had already taken its snapshot.
+     *
+     * Reported only when a lever is set (asmspy_ptrace_sample's tail). */
+    int in_drain;
+    unsigned drain_traps, late_traps, late_detached;
+    /* ASMSPY_PS_TEST_STEAL_BYTE: guard_held counts restores that looked at the
+     * byte and correctly declined to write; blind_writes counts restores that
+     * wrote over something that was not ours. */
+    unsigned guard_held, blind_writes;
+    /* ASMSPY_PS_TEST_STOP_COST_US: sweep_us is the time spent in stop sweeps
+     * that carried a REAL budget (the teardown's PS_STOP_FOREVER sweeps are not
+     * counted — they are deliberately unbounded); sweep_clamped is how many of
+     * those hit their budget and returned early, and sweep_over how many
+     * overran it, which after the fix must be none. */
+    unsigned long long sweep_us;
+    unsigned sweep_clamped, sweep_over;
 } ps_ctx_t;
 
 /* One residency bucket: a FUNCTION START and how many samples landed in its
@@ -358,6 +387,102 @@ static int ps_read_lose_after(void) {
         return -1;
     long v = strtol(e, NULL, 10);
     return v >= 0 ? (int)v : -1;
+}
+
+/* A THIRD TEST LEVER: ASMSPY_PS_TEST_LATE_TRAP_MS=<n> makes ps_disarm resume
+ * ONE thread it had just stopped and then idle `n` ms WITHOUT pumping, with the
+ * entry trap still armed.
+ *
+ * It manufactures, on demand, the one shape the whole trap-provenance split
+ * exists for and that no victim in this tree produces on cue: a task of the
+ * target executing our int3 in the narrow window between the disarm's last pump
+ * and the byte coming back out, so its SIGTRAP is QUEUED but not yet reaped
+ * while the candidate is being torn down. In the wild that task is a thread
+ * cloned after ps_stop_all's round-2 snapshot (2026-08-06 final review,
+ * finding 1) — tabled by the pump, resumed RESUME_QUIET into an address space
+ * whose int3 is still planted, and no test could reach it because it depends on
+ * a clone landing inside a window microseconds wide. Resuming a thread we
+ * already hold reaches the identical state deterministically: from the module's
+ * point of view a thread it did not stop is a thread it did not stop.
+ *
+ * Unset/0 = never fires (real behaviour); the resume is the ONLY thing this
+ * changes, and every disposition downstream of it is production code. */
+static long ps_read_late_trap_ms(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_LATE_TRAP_MS");
+    if (!e || !*e)
+        return 0;
+    long v = strtol(e, NULL, 10);
+    return v > 0 ? v : 0;
+}
+
+/* A FOURTH TEST LEVER: ASMSPY_PS_TEST_SKIP_DRAIN=1 skips ps_disarm's drain.
+ *
+ * The drain closes the window above by reaping what is already queued while
+ * `bp_base` still names the trap. It cannot close it completely: a task that
+ * executed the int3 microseconds before the byte came out may not have finished
+ * entering its stop by the time waitpid(WNOHANG) asks, so its status surfaces
+ * only AFTER the disarm has cleared bp_base. That residual is exactly what
+ * ps_trap_addr's armed_bp fallback is for, and with the drain in place nothing
+ * in the suite would ever exercise it — this lever makes "the status was not
+ * visible yet" reachable so the fallback is tested rather than assumed. */
+static int ps_read_skip_drain(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_SKIP_DRAIN");
+    return (e && *e && *e != '0') ? 1 : 0;
+}
+
+/* A FIFTH TEST LEVER: ASMSPY_PS_TEST_STEAL_BYTE=1 overwrites the armed byte
+ * with something that is neither our trap nor the original, through a thread we
+ * hold, immediately before ps_unplant — and checks afterwards whether the
+ * restore wrote anyway.
+ *
+ * That is the A29 question in one measurement (2026-08-06 final review, finding
+ * 5). Between the plant and the disarm the target has been RUNNING for up to
+ * ASMSPY_PS_CONFIRM_MS, so a dlclose or an mmap can leave a different mapping at
+ * that address; PTRACE_POKETEXT succeeds anyway (FOLL_FORCE), splicing a stale
+ * word into live text. Waiting for a real remap inside a 50 ms window is not a
+ * test, so the byte is changed by hand, with every thread stopped, and put back
+ * before anything runs — the target's text is identical either side of the
+ * probe, and the only thing observed is whether the restore looked first. */
+static int ps_read_steal_byte(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_STEAL_BYTE");
+    return (e && *e && *e != '0') ? 1 : 0;
+}
+
+/* A SIXTH TEST LEVER: ASMSPY_PS_TEST_STOP_COST_US=<n> charges `n` microseconds
+ * to every ps_ensure_stopped that actually has to stop something.
+ *
+ * The cost being modelled is real and this repo has already measured its cause:
+ * a thread in uninterruptible sleep pays PS_STOP_US (200 ms), stays in the
+ * table, and is paid for again by every later sweep — and amdgpu putting
+ * threads in D state is in this repo's own host notes. A victim cannot be asked
+ * to enter D state on demand, so the cost is injected instead. Nothing else
+ * changes: the sweep still stops what it can, in the same order. */
+static long ps_read_stop_cost_us(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_STOP_COST_US");
+    if (!e || !*e)
+        return 0;
+    long v = strtol(e, NULL, 10);
+    return v > 0 ? v : 0;
+}
+
+/* A SEVENTH TEST LEVER: ASMSPY_PS_TEST_WALK_PUMP_MS=<n> makes ps_detach_all's
+ * FIRST teardown pass pump for `n` ms after taking its snapshot of tids.
+ *
+ * That is not an artificial insertion — it is what the walk already does. Every
+ * ps_detach_one that has to retry calls ps_ensure_stopped, which pumps, and the
+ * pump TABLES whatever reports, including a clone the target made a microsecond
+ * ago. A task tabled after the snapshot is a task the pass will never detach
+ * (2026-08-06 final review, finding 4), and the old walk then zeroed the table
+ * and reported the target handed back clean while that task stayed seized with
+ * the pump about to disappear. Reproducing it on a real target means waiting for
+ * a clone to land inside a window microseconds wide; this widens the window and
+ * changes nothing else. Unset/0 = never fires. */
+static long ps_read_walk_pump_ms(void) {
+    const char *e = getenv("ASMSPY_PS_TEST_WALK_PUMP_MS");
+    if (!e || !*e)
+        return 0;
+    long v = strtol(e, NULL, 10);
+    return v > 0 ? v : 0;
 }
 
 /* Add `tid`, or find it.
@@ -582,6 +707,32 @@ static int ps_plant(ps_ctx_t *c, pid_t tid, uint64_t base) {
     return 0;
 }
 
+/* THE ADDRESS A SIGTRAP OF OURS WOULD HAVE COME FROM, and the word that was
+ * there before we wrote to it. `bp_base` while a candidate owns the trap, and
+ * `armed_bp` — which ps_plant sets and nothing ever clears — once ps_disarm has
+ * given the address back.
+ *
+ * This IS the trap-provenance question, and asking only `bp_base` was a Critical
+ * (2026-08-06 final review, finding 1). A task can execute the int3 and have its
+ * SIGTRAP still QUEUED when the byte comes out; ps_disarm then clears bp_base,
+ * and the next pump reaps that status with nothing left to recognise it by. It
+ * falls through to ps_sigtrap_is_app — which reads SI_KERNEL, which is what OUR
+ * int3 reports — and asmspy_ps_decide's OWN x R_APP_TRAP cell re-injects SIGTRAP
+ * into a process that has no handler for it. That is the user's process, killed
+ * by a byte we planted, after we reported success. `armed_bp` was added for
+ * precisely this (see ps_ctx_t) and nothing consulted it.
+ *
+ * Every site that acts on "the trap" reads it through here rather than through
+ * bp_base, because a rewind or a restore aimed at address 0 is not a no-op —
+ * it is a thread left parked mid-instruction at base+1. */
+static uint64_t ps_trap_addr(const ps_ctx_t *c) {
+    return c->bp_base ? c->bp_base : c->armed_bp;
+}
+
+static long ps_trap_orig(const ps_ctx_t *c) {
+    return c->bp_base ? c->bp_orig : c->armed_orig;
+}
+
 /* MAY WE WRITE THE TARGET'S TEXT THROUGH A TASK OF THIS KIND?
  *
  * A switch, not a comparison, and with no `default:` — this and ps_kind_may_
@@ -680,14 +831,24 @@ static int ps_restore_copy(pid_t tid, uint64_t base, long orig) {
  *
  * `bp_base` is deliberately LEFT set on success too — see the ps_ctx_t note:
  * threads may still be queued at base+1 and only bp_base identifies them as
- * ours. 0 = the byte is out (or was never in), -1 = it is still in the target. */
+ * ours. 0 = the byte is out (or was never in), -1 = it is still in the target.
+ *
+ * THROUGH ps_restore_copy, which PEEKs first — A29, the rule the audit added
+ * after a blind restore spliced eight bytes of a parent's old text into an
+ * execve'd child's new image. This site was the last raw POKETEXT left in the
+ * restore path (2026-08-06 final review, finding 5) and it is not immune to the
+ * same fact: between ps_plant and here the target has been RUNNING for up to
+ * ASMSPY_PS_CONFIRM_MS, and a dlclose/mmap in that window can leave something
+ * else mapped at `bp_base`. FOLL_FORCE means the write would SUCCEED, splicing
+ * a stale word into live text, and the target then executes garbage and dies
+ * after we reported success. Reading first also makes "the byte is out" the
+ * honest answer when someone else already took it out. */
 static int ps_unplant(ps_ctx_t *c) {
     if (!c->bp_planted)
         return 0;
     for (int i = 0; i < c->n; i++)
         if (ps_can_poke(&c->t[i]) &&
-            ptrace(PTRACE_POKETEXT, c->t[i].tid, (void *)(uintptr_t)c->bp_base,
-                   (void *)(uintptr_t)c->bp_orig) == 0) {
+            ps_restore_copy(c->t[i].tid, c->bp_base, c->bp_orig) == 0) {
             c->bp_planted = 0;
             return 0;
         }
@@ -811,16 +972,27 @@ static asmspy_ps_reason_t ps_classify(ps_ctx_t *c, pid_t w, int st) {
         return ASMSPY_PS_R_SIGNAL;
     if (c->stepping == w)
         return ASMSPY_PS_R_OUR_STEP;
-    if (c->bp_base) {
-        /* `bp_base`, not `bp_planted`: a thread can be queued at base+1 with its
-         * SIGTRAP not yet consumed AFTER we have already restored the byte
-         * (during phase 3's step-and-rearm, and at the disarm). Collapsing the
-         * two made that thread's trap look like the TARGET'S OWN — si_code is
-         * SI_KERNEL either way — and re-injecting SIGTRAP into a process with no
-         * handler kills it. MEASURED: clone_victim died on every run. */
-        int at = ps_trap_where(w, c->bp_base);
-        if (at > 0)
+    uint64_t tb = ps_trap_addr(c);
+    if (tb) {
+        /* ps_trap_addr, not `bp_planted` and not `bp_base` either. Not
+         * bp_planted: a thread can be queued at base+1 with its SIGTRAP not yet
+         * consumed AFTER we have already restored the byte (during phase 3's
+         * step-and-rearm, and at the disarm). Collapsing the two made that
+         * thread's trap look like the TARGET'S OWN — si_code is SI_KERNEL either
+         * way — and re-injecting SIGTRAP into a process with no handler kills it.
+         * MEASURED: clone_victim died on every run. And not bp_base, which
+         * ps_disarm clears per candidate: the same queued-status thread reaped
+         * one microsecond later then had no provenance at all. See
+         * ps_trap_addr. */
+        int at = ps_trap_where(w, tb);
+        if (at > 0) {
+            if (!c->bp_base)
+                c->late_traps++; /* recognised only because armed_bp outlived
+                                  * the disarm — see ps_trap_addr */
+            else if (c->in_drain)
+                c->drain_traps++;
             return ASMSPY_PS_R_OUR_TRAP;
+        }
         if (at < 0)
             return ASMSPY_PS_R_TRAP_UNSURE;
     }
@@ -1042,14 +1214,19 @@ static int ps_perform(ps_ctx_t *c, pid_t w, int sig, asmspy_ps_act_t act,
         return PS_EV_NONE;
 
     case ASMSPY_PS_ACT_REWIND_RESUME:
-        if (ps_rewind(w, c->bp_base) != 0)
+        /* ps_trap_addr, for the reason ps_classify uses it: this act is reached
+         * for a trap the classifier proved was OURS, and after a disarm that
+         * proof came from armed_bp. Rewinding against a cleared bp_base is
+         * ps_rewind(w, 0) — a no-op that returns 0, so the thread is CONTed
+         * from base+1, i.e. resumed one byte into an instruction. */
+        if (ps_rewind(w, ps_trap_addr(c)) != 0)
             return PS_EV_NONE; /* could not make it safe to run: HOLD it, and
                                 * let the teardown try again */
         ps_cont(c, w, 0);
         return PS_EV_NONE;
 
     case ASMSPY_PS_ACT_COLLECT:
-        if (ps_rewind(w, c->bp_base) != 0)
+        if (ps_rewind(w, ps_trap_addr(c)) != 0)
             return PS_EV_NONE; /* as above: never report an arrival we could not
                                 * make resumable — phase 3 would step it from
                                 * base+1, mid-instruction */
@@ -1064,8 +1241,8 @@ static int ps_perform(ps_ctx_t *c, pid_t w, int sig, asmspy_ps_act_t act,
          * cleared — we do not know whether this cleared the target's own text or
          * a private copy of it, and a redundant restore later is free while a
          * skipped one leaks. */
-        ps_restore_copy(w, c->bp_base, c->bp_orig);
-        if (ps_rewind(w, c->bp_base) != 0)
+        ps_restore_copy(w, ps_trap_addr(c), ps_trap_orig(c));
+        if (ps_rewind(w, ps_trap_addr(c)) != 0)
             return PS_EV_NONE;
         ps_cont(c, w, 0);
         return PS_EV_NONE;
@@ -1119,7 +1296,7 @@ static int ps_perform(ps_ctx_t *c, pid_t w, int sig, asmspy_ps_act_t act,
         if (ps_restore_copy(w, cb, co) != 0)
             return PS_EV_NONE; /* keep it TRACED (so its trap is ours to absorb)
                                 * and stopped; the teardown retries */
-        ps_rewind(w, cb ? cb : c->bp_base);
+        ps_rewind(w, cb ? cb : ps_trap_addr(c));
         if (ps_detach_one(c, w,
                           act == ASMSPY_PS_ACT_RELEASE_SIGNAL ? sig : 0) == 0)
             ps_del(c, w);
@@ -1149,7 +1326,7 @@ static int ps_perform(ps_ctx_t *c, pid_t w, int sig, asmspy_ps_act_t act,
  * is, and releasing an untraced task into an armed address space is the death
  * described at PS_MAX_THREADS. */
 static int ps_release_untabled(ps_ctx_t *c, pid_t w) {
-    if (c->bp_base) {
+    if (ps_trap_addr(c)) {
         /* READ BEFORE WRITING (A29), which this path used to be the last place
          * not to do. It POKETEXTed bp_orig into a task whose address space it
          * had just finished saying it could not identify — so if that task had
@@ -1161,8 +1338,8 @@ static int ps_release_untabled(ps_ctx_t *c, pid_t w) {
          * child): exactly the restore it needed. bp_planted is deliberately NOT
          * cleared, because we do not know which case this was, and a redundant
          * restore later is free while a skipped one leaks. */
-        ps_restore_copy(w, c->bp_base, c->bp_orig);
-        ps_rewind(w, c->bp_base);
+        ps_restore_copy(w, ps_trap_addr(c), ps_trap_orig(c));
+        ps_rewind(w, ps_trap_addr(c));
     }
     /* AUDIT NOTE (A26): the ONLY PTRACE_DETACH in this file whose result is not
      * checked and retried, and it is not checked because there is nowhere to
@@ -1266,16 +1443,39 @@ static int ps_pump(ps_ctx_t *c, pid_t hold, long budget_us, long spin_us,
 
 /* Bring `tid` to a ptrace-stop. PTRACE_POKETEXT and PTRACE_PEEKTEXT are both
  * refused on a RUNNING tracee — silently, leaving a trap armed — so every
- * plant/restore goes through here first. 0 if stopped, -1 if it vanished. */
-static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid) {
+ * plant/restore goes through here first. 0 if stopped, -1 if it vanished.
+ *
+ * `budget_us` CLAMPS the wait, and it is what makes phase 3's advertised bound
+ * true (2026-08-06 final review, finding 7). PS_STOP_US is 200 ms PER THREAD and
+ * a thread in uninterruptible sleep pays all of it and stays in the table, so
+ * every later sweep pays again: against a fat or D-state target the confirm
+ * phase cost O(threads x 200 ms) per candidate while its own comment advertised
+ * 800 ms for the whole phase — wrong by ~60x, with the target held stopped for
+ * it. Callers that own a deadline pass what is left of it; the teardown passes
+ * PS_STOP_FOREVER, because getting our byte back out is not something to give up
+ * on early. */
+#define PS_STOP_FOREVER ((long)0x7fffffff)
+static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid, long budget_us) {
     int i = ps_find(c, tid);
     if (i < 0)
         return -1;
     if (c->t[i].stopped)
         return 0;
+    if (budget_us <= 0)
+        return -1; /* nothing left to spend: not stopped, and say so */
+    if (budget_us > PS_STOP_US)
+        budget_us = PS_STOP_US;
+    /* TEST LEVER (inert unless ASMSPY_PS_TEST_STOP_COST_US is set), charged
+     * HERE so it lands inside the sweep's own accounting, exactly where a
+     * D-state thread's cost lands. See ps_read_stop_cost_us. */
+    long cost = ps_read_stop_cost_us();
+    if (cost > 0) {
+        struct timespec ts = {cost / 1000000L, (cost % 1000000L) * 1000L};
+        nanosleep(&ts, NULL);
+    }
     ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
     long long t0 = ps_now_us();
-    while (ps_now_us() - t0 < PS_STOP_US) {
+    while (ps_now_us() - t0 < budget_us) {
         /* `arrived` NULL: this is not an arrival collector. A thread that trips
          * the entry while we are getting `tid` stopped is rewound and RELEASED
          * inside ps_perform rather than parked here. */
@@ -1303,8 +1503,17 @@ static int ps_ensure_stopped(ps_ctx_t *c, pid_t tid) {
  * can mutate the table underneath it.
  *
  * Two rounds, because a thread cloned DURING the first round is tabled by the
- * pump and is not in that round's snapshot. */
-static void ps_stop_all(ps_ctx_t *c) {
+ * pump and is not in that round's snapshot.
+ *
+ * `budget_us` is the bound for the WHOLE sweep, not per thread, and it is
+ * spent down as it goes (finding 7). A sweep that runs out stops asking: the
+ * threads it did get are still stopped, and a plant needs only ONE pokeable
+ * thread, so an exhausted budget costs candidate coverage, never safety —
+ * every task here is SEIZED either way, which is the property that keeps an
+ * armed int3 survivable. */
+static void ps_stop_all(ps_ctx_t *c, long budget_us) {
+    long long t0 = ps_now_us();
+    const int bounded = budget_us != PS_STOP_FOREVER;
     for (int round = 0; round < 2; round++) {
         pid_t snap[PS_TABLE_SLOTS];
         int n = 0;
@@ -1312,10 +1521,49 @@ static void ps_stop_all(ps_ctx_t *c) {
             if (!c->t[i].stopped && (!c->t[i].listening || c->tearing_down))
                 snap[n++] = c->t[i].tid;
         if (n == 0)
-            return;
-        for (int i = 0; i < n; i++)
-            ps_ensure_stopped(c, snap[i]);
+            break;
+        for (int i = 0; i < n; i++) {
+            long left = bounded ? budget_us - (long)(ps_now_us() - t0)
+                                : PS_STOP_FOREVER;
+            if (left <= 0) {
+                if (bounded) {
+                    c->sweep_clamped++;
+                    c->sweep_us += (unsigned long long)(ps_now_us() - t0);
+                }
+                return;
+            }
+            ps_ensure_stopped(c, snap[i], left);
+        }
     }
+    if (bounded) {
+        long long spent = ps_now_us() - t0;
+        c->sweep_us += (unsigned long long)spent;
+        if (spent > budget_us)
+            c->sweep_over++; /* the bound was advertised and then exceeded */
+    }
+}
+
+/* Consume every wait status that is ALREADY QUEUED, and not one more.
+ *
+ * ps_pump with a budget would do this too, but it would also NAP for the rest of
+ * that budget when the queue is empty — and the two callers here run on a
+ * deadline they have already advertised. This costs one waitpid when there is
+ * nothing to reap. The guard is the pump's own lesson: a target generating stops
+ * faster than we consume them must not be able to keep a "drain" fed forever. */
+#define PS_DRAIN_MAX 512
+static void ps_drain(ps_ctx_t *c) {
+    c->in_drain = 1;
+    for (int guard = 0; guard < PS_DRAIN_MAX; guard++) {
+        int st = 0;
+        pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
+        if (w <= 0)
+            break;
+        /* hold 0, arrived NULL: nobody is waiting on a particular tid here, and
+         * an arrival at this point is not a measurement — it is a task to make
+         * safe, which is exactly what ASMSPY_PS_ACT_REWIND_RESUME does. */
+        ps_dispatch(c, w, st, 0, NULL);
+    }
+    c->in_drain = 0;
 }
 
 /* Undo ps_stop_all: end the stops WE caused, and only those.
@@ -1362,17 +1610,117 @@ static void ps_resume_all(ps_ctx_t *c) {
  * is KEPT: clearing it is how the address of a live int3 was lost, after which
  * teardown poked address zero and the target died seconds later with the
  * sampler reporting success. Returns 0 clean, -1 leaked. */
-static int ps_disarm(ps_ctx_t *c) {
-    ps_stop_all(c);
+static int ps_disarm(ps_ctx_t *c, long budget_us) {
+    ps_stop_all(c, budget_us);
+
+    /* TEST LEVER (inert unless ASMSPY_PS_TEST_LATE_TRAP_MS is set): put the
+     * candidate back into the state it held for its whole collection window —
+     * byte IN, a thread RUNNING — and idle, so a task of the target executes our
+     * int3 in the one window the two steps below exist for. See
+     * ps_read_late_trap_ms.
+     *
+     * Gated on bp_arrived for the reason ASMSPY_PS_TEST_TGID_FAIL=armed is:
+     * spending the window on an entry nothing enters makes the whole thing
+     * vacuous. The re-plant is needed because a saturating entry has its byte
+     * taken out by the arrival loop's last iteration — which exit phase 3 took
+     * says nothing about the window this reconstructs, and a target with two
+     * runnable threads is in exactly this state for 50 ms per candidate. The
+     * thread resumed is never the one the unplant will poke through. */
+    long late = ps_read_late_trap_ms();
+    if (late > 0 && c->bp_arrived) {
+        pid_t planter = 0;
+        for (int i = 0; i < c->n && !planter; i++)
+            if (ps_can_poke(&c->t[i]))
+                planter = c->t[i].tid;
+        if (planter && !c->bp_planted)
+            ps_plant(c, planter, c->bp_base);
+        if (planter && c->bp_planted) {
+            for (int i = 0; i < c->n; i++)
+                if (c->t[i].tid != planter && c->t[i].stopped &&
+                    !c->t[i].listening && c->t[i].kind == ASMSPY_PS_OWN) {
+                    ps_cont(c, c->t[i].tid, 0);
+                    break;
+                }
+            struct timespec ts = {late / 1000, (late % 1000) * 1000000L};
+            nanosleep(&ts, NULL);
+        }
+    }
+
+    /* TEST LEVER (inert unless ASMSPY_PS_TEST_STEAL_BYTE is set): make the word
+     * at the armed address neither our trap nor the original, ask ps_unplant to
+     * restore, and see whether it wrote. Every thread is stopped here, and the
+     * true original goes back before any of them runs, so the target's text is
+     * identical either side. See ps_read_steal_byte. */
+    pid_t stealer = 0;
+    long stolen = 0;
+    if (ps_read_steal_byte() && c->bp_planted && c->bp_base) {
+        for (int i = 0; i < c->n && !stealer; i++)
+            if (ps_can_poke(&c->t[i]))
+                stealer = c->t[i].tid;
+        if (stealer) {
+            /* Distinct from BOTH the original and the trap encoding, so the
+             * PEEK afterwards can tell "declined to write" from "wrote". */
+#if defined(__aarch64__)
+            stolen = (c->bp_orig & ~0xffffffffL) | (long)0xd503201fL;
+#else
+            stolen = (c->bp_orig & ~0xffL) | 0x90L;
+            if ((c->bp_orig & 0xffL) == 0x90L)
+                stolen = (c->bp_orig & ~0xffL) | 0xf4L;
+#endif
+            if (ptrace(PTRACE_POKETEXT, stealer, (void *)(uintptr_t)c->bp_base,
+                       (void *)(uintptr_t)stolen) != 0)
+                stealer = 0;
+        }
+    }
+
     if (ps_unplant(c) != 0) {
-        ps_stop_all(c);
+        ps_stop_all(c, budget_us);
         if (ps_unplant(c) != 0) {
             c->leaked = 1;
             return -1;
         }
     }
+
+    if (stealer) {
+        errno = 0;
+        long now = ptrace(PTRACE_PEEKTEXT, stealer,
+                          (void *)(uintptr_t)c->bp_base, NULL);
+        if (!(now == -1 && errno)) {
+            if (now == stolen)
+                c->guard_held++; /* looked, saw it was not ours, left it */
+            else
+                c->blind_writes++; /* wrote over a word it never read */
+        }
+        /* Put the target's real text back, unconditionally: this probe must
+         * not be the thing that damages the process. */
+        ptrace(PTRACE_POKETEXT, stealer, (void *)(uintptr_t)c->bp_base,
+               (void *)(uintptr_t)c->bp_orig);
+        c->bp_planted = 0;
+    }
+
+    /* REAP WHAT IS ALREADY QUEUED, HERE, WHILE bp_base STILL NAMES THE TRAP.
+     *
+     * The byte is out, so no task can arrive from now on — but one that arrived
+     * a moment ago may be sitting in a ptrace-stop whose status we have not
+     * consumed. Two things then go wrong at once, and MEASURED, both of them do
+     * (2026-08-06 final review, finding 1): the rewind sweep below silently
+     * moves its pc off base+1 — PTRACE_GETREGS/SETREGS on an unreaped
+     * ptrace-stop SUCCEED, measured on this host, so "we have not waited on it"
+     * is no protection at all — and then bp_base is cleared, so when the status
+     * finally is reaped there is neither an address nor a pc left to recognise
+     * it by, and asmspy_ps_decide is handed R_APP_TRAP and re-injects SIGTRAP
+     * into a process with no handler. Draining first means those stops go
+     * through the pipeline as the ARRIVALS they are, and are rewound and
+     * resumed by the one cell that owns that decision. */
+    if (!ps_read_skip_drain())
+        ps_drain(c);
+
     for (int i = 0; i < c->n; i++)
-        ps_rewind(c->t[i].tid, c->bp_base);
+        /* Only a stop we HOLD. Rewinding a task whose status is still queued is
+         * how the evidence above got erased; and on a running tracee ps_rewind's
+         * register read fails anyway, so this loses nothing real. */
+        if (c->t[i].stopped)
+            ps_rewind(c->t[i].tid, c->bp_base);
     c->bp_base = 0; /* ONLY now, and only because the byte is provably out */
     return 0;
 }
@@ -1392,7 +1740,10 @@ static int ps_detach_one(ps_ctx_t *c, pid_t tid, int sig) {
         if (ptrace(PTRACE_DETACH, tid, NULL,
                    (void *)(uintptr_t)(attempt == 0 ? sig : 0)) == 0)
             return 0;
-        if (ps_ensure_stopped(c, tid) != 0)
+        /* PS_STOP_FOREVER: the alternative to stopping it is leaving it SEIZED
+         * with no pump, which is a permanent hang — see this function's own
+         * doc. Nothing here is on the confirm phase's clock. */
+        if (ps_ensure_stopped(c, tid, PS_STOP_FOREVER) != 0)
             /* ps_ensure_stopped removes a vanished tid; anything else means we
              * could not bring it to a stop and the next attempt will not fare
              * better. */
@@ -1502,9 +1853,23 @@ static int ps_seize_all(ps_ctx_t *c) {
  * with our pump gone, so its next signal is a stop nobody will ever consume and
  * it hangs forever. ps_detach_one insists; what it cannot free is reported.
  *
+ * A FOURTH: a task TABLED DURING THIS WALK (2026-08-06 final review, finding 4).
+ * ps_detach_one pumps on a failed DETACH and the pump tables whatever reports,
+ * so a clone that lands mid-walk is not in the snapshot the walk is working
+ * through. The old form then did an unconditional `c->n = 0` with `bad`
+ * untouched: the task was never detached, the evidence that it existed was
+ * erased, and the call reported a clean target. Its own attach-stop decides
+ * ASMSPY_PS_ACT_HOLD under `tearing_down`, so it is stopped FOREVER with the
+ * pump gone — and the tracer here is libasmspy.a inside a long-lived `--serve`
+ * process, so there is no exit-time auto-detach to rescue it. Hence the
+ * snapshot-and-detach REPEATS until a pass adds nothing (the shape ps_seize_all
+ * already uses), and what is left in the table at the end is reported, not
+ * zeroed.
+ *
  * Returns 0 if the target was handed back clean, -1 if anything was left behind
  * (a trap byte still in, or a task still seized) — which the caller must not
  * report as success. */
+#define PS_DETACH_PASSES 8
 static int ps_detach_all(ps_ctx_t *c) {
     int bad = 0;
     /* From here on a job-control stop must NOT be re-LISTENed: PTRACE_DETACH is
@@ -1532,37 +1897,96 @@ static int ps_detach_all(ps_ctx_t *c) {
         return 0;
     }
 
-    if (c->bp_base && ps_disarm(c) != 0)
+    /* PS_STOP_FOREVER: the confirm phase's clamp (finding 7) is about not
+     * charging a caller for candidates; the teardown is about not leaving a
+     * trap byte in a live process, and there is no budget at which giving up on
+     * that is the better answer. */
+    if (c->bp_base && ps_disarm(c, PS_STOP_FOREVER) != 0)
         bad = 1;
     else
-        ps_stop_all(c);
+        ps_stop_all(c, PS_STOP_FOREVER);
 
-    for (int i = 0; i < c->n; i++) {
-        /* A task in another address space still carrying a private copy of a
-         * trap byte. ps_restore_copy writes only if our byte is actually there,
-         * so a child that execve'd in the meantime is left alone rather than
-         * having eight bytes of the parent's old text spliced into its new
-         * image. */
-        if (c->t[i].copied_bp) {
-            if (ps_restore_copy(c->t[i].tid, c->t[i].copied_bp,
-                                c->t[i].copied_orig) != 0)
-                bad = 1;
-            else
-                ps_rewind(c->t[i].tid, c->t[i].copied_bp);
+    /* Restore-and-rewind, then detach, REPEATED until a pass frees nobody new.
+     * ps_detach_one pumps, the pump tables clones, and a task tabled after the
+     * snapshot this walks is a task nothing here would ever have detached. */
+    for (int pass = 0; pass < PS_DETACH_PASSES; pass++) {
+        for (int i = 0; i < c->n; i++) {
+            /* A task in another address space still carrying a private copy of
+             * a trap byte. ps_restore_copy writes only if our byte is actually
+             * there, so a child that execve'd in the meantime is left alone
+             * rather than having eight bytes of the parent's old text spliced
+             * into its new image. */
+            if (c->t[i].copied_bp) {
+                if (ps_restore_copy(c->t[i].tid, c->t[i].copied_bp,
+                                    c->t[i].copied_orig) != 0)
+                    bad = 1;
+                else
+                    ps_rewind(c->t[i].tid, c->t[i].copied_bp);
+            }
+            /* ps_trap_addr, not bp_base: ps_disarm above cleared bp_base on
+             * success, and a thread parked at base+1 at teardown time is
+             * exactly who this rewind is for. */
+            ps_rewind(c->t[i].tid, ps_trap_addr(c));
         }
-        ps_rewind(c->t[i].tid, c->bp_base);
+        /* Snapshot: ps_detach_one can drop a vanished tid, and can table a new
+         * one, mid-walk. */
+        pid_t snap[PS_TABLE_SLOTS];
+        int n = 0;
+        for (int i = 0; i < c->n; i++)
+            snap[n++] = c->t[i].tid;
+        if (n == 0)
+            break;
+        /* TEST LEVER (inert unless ASMSPY_PS_TEST_WALK_PUMP_MS is set): let the
+         * leader RUN and pump here, where a retrying ps_detach_one already
+         * pumps, so clones land after this pass's snapshot on demand. Both
+         * halves are states the walk itself produces — ASMSPY_PS_ACT_FOLLOW_
+         * CHILD CONTs the parent even under `tearing_down`, and every
+         * ps_ensure_stopped inside ps_detach_one pumps — but only ever for as
+         * long as a clone happens to take, which is why the window could not be
+         * reached from a test. See ps_read_walk_pump_ms. */
+        long wp = pass == 0 ? ps_read_walk_pump_ms() : 0;
+        if (wp > 0) {
+            for (int i = 0; i < c->n; i++)
+                if (c->t[i].tid == c->pid && c->t[i].stopped &&
+                    !c->t[i].listening) {
+                    ps_cont(c, c->t[i].tid, 0);
+                    break;
+                }
+            ps_pump(c, 0, wp * 1000, PS_SPIN_US, NULL);
+        }
+        int freed = 0;
+        for (int i = 0; i < n; i++) {
+            if (ps_detach_one(c, snap[i], 0) != 0) {
+                bad = 1;
+                continue;
+            }
+            /* Out of the table only once it is provably no longer ours —
+             * ps_detach_one does not ps_del, and the old `c->n = 0` below was
+             * doing it for every task at once, detached or not. */
+            if (ps_find(c, snap[i]) >= 0) {
+                ps_del(c, snap[i]);
+                freed++;
+                if (pass > 0)
+                    c->late_detached++; /* tabled after an earlier pass had
+                                         * already taken its snapshot */
+            }
+        }
+        if (c->n == 0)
+            break;
+        if (freed == 0)
+            break; /* a pass that frees nobody will not fare better twice */
+        /* Anything still here was tabled during the walk, or refused: stop it
+         * before the next pass tries to detach it. */
+        ps_stop_all(c, PS_STOP_FOREVER);
     }
-    /* Snapshot again: ps_detach_one can drop a vanished tid mid-walk. */
-    pid_t snap[PS_TABLE_SLOTS];
-    int n = 0;
-    for (int i = 0; i < c->n; i++)
-        snap[n++] = c->t[i].tid;
-    for (int i = 0; i < n; i++)
-        if (ps_detach_one(c, snap[i], 0) != 0)
-            bad = 1;
 
     c->bp_base = 0;
-    c->n = 0;
+    /* NOT `c->n = 0`. A task still in the table here is a task still SEIZED,
+     * with the pump about to go away — the exact permanent hang ps_detach_one's
+     * comment describes — and zeroing the count reported it as a clean handback.
+     * Damage is what this return value is for. */
+    if (c->n)
+        bad = 1;
     return bad ? -1 : 0;
 }
 
@@ -1778,13 +2202,22 @@ static void ps_phase2(ps_ctx_t *c, const asmspy_symtab_t *syms,
  *
  * This phase is also the only one that answers the question the caller actually
  * has. The producer arms an int3 at the region entry and waits; "will that fire
- * promptly" is not predicted here, it is MEASURED, with the same primitive. */
+ * promptly" is not predicted here, it is MEASURED, with the same primitive.
+ *
+ * `budget_us` bounds the WHOLE candidate — the stop sweep, the arm, the arrival
+ * wait and the disarm — not just the wait. It used to start its clock AFTER
+ * ps_stop_all, which is where the phase's advertised bound went wrong (finding
+ * 7): a sweep is O(threads) x PS_STOP_US in the bad case, so the part outside
+ * the clock could dwarf the part inside it. The disarm is the one step still
+ * allowed to overrun: leaving our byte in a live process is not a cost to trade
+ * against a deadline. */
 static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
+    long long t_end = ps_now_us() + budget_us;
     c->bp_arrived = 0; /* a NEW candidate: nothing has reached this one yet. Not
                         * cleared by ps_plant, because phase 3 re-plants the SAME
                         * address after every arrival and the fact being tracked
                         * is about the ENTRY, not about one planting of it. */
-    ps_stop_all(c);
+    ps_stop_all(c, budget_us);
     if (c->n == 0)
         return;
     /* ps_can_poke, not `stopped`: a LISTENed thread is in group-stop and every
@@ -1804,7 +2237,10 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
     ps_resume_all(c);
 
     while (cd->arrivals < ASMSPY_PS_HIT_BUDGET) {
-        long left = (long)(budget_us - (ps_now_us() - t0));
+        /* Against t_end (set at entry), not against the arm: what the caller
+         * was promised is a per-candidate cost, and the sweep above already
+         * spent part of it. */
+        long left = (long)(t_end - ps_now_us());
         if (left <= 0)
             break;
         pid_t who = 0;
@@ -1838,8 +2274,13 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
          * out, so ps_unplant short-circuited, ps_disarm cleared bp_base and
          * reported clean, and the target died on its next arrival with the
          * sampler reporting success. That is C2 exactly, one function over. */
-        if (ptrace(PTRACE_POKETEXT, who, (void *)(uintptr_t)cd->addr,
-                   (void *)(uintptr_t)c->bp_orig) != 0)
+        /* ps_restore_copy, not a raw POKETEXT: the same A29 rule ps_unplant
+         * now follows. `who` has been running since the plant, and a write
+         * that has not looked at what is there is a write into whatever got
+         * mapped at this address in the meantime (2026-08-06 final review,
+         * finding 5). Its 0 means "our byte is not there any more", which is
+         * exactly the state bp_planted = 0 records. */
+        if (ps_restore_copy(who, cd->addr, c->bp_orig) != 0)
             break; /* leave bp_planted set: ps_disarm below owns the retry, and
                     * reports a leak if it cannot get the byte out either */
         c->bp_planted = 0;
@@ -1873,8 +2314,12 @@ static void ps_phase3_one(ps_ctx_t *c, ps_cand_t *cd, long budget_us) {
      * broke out early. A trap left behind does not fail loudly: the target runs
      * on and dies on its NEXT arrival, with no tracer to take the SIGTRAP,
      * whole seconds after we are gone. ps_disarm keeps bp_base when it cannot
-     * get the byte out, and sets `leaked`, which stops any further arming. */
-    ps_disarm(c);
+     * get the byte out, and sets `leaked`, which stops any further arming.
+     *
+     * PS_STOP_FOREVER, deliberately, and this is the ONE step allowed to
+     * overrun the per-candidate bound: there is no deadline at which leaving
+     * our byte in a live process is the better answer. */
+    ps_disarm(c, PS_STOP_FOREVER);
     ps_resume_all(c);
 }
 
@@ -2021,12 +2466,23 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
         int lose_after = ps_read_lose_after(); /* test lever, see its doc */
         for (int i = 0; i < ncand && c.n > 0 && !c.leaked && c.covered; i++) {
             /* Stop early once the window's worth of confirming has been spent
-             * AND there is already an answer to give. The HARD bound is the loop
-             * itself (ASMSPY_PS_MAX_CAND x ASMSPY_PS_CONFIRM_MS, 800 ms at the
-             * defaults); this only avoids charging a caller who is running a
-             * WINDOW, not a search, for candidates it no longer needs. When
-             * nothing has confirmed yet the remaining candidates are exactly
-             * what is worth paying for. */
+             * AND there is already an answer to give. This only avoids charging
+             * a caller who is running a WINDOW, not a search, for candidates it
+             * no longer needs; when nothing has confirmed yet the remaining
+             * candidates are exactly what is worth paying for.
+             *
+             * THE HARD BOUND, stated honestly (2026-08-06 final review, finding
+             * 7). It is ASMSPY_PS_MAX_CAND x ASMSPY_PS_CONFIRM_MS — 800 ms at
+             * the defaults — PLUS whatever each candidate's DISARM costs, and
+             * only the disarm, because ps_phase3_one now runs its stop sweep and
+             * its arrival wait against one deadline it takes at entry. The
+             * earlier version started that clock after the sweep, so a thread in
+             * uninterruptible sleep cost PS_STOP_US (200 ms) per sweep per
+             * candidate OUTSIDE the advertised figure, with the target held
+             * stopped throughout — this repo's own host notes record amdgpu
+             * putting threads in exactly that state, and a D-state process
+             * enters nothing, so the `nconf > 0` early break cannot fire either.
+             * The disarm is left uncapped on purpose: see ps_phase3_one. */
             if (ps_now_us() >= t3_end && nconf > 0)
                 break;
             ps_phase3_one(&c, &cands[i], per_us);
@@ -2059,6 +2515,24 @@ int asmspy_ptrace_sample(pid_t pid, const asmspy_symtab_t *syms,
      * target. Telling an operator "I broke your process" when it is provably
      * intact is its own harm. */
     int dirty = (ps_detach_all(&c) != 0);
+
+    /* TEST-ONLY REPORT, and only when a lever manufactured the shape it counts.
+     * Every one of these is a fact the caller cannot see from outside — whether
+     * the window the lever opened actually caught anything — so without it the
+     * checks built on those levers would pass on a run where nothing happened.
+     * Absent from every real run: the levers are unset, so the numbers are not
+     * printed, not merely zero. */
+    if (ps_read_late_trap_ms() > 0 || ps_read_walk_pump_ms() > 0 ||
+        ps_read_steal_byte() || ps_read_stop_cost_us() > 0) {
+        char tn[192];
+        snprintf(tn, sizeof tn,
+                 "test-window: drained=%u post-disarm=%u late-detached=%u "
+                 "guard-held=%u blind-writes=%u sweep-us=%llu sweep-clamped=%u "
+                 "sweep-over=%u",
+                 c.drain_traps, c.late_traps, c.late_detached, c.guard_held,
+                 c.blind_writes, c.sweep_us, c.sweep_clamped, c.sweep_over);
+        ps_note(why, whylen, tn);
+    }
 
     /* A trap we could not remove, or a task we could not release, is not a
      * result with a caveat — it is a target we have DAMAGED. Refusing here

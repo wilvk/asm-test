@@ -2997,7 +2997,29 @@ static int rgn_plant_bp(pid_t tid, uint64_t base, long *orig) {
     return 0;
 }
 
+/* READ BEFORE WRITING (A29), carried back from the second copy —
+ * cli/asmspy_ptracesample.c's ps_restore_copy, which the 2026-08-06 final review
+ * asked for here too (finding 5). Writing a saved word back without looking is
+ * only sound while `base` still names the mapping it named at the plant, and it
+ * need not: the target has been running in between, and a dlclose, an mmap or an
+ * execve in a fork child can put something else there. PTRACE_POKETEXT succeeds
+ * anyway (FOLL_FORCE), so the failure is silent — a stale word spliced into live
+ * text, and the target dies executing it after the engine reported success.
+ *
+ * "Not our trap" and "not mapped at all" are both answers, not errors: there is
+ * nothing of ours to undo in either case. */
 static void rgn_remove_bp(pid_t tid, uint64_t base, long orig) {
+    errno = 0;
+    long cur = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
+    if (cur == -1 && errno != 0)
+        return;
+#if defined(__aarch64__)
+    if ((cur & 0xffffffffL) != (long)0xd4200000L)
+        return;
+#else
+    if ((cur & 0xffL) != 0xccL)
+        return;
+#endif
     ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
            (void *)(uintptr_t)orig);
 }

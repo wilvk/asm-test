@@ -281,7 +281,11 @@ typedef struct {
     const char *module;
     asmspy_autocand_t *out;
     int max, window_ms;
-    char why[192];
+    /* 512, matching auto_pick_ptrace's own buffer (cli/asmspy.c). At 192 the
+     * arm-gate note alone is ~193 bytes, so anything ps_note appends after it
+     * — including §12/§13's test-window counts, which are the non-vacuity
+     * evidence for those sections — was silently truncated away. */
+    char why[512];
     int rc;
 } job_t;
 
@@ -1530,6 +1534,358 @@ int main(int argc, char **argv) {
         asmspy_symtab_free(&syms);
         kill_victim(fpid, fout);
         unsetenv("ASMSPY_FORKHOT_EXEC");
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §12  A TRAP OF OURS THAT IS STILL QUEUED WHEN THE BYTE COMES OUT.      */
+    /*                                                                       */
+    /* The disarm is not atomic with the target. A task can execute our int3  */
+    /* and have its SIGTRAP sitting unreaped while ps_unplant takes the byte  */
+    /* back out and ps_disarm gives the address up. What reaps that status    */
+    /* next used to find no bp_base, fall through to ps_sigtrap_is_app —      */
+    /* which reads SI_KERNEL, which is what OUR int3 reports — and re-inject  */
+    /* SIGTRAP into a process with no handler. The user's process, killed by  */
+    /* a byte we planted, after we reported success.                          */
+    /*                                                                       */
+    /* In the wild the task is a thread cloned after ps_stop_all's round-2    */
+    /* snapshot, so the window is microseconds wide and no victim here        */
+    /* produces it on cue. ASMSPY_PS_TEST_LATE_TRAP_MS resumes ONE thread the */
+    /* disarm had just stopped and idles with the trap armed: from the        */
+    /* module's point of view a thread it did not stop is a thread it did not */
+    /* stop.                                                                  */
+    /*                                                                       */
+    /* hotthreads_victim, because the shape needs TWO runnable threads of the */
+    /* target: one to take the byte back out through, and one to be running   */
+    /* when it does. Its four workers hammer `shared_entry`, so the arrival   */
+    /* inside the stall is a certainty rather than a hope.                    */
+    /*                                                                       */
+    /* Two runs, because the fix is two independent things and either alone   */
+    /* leaves a way to kill the target:                                       */
+    /*   (a) the drain — reap what is queued while bp_base still names it;    */
+    /*   (b) ps_trap_addr's armed_bp fallback — for the status that surfaces  */
+    /*       only AFTER the disarm, which ASMSPY_PS_TEST_SKIP_DRAIN reaches.  */
+    /* --------------------------------------------------------------------- */
+    for (int late_pass = 0; late_pass < 2; late_pass++) {
+        const int skip_drain = late_pass == 1;
+        char p_hot[256];
+        snprintf(p_hot, sizeof p_hot, "%s/hotthreads_victim", bdir);
+        int hout = -1;
+        pid_t hpid = spawn_victim(p_hot, "hotthreads_victim pid=", &hout);
+        if (hpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s (late trap)\n", p_hot);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(hpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s (late trap)\n", p_hot);
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        /* 25 ms: four threads calling `shared_entry` in a tight loop reach it
+         * in microseconds, so this is orders of magnitude of margin, and short
+         * enough that it does not stretch the run. */
+        setenv("ASMSPY_PS_TEST_LATE_TRAP_MS", "25", 1);
+        if (skip_drain)
+            setenv("ASMSPY_PS_TEST_SKIP_DRAIN", "1", 1);
+
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = hpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        job.window_ms = 500;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create (late trap)\n");
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        pthread_join(th, NULL);
+        unsetenv("ASMSPY_PS_TEST_LATE_TRAP_MS");
+        unsetenv("ASMSPY_PS_TEST_SKIP_DRAIN");
+
+        /* Run FREE for a moment before asking whether it lived: a re-injected
+         * SIGTRAP kills the target after we are gone, not while we hold it. */
+        {
+            struct timespec nap = {0, 250 * 1000 * 1000};
+            nanosleep(&nap, NULL);
+        }
+        long after = count_lines_over(hout, 300);
+        printf("# late-trap (%s): rc=%d after=%ld why='%s'\n",
+               skip_drain ? "drain SKIPPED, armed_bp fallback only"
+                          : "drain enabled",
+               job.rc, after, job.why);
+
+        /* NON-VACUITY FIRST. `test-window:` is the module's own count of what
+         * the lever's window actually caught, and it is the difference between
+         * this section testing the fix and this section testing nothing: a run
+         * where no thread reached the armed entry inside the stall would
+         * otherwise pass every check below on a build with the fix reverted. */
+        if (skip_drain)
+            CHECK(strstr(job.why, "post-disarm=0") == NULL &&
+                      strstr(job.why, "test-window:") != NULL,
+                  "a trap of ours really was reaped with bp_base already "
+                  "cleared, and was recognised as ours through armed_bp (the "
+                  "checks below are vacuous otherwise)");
+        else
+            CHECK(strstr(job.why, "drained=0 ") == NULL &&
+                      strstr(job.why, "test-window:") != NULL,
+                  "a trap of ours really was still queued when the byte came "
+                  "out, and the disarm's drain reaped it while bp_base still "
+                  "named it (the checks below are vacuous otherwise)");
+
+        CHECK(is_alive(hpid),
+              skip_drain
+                  ? "the target survives a SIGTRAP of ours reaped AFTER the "
+                    "disarm cleared bp_base -- armed_bp is what tells us the "
+                    "trap is ours, and re-injecting it kills a process with no "
+                    "handler"
+                  : "the target survives a trap of ours that was still queued "
+                    "when the byte came out");
+        CHECK(after > 3, "and it is still making progress afterwards");
+        CHECK(job.rc >= 0,
+              "and the sampler did not report the target as damaged");
+        for (int i = 0; i < job.rc && i < 8; i++)
+            CHECK(!has_trap_byte(hpid, cands[i].addr),
+                  "no entry is left holding an int3 after the late-trap run");
+        {
+            pid_t tids[128];
+            int nt = task_tids(hpid, tids, 128), still = 0;
+            for (int i = 0; i < nt; i++)
+                if (traced_by_us(tids[i]))
+                    still++;
+            CHECK(still == 0,
+                  "and every thread was released -- including the one the "
+                  "stall left running");
+        }
+
+        asmspy_symtab_free(&syms);
+        kill_victim(hpid, hout);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §13  A TASK TABLED DURING THE TEARDOWN WALK IS STILL DETACHED.         */
+    /*                                                                       */
+    /* ps_detach_all snapshots the table once, and ps_detach_one PUMPS on a   */
+    /* failed DETACH — and the pump tables whatever reports, including a      */
+    /* clone made a microsecond ago. The old walk then did an unconditional   */
+    /* `c->n = 0` with `bad` untouched: the newcomer was never detached, the  */
+    /* evidence that it existed was erased, and the call reported a clean     */
+    /* target. Its own attach-stop decides ASMSPY_PS_ACT_HOLD under           */
+    /* `tearing_down`, so it is stopped FOREVER with the pump gone — and the  */
+    /* tracer is libasmspy.a inside a long-lived `--serve` process, so no     */
+    /* exit-time auto-detach rescues it.                                      */
+    /*                                                                       */
+    /* ASMSPY_PS_TEST_WALK_PUMP_MS widens the window the walk already has;    */
+    /* clone_victim supplies threads that only exist after the attach.        */
+    /*                                                                       */
+    /* WHY THE DETECTOR IS `late-detached` AND NOT "is anything still         */
+    /* traced". MEASURED: with the walk reverted to one pass and `c->n = 0`,  */
+    /* every tid of the victim still reads TracerPid 0 afterwards — because   */
+    /* the sampler runs on a pthread HERE, and the kernel's exit_ptrace()     */
+    /* detaches a tracer thread's tracees when it exits. That rescue is       */
+    /* precisely what the deployment does NOT have: the tracer is             */
+    /* libasmspy.a inside a long-lived `--serve` process that outlives the    */
+    /* call by hours. So the observable has to be the walk's own count of     */
+    /* tasks it freed on a pass AFTER the one that snapshotted them — which   */
+    /* is exactly the set the old walk left behind, and which the mutation    */
+    /* drives to zero.                                                        */
+    /* --------------------------------------------------------------------- */
+    {
+        pid_t cpid = spawn_victim(p_clone, "clone_victim pid=", NULL);
+        if (cpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s (walk pump)\n", p_clone);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(cpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s (walk pump)\n", p_clone);
+            kill_victim(cpid, -1);
+            return 1;
+        }
+        /* 250 ms: clone_victim creates a worker every 60 ms, so the first
+         * teardown pass is guaranteed to have several tasks tabled behind its
+         * back rather than one on a good day. */
+        setenv("ASMSPY_PS_TEST_WALK_PUMP_MS", "250", 1);
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = cpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        /* Past clone_victim's 1.5 s single-threaded nap, so the teardown runs
+         * while it is actually spawning. */
+        job.window_ms = 2200;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create (walk pump)\n");
+            kill_victim(cpid, -1);
+            return 1;
+        }
+        pthread_join(th, NULL);
+        unsetenv("ASMSPY_PS_TEST_WALK_PUMP_MS");
+
+        pid_t tids[128];
+        int nt = task_tids(cpid, tids, 128), still = 0;
+        for (int i = 0; i < nt; i++)
+            if (traced_by_us(tids[i]))
+                still++;
+        printf("# teardown walk: rc=%d tasks=%d still-traced=%d why='%s'\n",
+               job.rc, nt, still, job.why);
+
+        /* THE assertion. `late-detached` counts tasks freed on a SECOND or
+         * later pass — i.e. tasks that were tabled after a pass had already
+         * taken its snapshot, which is exactly the set a single-pass walk
+         * leaves seized. Zero means either that the window caught nobody (the
+         * section is vacuous) or that the walk stopped at one pass (the defect
+         * is back); both are failures, and neither can be told from the other
+         * from outside, which is why the module counts it. */
+        CHECK(strstr(job.why, "late-detached=0") == NULL &&
+                  strstr(job.why, "test-window:") != NULL,
+              "a task tabled DURING the teardown walk is still detached: the "
+              "walk repeats until a pass frees nobody new, because a task left "
+              "seized with the pump gone hangs permanently");
+        CHECK(still == 0,
+              "and nothing of the victim is left traced by us (weak here: this "
+              "harness's tracer is a pthread, and exit_ptrace rescues what it "
+              "strands -- a `--serve` host would not)");
+        CHECK(job.rc >= 0 && strstr(job.why, "handed back clean") == NULL,
+              "and the target is reported clean because it IS clean -- the "
+              "walk no longer zeroes its own table to say so");
+        CHECK(is_alive(cpid), "the cloning victim survived the teardown walk");
+
+        asmspy_symtab_free(&syms);
+        kill_victim(cpid, -1);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §14  THE RESTORE LOOKS BEFORE IT WRITES (A29), AT EVERY SITE.          */
+    /*                                                                       */
+    /* ps_unplant was the last raw PTRACE_POKETEXT in the restore path. The   */
+    /* target runs for up to ASMSPY_PS_CONFIRM_MS between the plant and the   */
+    /* disarm, and a dlclose or an mmap in that window can leave a different  */
+    /* mapping at the armed address — where POKETEXT succeeds anyway          */
+    /* (FOLL_FORCE) and splices a stale word into live text, after which the  */
+    /* target executes garbage and dies with the sampler reporting success.   */
+    /*                                                                       */
+    /* ASMSPY_PS_TEST_STEAL_BYTE changes the word by hand with every thread   */
+    /* stopped, and puts the real one back before any of them runs, so the    */
+    /* only thing observed is whether the restore READ first.                 */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_hot[256];
+        snprintf(p_hot, sizeof p_hot, "%s/hotthreads_victim", bdir);
+        int hout = -1;
+        pid_t hpid = spawn_victim(p_hot, "hotthreads_victim pid=", &hout);
+        if (hpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s (steal byte)\n", p_hot);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(hpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s (steal byte)\n", p_hot);
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        setenv("ASMSPY_PS_TEST_STEAL_BYTE", "1", 1);
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = hpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        job.window_ms = 500;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create (steal byte)\n");
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        pthread_join(th, NULL);
+        unsetenv("ASMSPY_PS_TEST_STEAL_BYTE");
+        long after = count_lines_over(hout, 300);
+        printf("# steal-byte: rc=%d after=%ld why='%s'\n", job.rc, after,
+               job.why);
+
+        CHECK(strstr(job.why, "guard-held=0 ") == NULL &&
+                  strstr(job.why, "test-window:") != NULL,
+              "the restore was really offered a word that was not ours (the "
+              "check below is vacuous otherwise)");
+        CHECK(strstr(job.why, "blind-writes=0 ") != NULL,
+              "ps_unplant READS before it writes: a word at the armed address "
+              "that is not our trap is left alone, because after a remap it is "
+              "someone else's live text and POKETEXT would succeed anyway");
+        CHECK(is_alive(hpid) && after > 3,
+              "and the victim is alive and still progressing");
+        asmspy_symtab_free(&syms);
+        kill_victim(hpid, hout);
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* §15  THE CONFIRM PHASE'S ADVERTISED BOUND INCLUDES THE STOP SWEEP.     */
+    /*                                                                       */
+    /* ps_phase3_one used to start its clock AFTER ps_stop_all, and           */
+    /* ps_ensure_stopped spins to PS_STOP_US (200 ms) per un-stoppable thread */
+    /* without removing it from the table — so every later sweep pays again.  */
+    /* Against a fat or D-state target the phase cost O(threads x 200 ms) per */
+    /* candidate while its own comment advertised 800 ms for all of it, with  */
+    /* the whole target held stopped for the difference.                      */
+    /*                                                                       */
+    /* ASMSPY_PS_TEST_STOP_COST_US injects the per-thread cost a D-state      */
+    /* thread imposes, which no victim can be asked to produce. The module    */
+    /* reports the time its BUDGETED sweeps actually took; the teardown's     */
+    /* deliberately unbounded ones are excluded and stated as such.           */
+    /* --------------------------------------------------------------------- */
+    {
+        char p_hot[256];
+        snprintf(p_hot, sizeof p_hot, "%s/hotthreads_victim", bdir);
+        int hout = -1;
+        pid_t hpid = spawn_victim(p_hot, "hotthreads_victim pid=", &hout);
+        if (hpid < 0) {
+            fprintf(stderr, "FAIL: could not spawn %s (stop cost)\n", p_hot);
+            return 1;
+        }
+        asmspy_symtab_t syms = {0};
+        if (asmspy_symtab_load(hpid, &syms) != 0) {
+            fprintf(stderr, "FAIL: no symbols for %s (stop cost)\n", p_hot);
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        /* 40 ms per thread: hotthreads_victim runs five, so ONE unclamped
+         * sweep costs 200 ms against a per-candidate budget of
+         * ASMSPY_PS_CONFIRM_MS = 50 ms. The overrun is 4x the budget on the
+         * first sweep alone, so this cannot pass by luck. */
+        setenv("ASMSPY_PS_TEST_STOP_COST_US", "40000", 1);
+        asmspy_autocand_t cands[8];
+        job_t job = {0};
+        job.pid = hpid;
+        job.syms = &syms;
+        job.out = cands;
+        job.max = 8;
+        job.window_ms = 400;
+        pthread_t th;
+        if (pthread_create(&th, NULL, run_sampler, &job) != 0) {
+            fprintf(stderr, "FAIL: pthread_create (stop cost)\n");
+            kill_victim(hpid, hout);
+            return 1;
+        }
+        pthread_join(th, NULL);
+        unsetenv("ASMSPY_PS_TEST_STOP_COST_US");
+        printf("# stop-cost: rc=%d why='%s'\n", job.rc, job.why);
+
+        CHECK(strstr(job.why, "sweep-clamped=0 ") == NULL &&
+                  strstr(job.why, "test-window:") != NULL,
+              "a budgeted stop sweep really did run out of budget under the "
+              "injected per-thread cost (the check below is vacuous "
+              "otherwise)");
+        CHECK(strstr(job.why, "sweep-over=0") != NULL,
+              "and no budgeted stop sweep overran the deadline it was given: "
+              "the confirm phase's advertised per-candidate bound covers the "
+              "sweep, not just the arrival wait");
+        CHECK(is_alive(hpid), "the victim survived the slow-stop run");
+        asmspy_symtab_free(&syms);
+        kill_victim(hpid, hout);
     }
 
     printf("%d checks, %d failures\n", checks, failures);
