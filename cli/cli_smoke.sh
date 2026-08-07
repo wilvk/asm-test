@@ -765,6 +765,140 @@ kill -0 "$AVPID" 2>/dev/null \
 echo "  target survived the timeout path + settle"
 
 # ---------------------------------------------------------------------------
+# THE UPPER SIXTEEN VECTOR REGISTERS (ymm16-31 / xmm16-31)
+# ---------------------------------------------------------------------------
+# The live producer used to decline idx > 15 at three sites in
+# src/dataflow_ptrace.c, below a classification that already admitted
+# XMM0..+31 / YMM0..+31. The cost is not theoretical: glibc's EVEX string and
+# memory routines are 256-bit and keep their vectors in the upper half (measured
+# on this host, libc.so.6 carries 2090 instructions naming ymm16-31), so a
+# capture over any memcpy-heavy region recorded value_valid:false where the
+# values belong — and the gap barrier, which cannot even say "unchanged" about a
+# register it never read, marked the whole recording truncated.
+#
+# THIS ASSERTS VALUES, NOT THE ABSENCE OF A MARKER, and that is the point. The
+# upper sixteen live in XSAVE component 7 (Hi16_ZMM) whose offset is a runtime
+# CPUID(0xd,7) answer, not the fixed 576 the low sixteen use. A wrong component,
+# or the right component with the wrong stride, does not fail loudly — it
+# returns plausible garbage. So the victim writes DISTINCT known patterns (and
+# decoys into ymm0/ymm1, which is what an index-masking bug would return) and
+# ANNOUNCES them; every check below compares the recorded bytes against what the
+# victim said it wrote. "No longer truncated" alone would pass on a misread.
+#
+# THE GUARD IS A HARDWARE GATE, and the distinction matters. Without avx512f the
+# CPU has no component 7 at all, ymm16-31 do not exist, and the producer's
+# refusal is the correct answer — nothing to install, so per CLAUDE.md it is
+# recorded and skipped. A skip that fired on EVERY host would be the opposite:
+# it would make this lane decorative. The authority is the victim's own
+# __builtin_cpu_supports("avx512f") — the same predicate the producer's CPUID
+# probe answers to — so guard and feature can never disagree about the reason.
+echo "--- asmspy --dataflow evex_victim (upper sixteen vector regs, ymm16-31) ---"
+if [ "${DF_AVAIL:-1}" != 1 ]; then
+    echo "# SKIP ymm16-31: the data-flow value producer is unavailable here (it"
+    echo "  self-skipped above), so there is no capture to assert values in."
+elif [ ! -x "$BUILD/evex_victim" ]; then
+    echo "# SKIP ymm16-31: no evex_victim was built — EVEX is an x86 encoding and"
+    echo "  mk/cli.mk gates the victim on CLI_ARCH=x86_64. This machine ($(uname -m))"
+    echo "  has no upper sixteen vector registers to read. An architecture gate,"
+    echo "  not a missing dependency."
+else
+    evlog="$BUILD/evex_victim_$$.log"
+    rm -f "$evlog"
+    "$BUILD/evex_victim" >"$evlog" 2>&1 &
+    EVPID=$!
+    sleep 1
+    if grep -q '^# SKIP evex_victim' "$evlog"; then
+        sed 's/^/  /' "$evlog"
+        echo "  (hardware gate: recorded, not worked around — the producer's own"
+        echo "   CPUID(0xd) probe reaches the same verdict and declines cleanly.)"
+        wait "$EVPID" 2>/dev/null || true
+    else
+        kill -0 "$EVPID" 2>/dev/null \
+            || fail "ymm16-31: evex_victim died at startup: $(cat "$evlog")"
+        # The expected values, read from the victim rather than duplicated here:
+        # a second hardcoded copy is a thing that can drift out of agreement with
+        # the bytes actually stored, and then the test asserts nothing.
+        evexp=$(grep -m1 '^evex_victim expect' "$evlog" || true)
+        [ -n "$evexp" ] \
+            || fail "ymm16-31: evex_victim announced no expected patterns: $(cat "$evlog")"
+        ev_want() { printf '%s\n' "$evexp" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+        ey16=$(ev_want ymm16); ey17=$(ev_want ymm17); ex20=$(ev_want xmm20)
+        eg18=$(ev_want glue18); ed0=$(ev_want decoy0)
+        [ -n "$ey16" ] && [ -n "$ey17" ] && [ -n "$ex20" ] && [ -n "$eg18" ] \
+            && [ -n "$ed0" ] || fail "ymm16-31: could not parse the announced patterns: $evexp"
+
+        # (a) evex_hot: read_ymm's and read_xmm's high paths, value-strict.
+        evrec="$BUILD/evex_hi_$$.asmtrace"
+        rm -f "$evrec"
+        set +e
+        timeout 40 "$ASM" --dataflow "$EVPID" evex_hot --record="$evrec" \
+            >/dev/null 2>&1; rc=$?
+        set -e
+        [ "$rc" -eq 124 ] && fail "ymm16-31: --dataflow evex_hot hung"
+        [ "$rc" -eq 0 ] || fail "ymm16-31: --dataflow evex_hot exited $rc"
+        [ -s "$evrec" ] || fail "ymm16-31: no recording written for evex_hot"
+        for spec in "ymm16 32 $ey16" "ymm17 32 $ey17" "xmm20 16 $ex20"; do
+            evreg=${spec%% *}; evrest=${spec#* }
+            evsz=${evrest%% *}; evbytes=${evrest#* }
+            evline=$(grep '"k":"df_step"' "$evrec" \
+                     | grep -F "\"disasm\":\"vmovdqu64 $evreg," | head -1)
+            [ -n "$evline" ] \
+                || fail "ymm16-31: no df_step wrote $evreg (did evex_hot change?)"
+            # The DECOY check runs FIRST, and only because of ordering: the exact
+            # -bytes check below would also catch this, but it would report a bare
+            # mismatch. Masking idx into 0..15 is the misread a bug most plausibly
+            # produces, and it deserves to be named rather than diagnosed.
+            printf '%s' "$evline" | grep -qF "\"bytes\":\"$ed0\"" \
+                && fail "ymm16-31: $evreg recorded ymm0's decoy bytes -- the high read landed in the wrong xstate component (idx masked into the low sixteen?)"
+            # The write op, whole: size + value_valid + wide + the exact bytes. A
+            # partial match ("wide is set", or "the footer says truncated:false")
+            # would pass on a misread component — measured: pointing the read at
+            # component 2, or reading Hi16_ZMM with a 16-byte stride instead of 64,
+            # both yield a fully-formed wide record with an untruncated footer.
+            printf '%s' "$evline" \
+                | grep -qF "\"size\":$evsz,\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":\"$evbytes\"" \
+                || fail "ymm16-31: $evreg's recorded write is not the value evex_victim wrote ($evbytes) -- $evline"
+        done
+        grep -q '"k":"end","events":[0-9]*,"truncated":false' "$evrec" \
+            || fail "ymm16-31: evex_hot recording still reports truncated"
+        echo "  evex_hot: ymm16/ymm17 (read_ymm) + xmm20 (read_xmm) recorded EXACTLY"
+        echo "            the bytes evex_victim wrote; footer truncated:false"
+
+        # (b) evex_gap: the gap barrier's alias-slice path, the third site. The
+        # region calls out to evex_clobber(), which the capture steps OVER, so the
+        # barrier must diff the vector file across the elided excursion and record
+        # ymm18's NEW value. That is the shape of a region calling glibc's EVEX
+        # memmove — with a deterministic answer instead of whatever libc leaves.
+        evgap="$BUILD/evex_gap_$$.asmtrace"
+        rm -f "$evgap"
+        set +e
+        timeout 40 "$ASM" --dataflow "$EVPID" evex_gap --record="$evgap" \
+            >/dev/null 2>&1; rc=$?
+        set -e
+        [ "$rc" -eq 124 ] && fail "ymm16-31: --dataflow evex_gap hung"
+        [ "$rc" -eq 0 ] || fail "ymm16-31: --dataflow evex_gap exited $rc"
+        [ -s "$evgap" ] || fail "ymm16-31: no recording written for evex_gap"
+        # The synthetic barrier is the one df_step with no `disasm` (it stands for
+        # elided glue, not for an instruction).
+        gapln=$(grep '"k":"df_step"' "$evgap" | grep -v '"disasm"' | head -1)
+        [ -n "$gapln" ] \
+            || fail "ymm16-31: no gap-barrier step for evex_gap's call-out (region shape changed?)"
+        printf '%s' "$gapln" \
+            | grep -qF "\"size\":32,\"write\":true,\"value_valid\":true,\"wide\":true,\"bytes\":\"$eg18\"" \
+            || fail "ymm16-31: the gap barrier did not record ymm18's post-glue value ($eg18) -- $gapln"
+        grep -q '"k":"end","events":[0-9]*,"truncated":false' "$evgap" \
+            || fail "ymm16-31: evex_gap recording reports truncated (the barrier still cannot read a high vector reg)"
+        echo "  evex_gap: the gap barrier recorded ymm18's post-glue value exactly;"
+        echo "            footer truncated:false (was true: the barrier used to"
+        echo "            disclose that it could not read a high vector register)"
+        rm -f "$evrec" "$evgap"
+        kill "$EVPID" 2>/dev/null || true
+        wait "$EVPID" 2>/dev/null || true
+    fi
+    rm -f "$evlog"
+fi
+
+# ---------------------------------------------------------------------------
 # --max TRUNCATES, it does not FAIL (asmspy-plan Theme H)
 # ---------------------------------------------------------------------------
 # asmspy.h documents --max as bounding the in-region steps captured. It did not

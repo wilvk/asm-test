@@ -143,6 +143,7 @@ typedef struct {
 
 #include <asm/prctl.h> /* ARCH_SET_GS */
 #include <capstone/capstone.h>
+#include <cpuid.h> /* __get_cpuid_count: the Hi16_ZMM xstate offset (dfp_hi16_off) */
 #include <dirent.h> /* /proc/<pid>/task enumeration (Increment 4 worker targeting) */
 #include <elf.h> /* NT_X86_XSTATE */
 #include <errno.h>
@@ -345,7 +346,14 @@ static bool gp_value(const struct user_regs_struct *r, uint32_t reg,
 
 /* Vector operand width from its Capstone register class: XMM = 16, YMM = 32, else 0
  * (not a vector reg). cs_regs_access reports vector regs with no size, so the producer
- * assigns it from the register class. */
+ * assigns it from the register class.
+ *
+ * ZMM stays 0 — deliberately, and it is NOT the same gap the upper sixteen were. A
+ * 512-bit read needs a SECOND xstate component, ZMM_Hi256 (6, the upper 256 bits of
+ * zmm0..15), stitched to the SSE area and to component 2 for the low sixteen; the
+ * upper sixteen need only component 7, which holds them whole. Returning 0 here routes
+ * a ZMM operand to gp_value, which declines, so it records value_valid:false — the
+ * honest "not measured", not a fabricated 0. Admitting ZMM is a separate task. */
 static uint16_t vec_width(uint32_t reg) {
     if (reg >= X86_REG_XMM0 && reg <= X86_REG_XMM0 + 31)
         return 16;
@@ -354,11 +362,79 @@ static uint16_t vec_width(uint32_t reg) {
     return 0;
 }
 
-/* Read the live 128-bit XMM[idx] (0..15; higher indices need AVX-512 xstate, skipped)
- * from PTRACE_GETFPREGS. Returns 1 on success. */
-static int read_xmm(pid_t pid, int idx, uint8_t out[16]) {
-    if (idx < 0 || idx > 15)
+/* Bytes per register in the Hi16_ZMM component: it saves the FULL 512-bit zmm16..31,
+ * so ymm16 is the first 32 bytes of its slot and xmm16 the first 16. Measured on this
+ * host (CPUID(0xd,7): size 1024 = 16 x 64, offset 1408). */
+#define DFP_HI16_STRIDE 64
+
+/* Byte offset of zmm16's slot within the NT_X86_XSTATE image, or 0 when this CPU has
+ * no upper sixteen at all.
+ *
+ * Component 2 (AVX / YMM_Hi128) sits at the architecturally FIXED offset 576, which is
+ * why read_ymm below can hardcode it. Component 7 (Hi16_ZMM) has no such guarantee: the
+ * standard-format offset is enumerated per-CPU in CPUID(0xd,7).EBX and must be read,
+ * not assumed. Measured here (Ryzen 9 9950X): 1408, after component 5 (opmask, 832) and
+ * component 6 (ZMM_Hi256, 896). A hardcoded 1408 would be a latent misread on any part
+ * that lays its components out differently.
+ *
+ * CPUID(0xd,0).EAX bit 7 is the gate: it reports the components XCR0 can enable, and the
+ * ptrace image only carries what XCR0 enabled. Clear bit -> no avx512f -> 0, and every
+ * caller then declines rather than inventing bytes. That is a HARDWARE gate (CLAUDE.md):
+ * there is nothing to install that would put ymm16-31 on a CPU that lacks them.
+ *
+ * Probed once and cached, unlocked, because every way the cache can race is safe. Two
+ * threads both running the probe store the SAME value (CPUID is a pure function of the
+ * part). A thread that observed `probed` before `off` reads 0 and DECLINES — which
+ * records value_valid:false, the honest "not measured", never a fabricated value. The
+ * failure mode of this race is a lost measurement, not a wrong one. */
+static size_t dfp_hi16_off(void) {
+    static int probed = 0;
+    static size_t off = 0;
+    if (probed)
+        return off;
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (__get_cpuid_count(0xd, 0, &a, &b, &c, &d) && (a & (1u << 7)) &&
+        __get_cpuid_count(0xd, 7, &a, &b, &c, &d) &&
+        a >= 16 * DFP_HI16_STRIDE && b != 0)
+        off = (size_t)b;
+    probed = 1;
+    return off;
+}
+
+/* Read the first `n` bytes (16 = xmm, 32 = ymm) of one of the UPPER SIXTEEN vector
+ * registers, idx 16..31, out of the Hi16_ZMM component of the tracee's XSAVE image.
+ *
+ * This is where glibc's EVEX string/memory routines keep their vectors — measured, the
+ * host libc carries 2090 instructions naming ymm16-31 — so declining here is what used
+ * to leave a memcpy-heavy region's vector values unrecorded.
+ *
+ * Returns 0, not zeroed bytes, on every failure: unlike the low sixteen (whose low 128
+ * bits always exist in the legacy SSE area), there is no partial answer to give for a
+ * high register, so "cannot read" must reach the caller as "not measured". */
+static int dfp_read_hi16(pid_t pid, int idx, uint8_t *out, size_t n) {
+    const size_t base = dfp_hi16_off();
+    if (base == 0)
+        return 0; /* no Hi16_ZMM on this part: the refusal is correct */
+    uint8_t xs[8192];
+    struct iovec iov = {xs, sizeof xs};
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_X86_XSTATE, &iov) !=
+        0)
         return 0;
+    const size_t o = base + (size_t)(idx - 16) * DFP_HI16_STRIDE;
+    if (iov.iov_len < o + n)
+        return 0; /* short image: the component was not delivered */
+    memcpy(out, xs + o, n);
+    return 1;
+}
+
+/* Read the live 128-bit XMM[idx]. 0..15 come from the legacy SSE save area
+ * (PTRACE_GETFPREGS); 16..31 have no slot there at all and come from the Hi16_ZMM
+ * xstate component, whose first 16 bytes ARE xmm[idx]. Returns 1 on success. */
+static int read_xmm(pid_t pid, int idx, uint8_t out[16]) {
+    if (idx < 0 || idx > 31)
+        return 0;
+    if (idx >= 16)
+        return dfp_read_hi16(pid, idx, out, 16);
     struct user_fpregs_struct fp;
     if (ptrace(PTRACE_GETFPREGS, pid, NULL, &fp) != 0)
         return 0;
@@ -366,13 +442,23 @@ static int read_xmm(pid_t pid, int idx, uint8_t out[16]) {
     return 1;
 }
 
-/* Read the live 256-bit YMM[idx]: the low 128 from the SSE area (GETFPREGS) and the
- * high 128 from the AVX component of the XSAVE image (PTRACE_GETREGSET/NT_X86_XSTATE).
- * The YMM_Hi128 component sits at the standard xsave offset 576 (16 bytes per reg).
- * Returns 1 on success (high half zeroed if the image is too short — a no-AVX host). */
+/* Read the live 256-bit YMM[idx].
+ *
+ * 0..15 are STITCHED from two places: the low 128 from the SSE area (GETFPREGS) and the
+ * high 128 from the AVX component of the XSAVE image (PTRACE_GETREGSET/NT_X86_XSTATE),
+ * whose YMM_Hi128 slots sit at the standard xsave offset 576, 16 bytes per register.
+ * Returns 1 with the high half zeroed if the image is too short — a no-AVX host, where
+ * bits 255:128 genuinely do not exist.
+ *
+ * 16..31 need no stitching: Hi16_ZMM stores each register whole, so ymm[idx] is simply
+ * the first 32 bytes of its slot. That path returns 0 rather than zeros when the
+ * component is absent, because there is no half of a high register that does exist.
+ * Returns 1 on success. */
 static int read_ymm(pid_t pid, int idx, uint8_t out[32]) {
-    if (idx < 0 || idx > 15)
+    if (idx < 0 || idx > 31)
         return 0;
+    if (idx >= 16)
+        return dfp_read_hi16(pid, idx, out, 32);
     if (!read_xmm(pid, idx, out))
         return 0;
     uint8_t xs[8192];
@@ -988,8 +1074,9 @@ static int dfp_run_to(pid_t pid, uint64_t base);
  * themselves are only forward-declared here — same pattern as dfp_run_to above — their
  * bodies stay defined further down, next to the windowed survey that also calls them. */
 typedef struct {
-    int have;
-    uint8_t ymm[16][32];
+    int have;    /* ymm0..15 usable (GETFPREGS succeeded)                 */
+    int have_hi; /* ymm16..31 usable (Hi16_ZMM present AND delivered)     */
+    uint8_t ymm[32][32];
 } dfp_vecsnap_t;
 
 static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s);
@@ -2366,14 +2453,23 @@ static uint64_t dfp_alias_slice(uint64_t container, unsigned shift,
 }
 
 /* A whole-vector-file snapshot in ONE pair of ptrace calls (not read_ymm's per-register
- * GETREGSET), because the gap barrier diffs up to 16 registers at once and gaps are the
- * rare event, not the hot path. `have` = the snapshot is usable; a failure leaves it 0
- * and the barrier fails closed on every vector location at risk. (The `dfp_vecsnap_t`
- * typedef itself lives earlier in the file, forward-declared alongside dfp_run_to, since
- * dfp_step_loop's call-out branch needs it by value before this definition.) */
+ * GETREGSET), because the gap barrier diffs up to 32 registers at once and gaps are the
+ * rare event, not the hot path. `have` = ymm0..15 usable; `have_hi` = ymm16..31 usable.
+ * A failure leaves the corresponding flag 0 and the barrier fails closed on every vector
+ * location at risk in that half. (The `dfp_vecsnap_t` typedef itself lives earlier in the
+ * file, forward-declared alongside dfp_run_to, since dfp_step_loop's call-out branch
+ * needs it by value before this definition.)
+ *
+ * The two halves get SEPARATE flags because they fail independently and because a zeroed
+ * high half would be a LIE the barrier cannot detect: the barrier's whole logic is a
+ * memcmp of pre against post, so zeroing both on an unreadable Hi16_ZMM would read as
+ * "the glue left ymm18 alone" — a fabricated claim about a register nobody looked at.
+ * The low half can safely zero bits 255:128 (a no-AVX host really has none); the high
+ * half cannot, so its flag carries the answer instead. */
 static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s) {
     struct user_fpregs_struct fp;
     s->have = 0;
+    s->have_hi = 0;
     if (ptrace(PTRACE_GETFPREGS, pid, NULL, &fp) != 0)
         return;
     for (int i = 0; i < 16; i++)
@@ -2388,6 +2484,17 @@ static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s) {
                 memcpy(s->ymm[i] + 16, xs + o, 16);
             else
                 memset(s->ymm[i] + 16, 0, 16);
+        }
+        /* The upper sixteen, out of the SAME image — Hi16_ZMM, whose offset is a
+         * runtime CPUID answer (dfp_hi16_off), 64 bytes per register of which the
+         * first 32 are ymm[i]. All-or-nothing: one short read and the whole high
+         * half is unusable, since a partly-filled snapshot would diff garbage. */
+        const size_t hb = dfp_hi16_off();
+        if (hb != 0 && iov.iov_len >= hb + 16 * DFP_HI16_STRIDE) {
+            for (int i = 16; i < 32; i++)
+                memcpy(s->ymm[i], xs + hb + (size_t)(i - 16) * DFP_HI16_STRIDE,
+                       32);
+            s->have_hi = 1;
         }
     } else {
         for (int i = 0; i < 16; i++)
@@ -2461,7 +2568,14 @@ static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
             r.value_valid = true;
         } else {
             int idx = (int)(reg - (w == 16 ? X86_REG_XMM0 : X86_REG_YMM0));
-            if (idx < 0 || idx > 15 || !vpre->have || !vpost->have) {
+            /* The upper sixteen come from a DIFFERENT xstate component than the
+             * low sixteen (Hi16_ZMM vs SSE-area + YMM_Hi128), so the snapshot
+             * tracks the two halves' usability separately and this gate has to ask
+             * the right one. Asking only `have` would diff a high register against
+             * a snapshot that never held it. */
+            const int hi = idx >= 16;
+            if (idx < 0 || idx > 31 || !vpre->have || !vpost->have ||
+                (hi && (!vpre->have_hi || !vpost->have_hi))) {
                 c->vt->truncated = true;
                 continue;
             }

@@ -296,6 +296,25 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# evex_victim backs the ymm16-31 smoke: its hot routines write the UPPER SIXTEEN
+# vector registers, which the live ptrace producer used to decline. EVEX is an x86
+# encoding, so this is an ARCHITECTURE sentinel like CLI_I386_VICTIM above —
+# aarch64 has no ymm16 to read and the smoke says so rather than failing. The
+# AVX-512 question is NOT decided here: the victim probes __builtin_cpu_supports
+# at runtime and self-skips, so an x86-64 box without avx512f still BUILDS it (and
+# so does a cross-built image), which keeps the CPU gate in one place. The
+# target("avx512f,avx512vl") attribute is per-function, so no -m flag is needed and
+# the file's own guard runs on plain baseline code. Compiles via the cli/ .o
+# pattern rule.
+ifeq ($(CLI_ARCH),x86_64)
+CLI_EVEX_VICTIM := $(BUILD)/evex_victim
+else
+CLI_EVEX_VICTIM :=
+endif
+
+$(BUILD)/evex_victim: $(BUILD)/evex_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # sigload_victim backs the PERF-FREE picker's signal-fidelity check, and it is
 # the only victim here that is busy AND signal-driven. auto_victim cannot do its
 # job: MEASURED, an unconditional PTRACE_CONT(sig=0) in the residency sampler
@@ -784,7 +803,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
-           $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY) \
+           $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_EVEX_VICTIM) \
+           $(CLI_REGSTATE_PARITY) \
            $(CLI_MEM_PARITY) $(CLI_REWEAVE) \
            $(BUILD)/test_serve_record $(BUILD)/serve_record_target
 	@echo "== cli-smoke =="
