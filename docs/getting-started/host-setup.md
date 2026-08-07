@@ -35,10 +35,10 @@ attachable today, on an untouched host, with a named region:
 
 Measured directly on this machine, live, with an ordinary snap-packaged
 Firefox running and `kernel.yama.ptrace_scope` at its default of `1`: a
-read-only `open("/proc/<pid>/mem", O_RDONLY)` probe — the same check the
-kernel runs for `PTRACE_ATTACH`, `PTRACE_MODE_ATTACH_FSCREDS`, and one that
-changes no state — against all 13 Firefox-family processes present found
-**10 of 13 attachable**. The 3 refusals are exactly the processes that never
+read-only `open("/proc/<pid>/mem", O_RDONLY)` probe — this runs the kernel's
+own `ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS)`, the same check
+`PTRACE_ATTACH` runs, and changes no state — against all 13 Firefox-family
+processes present on this host found **10 of 13 attachable**. The 3 refusals are exactly the processes that never
 call `PR_SET_PTRACER`: the top-level `firefox` process, its `crashhelper`,
 and the `forkserver`. Every process spawned *under* the forkserver — Socket,
 RDD, Privileged Content, WebExtensions, Utility, both Isolated Web Content
@@ -274,8 +274,8 @@ a rung here, especially against a snap-packaged Firefox refusing an attach.
 the message it feeds into `attach_remedy`) has sent people chasing this fix
 for the wrong reason before: it names "confined" as the reason *the
 launch-from-asmspy alternative* won't work on such a target, not as the
-reason attach itself failed. The attach failure is Yama, every time, on this
-page — rungs 0, 1 and 3 above.
+reason attach itself failed. The attach failure is Yama, every time — see
+rungs 0 and 3 above.
 
 Two independent facts back this up:
 
@@ -295,7 +295,7 @@ Two independent facts back this up:
   A confined Firefox has already told AppArmor tracing it is fine. This
   host's live Firefox reads `snap.firefox.firefox (enforce)` from
   `/proc/<pid>/attr/current` — genuinely confined, in enforce mode — and was
-  still 10-of-13 attachable per rung 0's measurement above. Confinement was
+  still 10 of 13 attachable per rung 0's measurement above. Confinement was
   never the gate.
 
 If an attach is refused, read what `asmspy --info` or the GUI's attach
