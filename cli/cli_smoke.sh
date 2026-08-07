@@ -87,6 +87,34 @@ expect_badarg "$ASM" --stream -3    # negative pid
 expect_badarg "$ASM" --log 1 abc    # non-numeric count
 echo "bad arguments rejected"
 
+# Dumpability guard (T10, M16): a file-capability execve (`setcap
+# cap_perfmon+ep asmspy`) marks the process non-dumpable, which flips
+# /proc/self/* to root:root and makes codeimage's soft-dirty probe
+# (src/codeimage.c) EACCES -- silently killing every 3D scene while blaming a
+# kernel config that is actually enabled. main() now restores dumpability
+# with a guarded prctl(PR_SET_DUMPABLE,1) before any capture. Reproducing the
+# real trigger needs `setcap` (root) this suite does not have -- that A/B is
+# recorded as an OUTSTANDING measurement in task-10-report.md, with the exact
+# commands to run on a sudo-capable box.
+#
+# What CAN be proven unprivileged: PR_SET_DUMPABLE(0) needs no capability (any
+# process can un-dump itself), so ASMSPY_TEST_FORCE_NONDUMPABLE forces the
+# exact starting condition the guard's `!= 1` branch exists to detect, and
+# asmspy reports both sides of the guard on stderr under that lever (silent
+# otherwise -- the env var is unset on every real invocation above and below
+# this block). This proves the guard's OWN logic restores dumpability from a
+# genuinely non-dumpable start; it does NOT prove a setcap'd binary starts
+# non-dumpable in the first place (that part of M16 is the outstanding sudo
+# measurement).
+echo "--- asmspy dumpability guard: forced PR_SET_DUMPABLE(0) must self-restore (T10) ---"
+dbg=$(ASMSPY_TEST_FORCE_NONDUMPABLE=1 "$ASM" --list 2>&1 >/dev/null) || fail "dumpability guard: --list exited nonzero under the test lever"
+printf '%s\n' "$dbg"
+printf '%s\n' "$dbg" | grep -q 'pre-guard dumpable=0' \
+    || fail "dumpability guard: the test lever did not actually force PR_SET_DUMPABLE(0) before the guard ran"
+printf '%s\n' "$dbg" | grep -q 'post-guard dumpable=1' \
+    || fail "dumpability guard: prctl(PR_GET_DUMPABLE)!=1 did not restore to 1 (the guard is missing or broken)"
+echo "dumpability guard: forced 0 -> restored 1"
+
 # region trace: attach to attach_victim (has a hot leaf function 'hotfn')
 "$BUILD/attach_victim" 2>/dev/null &
 AVPID=$!
@@ -165,6 +193,19 @@ until grep -q 'ret=57' "$tsig_log" 2>/dev/null; do # >=1 sample -> mid-cycle
     kill -0 "$TRPID" 2>/dev/null || fail "sigterm: tracer exited before signal"
     sleep 0.1
 done
+# T10 baseline: the ordinary unprivileged path must be untouched by the guard
+# above. /proc has no "Dumpable:" field in status -- the OBSERVABLE symptom
+# M16 measured is /proc/<pid> itself flipping to root:root ownership, so stat
+# the live tracer's /proc/<pid> (external, no self-report instrumentation)
+# while it is mid-capture and require it match OUR OWN uid:gid, not a bare
+# "not root" (this smoke may itself run as root in a container, where a
+# dumpable process's own /proc/<pid> is legitimately 0:0 too). This
+# necessarily matches here (an unprivileged process starts dumpable already),
+# so on its own it could not catch the guard being deleted -- the forced-lever
+# check above (T10) is what exercises the guard's actual branch.
+my_ug="$(id -u):$(id -g)"
+proc_ug=$(stat -c '%u:%g' "/proc/$TRPID" 2>/dev/null) || proc_ug=""
+[ "$proc_ug" = "$my_ug" ] || fail "sigterm: live tracer /proc/$TRPID owned $proc_ug (want $my_ug) -- non-dumpable flips this to root:root and EACCES's codeimage's /proc/self/* probes"
 kill -TERM "$TRPID"
 i=0
 while :; do # poll /proc state: kill -0 stays true on a zombie, this doesn't

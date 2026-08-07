@@ -33,6 +33,7 @@
 #include <string.h>
 #include <strings.h>    /* strcasecmp — the symbol picker's name sort */
 #include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
+#include <sys/prctl.h> /* PR_(GET|SET)_DUMPABLE: restore after a file-cap execve, M16 */
 #include <sys/ptrace.h> /* doc 45: serve_launch_target's PTRACE_TRACEME/DETACH */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <sys/un.h>
@@ -9025,6 +9026,36 @@ int main(int argc, char **argv) {
      * and a region/dataflow trace has a planted 0xcc to unplant — so Ctrl-C
      * must end the engine loop (each polls g_sigstop), not kill the tracer. */
     install_stop_handlers();
+    /* Test-only lever (ASMSPY_TEST_FORCE_NONDUMPABLE): the real trigger below is
+     * a file-capability execve (`setcap cap_perfmon+ep asmspy`), which needs
+     * privilege this suite does not run with, so the trap it causes can only be
+     * demonstrated by reproducing its OBSERVABLE state, not its cause.
+     * PR_SET_DUMPABLE(0) is available to any process on itself (no capability
+     * needed), so this env var forces that same starting condition, letting
+     * cli_smoke.sh drive the guard's `!= 1` branch for real instead of only
+     * ever observing the already-dumpable default. Unset = disabled, the
+     * normal path untouched. */
+    const char *force_nondump = getenv("ASMSPY_TEST_FORCE_NONDUMPABLE");
+    if (force_nondump) {
+        prctl(PR_SET_DUMPABLE, 0);
+        fprintf(stderr, "asmspy: [test] pre-guard dumpable=%d\n",
+                prctl(PR_GET_DUMPABLE));
+    }
+    /* A file-capability execve marks us non-dumpable, which flips /proc/self to
+     * root:root and makes codeimage's own soft-dirty probe fail with EACCES --
+     * so a `setcap cap_perfmon+ep asmspy` produces perf access and NO codeimage,
+     * blaming a kernel config that is enabled. Restore dumpability before any
+     * capture. Guarded, so the normal unprivileged path is untouched.
+     *
+     * Security note: dumpable=1 while holding capabilities lets another
+     * same-uid process ptrace into this privileged context -- the argument
+     * for granting cap_perfmon ONLY, never cap_sys_ptrace, on a GUI-driven
+     * binary (see the capability ladder task 11 documents). */
+    if (prctl(PR_GET_DUMPABLE) != 1)
+        prctl(PR_SET_DUMPABLE, 1);
+    if (force_nondump)
+        fprintf(stderr, "asmspy: [test] post-guard dumpable=%d\n",
+                prctl(PR_GET_DUMPABLE));
     /* --serve[=<path>]: the live-session control loop. Placed FIRST because it
      * is the only mode that takes no pid on the command line — the client sends
      * one per session (docs/internal/gui/asmtrace-schema.md, Serve protocol). */
