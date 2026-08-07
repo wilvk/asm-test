@@ -30,6 +30,7 @@
 #include <cstdio>    // std::snprintf — undo_apply's filter restore (22 T4)
 #include <cstdlib>   // std::strtoul — the go-to modal's step parse (17 T1)
 #include <cstring>   // std::strcmp — the pane-def name lookup
+#include <unistd.h>  // getpid() — the session-level perf probe's own pid
 
 #include "analysis/diff.h" // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
@@ -4793,24 +4794,56 @@ void draw_shell(ShellState &s) {
     //
     // The verdict that may BLOCK therefore comes from the binary that would
     // run: `asmspy --info <pid> --json` now measures perf_event_open in its own
-    // process and reports it as `host.perf_ok`, and the details-pane runner
-    // latches it (ProcInfoRunner::host_perf_*). Until one has landed,
-    // perf_probed stays false and nothing is blocked — the safe direction, and
-    // in the GUI's own flow the operator selects a process (which is what fires
-    // the probe) before there is anything to start.
+    // process and reports it as `host.perf_ok`.
+    //
+    // Post-review finding (2026-08-06 final review, the last item): that verdict
+    // must NOT be sourced from InspectState::details. `details` is the Process
+    // details pane's OWN ProcInfoRunner, and TWO independent gates sat between
+    // it and this feed: draw_details_pane sets its `visible` from
+    // ImGui::IsWindowFocused (so an operator who never focuses that exact pane
+    // never spawns a probe), and procinfo_tick itself early-returns for
+    // `selected_pid <= 0` (procinfo.cpp:551, so an operator who never selects a
+    // process — the Launch pane needs none — gets the same silence). Both fail
+    // PERMISSIVE (perf_probed stays false, which still means "block nothing"),
+    // so #2/#8 stayed closed, but Task 4's gate could never ARM in either flow.
+    //
+    // `host_probe` (InspectState, doors.h) is a second, otherwise-identical
+    // ProcInfoRunner ticked HERE — every draw_shell frame, regardless of which
+    // door or pane is open or focused — and targeted at THIS PROCESS's own pid
+    // (getpid(), always > 0) rather than InspectState::selected_pid, so neither
+    // gate above applies: it fires whether or not a Details pane exists on
+    // screen and whether or not anything has ever been selected. The snapshot
+    // of "this process" it gathers is thrown away (nothing reads its `shown`);
+    // the `host` object riding along with it is a fact about the asmspy BINARY
+    // — the same binary/inode `details` would have measured — which is exactly
+    // what mode_host_blocked needs. refresh_s is pinned huge because that fact
+    // does not change again absent a path edit (already handled below: a
+    // changed asmspy_path resets host_perf_probed to false), so this needs one
+    // successful fork per session, not a repeating background poll.
+    if (s.inspect.host_started) {
+        s.inspect.host_probe.asmspy_path = s.inspect.asmspy_path;
+        s.inspect.host_probe.refresh_s = 1e9;
+        procinfo_tick(s.inspect.host_probe, static_cast<long>(::getpid()),
+                      ImGui::GetTime());
+    }
+    // Until a verdict has landed, perf_probed stays false and nothing is
+    // blocked — the safe direction, and it now no longer depends on the
+    // operator's next click: host_probe above fires the moment a local host is
+    // up.
     //
     // ssh_host is still required for the same reason as before: procinfo.cpp's
     // spawn deliberately probes LOCALLY even when a remote session is
     // configured, so its verdict is about the wrong machine then.
     const bool local_session =
         s.inspect.host_started && s.inspect.ssh_host[0] == '\0';
-    s.inspect.perf_probed = local_session && s.inspect.details.host_perf_probed;
-    s.inspect.perf_ok = s.inspect.details.host_perf_ok;
+    s.inspect.perf_probed =
+        local_session && s.inspect.host_probe.host_perf_probed;
+    s.inspect.perf_ok = s.inspect.host_probe.host_perf_ok;
     // The desktop's own probe still supplies the paranoid-sysctl remedy text
     // when the binary reported no reason of its own; the binary's is preferred,
     // because it is the one that measured the refusal.
-    s.inspect.perf_reason = !s.inspect.details.host_perf_why.empty()
-                                ? s.inspect.details.host_perf_why
+    s.inspect.perf_reason = !s.inspect.host_probe.host_perf_why.empty()
+                                ? s.inspect.host_probe.host_perf_why
                                 : s.caps.perf_reason;
     // 34 T3: advance the execution-step play/pause transport once per frame, over
     // the active recording's dataflow step space, brushing selection.step through

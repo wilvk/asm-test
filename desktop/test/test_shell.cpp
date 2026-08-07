@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <string>
 
+#include <unistd.h> // ::usleep — the session-probe real fork/exec settle loop
+
 #include "imgui.h"
 #include "imgui_internal.h" // 19: FindWindowByName + ImGuiWindow::{WasActive,DockId}
 
@@ -134,6 +136,16 @@ int main() {
     // (ProcInfoRunner::host_perf_*, decoded from `asmspy --info --json`), never
     // from cap_probe's syscall in THIS process, which measures a different
     // executable's capabilities.
+    //
+    // The producer is InspectState::host_probe (post-review finding: it used
+    // to be `details`, the Process details pane's OWN runner — gated on that
+    // exact pane's window focus and on a real selected_pid, neither of which
+    // this headless hand-off test, or the Launch pane, ever supplies). This
+    // block still pokes the runner's fields directly rather than driving a
+    // real fork/exec — it is testing the PURE hand-off, same as before the
+    // rename. The REAL end-to-end wiring — no poke, an actual `asmspy --info`
+    // fork/exec, no focus, no selection — is proved further down
+    // (caps/session-probe-*).
     {
         auto frame = [&](ShellState &st) {
             io.DisplaySize = ImVec2(1280, 720);
@@ -146,9 +158,26 @@ int main() {
                                 "itself (Permission denied)";
         s.inspect.host_started = true;
         s.inspect.ssh_host[0] = '\0';
-        s.inspect.details.host_perf_probed = true;
-        s.inspect.details.host_perf_ok = false;
-        s.inspect.details.host_perf_why = why;
+        // ONE settling frame before the poke. The smoke-test frames run before
+        // this block (lines 97-125 above) already drew the Connect pane while
+        // host_started was still false, which prefills InspectState::asmspy_path
+        // with resolve_asmspy_path()'s answer on THIS host (this repo's own
+        // build/asmspy, if one happens to be built) — so by the time
+        // host_probe's very FIRST tick runs here, its own last_asmspy_path_seen
+        // (still "", never having ticked before) disagrees with that already-
+        // non-blank path, and procinfo_tick's "the path changed" branch fires
+        // and resets host_perf_probed. Harmless in real use (it is resetting
+        // false to false, since nothing had probed yet), but it would silently
+        // wipe the hand-set poke below on the very frame this block reads it.
+        // One frame with host_started true and nothing poked yet lets
+        // last_asmspy_path_seen catch up; the poke afterward then survives.
+        // Both frames stay well under procinfo_tick's 250ms debounce, so
+        // neither one ever reaches a real spawn — this remains a pure
+        // hand-off test, not a fork/exec one.
+        frame(s);
+        s.inspect.host_probe.host_perf_probed = true;
+        s.inspect.host_probe.host_perf_ok = false;
+        s.inspect.host_probe.host_perf_why = why;
         frame(s);
         check("caps/handoff-probed", s.inspect.perf_probed,
               "a local session with a verdict FROM THE BINARY must mark the "
@@ -164,7 +193,7 @@ int main() {
         // does on this box), and blocking on that would grey `sample` on a
         // host where `setcap cap_perfmon+ep` has already been applied to the
         // asmspy inode.
-        s.inspect.details.host_perf_probed = false;
+        s.inspect.host_probe.host_perf_probed = false;
         frame(s);
         check("caps/no-binary-verdict-blocks-nothing", !s.inspect.perf_probed,
               "without a measurement from the binary that will RUN, the door "
@@ -173,16 +202,89 @@ int main() {
 
         // A remote session's local probe describes the wrong MACHINE, which is
         // the pre-existing half of the same rule.
-        s.inspect.details.host_perf_probed = true;
+        s.inspect.host_probe.host_perf_probed = true;
         std::snprintf(s.inspect.ssh_host, sizeof s.inspect.ssh_host, "%s",
                       "build-box");
         frame(s);
         check("caps/remote-session-not-probed", !s.inspect.perf_probed,
-              "asmspy runs on another box for an ssh session, and the details "
-              "probe deliberately stays local");
+              "asmspy runs on another box for an ssh session, and the "
+              "session-level probe deliberately stays local");
         s.inspect.ssh_host[0] = '\0';
         s.inspect.host_started = false;
-        s.inspect.details.host_perf_probed = false;
+        s.inspect.host_probe.host_perf_probed = false;
+    }
+
+    // --- 2026-08-06 final review, post-review finding: THE REAL PATH, no poke.
+    //
+    // The two checks above prove the hand-off is wired; they do not prove
+    // anything in a reachable GUI flow ever PRODUCES the value being handed
+    // off. That is the actual gap the re-reviewer found: the OLD producer
+    // (`details`) is gated on the Process details pane's own window focus
+    // (details_pane.cpp: `visible = ImGui::IsWindowFocused(...)`) AND on a
+    // real `selected_pid` (procinfo_tick early-returns for `selected_pid <=
+    // 0`) — and this exact headless smoke (no pane ever focused, no process
+    // ever selected) is a faithful stand-in for both the Launch pane (which
+    // needs no pid at all) and an operator who never opens Details. A test
+    // that hand-sets `details.host_perf_probed` — as the two blocks above,
+    // and this file before this fix, both did — cannot see that gap: it
+    // never calls the code that is supposed to set the field in the first
+    // place. This block calls NOTHING but draw_shell, pokes NO field, and
+    // selects NO process.
+    //
+    // `fake_asmspy_host_probe.sh` stands in for the asmspy binary. Unlike
+    // every other fake_asmspy_*.sh fixture in this suite (which hardcode a
+    // fixed identity.pid), it echoes back the pid it was ACTUALLY asked about
+    // — because the caller here is host_probe targeting ITS OWN pid
+    // (getpid()), which is this test binary's real, different-every-run pid,
+    // not a stable constant a fixture could hardcode; a fixed identity.pid
+    // would fail procinfo_tick's pid-mismatch guard on every host this runs
+    // on.
+    {
+        ShellState hp;
+        hp.inspect.host_started = true;
+        hp.inspect.ssh_host[0] = '\0';
+        std::snprintf(hp.inspect.asmspy_path, sizeof hp.inspect.asmspy_path,
+                      "%s", fx("fake_asmspy_host_probe.sh").c_str());
+        check("caps/session-probe-no-selection", hp.inspect.selected_pid == 0,
+              "this proof's whole point is that NOTHING has been selected — "
+              "a nonzero selected_pid here would let the OLD, focus-gated "
+              "vehicle pass this check too, for the wrong reason");
+
+        // Real fork/exec/read/reap underneath (procinfo.cpp), same caveat
+        // test_procinfo.cpp's own polling loop states: simulated `now_s`
+        // advances instantly, so this needs actual wall-clock ticks between
+        // draw_shell calls for the kernel to schedule and run the child.
+        bool probed = false;
+        for (int i = 0; i < 400 && !probed; i++) {
+            io.DisplaySize = ImVec2(1280, 720);
+            io.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            draw_shell(hp);
+            ImGui::Render();
+            probed = hp.inspect.perf_probed;
+            if (!probed)
+                ::usleep(1000);
+        }
+        check("caps/session-probe-fires-with-no-selection", probed,
+              "the session-level perf probe must fire with NO process ever "
+              "selected and NO pane ever focused, purely from draw_shell's "
+              "own per-frame update — otherwise mode_host_blocked's gate "
+              "never arms in either the Launch pane or an operator's first "
+              "click, exactly the flows the re-review found unreachable");
+        check("caps/session-probe-verdict", !hp.inspect.perf_ok,
+              "the fixture's measured verdict is a refusal and must survive "
+              "the REAL fork/exec/decode path, not just the hand-off");
+        check("caps/session-probe-reason",
+              hp.inspect.perf_reason.find("fixture") != std::string::npos,
+              ("the binary's own reason must cross verbatim: '" +
+               hp.inspect.perf_reason + "'")
+                  .c_str());
+        check("caps/session-probe-details-never-touched",
+              !hp.inspect.details.host_perf_probed,
+              "the OLD focus/selection-gated runner (`details`) was never "
+              "ticked with a real selection or a focused pane in this block "
+              "-- if this is set, something OTHER than host_probe fired, and "
+              "the proof above is not testing what it claims to");
     }
 
     // A verbatim open error must surface (never a silent no-op).

@@ -208,6 +208,31 @@ struct InspectState {
     // is driven purely by selected_pid.
     ProcInfoRunner details;
 
+    // The session-level perf-capability probe (2026-08-06 final review,
+    // post-review finding: the focus/selection dependency). `details` above
+    // is gated on TWO things that need not ever become true: the Process
+    // details pane's own window focus (details_pane.cpp sets `visible` from
+    // ImGui::IsWindowFocused), and a real `selected_pid` (procinfo_tick
+    // early-returns for `selected_pid <= 0`) — so an operator who never
+    // focuses that exact pane, or the Launch pane's "needs no pid at all"
+    // flow, never produces the `asmspy --info --json` verdict that feeds
+    // mode_host_blocked (finding 8's fix). Both fail PERMISSIVE
+    // (perf_probed stays false, which still means "block nothing"), so this
+    // does not re-open #2/#8 — but Task 4's gate could never ARM in either
+    // reachable flow.
+    //
+    // This runner exists solely to drive that one probe past both hazards:
+    // `visible` is left at its struct default of `true` (shell.cpp is the
+    // only place that ticks it, and nothing there ever sets it from ImGui
+    // focus), and shell.cpp targets it at THIS PROCESS's own pid (getpid(),
+    // always > 0) rather than InspectState::selected_pid, so it fires
+    // whether or not anything has ever been selected. It is still
+    // `asmspy --info --json` against the SAME asmspy binary/inode `details`
+    // would use — the pid argument only selects which target's snapshot is
+    // gathered and thrown away; the `host` object it carries alongside is a
+    // fact about the binary, not about that target.
+    ProcInfoRunner host_probe;
+
     // Hide the rows whose verdict is a definite Attach::No — a target the picker
     // could only refuse. ON by default: the useful list is the one you can act
     // on, and a machine's /proc is mostly other users' processes and kernel
