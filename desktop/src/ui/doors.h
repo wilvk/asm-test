@@ -263,13 +263,16 @@ struct InspectState {
     // 2026-08-06 plan, Task 8 (M12): two more flags the serve host has always
     // honoured (cli/asmspy.c's `mem`/`statediff` in serve_parse_start) that the
     // GUI never sent — measured: grep -c '"insns"|"mem"|"statediff"|"fpregs"'
-    // over this door returned 0. Both are OPT-IN, unlike `steps` above, because
-    // both have a real cost: `mem` adds one `mem` event per memory access over
-    // the whole capture window, and `statediff` forces the register ring on
-    // (server-side `p->steps = 1`) and adds one statediff + one regstate per
-    // step — against a sweep leg hard-capped at only 400 (sweep_max below), that
-    // is up to 800 extra events for one leg. The capture-pane checkboxes state
-    // both costs; see inspect_start_params for where they reach the wire.
+    // over this door returned 0 (that grep also names `fpregs`, the XMM/MXCSR
+    // deck opt-in, 31 R4 — it is OUT OF SCOPE for this task and still unsent;
+    // do not read its presence in the measurement as coverage here). Both
+    // `mem`/`statediff` are OPT-IN, unlike `steps` above, because both have a
+    // real cost: `mem` adds one `mem` event per memory access over the whole
+    // capture window, and `statediff` forces the register ring on (server-side
+    // `p->steps = 1`) and adds one statediff + one regstate per step — against
+    // a sweep leg hard-capped at only 400 (sweep_max below), that is up to 800
+    // extra events for one leg. The capture-pane checkboxes state both costs;
+    // see inspect_start_params for where they reach the wire.
     bool want_mem = false;
     bool want_statediff = false;
 

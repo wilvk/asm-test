@@ -2311,8 +2311,15 @@ int main() {
         InspectState is;
         // Isolate from the `steps` ring's own default (true) and the `auto` sample
         // window's (2000 ms) — see doors.h: this block's assertions are about
-        // REGION params only, and the dedicated sub-blocks below already cover
-        // `steps` and the window on their own terms.
+        // REGION params only. The window IS independently re-covered below on its
+        // own terms (`cap/auto default window omitted`, `cap/auto window set`).
+        // `steps` is NOT re-covered for `Auto` anywhere else in this file: the
+        // only other steps-related check (`cap/auto steps`) sets is.steps=true
+        // and never re-tests the false case — so THIS assertion, just below, is
+        // the one and only place a false `is.steps` reaching `Auto` is proven to
+        // stay off the wire. Coordinator review (2026-08-06 plan, Task 8):
+        // narrowing this off `.empty()` for `insns` silently dropped that
+        // coverage once; do not narrow it again without re-adding the same checks.
         is.steps = false;
         is.window_ms = 0;
         std::snprintf(is.region, sizeof is.region, "%s", "0x1000:16");
@@ -2322,14 +2329,19 @@ int main() {
         is.want = LiveMode::Auto;
         // 2026-08-06 plan, Task 8: no longer `.empty()` — auto now ALSO carries
         // `insns` unconditionally (it is itself a dataflow engine, doors.h's own
-        // "the auto leg ... is itself the dataflow engine"), so this narrows to
-        // what the comment above actually claims: no REGION key, insns or not.
+        // "the auto leg ... is itself the dataflow engine"). Narrowed to what the
+        // comment above actually claims: no REGION key AND (since is.steps=false
+        // and is.window_ms=0 are still in effect here) no `steps`/`ms` either —
+        // insns present, nothing else that this specific state should produce.
         {
             nlohmann::json ap = inspect_start_params(is);
-            check("cap/auto no region",
-                  !ap.contains("base") && !ap.contains("func") &&
-                      !ap.contains("len"),
-                  "auto samples its own region — no region params");
+            check(
+                "cap/auto no region",
+                !ap.contains("base") && !ap.contains("func") &&
+                    !ap.contains("len") && !ap.contains("steps") &&
+                    !ap.contains("ms"),
+                "auto samples its own region — no region params, and with "
+                "is.steps=false/is.window_ms=0 still set, no steps/ms either");
         }
         is.want = LiveMode::Dataflow;
         nlohmann::json p = inspect_start_params(is);
