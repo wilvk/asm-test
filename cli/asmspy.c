@@ -4606,14 +4606,16 @@ static void *serve_tracer(void *arg) {
         serve_skip_reason(s, s->rc, skiptext, sizeof skiptext);
     /* Cache it into skip_note, the field serve_skip_reason itself already
      * treats as "a reason the session measured for itself" (its very first
-     * check). Two readers need this exact string AFTER this point, and only
-     * one of them still has a live p.mode to key off of: serve_loop's own
-     * `end.skip` fix (below, the call-site half of this change) calls
-     * serve_skip_reason a SECOND time, but by then serve_stop has already
-     * reset p.mode to SM_NONE, which would silently drop the SAMPLE/WATCH
-     * branches (mode-gated) back to the generic asmspy_strerror text. Caching
-     * here — before that reset — makes the second call hit the skip_note
-     * short-circuit and return the identical string regardless of mode. */
+     * check). serve_loop's own `end.skip` fix (below, the call-site half of
+     * this change) does NOT call serve_skip_reason at all — by the time it
+     * runs, serve_stop has already returned (and, as its very last
+     * statement, reset p.mode to SM_NONE), so there is no live mode context
+     * left to key a fresh call off of. It reads skip_note directly instead.
+     * That means the SAMPLE/WATCH branches inside serve_skip_reason — gated
+     * on p.mode, which is only valid HERE, inside serve_tracer, while the
+     * engine that just ran is still the one named in p.mode — have to be
+     * resolved and stashed into skip_note now, or that text is unrecoverable
+     * later. */
     if (skiptext[0] && !s->skip_note[0])
         snprintf(s->skip_note, sizeof s->skip_note, "%s", skiptext);
     /* 2026-08-06 T9: a `note` is the file-legal channel for this reason. The
@@ -4633,11 +4635,14 @@ static void *serve_tracer(void *arg) {
      * same rec_emitf the session file already tees (r->shared, wired at
      * session start), fixes that — and does it per LEG, which a single
      * closing footer (the other half of this fix) cannot. Precedent:
-     * serve_codeimage_arm's "codeimage unavailable" note, identical shape. */
+     * serve_codeimage_arm's "codeimage unavailable" note, identical shape —
+     * no generic prefix here either, since the measured reason (e.g.
+     * "perf_event_open refused (EACCES): ...") already says plainly what
+     * happened without one. */
     if (skiptext[0]) {
         char esc[4 * sizeof skiptext];
         asmtrace_escape(esc, sizeof esc, skiptext);
-        rec_emitf(&s->rec, "note", "\"text\":\"skip: %s\"", esc);
+        rec_emitf(&s->rec, "note", "\"text\":\"%s\"", esc);
     }
     s->events = s->rec.out.events;
     {
