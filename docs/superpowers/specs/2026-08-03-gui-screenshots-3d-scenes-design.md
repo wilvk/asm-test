@@ -199,8 +199,13 @@ a vague generality:
   load-bearing rather than decorative: without it the denial reads like a tracer
   bug rather than a policy.
 - `perf_event_paranoid` — 4 here. IBS is unavailable, so `--sample` and
-  `--auto --sampler=ibs` cannot be used; name symbols explicitly or use
-  `--sampler=sw`.
+  `--auto --sampler=ibs` cannot be used. **`--sampler=sw` is not a working
+  substitute**: it reaches the identical `perf_event_open` call
+  (`src/ibs_backend.c:369`, shared by `ibs_chan_open` and `sw_chan_open`) and
+  is refused for the same reason — measured live on this host, both samplers
+  print `perf_event_open refused (EACCES...)`. Name symbols explicitly, or
+  use `--auto --sampler=ptrace` (no `perf_event_open` at all; see
+  [Host setup for tracing](../../getting-started/host-setup.md)).
 
 Both are stated with the command to read them and the command to change them, so
 a reader on a different host can tell whether the advice applies.
