@@ -554,24 +554,27 @@ int main() {
     // advising the operator to grant a capability they had already granted. The
     // verdict that may block therefore has to come over this wire.
     {
-        ProcInfo h = load("procinfo_host_perf.asmtrace");
-        check("host/parsed", h.valid, h.parse_error);
-        check("host/probed", h.host_probed,
+        // procinfo_full carries it, and must: cli_smoke.sh's schema-parity
+        // gate asserts this fixture's key set EQUALS what a live `asmspy
+        // --info --json` emits, so a fixture without `host` is a stale
+        // fixture the moment the producer grows the key.
+        check("host/probed", p.host_probed,
               "a recording carrying host.perf_ok must decode as PROBED — "
               "without this the desktop falls back to its own process's "
               "syscall, which measures the wrong binary");
-        check("host/verdict", !h.host_perf_ok,
+        check("host/verdict", !p.host_perf_ok,
               "the fixture's measured verdict is a refusal and must survive "
               "the decode");
         check("host/why-carried",
-              h.host_perf_why.find("asmspy binary itself") != std::string::npos,
+              p.host_perf_why.find("asmspy binary itself") != std::string::npos,
               "the binary's own reason must cross verbatim — it is the text "
               "the mode refusal embeds, and the one that names the remedy: " +
-                  h.host_perf_why);
-        // ABSENCE IS NOT REFUSAL. The identical fixture WITHOUT the key (they
-        // differ in nothing else) must leave host_probed false, so an older
-        // asmspy — or any producer that never emitted it — blocks nothing.
-        ProcInfo n = load("procinfo_full.asmtrace");
+                  p.host_perf_why);
+        // ABSENCE IS NOT REFUSAL. procinfo_refused.asmtrace predates the key
+        // (it carries no `host` object at all), which is exactly the shape an
+        // older asmspy produces — and it must leave host_probed false, so its
+        // silence blocks nothing rather than greying a mode nobody measured.
+        ProcInfo n = load("procinfo_refused.asmtrace");
         check("host/absent-is-not-probed", n.valid && !n.host_probed,
               "a producer that emits no host object has no opinion; treating "
               "its silence as a refusal would grey a mode nobody measured");
@@ -585,8 +588,8 @@ int main() {
     {
         ProcInfoRunner run;
         run.asmspy_path =
-            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_host_perf.sh";
-        const long fpid = load("procinfo_host_perf.asmtrace").pid;
+            std::string(ASMTEST_FIXTURE_DIR) + "/fake_asmspy_info.sh";
+        const long fpid = load("procinfo_full.asmtrace").pid;
         procinfo_tick(run, fpid, 0.0);
         for (int i = 0; i < 200 && !run.host_perf_probed; i++) {
             procinfo_tick(run, fpid, 0.30 + 0.01 * i);
