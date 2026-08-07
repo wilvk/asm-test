@@ -9,6 +9,7 @@
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <unordered_map> // pid -> row, for the process tree's parent lookup
 
 #include <dirent.h>
 #include <fcntl.h> // open/O_RDONLY/O_CLOEXEC — the attach-probe mem open
@@ -371,6 +372,12 @@ std::vector<ProcRow> list_processes(bool sample_cpu) {
         const std::string status = read_file(base + "/status");
         std::string uid = status_field(status, "Uid");
         r.uid = uid.empty() ? -1 : std::atol(uid.c_str());
+        // Lineage, from the SAME read as Uid above — the Processes pane nests
+        // the table by it (proc_tree_layout). Unreadable leaves 0, which the
+        // tree treats as a root; see ProcRow::ppid on why that is not conflated
+        // with a ppid we read but cannot find.
+        std::string ppid = status_field(status, "PPid");
+        r.ppid = ppid.empty() ? 0 : std::atol(ppid.c_str());
         r.facts = probe_attach(r.pid, scope, our_uid, have_cap);
         r.verdict = attach_verdict(r.facts);
         // First CPU snapshot; the delta over the window below becomes ::cpu. Only
@@ -398,6 +405,134 @@ std::vector<ProcRow> list_processes(bool sample_cpu) {
     std::sort(rows.begin(), rows.end(),
               [](const ProcRow &a, const ProcRow &b) { return a.pid < b.pid; });
     return rows;
+}
+
+// ---------------------------------------------------------------------------
+// the process tree
+// ---------------------------------------------------------------------------
+
+std::vector<ProcTreeRow> proc_tree_layout(const std::vector<ProcRow> &rows,
+                                          const std::vector<char> &visible,
+                                          bool descending) {
+    std::vector<ProcTreeRow> out;
+    const size_t n = rows.size();
+    if (n == 0)
+        return out;
+    // A short `visible` reads as "not visible", never as "shown by default":
+    // a caller that got the mask wrong must under-draw, not leak rows its own
+    // attachability gate meant to withhold.
+    auto vis = [&](size_t i) { return i < visible.size() && visible[i] != 0; };
+
+    // pid -> index over the WHOLE snapshot, visible or not. A duplicate pid
+    // cannot come out of one /proc readdir; emplace keeps the first anyway,
+    // so a malformed caller-built vector re-parents nothing silently.
+    std::unordered_map<long, size_t> by_pid;
+    by_pid.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i)
+        by_pid.emplace(rows[i].pid, i);
+
+    const size_t kNone = static_cast<size_t>(-1);
+    std::vector<size_t> parent(n, kNone);
+    for (size_t i = 0; i < n; ++i) {
+        if (rows[i].ppid <= 0 || rows[i].ppid == rows[i].pid)
+            continue;
+        auto it = by_pid.find(rows[i].ppid);
+        if (it != by_pid.end() && it->second != i)
+            parent[i] = it->second;
+    }
+    // Cut cycles. /proc is a tree, but this snapshot is read pid by pid over
+    // milliseconds, and a pid recycled mid-read can close a loop between two
+    // rows that were never actually related. Left in, such a loop is not a
+    // mis-drawn row: every member of it has a parent, so none of them lands
+    // in `roots`, the pre-order walk below never reaches them, and they
+    // VANISH from a table whose whole job is to list what is running. So
+    // every row whose ancestor chain runs longer than the snapshot itself is
+    // cut loose to a root. Applied per row, so every member of a cycle is cut
+    // and the loop is genuinely broken rather than moved onto someone else.
+    std::vector<size_t> cut;
+    for (size_t i = 0; i < n; ++i) {
+        size_t steps = 0, at = i;
+        while (parent[at] != kNone && ++steps <= n)
+            at = parent[at];
+        if (steps > n)
+            cut.push_back(i);
+    }
+    for (size_t i : cut)
+        parent[i] = kNone;
+
+    // Sibling groups, each ordered by pid in the requested direction. `rows`
+    // arrives pid-sorted from list_processes, but this does not assume it —
+    // the order is the pane's to choose, and a caller-built vector need not
+    // be sorted at all.
+    std::vector<std::vector<size_t>> kids(n);
+    std::vector<size_t> roots;
+    for (size_t i = 0; i < n; ++i)
+        (parent[i] == kNone ? roots : kids[parent[i]]).push_back(i);
+    auto by_pid_order = [&](size_t a, size_t b) {
+        return descending ? rows[a].pid > rows[b].pid
+                          : rows[a].pid < rows[b].pid;
+    };
+    std::sort(roots.begin(), roots.end(), by_pid_order);
+    for (auto &k : kids)
+        std::sort(k.begin(), k.end(), by_pid_order);
+
+    // The └ vs ├ decision, made over the DRAWN siblings (see ProcTreeRow::
+    // last_sibling) rather than the snapshot's: the last visible entry of
+    // each group gets the └, and a group with none gets nothing.
+    std::vector<char> is_last(n, 0);
+    auto mark_last = [&](const std::vector<size_t> &group) {
+        for (size_t k = group.size(); k-- > 0;)
+            if (vis(group[k])) {
+                is_last[group[k]] = 1;
+                return;
+            }
+    };
+    mark_last(roots);
+    for (const auto &k : kids)
+        mark_last(k);
+
+    // What to SAY about each row's parent — computed from the snapshot and
+    // the visibility mask, independent of the nesting above. A cycle-cut row
+    // is drawn at the root but its ppid still names a real row in this table,
+    // and reporting that honestly is better than calling it Unknown because
+    // the nesting gave up on it.
+    auto parent_kind = [&](size_t i) {
+        if (rows[i].ppid <= 0 || rows[i].ppid == rows[i].pid)
+            return ProcParent::None;
+        auto it = by_pid.find(rows[i].ppid);
+        if (it == by_pid.end())
+            return ProcParent::Unknown;
+        return vis(it->second) ? ProcParent::Shown : ProcParent::Hidden;
+    };
+
+    // Pre-order walk of the FULL tree, emitting only the visible rows — which
+    // is how a child keeps its true depth across a hidden ancestor. An
+    // explicit stack rather than recursion: the depth here is data read from
+    // another process, and a pathological snapshot must not blow ours.
+    struct Frame {
+        size_t node;
+        int depth;
+    };
+    // Pushed in reverse so the stack pops them in sibling order.
+    std::vector<Frame> todo;
+    for (size_t k = roots.size(); k-- > 0;)
+        todo.push_back({roots[k], 0});
+    while (!todo.empty()) {
+        Frame f = todo.back();
+        todo.pop_back();
+        if (vis(f.node)) {
+            ProcTreeRow t;
+            t.index = f.node;
+            t.depth = f.depth;
+            t.parent = parent_kind(f.node);
+            t.last_sibling = is_last[f.node] != 0;
+            out.push_back(t);
+        }
+        const std::vector<size_t> &k = kids[f.node];
+        for (size_t j = k.size(); j-- > 0;)
+            todo.push_back({k[j], f.depth + 1});
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

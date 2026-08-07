@@ -194,6 +194,15 @@ std::string remedy_command(const std::string &advice);
 // One row of the process list.
 struct ProcRow {
     long pid = 0;
+    // /proc/<pid>/status PPid. 0 for the one real root (pid 1's parent, and
+    // every kernel thread's in a namespace that hides it), and 0 as well when
+    // status was unreadable — the two are not distinguished here because
+    // nothing downstream can act on the difference: both mean "this snapshot
+    // gives this row no parent to nest under" (proc_tree_layout's
+    // ProcParent::None). What must NOT be conflated is a ppid we DID read
+    // naming a process this snapshot does not carry, which is
+    // ProcParent::Unknown and a different fact entirely.
+    long ppid = 0;
     long uid = 0;
     std::string comm;
     std::string cmdline;
@@ -224,6 +233,59 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid, bool have_cap);
 // is off by default because that sample is not free (the call briefly sleeps);
 // the Processes pane only asks for it when the "activity" column is the sort.
 std::vector<ProcRow> list_processes(bool sample_cpu = false);
+
+// --- the process tree -------------------------------------------------------
+//
+// A /proc snapshot carries lineage that a flat pid-sorted table throws away:
+// `firefox` and its eight content children read as nine unrelated rows. This
+// is the pure half of putting it back — the Processes pane's draw code owns
+// the glyphs and nothing else.
+//
+// The rule that shapes the whole thing: DEPTH IS COMPUTED OVER THE WHOLE
+// SNAPSHOT, never over the rows that survived the pane's attachability gate
+// and type-to-narrow filter. Re-rooting a child whose parent was filtered out
+// would render it flush left, which claims it is a top-level process — a
+// lineage this pane never measured, and one of the two the operator is
+// looking at the table to learn. So a hidden parent keeps its child's depth
+// and is REPORTED as hidden, for the pane to say so in the row.
+
+// What is known about a visible row's parent. Four facts, not a bool: the
+// remedy an operator reaches for differs for each, and collapsing them was
+// the failure this enum exists to prevent.
+enum class ProcParent {
+    None,    // ppid 0 (or the row is its own parent): nothing to nest under
+    Shown,   // the parent is in this snapshot AND in the table
+    Hidden,  // the parent is in this snapshot, but the gate or filter cut it
+    Unknown, // ppid names no row in this snapshot — the parent exited between
+             // the readdir and the read, or lives outside our pid namespace
+};
+
+struct ProcTreeRow {
+    size_t index = 0; // into the `rows` handed in
+    int depth = 0;    // ancestors within the snapshot; 0 = nothing above it
+    ProcParent parent = ProcParent::None;
+    // The last of its parent's children that this table will actually DRAW —
+    // which is what the └ vs ├ connector means. Computed over the VISIBLE
+    // siblings, not the snapshot's: a filter that hides the youngest sibling
+    // has to move the └ up to the one above it, or the tree renders a branch
+    // continuing into nothing.
+    bool last_sibling = true;
+};
+
+// The visible rows, in parent-then-children order, each at its true depth.
+//
+// `visible[i]` is non-zero for a row the pane will draw; a short or empty
+// vector reads as "none visible" rather than silently defaulting to shown.
+// `descending` orders siblings (and roots) by descending pid, to match a
+// descending pid sort — the tree SHAPE is identical either way, only the
+// order within each sibling group flips.
+//
+// Every row of `rows` is consulted for the shape; only the visible ones are
+// returned. Cycles (impossible in a live /proc, reachable in a snapshot read
+// pid-by-pid across a reused pid) are cut to roots rather than walked.
+std::vector<ProcTreeRow> proc_tree_layout(const std::vector<ProcRow> &rows,
+                                          const std::vector<char> &visible,
+                                          bool descending = false);
 
 // Parse a scoped-region spec for trace/dataflow's serve `start` params. A spec of
 // the form "0xADDR:LEN" (base and len each 0x-hex or decimal, len > 0) yields

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <strings.h> // strcasecmp — case-insensitive column sort of comm / why
+#include <unordered_map> // pid -> comm, for the Processes pane's parent column
 
 #include <sys/utsname.h> // uname — best-effort target arch for the arm64 gate
 #include <unistd.h>      // sysconf(_SC_CLK_TCK) — jiffies -> %CPU in the activity cell
@@ -1599,6 +1600,28 @@ void draw_processes_pane(InspectState &s) {
                             n_hidden);
     }
 
+    // Nest by lineage. A tree has ONE order, so it can only hold under the pid
+    // sort — under "activity" or "attach" the checkbox greys and says why,
+    // rather than the pane silently dropping either the nesting or the sort the
+    // operator just clicked. proc_sort_is_pid is last frame's sort column (the
+    // specs live inside BeginTable, below); it starts true, which is what pid's
+    // DefaultSort makes it on the first frame anyway.
+    const bool tree_ok = s.proc_sort_is_pid;
+    ImGui::BeginDisabled(!tree_ok);
+    ImGui::Checkbox("tree", &s.proc_tree);
+    ImGui::EndDisabled();
+    if (!tree_ok) {
+        flow_same_line(flow_text_w("· a tree has one order — sort by pid to "
+                                   "nest children under their parent"));
+        ImGui::TextDisabled("· a tree has one order — sort by pid to nest "
+                            "children under their parent");
+    } else if (s.proc_tree) {
+        flow_same_line(flow_text_w("· children are nested under their parent; "
+                                   "the parent column names it either way"));
+        ImGui::TextDisabled("· children are nested under their parent; the "
+                            "parent column names it either way");
+    }
+
     // Type-to-narrow (24 T4's shared filter) over pid / comm / cmdline — the
     // /proc list is the one client-side table that never had a filter (doc 16's
     // framing). Build the haystack once; the matcher + "showing N of M" are pure.
@@ -1625,19 +1648,40 @@ void draw_processes_pane(InspectState &s) {
     // 24-T4 free-column-sort idiom — reorder our own VIEW indices only; the model
     // (list_processes(), pid-sorted) is never touched (D4/D7). The type-to-narrow
     // filter above still applies on top, over whichever order is showing.
+    // The rows this table will actually DRAW: the attachability gate above AND
+    // the filter just above. Resolved HERE rather than inside the row loop,
+    // because the tree layout needs the whole mask up front — which sibling
+    // gets the └ and which parents are reported hidden are both facts about
+    // the drawn set, not about one row.
+    std::vector<char> visible(s.rows.size(), 0);
+    for (size_t i = 0; i < s.rows.size(); ++i)
+        visible[i] = shown[i] && dt_filter_match(q, hay[i]);
+
     // Column indices, shared by the sort switch and the activity gate below.
-    enum { kColPid = 0, kColComm, kColActivity, kColAttach, kColWhy };
-    if (ImGui::BeginTable("procs", 5,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY |
-                              ImGuiTableFlags_Resizable |
-                              ImGuiTableFlags_Reorderable |
-                              ImGuiTableFlags_Sortable)) {
+    enum {
+        kColPid = 0,
+        kColComm,
+        kColParent,
+        kColActivity,
+        kColAttach,
+        kColWhy
+    };
+    if (ImGui::BeginTable(
+            "procs", 6,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable |
+                ImGuiTableFlags_Reorderable | ImGuiTableFlags_Sortable)) {
         // pid is the default sort (ascending — the order the model already has),
         // and fixed-width so the numeric column does not stretch.
         ImGui::TableSetupColumn("pid", ImGuiTableColumnFlags_DefaultSort |
                                            ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("comm");
+        // The parent, ALWAYS — the nesting above is the readable shape, but it
+        // only survives the pid sort, and lineage is not a thing the operator
+        // should lose by ranking on activity. Not sortable: sorting by a
+        // parent's pid is the tree in a worse spelling, and ImGui's sort
+        // switch below would need a case that means nothing.
+        ImGui::TableSetupColumn("parent", ImGuiTableColumnFlags_NoSort);
         // Clicking "activity" is what asks for the CPU sample (want_cpu_sort,
         // consumed at the top next frame); most-active-first is the useful order,
         // so it prefers to sort descending.
@@ -1659,11 +1703,17 @@ void draw_processes_pane(InspectState &s) {
         // Default false so no-sort (unreachable given pid's DefaultSort, but
         // accurate) leaves the instant path; set true only while activity sorts.
         s.want_cpu_sort = false;
+        // No sort spec at all is the pid order the model already carries, so
+        // the tree is available — same answer pid's DefaultSort gives.
+        s.proc_sort_is_pid = true;
+        bool pid_descending = false;
         if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs();
             ss && ss->SpecsCount > 0) {
             const ImGuiTableColumnSortSpecs &c = ss->Specs[0];
             const bool asc = c.SortDirection == ImGuiSortDirection_Ascending;
             s.want_cpu_sort = (c.ColumnIndex == kColActivity);
+            s.proc_sort_is_pid = (c.ColumnIndex == kColPid);
+            pid_descending = s.proc_sort_is_pid && !asc;
             std::stable_sort(
                 order.begin(), order.end(), [&](int a, int b) {
                     const ProcRow &ra = s.rows[static_cast<size_t>(a)];
@@ -1696,21 +1746,81 @@ void draw_processes_pane(InspectState &s) {
                 });
         }
 
+        // The lineage, computed over the WHOLE snapshot (live/inspect.h). Built
+        // unconditionally, not only in tree mode: the `parent` column reports
+        // ProcParent for every row, in every sort, and that classification is
+        // this function's, not something the draw loop should re-derive.
+        const std::vector<ProcTreeRow> tree =
+            proc_tree_layout(s.rows, visible, pid_descending);
+        // index -> its ProcTreeRow, so the FLAT path keeps the clicked column's
+        // order while still naming each row's parent.
+        std::vector<int> at(s.rows.size(), -1);
+        for (size_t k = 0; k < tree.size(); ++k)
+            at[tree[k].index] = static_cast<int>(k);
+        // The tree's order, or the sorted one — the row body below is the same
+        // either way, so this is the only place the two modes differ.
+        //
+        // Gated on `tree_ok` — LAST frame's sort column, the same value the
+        // checkbox above was greyed by — and deliberately NOT on the
+        // s.proc_sort_is_pid the sort block just refreshed a few lines up.
+        // Reading the fresh one flattens a frame earlier, but it lets the top
+        // of the pane grey the checkbox and say "sort by pid to nest" while
+        // the table below it nests anyway: a pane arguing with itself, in the
+        // one frame the operator is looking at because they just clicked. The
+        // cost of the other order is one frame of a tree under a fresh
+        // non-pid sort, which nothing on screen contradicts.
+        const bool use_tree = s.proc_tree && tree_ok;
+        std::vector<size_t> draw_order;
+        draw_order.reserve(tree.size());
+        if (use_tree) {
+            for (const ProcTreeRow &t : tree)
+                draw_order.push_back(t.index);
+        } else {
+            for (int oi : order)
+                if (visible[static_cast<size_t>(oi)])
+                    draw_order.push_back(static_cast<size_t>(oi));
+        }
+
+        // A parent's comm, by pid, over the whole snapshot — Hidden parents are
+        // named too, which is the point of naming them at all.
+        std::unordered_map<long, const std::string *> comm_by_pid;
+        comm_by_pid.reserve(s.rows.size() * 2);
+        for (const ProcRow &pr : s.rows)
+            comm_by_pid.emplace(pr.pid, &pr.comm);
+        auto parent_comm = [&](long ppid) -> const char * {
+            auto it = comm_by_pid.find(ppid);
+            return it == comm_by_pid.end() ? "" : it->second->c_str();
+        };
+
         // Turn the sampled jiffies into a %CPU of one core over the ~150ms
         // window (jiffies / (window_s * ticks_per_s) * 100). One busy core reads
         // ~100%, two ~200% — the same shape top shows.
         const double clk_tck = static_cast<double>(sysconf(_SC_CLK_TCK));
-        for (int oi : order) {
-            const size_t i = static_cast<size_t>(oi);
-            if (!shown[i]) // hidden by the attachability gate above
-                continue;
-            if (!dt_filter_match(q, hay[i]))
-                continue;
+        for (size_t i : draw_order) {
             const ProcRow &r = s.rows[i];
+            // Every drawn row is visible, and proc_tree_layout returns exactly
+            // the visible rows — so this lookup always lands.
+            const ProcTreeRow &t = tree[static_cast<size_t>(at[i])];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            char lbl[64];
-            std::snprintf(lbl, sizeof lbl, "%ld##p%ld", r.pid, r.pid);
+            char lbl[96];
+            if (use_tree && t.depth > 0) {
+                // Indent by depth, then ONE connector at the row's own level.
+                // Deliberately no │ continuation lines through the levels
+                // above: any ancestor may be hidden by the gate or the filter,
+                // and a line drawn through that gap would trace a branch back
+                // to a row this table is not showing. The depth is capped at
+                // what the column can hold — a 40-deep container tree must not
+                // push the pid off the right edge — and the parent column
+                // below carries the fact regardless of how deep it went.
+                const int cap = t.depth > 12 ? 12 : t.depth;
+                std::string pad(static_cast<size_t>(cap - 1) * 2, ' ');
+                std::snprintf(lbl, sizeof lbl, "%s%s %ld##p%ld", pad.c_str(),
+                              t.last_sibling ? "\xe2\x94\x94" : "\xe2\x94\x9c",
+                              r.pid, r.pid);
+            } else {
+                std::snprintf(lbl, sizeof lbl, "%ld##p%ld", r.pid, r.pid);
+            }
             if (ImGui::Selectable(lbl, s.selected_pid == r.pid,
                                   ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
@@ -1746,6 +1856,39 @@ void draw_processes_pane(InspectState &s) {
             }
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(r.comm.c_str());
+            ImGui::TableNextColumn();
+            // The parent, and — when the row is not sitting under it — WHY
+            // not. All four ProcParent cases render differently on purpose:
+            // "no parent", "the parent is that row up there", "the parent is
+            // in this snapshot but you filtered it out" and "we could not
+            // find the parent at all" are four different things to know, and
+            // a single blank cell for the last three is the collapse the enum
+            // exists to prevent.
+            switch (t.parent) {
+            case ProcParent::None:
+                // An absence, never barred (#1) — pid 1 and the kernel threads
+                // genuinely have nothing above them in this snapshot.
+                ImGui::TextDisabled("—");
+                break;
+            case ProcParent::Shown:
+                ImGui::Text("%ld %s", r.ppid, parent_comm(r.ppid));
+                break;
+            case ProcParent::Hidden:
+                ImGui::Text("%ld %s", r.ppid, parent_comm(r.ppid));
+                // The gap the tree's indentation cannot explain by itself: this
+                // row is drawn at its real depth with nothing above it, and
+                // without this line that reads as a bug in the nesting.
+                ImGui::TextDisabled("(hidden by the filter / attachable gate)");
+                break;
+            case ProcParent::Unknown:
+                // A ppid we DID read, naming a process this /proc walk does not
+                // carry: the parent exited between the readdir and the read, or
+                // it lives outside our pid namespace. Not the same as "no
+                // parent", and the pid is still worth showing.
+                ImGui::Text("%ld", r.ppid);
+                ImGui::TextDisabled("(not in this snapshot)");
+                break;
+            }
             ImGui::TableNextColumn();
             // Activity is a MEASURED quantity: show "—" when this list was not
             // sampled (the instant pid/comm/attach path), never "0%", which would

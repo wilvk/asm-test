@@ -251,6 +251,21 @@ struct InspectState {
     bool sample_cpu = false;
     bool want_cpu_sort = false;
 
+    // Nest the table by lineage (ProcRow::ppid) instead of listing pids flat,
+    // so a browser and its content children read as one process rather than
+    // nine unrelated ones. ON by default: a tree of roots IS a flat list, so
+    // the setting costs a snapshot with no lineage nothing.
+    //
+    // A tree has exactly ONE order — parent, then children — so it can only
+    // hold under the pid sort; clicking "activity" or "attach" asks for an
+    // order the nesting cannot honour. Rather than silently ignore either the
+    // sort or the checkbox, the checkbox greys with that reason and the table
+    // goes flat. proc_sort_is_pid carries the sort column across frames the
+    // same way want_cpu_sort above does, and for the same reason: the sort
+    // specs only exist INSIDE BeginTable, and the checkbox is drawn above it.
+    bool proc_tree = true;
+    bool proc_sort_is_pid = true;
+
     // The scoped region for trace/dataflow (mode_needs_region): a func NAME or
     // "0xADDR:LEN". Sent as the `start` params (parse_region_spec); ignored by the
     // whole-process modes and `auto` (which finds its own region).

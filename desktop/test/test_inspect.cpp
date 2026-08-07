@@ -791,9 +791,211 @@ static void test_remedy_command() {
           "an ordinary status names no gate and yields no command");
 }
 
+// ---------------------------------------------------------------------------
+// proc_tree_layout — the Processes pane's lineage.
+//
+// The whole point of this function is what it does with rows the pane is NOT
+// drawing, so every check below is about the interaction between the snapshot
+// and the visibility mask. A layout that only ever sees an all-visible mask is
+// a sorted list with extra steps; the cases that matter are the ones where the
+// gate or the filter has taken an ancestor away, and those are exactly the ones
+// a live /proc will not reproduce on demand.
+// ---------------------------------------------------------------------------
+namespace {
+
+// pid/ppid/comm is all the layout reads. Nothing here needs a real process.
+ProcRow pr(long pid, long ppid, const char *comm) {
+    ProcRow r;
+    r.pid = pid;
+    r.ppid = ppid;
+    r.comm = comm;
+    return r;
+}
+
+// systemd(1) -> gnome-shell(1130) -> firefox(2201) -> two content children,
+// plus NetworkManager(842) as a second child of pid 1 and an orphan(3000)
+// whose parent is not in the snapshot at all.
+std::vector<ProcRow> tree_rows() {
+    return {
+        pr(1, 0, "systemd"),           pr(842, 1, "NetworkManager"),
+        pr(1130, 1, "gnome-shell"),    pr(2201, 1130, "firefox"),
+        pr(2260, 2201, "Web Content"), pr(2281, 2201, "RDD Process"),
+        pr(3000, 2999, "orphan"),
+    };
+}
+
+// The emitted (pid, depth) pairs, as "pid@depth pid@depth …" — one string is a
+// far better failure message than six index comparisons.
+std::string shape(const std::vector<ProcRow> &rows,
+                  const std::vector<ProcTreeRow> &t) {
+    std::string o;
+    for (const ProcTreeRow &n : t)
+        o += (o.empty() ? "" : " ") + std::to_string(rows[n.index].pid) + "@" +
+             std::to_string(n.depth);
+    return o;
+}
+
+// Find the emitted row for a pid; nullptr when it was not emitted at all.
+const ProcTreeRow *find(const std::vector<ProcRow> &rows,
+                        const std::vector<ProcTreeRow> &t, long pid) {
+    for (const ProcTreeRow &n : t)
+        if (rows[n.index].pid == pid)
+            return &n;
+    return nullptr;
+}
+
+} // namespace
+
+static void test_proc_tree() {
+    const std::vector<ProcRow> rows = tree_rows();
+    const std::vector<char> all(rows.size(), 1);
+
+    // 1. Everything visible: pre-order, siblings by pid, depth = real ancestry.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all);
+        check("tree/order",
+              shape(rows, t) == "1@0 842@1 1130@1 2201@2 2260@3 2281@3 3000@0",
+              "parent-then-children, siblings by pid: got " + shape(rows, t));
+        check("tree/emits-all", t.size() == rows.size(),
+              "every visible row is emitted exactly once");
+    }
+
+    // 2. Descending flips the sibling ORDER without changing the SHAPE — the
+    // depths are identical, only each group's order reverses.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, true);
+        check("tree/descending",
+              shape(rows, t) == "3000@0 1@0 1130@1 2201@2 2281@3 2260@3 842@1",
+              "descending reverses each sibling group only: got " +
+                  shape(rows, t));
+    }
+
+    // 3. THE CASE THIS FUNCTION EXISTS FOR. Hide every ancestor of the two
+    // content processes (a "firefox"-less filter, or an attachability gate that
+    // dropped them) and the children must KEEP depth 3. Re-rooting them to 0
+    // would render them flush left, claiming a top-level lineage that was never
+    // measured — which is the defect, not a cosmetic one.
+    {
+        std::vector<char> vis(rows.size(), 0);
+        vis[4] = vis[5] = 1; // 2260, 2281 only
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis);
+        check("tree/hidden-ancestors-keep-depth",
+              shape(rows, t) == "2260@3 2281@3",
+              "a hidden ancestor must not re-root its child: got " +
+                  shape(rows, t));
+        const ProcTreeRow *n = find(rows, t, 2260);
+        check("tree/hidden-parent-reported",
+              n && n->parent == ProcParent::Hidden,
+              "the parent is in the snapshot but not drawn -> Hidden, so the "
+              "pane can say so rather than leave an unexplained indent");
+    }
+
+    // 4. The four ProcParent cases are four different facts, and the one that
+    // must never collapse into "Hidden" is a ppid naming a process this walk
+    // does not carry — a parent that exited mid-scan, or one outside our pid
+    // namespace. Nothing can un-hide that one, so the remedy differs.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all);
+        const ProcTreeRow *root = find(rows, t, 1);
+        const ProcTreeRow *kid = find(rows, t, 2201);
+        const ProcTreeRow *orph = find(rows, t, 3000);
+        check("tree/parent-none", root && root->parent == ProcParent::None,
+              "ppid 0 is a real root, not an unknown parent");
+        check("tree/parent-shown", kid && kid->parent == ProcParent::Shown,
+              "a drawn parent reads Shown");
+        check("tree/parent-unknown",
+              orph && orph->parent == ProcParent::Unknown,
+              "a ppid absent from the snapshot is Unknown, NOT Hidden — no "
+              "filter change can bring it back");
+        check("tree/orphan-is-root", orph && orph->depth == 0,
+              "a parent this snapshot does not carry leaves nothing to nest "
+              "under, so depth 0 is measured, not assumed");
+    }
+
+    // 5. last_sibling is computed over the DRAWN siblings. Hide the youngest
+    // child and the └ has to move up to the one above it, or the tree draws a
+    // branch continuing into a row that is not there.
+    {
+        std::vector<char> vis(rows.size(), 1);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis);
+        const ProcTreeRow *a = find(rows, t, 2260);
+        const ProcTreeRow *b = find(rows, t, 2281);
+        check("tree/last-sibling-full",
+              a && b && !a->last_sibling && b->last_sibling,
+              "with both drawn, the └ belongs to the later pid");
+        vis[5] = 0; // hide 2281, the youngest
+        t = proc_tree_layout(rows, vis);
+        a = find(rows, t, 2260);
+        check("tree/last-sibling-follows-filter", a && a->last_sibling,
+              "hiding the youngest sibling must move the └ up, not leave a ├ "
+              "pointing at nothing");
+    }
+
+    // 6. A short/empty mask under-draws rather than leaking rows the gate meant
+    // to withhold — an empty result is the safe answer to a caller bug.
+    {
+        check("tree/empty-mask",
+              proc_tree_layout(rows, std::vector<char>()).empty(),
+              "no mask means nothing visible, never everything visible");
+        check("tree/empty-rows",
+              proc_tree_layout(std::vector<ProcRow>(), std::vector<char>())
+                  .empty(),
+              "an empty snapshot lays out empty");
+    }
+
+    // 7. A CYCLE. Impossible in a live /proc, reachable in a snapshot read pid
+    // by pid across a recycled pid. Verified by mutation: with the cut removed
+    // both rows DISAPPEAR (each has a parent, so neither is a root, and the
+    // pre-order walk never reaches either) — a table whose job is to list what
+    // is running, silently not listing two of them.
+    {
+        std::vector<ProcRow> cyc = {pr(10, 11, "a"), pr(11, 10, "b")};
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(cyc, std::vector<char>(2, 1));
+        check(
+            "tree/cycle-still-listed", t.size() == 2,
+            "a cycle is cut to roots — neither row may vanish from the table");
+        check("tree/cycle-depth",
+              t.size() == 2 && t[0].depth == 0 && t[1].depth == 0,
+              "every member of a cut cycle is a root");
+        // The ppid still names a real row in the table, so the parent COLUMN
+        // stays truthful even though the nesting gave up.
+        check("tree/cycle-parent-still-named",
+              t.size() == 2 && t[0].parent == ProcParent::Shown,
+              "a cycle-cut row's ppid is still a drawn row: say so");
+    }
+
+    // 8. Self-parenthood (pid == ppid) is the degenerate one-node cycle, and it
+    // must not nest a row under itself.
+    {
+        std::vector<ProcRow> self = {pr(7, 7, "self")};
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(self, std::vector<char>(1, 1));
+        check("tree/self-parent",
+              t.size() == 1 && t[0].depth == 0 &&
+                  t[0].parent == ProcParent::None,
+              "a row whose ppid is its own pid has nothing above it");
+    }
+
+    // 9. The layout must not assume the input is pid-sorted: list_processes
+    // sorts, but nothing in the signature promises it, and a caller-built
+    // vector need not.
+    {
+        std::vector<ProcRow> shuffled = {pr(2201, 1130, "firefox"),
+                                         pr(1, 0, "systemd"),
+                                         pr(1130, 1, "gnome-shell")};
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(shuffled, std::vector<char>(3, 1));
+        check("tree/unsorted-input", shape(shuffled, t) == "1@0 1130@1 2201@2",
+              "the order is the layout's, not the input's: got " +
+                  shape(shuffled, t));
+    }
+}
+
 int main(void) {
     test_attach();
     test_activity();
+    test_proc_tree();
     test_remedy_command();
     test_evidence();
     test_front_door();

@@ -1289,6 +1289,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_inspect \
                  $(BUILD)/desktop_test_procinfo \
                  $(BUILD)/desktop_test_details_draw \
+                 $(BUILD)/desktop_test_procs_draw \
                  $(BUILD)/desktop_test_obs_syscalls \
                  $(BUILD)/desktop_test_crossing \
                  $(BUILD)/desktop_test_obs_watch \
@@ -2242,6 +2243,17 @@ $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
 $(BUILD)/desktop/test/t/test_details_draw.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop_test_details_draw: $(BUILD)/desktop/test/t/test_details_draw.o \
+    $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
+
+# The Processes pane's LINEAGE, drawn. proc_tree_layout itself is pinned in
+# desktop_test_inspect against no ImGui at all; this is the half that can only
+# be seen on screen — the connectors, the parent column, and the line that
+# explains an indented row whose parent the filter took away. Same full
+# shell-object link as test_details_draw just above, and for the same reason:
+# it constructs a real InspectState, whose embedded LiveSession/ObserverState/
+# LongOp members need their constructors resolvable even when untouched.
+$(BUILD)/desktop_test_procs_draw: $(BUILD)/desktop/test/t/test_procs_draw.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(X11_LIBS) -o $@
 
