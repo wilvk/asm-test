@@ -276,6 +276,15 @@ nlohmann::json inspect_start_params(const InspectState &s) {
             params["mem"] = true;
         if (s.want_statediff)
             params["statediff"] = true;
+        // 2026-08-07 plan, Task 1: `blame`, OPT-IN like mem/statediff above —
+        // the 3D pane's blame causal layer defaults ON (scene3d/scene.h) and
+        // build_blame_forest runs every frame regardless of whether this is
+        // set, so an un-ticked capture just draws that layer empty rather than
+        // erroring. Costs one `blame` event per step with a cone payload
+        // (cli/asmspy.c), against a sweep leg capped at sweep_max — real
+        // enough to price on the checkbox rather than default on.
+        if (s.want_blame)
+            params["blame"] = true;
     }
     // The tree filter (depth/focus/module/tid/follow) rides this same Start — the
     // patch bay owns tree config now, so the one Start carries it. obs_tree_start_
@@ -977,6 +986,14 @@ void draw_patch_bay(InspectState &s) {
             "— forces the register ring on, one statediff + one regstate per "
             "step",
             &s.want_statediff);
+        // 2026-08-07 plan, Task 1 (M12 gap): `blame`, OPT-IN and priced like
+        // mem/statediff above — the 3D pane's blame causal layer defaults ON
+        // and draws every frame, but was fed nothing at all because the GUI
+        // never asked the host for it.
+        ImGui::Checkbox(
+            "record the blame cone (blame → the 3D pane's causal layer) — "
+            "one `blame` event per step with a cone payload",
+            &s.want_blame);
         // 35 T4: keep re-arming the same region until Stop, into one growing
         // recording (the Scrubber follows the latest invocation live). One start
         // fires; the once-per-session perturb confirm is not re-asked per pass.

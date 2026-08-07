@@ -300,6 +300,13 @@ struct InspectState {
     // see inspect_start_params for where they reach the wire.
     bool want_mem = false;
     bool want_statediff = false;
+    // The per-step BLAME cone (`--blame`): which earlier steps a value came
+    // from. The 3D pane's blame causal layer defaults ON (scene3d/scene.h) and
+    // build_blame_forest runs every frame, so without this the layer is drawn
+    // empty on every GUI capture — the defect this opt-in closes. Off by
+    // default like mem/statediff: it adds one `blame` event per step, carrying
+    // a cone payload, against a sweep leg capped at sweep_max.
+    bool want_blame = false;
 
     // CONTINUOUS capture (35 T4): the dataflow/auto engine re-arms the same scoped
     // region and keeps capturing until Stop, appending each invocation into one

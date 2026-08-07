@@ -2985,6 +2985,37 @@ int main() {
               "an un-ticked capture must not force the register ring on");
     }
 
+    // 2026-08-07 plan, Task 1: the blame layer is ON by default
+    // (scene3d/scene.h:131) and build_blame_forest runs every frame
+    // (shell.cpp:1340), but Streams::blame is populated only from the wire
+    // `blame` kind — which the GUI has never sent. So the layer draws nothing
+    // on every GUI capture, silently. The previous plan's M12 listed the
+    // unsent flags and missed this one.
+    {
+        InspectState is;
+        is.want = LiveMode::Dataflow;
+        std::snprintf(is.region, sizeof is.region, "%s", "hotfn");
+        check("cap/blame is opt-in and off by default",
+              !inspect_start_params(is).contains("blame"),
+              "blame costs one event per step with a cone payload, so it is a "
+              "checkbox, not a default — same shape as mem/statediff");
+        is.want_blame = true;
+        check("cap/dataflow sends blame",
+              inspect_start_params(is).value("blame", false),
+              "the blame causal layer is on by default and is drawn every "
+              "frame; without this flag it is fed nothing at all");
+        is.want = LiveMode::Auto;
+        check("cap/auto sends blame too",
+              inspect_start_params(is).value("blame", false),
+              "auto IS the dataflow engine with a picker in front of it, and "
+              "the auto-led sweep leg is the common path to the 3D pane");
+        is.want = LiveMode::Log;
+        check("cap/log ignores blame",
+              !inspect_start_params(is).contains("blame"),
+              "a whole-process mode single-steps nothing, so there is no "
+              "per-step cone to record");
+    }
+
     // --- Swap/Queue must carry the same params as the direct Start. Routing tree
     // through the shared budget flow newly exposed it to the budget-recovery paths,
     // which used to drop ALL start params — so a tree started via Queue silently
