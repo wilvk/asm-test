@@ -3724,6 +3724,84 @@ fi
 kill -9 "$DFWPID" 2>/dev/null || true
 wait "$DFWPID" 2>/dev/null || true
 
+# --serve --record: a SKIPPED LEG's reason must survive INSIDE the session
+# file, not just on the live client stream (2026-08-06 plan, Task 9).
+#
+# WHY: the per-capture `end` footer already carries `skip` (rec_close), and
+# that reaches the CLIENT stream — but the SESSION-level sink (--record=<f>,
+# one writer/header for the whole session, 61 T7c) is deliberately closed only
+# ONCE, at quit, so a per-engine close never stamps it with a second `end`
+# (rec_close's own comment). Measured before this fix: an `auto` leg that
+# self-skipped left the live stream's `end` with a full `skip:{code,reason}`
+# while the recorded SESSION FILE's own footer was a bare
+# `{"k":"end","events":0,"truncated":false,"drops":{...}}` — reopening the
+# recording lost the only clue the capture ever ran, let alone why it came
+# back empty. `--sampler=ibs` is forced (rather than bare `auto`, which chains
+# to the perf-free ptrace picker and can succeed) so this is a DETERMINISTIC
+# self-skip wherever perf is locked down (paranoid>2, no CAP_PERFMON) or IBS
+# is simply absent — on any such host/lane the reason differs, but a skip
+# happens either way; where perf IS reachable (docker-cli-ibs), the sampler
+# runs for real and there is nothing for the file to lose (the else branch).
+echo "--- asmspy --serve --record: a skipped leg's reason lands in the SESSION file (T9) ---"
+"$BUILD/spy_victim" >/dev/null 2>&1 &
+T9PID=$!
+sleep 1
+kill -0 "$T9PID" 2>/dev/null || fail "T9: spy_victim did not start"
+T9SESS="$RECDIR/serve_t9_session.asmtrace"
+T9OUT="$RECDIR/serve_t9_client.ndjson"
+rm -f "$T9SESS" "$T9OUT"
+set +e
+{
+    printf '{"cmd":"start","mode":"auto","pid":%d,"sampler":"ibs","max":50}\n' "$T9PID"
+    sleep 2
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 40 "$ASM" --serve --record="$T9SESS" >"$T9OUT" 2>/dev/null
+t9rc=$?
+set -e
+[ "$t9rc" -eq 124 ] && fail "--serve --record (T9): hung"
+[ "$t9rc" -eq 0 ] || fail "--serve --record (T9): exited $t9rc"
+[ -s "$T9SESS" ] || fail "--serve --record (T9): no session file written"
+kill -0 "$T9PID" 2>/dev/null \
+    || fail "--serve --record (T9): the victim did not survive the session"
+
+if grep -q '"k":"end".*"skip"' "$T9OUT"; then
+    # The IBS sampler self-skipped on THIS host/lane — the leg this task
+    # exists for. Pull the reason it measured on the CLIENT stream (already
+    # correct before this fix) and require the SESSION FILE to carry the
+    # identical text, not a generic placeholder.
+    skipreason=$(grep -o '"reason":"[^"]*"' "$T9OUT" | head -1 | sed 's/^"reason":"//; s/"$//')
+    [ -n "$skipreason" ] || fail "T9: could not extract the measured skip reason from the client stream"
+
+    grep -q '"k":"note"' "$T9SESS" \
+        || fail "T9: the session file has no note — reopening it loses why the leg captured nothing"
+    grep '"k":"note"' "$T9SESS" | grep -qF "$skipreason" \
+        || fail "T9: the session file's note does not carry the MEASURED reason verbatim (got: $(grep '"k":"note"' "$T9SESS"))"
+
+    # The trap: session/cmd/err are serve-only kinds (asmtrace-schema.md) and
+    # must NEVER be teed into a `.asmtrace` file — the fix is a `note`, not a
+    # copy of the client-side `session state:"skip"` event.
+    grep -q '"k":"session"' "$T9SESS" \
+        && fail "T9: a serve-only 'session' event was teed into the recording (schema forbids this)"
+
+    tail -1 "$T9SESS" | grep -q '"k":"end"' \
+        || fail "T9: the session file's last line is not an end footer (TORN recording)"
+    tail -1 "$T9SESS" | grep -q '"skip":{"code":2,' \
+        || fail "T9: the session file's OWN end footer still carries no skip (the call-site fix regressed)"
+    tail -1 "$T9SESS" | grep -qF "$skipreason" \
+        || fail "T9: the session file's own end.skip does not carry the measured reason"
+    echo "  IBS self-skipped ($skipreason) — the session file carries it as a note AND on its own end footer"
+else
+    # perf reachable here (docker-cli-ibs, or paranoid<=2/CAP_PERFMON): the
+    # sampler ran for real, so this lane exercises the success path instead —
+    # legitimate per CLAUDE.md (hardware/perf access is a real gate), and the
+    # well-formed-file checks above already ran regardless of which path.
+    echo "  (IBS sampler ran for real on this host/lane — nothing skipped, T9's note/skip checks not exercised here)"
+fi
+
+kill -9 "$T9PID" 2>/dev/null || true
+wait "$T9PID" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # --info — the attach-free process snapshot
 # ---------------------------------------------------------------------------

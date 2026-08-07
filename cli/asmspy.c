@@ -4604,6 +4604,41 @@ static void *serve_tracer(void *arg) {
      * nothing to report. */
     if (s->rc > 0)
         serve_skip_reason(s, s->rc, skiptext, sizeof skiptext);
+    /* Cache it into skip_note, the field serve_skip_reason itself already
+     * treats as "a reason the session measured for itself" (its very first
+     * check). Two readers need this exact string AFTER this point, and only
+     * one of them still has a live p.mode to key off of: serve_loop's own
+     * `end.skip` fix (below, the call-site half of this change) calls
+     * serve_skip_reason a SECOND time, but by then serve_stop has already
+     * reset p.mode to SM_NONE, which would silently drop the SAMPLE/WATCH
+     * branches (mode-gated) back to the generic asmspy_strerror text. Caching
+     * here — before that reset — makes the second call hit the skip_note
+     * short-circuit and return the identical string regardless of mode. */
+    if (skiptext[0] && !s->skip_note[0])
+        snprintf(s->skip_note, sizeof s->skip_note, "%s", skiptext);
+    /* 2026-08-06 T9: a `note` is the file-legal channel for this reason. The
+     * client-visible `session state:"skip"` event (serve_emit_session_end,
+     * below the tracer tail) is one of the three serve-only kinds a
+     * `.asmtrace` file must NEVER carry (asmtrace-schema.md, Serve protocol:
+     * session/cmd/err "never inside a file written by --record") — so it must
+     * not simply be teed in. And the per-capture `end.skip` this closes into
+     * (rec_close, right below) reaches the CLIENT stream but not the SESSION
+     * file: r->shared (the --record=<f> session sink) is deliberately never
+     * closed per engine, so it never gets a per-leg `end` of its own (see
+     * rec_close's comment). Measured before this fix: an `auto` leg that
+     * self-skipped left the live client stream's `end` with a full
+     * `skip:{code,reason}` while the session file's own body had nothing at
+     * all beyond the header — reopening the recording lost the only clue why
+     * it captured zero events. Emitting the reason as a `note`, through the
+     * same rec_emitf the session file already tees (r->shared, wired at
+     * session start), fixes that — and does it per LEG, which a single
+     * closing footer (the other half of this fix) cannot. Precedent:
+     * serve_codeimage_arm's "codeimage unavailable" note, identical shape. */
+    if (skiptext[0]) {
+        char esc[4 * sizeof skiptext];
+        asmtrace_escape(esc, sizeof esc, skiptext);
+        rec_emitf(&s->rec, "note", "\"text\":\"skip: %s\"", esc);
+    }
     s->events = s->rec.out.events;
     {
         unsigned long long dropped = s->rec.paused_dropped;
@@ -5480,9 +5515,27 @@ static int serve_loop(FILE *in, FILE *out, const char *record) {
     serve_stop(&s, atomic_load(&s.running) ? "quit" : "max");
     pthread_mutex_destroy(&s.mu);
     /* Closed ONCE, here, for the whole session — never per engine (rec_close
-     * says why). */
-    if (have_sess)
-        asmtrace_close(&sess_file, 0, 0, NULL);
+     * says why). 2026-08-06 T9: this used to pass NULL unconditionally, which
+     * is why a session's OWN closing line stayed a bare
+     * `{"k":"end","events":0,"truncated":false,"drops":{...}}` even when the
+     * one leg it ran self-skipped (measured on this host: --serve --record
+     * with mode=auto under perf_event_paranoid=4). `s.rc`/`s.skip_note` are
+     * exactly as the tracer thread (now joined, via serve_stop above) left
+     * them — a fresh `start` resets both, so nothing but the leg that
+     * actually produced this session's events has touched them since. This
+     * gives the session's own footer the LAST leg's skip; a session that ran
+     * several legs still has each one's reason preserved individually as a
+     * `note` in the body (serve_tracer, the other half of this fix), since
+     * one footer can only hold one skip object. */
+    if (have_sess) {
+        asmtrace_prov_t skip = {NULL,
+                                1,
+                                "exact",
+                                s.rc > 0 ? s.rc : 0,
+                                s.skip_note[0] ? s.skip_note : NULL,
+                                0};
+        asmtrace_close(&sess_file, 0, 0, &skip);
+    }
     return 0;
 }
 
