@@ -861,6 +861,49 @@ is a growth-rung companion, not scheduled against Phase 1–4** — it consumes 
 core docs' feeds and blocks nothing; start it only after 04/07/08 land, and only
 its coarse rung is buildable before the Wave-1 `mem[]` stream.
 
+### Encoding-integrity family (docs 62–66) — the visual discipline reaching outward
+
+Cut 2026-08-07 from a **code review of the GUI and asmspy visualisation layers**.
+[62](62-encoding-integrity-roadmap.md) is the roadmap (**not a brief**): ten findings
+with their measurements, clustered into four briefs by shared *mechanism*.
+
+The framing is deliberately narrow. Docs [23](../archive/gui/23-graded-truth-layer.md)
+and [24](../archive/gui/24-one-visual-language.md) built a working encoding system —
+one meaning per colour (F14), a mandatory non-colour second channel (F15), and a
+headless gate that measures both. **Nothing in this family changes that system.**
+Every task is one of those two rules reaching a surface that predates it: the 3D
+scene, which grew its own categorical palettes; the magnitude channel, which landed
+as one function and acquired four denominators; and asmspy's TUI, which has no
+colour channel and no magnitude channel at all.
+
+The four briefs are **independent and may be claimed in parallel**. Land
+[63](63-magnitude-transform-and-denominator.md) first if anything is — its T1 splits
+`dt_cell_magnitude_bar` into two named entry points, so anything else writing against
+that API should be written after the split rather than migrated across it.
+[64](64-scene-palettes-enter-the-gate.md) is the only accessibility defect in the set.
+Nothing here changes the wire schema, the engine, or any `.asmtrace` golden.
+
+This family is **complementary to, not a re-run of**, the
+[2026-07-29 UX & dataviz review](../analysis/2026-07-29-gui-ux-dataviz-review.md):
+that review worked from the rendered surfaces inward, this one from the encoding
+system outward. [62](62-encoding-integrity-roadmap.md) §2 records the two adjacencies
+and notes that the 2026-08-01 briefs cut from that review were never committed and
+are no longer in the tree.
+
+| Doc | Findings | Area | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|---|
+| [62-encoding-integrity-roadmap.md](62-encoding-integrity-roadmap.md) | all 10 | the ten findings + their measurements, the cluster rationale, the sequencing, and the one finding deliberately left uncut (**roadmap, not a brief**) | — | — | roadmap · cuts 63–66 | — |
+| [63-magnitude-transform-and-denominator.md](63-magnitude-transform-and-denominator.md) | #2, #3, #6 | split `dt_cell_magnitude_bar` into rank vs share (four denominators, one appearance today); `log1p` the count-like bars to match the terrain's own transform; bar the timeline's `in/out` and the hotedges misprediction **rate** | 4 | none — T1 splits an API, so land it before other work on that API | ☐ 0/4 | *free* |
+| [64-scene-palettes-enter-the-gate.md](64-scene-palettes-enter-the-gate.md) | #1 | the scene's 8 opcode-class + 6 region-kind hues never enter `test_cvd`; **7 measured `(pair, deficiency)` failures**, worst Heap-vs-Data 0.053 under protanopia, with hue the only channel on the surface. Gate them where each already links, then add a per-cell pattern channel | 4 | none | ☐ 0/4 | *free* |
+| [65-whole-trace-strips-at-scale.md](65-whole-trace-strips-at-scale.md) | #4, #5 | the overview strip never buckets and draws 0.9-*step*-wide bars (invisible above ~10k steps); the hot-edge heatmap suppresses the axis labels it already computes and maps a heavy tail linearly | 4 | none | ☐ 0/4 | *free* |
+| [66-asmspy-tui-channels.md](66-asmspy-tui-channels.md) | #7, #8, #9 | asmspy has **no colour anywhere** and three attributes for four states — so selecting a row erases its slice membership (a live bug); plus no magnitude channel, left-aligned counts, and symbol names truncated from the wrong end | 4 | none | ☐ 0/4 | *free* |
+
+**16 tasks, ☐ 0/16.** Finding **#10** (sampled-rank stability over survey windows) is
+deliberately **not cut** — it is the only finding needing new retained model state on
+both surfaces, and it carries an unresolved fidelity question about dropped windows.
+[62](62-encoding-integrity-roadmap.md) §5 states the question and what settling it
+would make cuttable as doc 67.
+
 ## Plan phase mapping
 
 Phase 1 = 01 + 02(T1–T4); Phase 2 = 03 + 04 + 05 + 06 + 02(T5–T6);
