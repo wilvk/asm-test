@@ -956,7 +956,17 @@ static void shell_weave_standalone(SceneView &sv, const Recording &r,
         std::find(sv.prism_regs.begin(), sv.prism_regs.end(), sv.prism_reg) ==
             sv.prism_regs.end())
         sv.prism_reg = sv.prism_regs.front();
-    sv.prism = scene3d::build_lane_prism(a.df, sv.prism_reg, a.arch);
+    // a.arch is the recording's RAW header value ("x86_64"/"aarch64", per
+    // doc/recording.cpp) but lane_width_class's ambiguity gate
+    // (space::mnemonic_class) matches its `guest` argument EXACTLY against
+    // "x86"/"arm64" — passing a.arch straight through made the gate a
+    // silent no-op for every real recording (found during the 2026-08-08
+    // revised T5 task; harmless today only because no ambiguous mnemonic is
+    // also in kLaneWidths). Translate through the SAME function the opcode
+    // terrain already uses for `build_opcode_terrain` below, rather than a
+    // second copy of the same translation.
+    sv.prism = scene3d::build_lane_prism(a.df, sv.prism_reg,
+                                         space::opcode_guest_from_arch(a.arch));
     // T2: two recordings. With no B side there is nothing to diverge FROM —
     // stated by the availability note below, never drawn as an empty scene.
     if (b != nullptr)
@@ -1223,7 +1233,11 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
                     std::snprintf(rl, sizeof rl, "reg %u", rid);
                     if (ImGui::Selectable(rl, rid == sv.prism_reg)) {
                         sv.prism_reg = rid;
-                        v = scene3d::build_lane_prism(a.df, rid, a.arch);
+                        // Same translation as the initial weave above (and
+                        // for the same reason): a.arch is raw, the
+                        // ambiguity gate needs "x86"/"arm64" exactly.
+                        v = scene3d::build_lane_prism(
+                            a.df, rid, space::opcode_guest_from_arch(a.arch));
                     }
                 }
                 ImGui::EndCombo();

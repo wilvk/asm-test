@@ -1697,15 +1697,19 @@ $(BUILD)/desktop_test_scene_kind: $(BUILD)/desktop/test/t/test_scene_kind.o \
 # T2-T5: the four standalone scene BUILDERS, over real fixtures. Links
 # s3/standalone.o + the models it reads from (analysis/diff.o for the
 # divergence gate, views/region.o + views/tree.o for the invocation/ribbon
-# sources, space/mnemonic.o for the prism's ambiguity gate) + the doc model,
-# and NOTHING else: no ImGui, no GL, no engine. Same engine-free closure proof
-# test_drillin makes, now for the substrates that are not the address plane.
+# sources, space/mnemonic.o for the prism's ambiguity gate, space/
+# opcode_terrain.o for opcode_guest_from_arch -- the 2026-08-08 fast-follow
+# test that pins the ambiguity gate needs a TRANSLATED guest, not a
+# recording's raw arch string) + the doc model, and NOTHING else: no ImGui,
+# no GL, no engine. Same engine-free closure proof test_drillin makes, now
+# for the substrates that are not the address plane.
 $(BUILD)/desktop/test/t/test_standalone.o \
 $(BUILD)/desktop/test/t/test_scene_kind.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop_test_standalone: $(BUILD)/desktop/test/t/test_standalone.o \
     $(BUILD)/desktop/test/s3/standalone.o \
     $(BUILD)/desktop/test/sp/mnemonic.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/opcode_terrain.o \
     $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/tree.o \
     $(BUILD)/desktop/test/vw/observer.o \
     $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \

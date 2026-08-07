@@ -20,6 +20,8 @@
 #include "doc/recording.h"
 #include "doc/streams.h"
 #include "scene3d/standalone.h"
+#include "space/mnemonic.h" // the ambiguity gate itself (fast-follow test)
+#include "space/opcode_terrain.h" // opcode_guest_from_arch (fast-follow test)
 #include "space/projection.h"
 #include "views/region.h"
 #include "views/tree.h"
@@ -882,6 +884,46 @@ int main() {
               mix.writes[0].lane_bytes == 4,
               "a Known write's lane_bytes must not be affected by a sibling "
               "write's verdict");
+    }
+
+    // ---- T5 fast-follow (2026-08-08): the ambiguity gate needs a
+    // TRANSLATED guest string, not the recording's raw arch -----------------
+    //
+    // shell.cpp's two build_lane_prism call sites were passing a.arch
+    // straight through. Real recordings carry "x86_64"/"aarch64" (doc/
+    // recording.cpp), but space::mnemonic_class -- the ambiguity gate
+    // lane_width_class's own comment calls "the GATE" -- matches `guest`
+    // EXACTLY against "x86"/"arm64". So the gate could never fire for any
+    // real recording; fixed by routing both call sites through
+    // space::opcode_guest_from_arch, the same translator the opcode terrain
+    // already uses (shell.cpp).
+    //
+    // This was "harmless today" only by coincidence: every currently
+    // ambiguous x86 mnemonic (movd/movq -- caught earlier by the bulk-move
+    // family anyway -- and the cvtsi2sd/cvtsi2ss/... scalar conversions) is
+    // ALSO absent from kLaneWidths, so lane_width_class returns Unknown
+    // whether or not the gate actually ran -- its return value alone cannot
+    // observe the bug. So this check asserts the gate's own precondition
+    // directly (space::mnemonic_class(...).ambiguous), which IS what
+    // depends on the guest string being exact, while still routing the
+    // mnemonic through lane_width_class to pin the contract a caller
+    // actually relies on.
+    {
+        const std::string guest = space::opcode_guest_from_arch("x86_64");
+        // cvtsi2sd is ambiguous (54 T4: a GPR<->XMM scalar conversion) and,
+        // unlike movd/movq, is NOT in the bulk-move family -- so it is one
+        // of the few mnemonics that actually reaches the ambiguity gate
+        // inside lane_width_class rather than being caught earlier.
+        check("T5/width/guest-string-must-be-translated-for-the-ambiguity-gate",
+              guest == "x86" &&
+                  space::mnemonic_class("cvtsi2sd", guest).ambiguous &&
+                  !space::mnemonic_class("cvtsi2sd", "x86_64").ambiguous &&
+                  lane_width_class("cvtsi2sd xmm0, eax", guest) ==
+                      PrismWidth::Unknown,
+              "space::mnemonic_class matches guest EXACTLY against \"x86\" "
+              "-- \"x86_64\" (a real recording's raw arch) never trips the "
+              "ambiguity gate; opcode_guest_from_arch(\"x86_64\") must "
+              "resolve to \"x86\" before it reaches lane_width_class");
     }
 
     if (failures) {
