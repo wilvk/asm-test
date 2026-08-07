@@ -2983,37 +2983,79 @@ int main() {
               "an un-ticked capture must not pay mem's per-access cost");
         check("cap/statediff off by default", !fp.contains("statediff"),
               "an un-ticked capture must not force the register ring on");
+
+        // 2026-08-07 plan, Task 1 (coordinator review, item 3): `cap/mem is
+        // opt-in`/`cap/statediff is opt-in` above already assert the enabled
+        // case (both read .value(key, false), false unless the arm actually
+        // fired -- confirmed by mutation: deleting either arm alone fails
+        // only its own check), but they share ONE InspectState, so
+        // want_mem is already true by the time statediff's check runs. A bug
+        // where one flag's arm keyed off the OTHER's checkbox instead of its
+        // own would be invisible there, since the key it set is independently
+        // true anyway by that point. These two isolate one flag at a time.
+        InspectState mem_only;
+        mem_only.want = LiveMode::Dataflow;
+        std::snprintf(mem_only.region, sizeof mem_only.region, "%s", "hotfn");
+        mem_only.want_mem = true;
+        check("cap/mem sends mem in isolation",
+              inspect_start_params(mem_only).value("mem", false),
+              "only want_mem is set here -- want_statediff is untouched");
+        InspectState statediff_only;
+        statediff_only.want = LiveMode::Dataflow;
+        std::snprintf(statediff_only.region, sizeof statediff_only.region, "%s",
+                      "hotfn");
+        statediff_only.want_statediff = true;
+        check("cap/statediff sends statediff in isolation",
+              inspect_start_params(statediff_only).value("statediff", false),
+              "only want_statediff is set here -- want_mem is untouched");
     }
 
     // 2026-08-07 plan, Task 1: the blame layer is ON by default
     // (scene3d/scene.h:131) and build_blame_forest runs every frame
     // (shell.cpp:1340), but Streams::blame is populated only from the wire
-    // `blame` kind — which the GUI has never sent. So the layer draws nothing
-    // on every GUI capture, silently. The previous plan's M12 listed the
-    // unsent flags and missed this one.
+    // `blame` kind — which the GUI never sent before this task. Coordinator
+    // review (round 2): the original opt-in-and-off shape rested on a false
+    // cost claim ("one event per step") — measured, cli/asmspy.c:2512-2519
+    // emits it ONCE per invocation (a flat +1), so since the layer it feeds
+    // already defaults ON, `want_blame` now DEFAULTS ON too. The checkbox
+    // survives for `continuous` mode's genuinely unbounded pass count
+    // (asmspy_engine.c's re-arm loop) — a sweep leg is NOT that axis, since
+    // every leg forces `continuous = false` (inspect_sweep_poll).
     {
         InspectState is;
         is.want = LiveMode::Dataflow;
         std::snprintf(is.region, sizeof is.region, "%s", "hotfn");
-        check("cap/blame is opt-in and off by default",
-              !inspect_start_params(is).contains("blame"),
-              "blame costs one event per step with a cone payload, so it is a "
-              "checkbox, not a default — same shape as mem/statediff");
-        is.want_blame = true;
-        check("cap/dataflow sends blame",
+        check("cap/dataflow sends blame by default",
               inspect_start_params(is).value("blame", false),
               "the blame causal layer is on by default and is drawn every "
-              "frame; without this flag it is fed nothing at all");
-        is.want = LiveMode::Auto;
-        check("cap/auto sends blame too",
-              inspect_start_params(is).value("blame", false),
+              "frame; a default-off flag behind it would feed that layer "
+              "nothing on every capture the operator never touches");
+        is.want_blame = false;
+        check("cap/blame off omits the key",
+              !inspect_start_params(is).contains("blame"),
+              "the one real cost is continuous mode's unbounded pass count -- "
+              "the checkbox is how a long auto capture turns this back off");
+
+        // `auto` is the SAME dataflow engine under another name -- a fresh
+        // InspectState so it is not contaminated by `is.want_blame = false`
+        // set just above.
+        InspectState au;
+        au.want = LiveMode::Auto;
+        check("cap/auto sends blame by default too",
+              inspect_start_params(au).value("blame", false),
               "auto IS the dataflow engine with a picker in front of it, and "
               "the auto-led sweep leg is the common path to the 3D pane");
-        is.want = LiveMode::Log;
-        check("cap/log ignores blame",
-              !inspect_start_params(is).contains("blame"),
+
+        // Even a checkbox the operator left checked must not survive a mode
+        // switch to a whole-process capture: there is no def-use graph there
+        // to seed a cone from, checkbox or not.
+        InspectState lg;
+        lg.want = LiveMode::Log;
+        lg.want_blame = true;
+        check("cap/log ignores blame even if requested",
+              !inspect_start_params(lg).contains("blame"),
               "a whole-process mode single-steps nothing, so there is no "
-              "per-step cone to record");
+              "def-use graph to seed a cone from regardless of the checkbox");
     }
 
     // --- Swap/Queue must carry the same params as the direct Start. Routing tree

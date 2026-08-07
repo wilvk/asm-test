@@ -276,13 +276,17 @@ nlohmann::json inspect_start_params(const InspectState &s) {
             params["mem"] = true;
         if (s.want_statediff)
             params["statediff"] = true;
-        // 2026-08-07 plan, Task 1: `blame`, OPT-IN like mem/statediff above —
-        // the 3D pane's blame causal layer defaults ON (scene3d/scene.h) and
-        // build_blame_forest runs every frame regardless of whether this is
-        // set, so an un-ticked capture just draws that layer empty rather than
-        // erroring. Costs one `blame` event per step with a cone payload
-        // (cli/asmspy.c), against a sweep leg capped at sweep_max — real
-        // enough to price on the checkbox rather than default on.
+        // 2026-08-07 plan, Task 1 (coordinator review: the cost claim below
+        // was wrong in its first draft — see doors.h's want_blame comment for
+        // the measured correction): `blame` DEFAULTS ON here, unlike
+        // mem/statediff above. cli/asmspy.c:2512-2519 emits it once per
+        // invocation (a flat +1, not one per step), and the layer it feeds
+        // defaults ON too (scene3d/scene.h) and draws every frame — so a
+        // default-off flag behind an always-on layer is the defect this task
+        // closes, not a cost worth gating. The checkbox survives for
+        // `continuous` mode, whose pass count is genuinely unbounded
+        // (asmspy_engine.c's re-arm loop) — a sweep leg is not that axis,
+        // since every leg forces `continuous = false` just below.
         if (s.want_blame)
             params["blame"] = true;
     }
@@ -986,13 +990,18 @@ void draw_patch_bay(InspectState &s) {
             "— forces the register ring on, one statediff + one regstate per "
             "step",
             &s.want_statediff);
-        // 2026-08-07 plan, Task 1 (M12 gap): `blame`, OPT-IN and priced like
-        // mem/statediff above — the 3D pane's blame causal layer defaults ON
-        // and draws every frame, but was fed nothing at all because the GUI
-        // never asked the host for it.
+        // 2026-08-07 plan, Task 1 (coordinator review, item 2): DEFAULT ON,
+        // unlike mem/statediff above — the false "one event per step" cost
+        // claim was the only reason this was ever opt-in; measured, it is a
+        // flat +1 event per invocation (cli/asmspy.c:2512-2519), cheaper than
+        // `mem` and no pricier than `insns` (already unconditional above),
+        // and the layer it feeds already defaults ON and draws every frame
+        // (scene3d/scene.h, shell.cpp). The checkbox survives for the one
+        // real cost: `continuous` mode re-arms indefinitely until Stop, so a
+        // long capture pays one blame event per pass with no bound.
         ImGui::Checkbox(
             "record the blame cone (blame → the 3D pane's causal layer) — "
-            "one `blame` event per step with a cone payload",
+            "one event per invocation; uncheck for a long continuous capture",
             &s.want_blame);
         // 35 T4: keep re-arming the same region until Stop, into one growing
         // recording (the Scrubber follows the latest invocation live). One start

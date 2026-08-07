@@ -300,13 +300,24 @@ struct InspectState {
     // see inspect_start_params for where they reach the wire.
     bool want_mem = false;
     bool want_statediff = false;
-    // The per-step BLAME cone (`--blame`): which earlier steps a value came
-    // from. The 3D pane's blame causal layer defaults ON (scene3d/scene.h) and
-    // build_blame_forest runs every frame, so without this the layer is drawn
-    // empty on every GUI capture — the defect this opt-in closes. Off by
-    // default like mem/statediff: it adds one `blame` event per step, carrying
-    // a cone payload, against a sweep leg capped at sweep_max.
-    bool want_blame = false;
+    // The BLAME cone (`--blame`): a single backward-attribution cone over the
+    // def-use graph, seeded at the penultimate step of ONE invocation
+    // (cli/asmspy.c:2512-2519's dataflow_emit_blame: gated `nsteps >= 1`, one
+    // `rec_emit` per call — NOT one event per step; an earlier version of this
+    // comment claimed "per step" and a live check proved it wrong: a 200-max
+    // capture produced exactly 1 blame event, not ~80). DEFAULT ON, unlike
+    // mem/statediff: the 3D pane's blame causal layer defaults ON
+    // (scene3d/scene.h) and build_blame_forest runs every frame, so leaving
+    // this off feeds that layer nothing — the exact defect this task closes —
+    // and at a flat +1-per-invocation cost (cheaper than `mem`, no pricier
+    // than `insns`, already unconditional above) there is no reason to make
+    // the operator ask for it. The one real cost is `continuous` mode's pass
+    // count (asmspy_engine.c:3753-3802's re-arm loop: `stop_loop =
+    // !continuous`, unbounded until Stop, one blame event per pass) — NOT a
+    // sweep leg, which forces `continuous = false` (inspect_sweep_poll) and so
+    // pays a flat +1 regardless of sweep_max. The checkbox stays so a long
+    // continuous `auto` capture can still turn it off.
+    bool want_blame = true;
 
     // CONTINUOUS capture (35 T4): the dataflow/auto engine re-arms the same scoped
     // region and keeps capturing until Stop, appending each invocation into one
