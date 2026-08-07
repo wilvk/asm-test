@@ -1050,19 +1050,52 @@ set +e
 ajout=$(timeout 60 "$ASM" --dataflow "$AJPID" --auto 2>&1); ajrc=$?
 set -e
 [ "$ajrc" -eq 124 ] && fail "--dataflow --auto hung on jit_victim"
-if printf '%s\n' "$ajout" | grep -q '^# SKIP --dataflow --auto'; then
-    printf '%s\n' "$ajout" | grep '^# SKIP' | sed 's/^/  /'
-    echo "  (IBS-Op unavailable — JIT --auto leg self-skipped; use make docker-cli-ibs)"
-else
+# THE OUTCOME IS DECIDED BY WHAT RAN, NOT BY THE FIRST `# SKIP` LINE.
+#
+# This guard used to be `grep '^# SKIP --dataflow --auto'` with $ajrc checked in
+# the ELSE arm only, and Task 5 turned that into a false pass: a chain rung that
+# refuses prints its own `# SKIP --dataflow --auto:` line ON ITS WAY to the next
+# rung, so on any perf-refused host IBS's in-flight refusal matched, the taken
+# branch never looked at $ajrc, and a chain that went on to reach the perf-free
+# picker and exit 1 passed green while printing "IBS-Op unavailable". MEASURED
+# on this host, 2026-08-06: rc=1, three `--auto[ptrace-pc]` windows, green.
+# Task 7 diagnosed the same hazard 200 lines up and dodged it with
+# `--sampler=ptrace`; this is the site it left behind.
+#
+# Three outcomes, each with its own exit code, and $ajrc checked in all of them.
+if printf '%s\n' "$ajout" | grep -qE '^--auto(\[sw-clock\])?: jit_hot_loop \[jit\]'; then
+    # A PERF-BACKED rung picked, which is the capability this leg exists for.
     [ "$ajrc" -eq 0 ] || fail "--dataflow --auto on jit_victim exited $ajrc: $ajout"
-    printf '%s\n' "$ajout" | grep -qE '\-\-auto: jit_hot_loop \[jit\]' \
-        || fail "--auto did not pick the JIT method jit_hot_loop: $ajout"
     # The capture must be NAMED too: a JIT winner is invisible to
     # asmspy_symtab_at, so this line is the auto_pick name plumbing, not the
     # symtab fallback.
     printf '%s\n' "$ajout" | grep -q 'data flow — jit_hot_loop' \
         || fail "--auto picked jit_hot_loop but did not capture/name it: $ajout"
     echo "  --auto picked + traced the JIT method (perf-map layered into the pick)"
+elif printf '%s\n' "$ajout" | grep -q '^--auto: every sampler in the chain refused'; then
+    # THE TERMINAL give-up, printed once by cmd_dataflow when the whole chain is
+    # exhausted — the only line that means "this call self-skipped", as distinct
+    # from a rung's own in-flight refusal.
+    [ "$ajrc" -eq 0 ] || fail "a fully-refused --auto chain is a clean self-skip and must exit 0, got $ajrc: $ajout"
+    printf '%s\n' "$ajout" | grep '^# SKIP' | sed 's/^/  /'
+    echo "  (every --auto sampler refused here, perf-free rung included — use make docker-cli-ibs)"
+elif printf '%s\n' "$ajout" | grep -q -- '--auto\[ptrace-pc\]'; then
+    # Perf refused, so the chain fell THROUGH to the perf-free picker and that
+    # rung really ran. It resolves through the ELF symtab only (auto_pick_ptrace
+    # passes no jitmap), so it cannot name a JIT method — but it must still
+    # behave, and its exit code must match what it did.
+    printf '%s\n' "$ajout" | grep -q -- '--auto\[ptrace-pc\]: jit_hot_loop' \
+        && fail "the perf-free rung named a JIT method it has no map for: $ajout"
+    if printf '%s\n' "$ajout" | grep -q 'data flow — '; then
+        [ "$ajrc" -eq 0 ] || fail "--auto picked and captured but exited $ajrc: $ajout"
+    else
+        [ "$ajrc" -eq 1 ] || fail "--auto reached the perf-free rung, qualified no region, and must exit 1 (no pick), got $ajrc: $ajout"
+        printf '%s\n' "$ajout" | grep -q 'gave up after .* idle window' \
+            || fail "--auto[ptrace-pc] qualified nothing but never said so: $ajout"
+    fi
+    echo "  (perf refused: the chain fell through to the perf-free ptrace rung, which reads the ELF symtab only and cannot name a JIT method — use make docker-cli-ibs for the JIT pick itself)"
+else
+    fail "--dataflow --auto on jit_victim: no sampler line at all (rc=$ajrc): $ajout"
 fi
 sleep 1
 kill -0 "$AJPID" 2>/dev/null || fail "jit_victim died under --dataflow --auto"
@@ -3842,6 +3875,54 @@ fi
 
 kill -9 "$T9PID" 2>/dev/null || true
 wait "$T9PID" 2>/dev/null || true
+
+# --serve: the ptrace picker's OWN measured reason must reach the wire, not the
+# generic placeholder (2026-08-06 final review, finding 3).
+#
+# WHY THIS IS NOT COSMETIC. asmspy_sampler_unavail_reason's ptrace string is
+# "the perf-free ptrace picker found no entry it could confirm (see the
+# per-attempt reason already reported)" — and the per-attempt reason goes to
+# STDERR, which desktop/src/live/session.cpp does not capture (it dup2s fds 0
+# and 1 only). So a GUI operator was pointed at a line their client never
+# received. The reason that hides hardest is asmspy_ptrace_sample's damage
+# report: the picker can come back "the target could not be handed back clean —
+# a trap byte or a seized task was left behind", the target then dies of a
+# SIGTRAP seconds later, and nothing on the client connects the two.
+#
+# ASMSPY_PS_TEST_CAP=2 makes the refusal deterministic on ANY host (the picker
+# needs no perf, so there is no lane where this can self-skip) and gives it a
+# distinctive sentence — the arm-gate note — that the generic string does not
+# contain. `sampler:"ptrace"` pins the rung.
+echo "--- asmspy --serve mode=auto sampler=ptrace: the wire carries the picker's MEASURED reason (F3) ---"
+"$BUILD/tid_victim" >/dev/null 2>&1 &
+F3PID=$!
+sleep 1
+kill -0 "$F3PID" 2>/dev/null || fail "F3: tid_victim did not start"
+F3OUT="$RECDIR/serve_f3_client.ndjson"
+rm -f "$F3OUT"
+set +e
+{
+    printf '{"cmd":"start","mode":"auto","pid":%d,"sampler":"ptrace","max":50}\n' "$F3PID"
+    sleep 3
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | ASMSPY_PS_TEST_CAP=2 timeout 60 "$ASM" --serve >"$F3OUT" 2>/dev/null
+f3rc=$?
+set -e
+[ "$f3rc" -eq 124 ] && fail "--serve (F3): hung"
+[ "$f3rc" -eq 0 ] || fail "--serve (F3): exited $f3rc"
+kill -0 "$F3PID" 2>/dev/null || fail "--serve (F3): the victim did not survive the session"
+# NON-VACUITY: the leg must actually have skipped, or there is no reason to
+# carry. A ptrace-rung refusal needs no perf, so this cannot be lane-dependent.
+grep -q '"skip"' "$F3OUT" \
+    || fail "F3: the ptrace rung did not self-skip under ASMSPY_PS_TEST_CAP=2 — the check below would be vacuous: $(cat "$F3OUT")"
+grep -q 'UNCONFIRMED' "$F3OUT" \
+    || fail "F3: the wire carries a generic refusal, not the reason the SAMPLER measured — a GUI has no stderr to read it from: $(grep '"skip"' "$F3OUT")"
+grep -q 'the perf-free ptrace picker found no entry it could confirm' "$F3OUT" \
+    && fail "F3: the wire still carries the generic placeholder in place of the measured reason: $(grep '"skip"' "$F3OUT")"
+echo "  the serve wire carries the picker's own UNCONFIRMED sentence verbatim (the damage report travels the same channel)"
+kill -9 "$F3PID" 2>/dev/null || true
+wait "$F3PID" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # --info — the attach-free process snapshot

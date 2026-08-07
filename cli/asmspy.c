@@ -3069,9 +3069,26 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
  * batch. (A dedicated boolean out-param on asmspy_ptrace_sample would remove
  * even this string dependency; not added here — see the task's report for
  * why it was left as a follow-up rather than done under this fix.) */
+/* `why_out` (2026-08-06 final review, finding 3): the sampler's MEASURED reason,
+ * copied out for a caller that has no stderr to read.
+ *
+ * The reason it had to exist. The serve host filled its skip_note from
+ * asmspy_sampler_unavail_reason — a fixed string — while the specific reason
+ * went to stderr, and desktop/src/live/session.cpp dup2s only fds 0 and 1, so a
+ * GUI launched from a desktop launcher never saw it at all. One of the strings
+ * lost that way is asmspy_ptrace_sample's damage report ("the target could not
+ * be handed back clean — a trap byte or a seized task was left behind; do not
+ * trace this process further without checking it"). The operator was shown "the
+ * perf-free ptrace picker found no entry it could confirm (see the per-attempt
+ * reason already reported)" — a reason they cannot see, about a process that is
+ * about to die of a SIGTRAP nothing will connect to us.
+ *
+ * NULL is allowed: the CLI path prints to a stderr the operator is already
+ * reading, and duplicating it there would be noise. */
 static int auto_pick_ptrace(pid_t pid, const asmspy_symtab_t *t,
                             const char *module, auto_cand_copy *out,
-                            int max_out, int window_ms) {
+                            int max_out, int window_ms, char *why_out,
+                            size_t why_out_len) {
     asmspy_autocand_t cands[AUTO_MAX_CANDS];
     /* 512, not 256: the worst case that matters here appends BOTH the
      * Capstone-missing note (~78 bytes) and the arm-gate note (~193 bytes,
@@ -3083,6 +3100,13 @@ static int auto_pick_ptrace(pid_t pid, const asmspy_symtab_t *t,
     char why[512] = "";
     int nc = asmspy_ptrace_sample(pid, t, module, cands, AUTO_MAX_CANDS,
                                   window_ms, why, sizeof why);
+    /* VERBATIM, and before any of the branches below, so every one of them —
+     * the self-skip, the empty window, the unconfirmed-batch refusal — hands
+     * the caller the same sentence stderr got. Copied even on success: a
+     * confirmed pick can still carry phase 2's "no Capstone" note, which is a
+     * fact about the pick a client should be able to show. */
+    if (why_out && why_out_len)
+        snprintf(why_out, why_out_len, "%s", why);
     if (nc < 0) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 why[0] ? why : "the ptrace sampler refused");
@@ -3192,9 +3216,11 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                 else if (smp == ASMSPY_SMP_IBS)
                     ncand = auto_pick(pid, &t, module, cands, AUTO_TRIES,
                                       window_ms);
-                else /* ASMSPY_SMP_PTRACE (Task 7): the perf-free picker. */
+                else /* ASMSPY_SMP_PTRACE (Task 7): the perf-free picker. NULL
+                      * why_out: this path's operator is reading the stderr the
+                      * picker already printed it on. */
                     ncand = auto_pick_ptrace(pid, &t, module, cands, AUTO_TRIES,
-                                             window_ms);
+                                             window_ms, NULL, 0);
                 if (ncand != 0 ||
                     asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
                         ASMSPY_WALK_ADVANCE)
@@ -3558,8 +3584,14 @@ typedef struct {
     /* A measured reason no lookup could produce. mode "auto" needs it: when
      * its SAMPLER self-skips, the thing that is unavailable is the sampler,
      * and only the sampler knows why — reporting the capture engine's generic
-     * text there would name the wrong subsystem. */
-    char skip_note[320];
+     * text there would name the wrong subsystem.
+     *
+     * 640, up from 320, because the ptrace picker's `why` is itself 512 and
+     * this is now the channel that carries it verbatim (2026-08-06 final
+     * review, finding 3): at 320 the chain suffix could push the tail of a
+     * damage report off the end, which is the one sentence an operator has to
+     * act on. */
+    char skip_note[640];
 } serve_session_t;
 
 /* ---- record-only sinks --------------------------------------------- */
@@ -4345,10 +4377,15 @@ static void serve_run_engine(serve_session_t *s) {
          * out-of-range wire `ms` cannot truncate into a ~24-day survey (review). */
         int window_ms = serve_auto_window_ms(p);
         char tried[64] = "";
+        /* The ptrace picker's own MEASURED reason. Sized like the picker's own
+         * buffer; re-cleared every attempt so a rung that refuses without a
+         * reason cannot inherit the previous rung's. */
+        char ps_why[512] = "";
         int wtry = 0;
         for (;;) {
             wtry = 0;
             for (;;) {
+                ps_why[0] = '\0';
                 if (smp_id == ASMSPY_SMP_SW)
                     ncand = auto_pick_sw(p->pid, &s->syms, mod, cands,
                                          AUTO_TRIES, window_ms);
@@ -4358,9 +4395,13 @@ static void serve_run_engine(serve_session_t *s) {
                 else /* ASMSPY_SMP_PTRACE (Task 7): the perf-free picker; an
                       * unconfirmed pick is refused INSIDE auto_pick_ptrace
                       * and comes back here as an ordinary self-skip (< 0),
-                      * surfacing below in skip_note exactly like IBS/sw's. */
+                      * surfacing below in skip_note exactly like IBS/sw's.
+                      * `ps_why` is what makes that skip_note the MEASURED
+                      * reason rather than the generic one — this session has
+                      * no stderr any client can read (finding 3). */
                     ncand = auto_pick_ptrace(p->pid, &s->syms, mod, cands,
-                                             AUTO_TRIES, window_ms);
+                                             AUTO_TRIES, window_ms, ps_why,
+                                             sizeof ps_why);
                 if (ncand != 0 ||
                     asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
                         ASMSPY_WALK_ADVANCE)
@@ -4398,13 +4439,22 @@ static void serve_run_engine(serve_session_t *s) {
              * facts about two different subsystems, so they must not share a
              * code or a reason. */
             s->rc = ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+            /* The MEASURED reason wins over the generic one whenever the rung
+             * that gave up actually produced one (finding 3). This is the only
+             * channel a GUI has: session.cpp dup2s fds 0 and 1 and drops the
+             * child's stderr, so "see the per-attempt reason already reported"
+             * names a line that client never received — and the reason it hides
+             * hardest is the damage report, which is the one an operator must
+             * act on. Empty falls back, so IBS/sw and a rung that refused
+             * without a word are unchanged. */
+            const char *ps_reason = (smp_id == ASMSPY_SMP_PTRACE && ps_why[0])
+                                        ? ps_why
+                                        : asmspy_sampler_unavail_reason(smp_id);
             if (ncand < 0 && chain_auto)
                 snprintf(s->skip_note, sizeof s->skip_note,
-                         "%s (chain tried: %s)",
-                         asmspy_sampler_unavail_reason(smp_id), tried);
+                         "%s (chain tried: %s)", ps_reason, tried);
             else if (ncand < 0)
-                snprintf(s->skip_note, sizeof s->skip_note, "%s",
-                         asmspy_sampler_unavail_reason(smp_id));
+                snprintf(s->skip_note, sizeof s->skip_note, "%s", ps_reason);
             else
                 snprintf(
                     s->skip_note, sizeof s->skip_note,
@@ -4485,7 +4535,11 @@ static void *serve_tracer(void *arg) {
     const char *backend = "ptrace-syscalls";
     int exact = 1;
     const char *trust = "exact";
-    char skiptext[256] = "";
+    /* Sized to skip_note, not smaller than it: this is the buffer that carries
+     * the measured reason onto the client stream and into the session note, and
+     * at 256 it silently cropped a reason skip_note was holding in full
+     * (2026-08-06 final review, finding 3). */
+    char skiptext[640] = "";
 
     /* This thread owns the quit-wake: serve_stop's pthread_kill(SIGALRM) must
      * INTERRUPT a blocked waitpid here, not kill the process. The command
