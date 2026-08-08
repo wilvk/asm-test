@@ -31,6 +31,20 @@ struct Region {
     uint64_t extent_base = 0, extent_len = 0;
     std::string perms; // "r-xp" verbatim from maps; "" when unknown
     std::string path;  // "/usr/lib/libc.so.6"; "" for anonymous or unknown
+
+    // Was this region's kind/label assigned by the vmmap naming overlay rather
+    // than by the recording's own `codeimage` events?
+    //
+    // Load-bearing, and not merely informational. resolve_anchor derives the
+    // rel->abs base by counting Region::Code spans and REFUSES when there are
+    // two or more — so once the overlay can name a data touch inside an
+    // executable mapping "Code", it can manufacture a second anchor candidate
+    // and strand every routine-relative path in the recording. A mapping's
+    // permission bits say what memory IS; only a `codeimage` event says the
+    // recording captured a routine THERE, and only the latter can anchor.
+    // resolve_anchor therefore filters on this. Defaults false so every
+    // existing producer (and every hand-built Region in a test) is unchanged.
+    bool from_vmmap = false;
 };
 
 // 61 T2: one region's rectangle on the cell grid, half-open in CELL

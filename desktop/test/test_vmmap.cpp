@@ -108,6 +108,39 @@ int main() {
               "inherits its predecessor's name");
     }
 
+    // --- a span STRADDLING two mappings is named by neither ------------------
+    // observed_data_spans page-rounds and gap-merges its clusters, so two
+    // touched pages in two ADJACENT kernel mappings arrive as one span. libc's
+    // rw-p data segment followed immediately by its anonymous .bss overflow is
+    // exactly this shape and exists in /proc/self/maps on any glibc host.
+    // Attributing the whole span to the first mapping would label anonymous
+    // memory "libc.so.6" AND report "touched at least 8192 of 4096 bytes".
+    {
+        space::VmMap m;
+        m.present = true;
+        m.readable = true;
+        m.spans_total = 2;
+        m.spans = {
+            {0x7f0000000000, 0x1000, "rw-p", "libc.so.6", "/usr/lib/libc.so.6"},
+            {0x7f0000001000, 0x1000, "rw-p", "", ""},
+        };
+        std::vector<space::Region> regs;
+        space::Region straddle;
+        straddle.base = 0x7f0000000000;
+        straddle.len = 0x2000; // crosses out of libc into the anon mapping
+        straddle.kind = space::Region::Unknown;
+        straddle.label = space::kObservedDataLabel;
+        regs.push_back(straddle);
+        const size_t n = space::vmmap_apply_names(regs, m);
+        check("straddle/not-named", n == 0 &&
+                                        regs[0].kind == space::Region::Unknown,
+              "a span crossing a mapping boundary belongs to neither — naming "
+              "it after the first would claim anonymous memory is libc");
+        check("straddle/no-contradictory-extent", regs[0].extent_len == 0,
+              "and it must carry no extent, or the readout says 'touched at "
+              "least 8192 of 4096'");
+    }
+
     // --- what it must NOT touch ---------------------------------------------
     {
         std::vector<space::Region> regs;
@@ -187,6 +220,44 @@ int main() {
               "overlay is mutating base/len and the reader's mental map breaks");
         check("layout/reflow-note-silent", space::layout_reflow_note(fa, fb).empty(),
               "an unmoved floor must not announce a reflow");
+    }
+
+    // --- NAMING A REGION MUST NOT MOVE THE ANCHOR ---------------------------
+    // resolve_anchor derives the rel->abs base by counting Region::Code spans,
+    // and refuses when there are two or more. So an overlay that renames an
+    // observed-data span inside an executable mapping to Code manufactures a
+    // second one — and a rel-basis recording loses its anchored path entirely,
+    // while the refusal blames a "codeimage code span" that is really a data
+    // touch. Layout invariance cannot catch this: the fingerprint never mixes
+    // `kind`.
+    {
+        std::vector<space::Region> regs;
+        space::Region code; // the ONE real codeimage span
+        code.base = 0x400000;
+        code.len = 0x1000;
+        code.kind = space::Region::Code;
+        code.label = "code@0x400000";
+        regs.push_back(code);
+        space::Region touched; // an observed touch inside libc's r-xp mapping
+        touched.base = 0x7f0000000000;
+        touched.len = 0x1000;
+        touched.kind = space::Region::Unknown;
+        touched.label = space::kObservedDataLabel;
+        regs.push_back(touched);
+
+        const space::Anchor before = space::resolve_anchor(regs);
+        check("anchor/precondition", before.ok && before.base == 0x400000,
+              "the fixture must anchor before the overlay runs");
+        const size_t n = space::vmmap_apply_names(regs, fixture_map());
+        check("anchor/precondition-renamed", n == 1 &&
+                                                 regs[1].kind ==
+                                                     space::Region::Code,
+              "the overlay must actually have named it Code, or this is "
+              "vacuous");
+        const space::Anchor after = space::resolve_anchor(regs);
+        check("anchor/survives-naming", after.ok && after.base == 0x400000,
+              "naming a data touch inside an executable mapping must NOT "
+              "create a second anchor candidate: " + after.reason);
     }
 
     // --- the wire shape, end to end, from a hand-authored fixture -----------

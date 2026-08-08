@@ -111,9 +111,22 @@ size_t vmmap_apply_names(std::vector<Region> &regions, const VmMap &map) {
         if (hi == map.spans.begin())
             continue;
         const VmSpan &s = *(hi - 1);
+        // FULL containment, not just the base. observed_data_spans page-rounds
+        // and gap-merges, so one span can cover two adjacent kernel mappings —
+        // libc's rw-p data followed by its anonymous .bss overflow is exactly
+        // that shape and is present on any glibc host. Attributing the whole
+        // span to the first would label anonymous memory "libc.so.6" and then
+        // report "touched at least 8192 of 4096 bytes". A span that crosses a
+        // boundary belongs to neither mapping, so it keeps saying so.
         if (r.base < s.base || r.base >= s.base + s.len)
             continue; // covered by no mapping: still unknown, never guessed
+        if (r.len > 0 && r.base + r.len > s.base + s.len)
+            continue; // straddles out of this mapping: unknown, never guessed
         r.kind = vmmap_kind_of(s.perms, s.name);
+        // Mark the provenance BEFORE anything downstream reads the kind: an
+        // r-xp mapping makes this Code, and resolve_anchor must not mistake
+        // that for a captured routine (types.h's from_vmmap).
+        r.from_vmmap = true;
         r.label = s.name.empty() ? std::string("(anonymous)") : s.name;
         r.extent_base = s.base;
         r.extent_len = s.len;

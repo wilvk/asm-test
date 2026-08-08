@@ -189,6 +189,48 @@ int main(void) {
         free(s2);
     }
 
+    /* A line longer than the read buffer is DROPPED WHOLE, not split. Its tail
+     * would otherwise be re-parsed as a fresh line, and a pathname containing
+     * "%llx-%llx rw-p " invents a span out of the middle of a filename — and
+     * can carry a raw quote into the JSON body. */
+    {
+        char *longline = malloc(1 << 16);
+        FILE *lf;
+        asmspy_vmspan_t *ls = NULL;
+        size_t lt = 0;
+        int ln;
+        size_t o2 = 0, pad;
+        o2 = (size_t)snprintf(longline, 1 << 16,
+                              "00400000-00410000 r-xp 00000000 08:01 100 /");
+        /* Pad the pathname past the 4096-byte parse buffer, then bury a
+         * plausible maps row plus a double quote inside it. */
+        for (pad = 0; pad < 5000; pad++)
+            longline[o2++] = 'x';
+        o2 += (size_t)snprintf(longline + o2, (1u << 16) - o2,
+                               "00500000-00540000 rw-p 00000000 00:00 0 a\"b\n"
+                               "00600000-00610000 r-xp 00000000 08:01 7 /ok\n");
+        longline[o2] = '\0';
+        lf = fmemopen(longline, strlen(longline), "r");
+        ln = asmspy_vmmap_parse(lf, &ls, &lt);
+        fclose(lf);
+        check("longline/tail-is-not-a-span", ln == 1 && lt == 1,
+              "only the well-formed row after the dropped line may survive");
+        if (ln == 1)
+            check("longline/kept-the-right-one", ls[0].base == 0x600000ULL,
+                  "the survivor must be the genuine row, not a fragment");
+        /* And whatever survived encodes as valid JSON with no bare quote. */
+        if (ln > 0) {
+            char jb[8192];
+            check("longline/body-is-clean",
+                  asmspy_vmmap_body(ls, (size_t)ln, lt, 1, 0, jb, sizeof jb) ==
+                          0 &&
+                      strstr(jb, "a\"b") == NULL,
+                  "a raw quote must never reach the body");
+        }
+        free(ls);
+        free(longline);
+    }
+
     /* A malformed line is skipped, not fatal, and does not count toward total. */
     {
         const char *junk = "not a maps line at all\n"

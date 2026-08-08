@@ -304,9 +304,17 @@ Anchor resolve_anchor(const std::vector<Region> &regions) {
 
     // Only code spans anchor a routine-relative PC offset; a data/stack/heap/mmap
     // region never makes the anchor ambiguous (a df_step offset is a code offset).
+    //
+    // And only a CODEIMAGE code span. Since the vmmap naming overlay landed, a
+    // region can be Code because the kernel mapped it r-xp — libc's text, say,
+    // under an observed data touch. That is a fact about the memory, not a
+    // statement that this recording captured a routine there, and counting it
+    // here would manufacture a second anchor candidate and strand every
+    // routine-relative path in the recording behind a refusal that then blames
+    // a "codeimage code span" which is really a load. See Region::from_vmmap.
     std::vector<const Region *> code;
     for (const Region &r : regions)
-        if (r.kind == Region::Code)
+        if (r.kind == Region::Code && !r.from_vmmap)
             code.push_back(&r);
 
     if (code.size() == 1) {

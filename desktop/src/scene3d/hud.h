@@ -162,7 +162,8 @@ std::string camera_here_text(const space::Projection &proj, float u, float v);
 
 // vmmap (2026-08-08): what the address-space map knows about one region — its
 // permissions, its backing file, its true extent, and how much of that extent
-// the capture reached. Pure, so the WORDING is testable without a frame, which
+// the capture reached. Rendered under each row of the REGION ROSTER (the only
+// caller). Pure, so the WORDING is testable without a frame, which
 // matters here because the phrasing carries a fidelity distinction: the extent
 // is exact (the kernel stated it) while the touched figure is a LOWER BOUND (the
 // capture single-stepped one region and saw a sample of its traffic). "touched
@@ -275,6 +276,11 @@ struct HudState {
     // 48 T3: the region-goto combo's selection, an index into terr.proj.regions
     // (-1 = none chosen yet).
     int goto_region_sel = -1;
+    // Its IDENTITY, for the same reason SceneFocus::region carries one: this is
+    // an ORDINAL into a vector rebuilt on every weave, and a growing capture
+    // gains regions, so a bounds check passes while the index quietly names
+    // someone else. 0/0 = never set.
+    uint64_t goto_region_base = 0, goto_region_len = 0;
 
     // 34 T3: the terrain-time play/pause transport, same shape as the camera
     // presets. `playing` is set by the caller before the draw so the button reads

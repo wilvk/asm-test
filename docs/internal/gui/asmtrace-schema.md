@@ -1209,13 +1209,13 @@ snapshot.
 
 ```json
 {"k":"vmmap","version":0,"maps_readable":true,
- "spans_total":23,"spans_truncated":false,
+ "spans_total":4,"spans_truncated":false,
  "spans":[
    {"base":"0x764548228000","len":1605632,"perms":"r-xp","name":"libc.so.6",
     "path":"/usr/lib/x86_64-linux-gnu/libc.so.6"},
+   {"base":"0x7f9000000000","len":536870912,"perms":"rw-p"},
    {"base":"0x55e3c2100000","len":67108864,"perms":"rw-p","name":"[heap]"},
-   {"base":"0x7ffd0a000000","len":135168,"perms":"rw-p","name":"[stack]"},
-   {"base":"0x7f9000000000","len":536870912,"perms":"rw-p"}]}
+   {"base":"0x7ffd0a000000","len":135168,"perms":"rw-p","name":"[stack]"}]}
 ```
 
 The address space as the producer read it. It exists so a consumer can say what
@@ -1226,6 +1226,13 @@ from "a load happened at this address".
 
 Field order: `version`, `maps_readable`, `spans_total`, `spans_truncated`,
 `spans`. Per span: `base`, `len`, `perms`, `name`, `path`.
+
+The example above is in the order the producer emits: `spans` is RANKED
+(executable first, then descending length, then ascending base), not sorted by
+address — so the r-xp row leads and the 512M anonymous reservation precedes the
+64M heap. `spans_total` equals the row count here because nothing was capped;
+when it exceeds `spans.length`, `spans_truncated` is `true`. A span with no
+pathname omits `name` and `path` entirely rather than carrying empty strings.
 
 **Emitted by `--serve` only**, once per session for every attach mode, after the
 header and before the first engine event, then again on the per-invocation

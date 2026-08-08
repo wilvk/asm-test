@@ -111,20 +111,6 @@ struct SceneLayers {
     // bands is the densest geometry here, so it is opted into deliberately and
     // its band count is stated in the HUD.
     bool sediment = false;
-    // --- vmmap (2026-08-08): two channels over the NAMED address space -----
-    // Both default OFF, joining the seven above rather than the eighteen that
-    // are on. Neither adds geometry: each RE-LIFTS a fact the roster and the
-    // pick readout already state in words, onto a plane whose colour budget is
-    // already spent. That is precisely the "re-lift, so opt in" rule the
-    // default-off set exists for, and both are empty on any recording without a
-    // `vmmap` — so defaulting them on would spend the budget for nothing.
-    //
-    // How much of each named mapping the capture actually reached, so a
-    // barely-grazed 512M arena reads differently from a fully-walked page.
-    bool occupancy = false;
-    // Mark w+x mappings (a JIT arena is the interesting case) and dim
-    // read-only ones.
-    bool perms = false;
     // --- 57-causal-layers: the four layers of CAUSE ------------------------
     // Each ADDS geometry rather than re-lifting the terrain's existing
     // reading, so each defaults ON by this struct's own convention — except

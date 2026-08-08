@@ -357,9 +357,9 @@ std::string camera_here_text(const space::Projection &proj, float u, float v) {
     return buf;
 }
 
-// vmmap (2026-08-08): what the address-space map knows about the region under
-// the cursor, as extra lines beneath camera_here_text's one. Empty when no
-// `vmmap` named this region, so a recording without one reads exactly as before.
+// vmmap (2026-08-08): what the address-space map knows about one region, as the
+// detail lines under each region-roster row. Empty when no `vmmap` named this
+// region, so a recording without one reads exactly as before.
 //
 // The two numbers carry DIFFERENT GRADES and are worded to keep them apart: the
 // extent is exact (the kernel said so), while the touched part is a LOWER BOUND
@@ -1014,8 +1014,11 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                               static_cast<unsigned long long>(r.base));
                 std::string name = r.label.empty() ? fallback : r.label;
                 bool sel = s.goto_region_sel == static_cast<int>(i);
-                if (ImGui::Selectable(name.c_str(), sel))
+                if (ImGui::Selectable(name.c_str(), sel)) {
                     s.goto_region_sel = static_cast<int>(i);
+                    s.goto_region_base = r.base;
+                    s.goto_region_len = r.len;
+                }
             }
             ImGui::EndCombo();
         }

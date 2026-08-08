@@ -67,17 +67,6 @@ const std::vector<LayerDesc> &scene_layers_all() {
         {"sediment", "sediment",
          "is this cell touched early, late, or throughout?", G::Activity,
          LayerGrade::Derived, &SceneLayers::sediment},
-        // vmmap (2026-08-08): Derived — a ratio of a recorded reach against a
-        // kernel-stated extent, not a raw recorded field. Structure, because
-        // both answer "what is this place", not "what happened here".
-        {"occupancy", "occupancy",
-         "how much of this mapping did the capture actually reach?",
-         G::Structure, LayerGrade::Derived, &SceneLayers::occupancy},
-        // Derived too: the permission bits are recorded verbatim, but "is this
-        // a JIT arena" is this layer's reading of them, not the kernel's word.
-        {"permissions", "permissions",
-         "is this memory writable, executable, or both?", G::Structure,
-         LayerGrade::Derived, &SceneLayers::perms},
         {"convergence", "convergence",
          "did two threads come near the same place, close in time?",
          G::Activity, LayerGrade::Derived, &SceneLayers::convergence},

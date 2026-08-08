@@ -3873,7 +3873,18 @@ static void serve_vmmap_emit(serve_session_t *s) {
     if (!f) {
         /* ABSENT MEASUREMENT, not measured zero — the state of every process the
          * running user does not own. Say so on the wire, so the viewer renders
-         * "could not be read" rather than "this process has no mappings". */
+         * "could not be read" rather than "this process has no mappings".
+         *
+         * Through the SAME change gate as the readable path: "still unreadable"
+         * is not news, and without this an unreadable target re-emits one event
+         * per invocation forever (thousands, on a continuous capture). The
+         * digest of an empty span set is a fixed value, so the first refusal is
+         * reported and the rest are suppressed. */
+        asmspy_vmmap_digest(NULL, 0, 0, 0, dg);
+        if (s->vm_have && memcmp(dg, s->vm_last, sizeof dg) == 0)
+            return;
+        memcpy(s->vm_last, dg, sizeof dg);
+        s->vm_have = 1;
         rec_emitf(&s->rec, "vmmap",
                   "\"version\":%u,\"maps_readable\":false,\"spans_total\":0,"
                   "\"spans_truncated\":false,\"spans\":[]",
@@ -5658,6 +5669,17 @@ static int serve_loop(FILE *in, FILE *out, const char *record) {
          * span must not leak into a region session's code image. */
         s.ci_base = 0;
         s.ci_len = 0;
+        /* Same rule for the vmmap gate, and for the same reason twice over.
+         * `version` is 0-based per session (the schema says so), and the change
+         * DIGEST is a fact about the previous session's target — carrying it
+         * forward means a second capture of the same process emits no `vmmap`
+         * at all, leaving that recording with no address-space map and every
+         * region back to "observed data (unknown)". Measured: without this
+         * reset the 2nd and later sessions of one serve host are silently
+         * unnamed. */
+        s.vm_have = 0;
+        s.vm_version = 0;
+        s.vm_last[0] = '\0';
         if (pthread_create(&s.th, NULL, serve_tracer, &s) != 0) {
             atomic_store(&s.running, 0);
             serve_err(&s, "start", "could not create the tracer thread");

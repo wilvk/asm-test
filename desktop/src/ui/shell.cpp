@@ -1451,10 +1451,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             sv.hud.focus.region = scene3d::reresolve_region(
                 sv.terr.proj.regions, sv.hud.focus.region_base,
                 sv.hud.focus.region_len);
-        if (sv.hud.goto_region_sel >= 0 &&
-            static_cast<size_t>(sv.hud.goto_region_sel) >=
-                sv.terr.proj.regions.size())
-            sv.hud.goto_region_sel = -1;
+        if (sv.hud.goto_region_sel >= 0)
+            sv.hud.goto_region_sel = scene3d::reresolve_region(
+                sv.terr.proj.regions, sv.hud.goto_region_base,
+                sv.hud.goto_region_len);
         sv.built = true;
         // T1-T5 (59): the four non-plane substrates, woven on the same gate.
         shell_weave_standalone(sv, r, a, shell_b(s));

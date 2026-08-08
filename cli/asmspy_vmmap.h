@@ -77,6 +77,18 @@ static int asmspy_vmmap_parse(FILE *f, asmspy_vmspan_t **out, size_t *n_total) {
 
     while (fgets(line, sizeof line, f)) {
         uint64_t lo = 0, hi = 0, off = 0;
+        /* A line longer than the buffer would come back in pieces, and the
+         * TAIL of a long pathname can itself parse as "%llx-%llx %s ..." —
+         * inventing a span from the middle of a filename. Drain and drop the
+         * whole line instead: a maps row we cannot read entirely is one we do
+         * not report. (4096 is far above the kernel's own line length; this is
+         * the defensive path, not the common one.) */
+        if (strchr(line, '\n') == NULL && !feof(f)) {
+            int c;
+            while ((c = fgetc(f)) != EOF && c != '\n')
+                ;
+            continue;
+        }
         char perms[8];
         int pathpos = 0;
         const char *p;
@@ -213,12 +225,20 @@ static int asmspy_vmmap_body(const asmspy_vmspan_t *sp, size_t n, size_t total,
                   version, readable ? "true" : "false",
                   (unsigned long long)total, total > n ? "true" : "false");
     for (i = 0; i < n; i++) {
-        char en[256 * 6 + 16], ep[256 * 6 + 16];
+        char en[256 * 6 + 16], ep[256 * 6 + 16], epr[8 * 6 + 16];
         asmtrace_escape(en, sizeof en, sp[i].name);
         asmtrace_escape(ep, sizeof ep, sp[i].path);
+        /* `perms` is escaped too. It is normally four fixed characters from
+         * the kernel, but a maps line longer than the read buffer splits under
+         * fgets and its TAIL is then parsed as a fresh line — so this field can
+         * carry arbitrary path bytes, including a quote or a backslash, and an
+         * unescaped %s would emit malformed JSON. Escaping every string field
+         * without exception is cheaper than reasoning about which one can be
+         * trusted. */
+        asmtrace_escape(epr, sizeof epr, sp[i].perms);
         ASMSPY_VM_APP("%s{\"base\":\"0x%llx\",\"len\":%llu,\"perms\":\"%s\"",
                       i ? "," : "", (unsigned long long)sp[i].base,
-                      (unsigned long long)sp[i].len, sp[i].perms);
+                      (unsigned long long)sp[i].len, epr);
         if (en[0])
             ASMSPY_VM_APP(",\"name\":\"%s\"", en);
         if (ep[0])
