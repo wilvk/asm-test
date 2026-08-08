@@ -626,6 +626,27 @@ int main(void) {
                   led + "\"");
         check("sweep/plan/shapes-differ", named != led,
               "two different leg lists must not print the same plan");
+        // doc 68 T3: the bound's UNIT, and what it does to the recording. "400
+        // events each" was measured wrong twice over: `max` bounds STEPS for the
+        // single-step legs (a --max=400 dataflow capture records exactly 400
+        // df_step and ~1600 events), and the recording comes back flagged
+        // truncated. An operator told "events" reads a 400-row timeline as the
+        // whole story.
+        check("sweep/plan/names-the-unit",
+              named.find("step") != std::string::npos &&
+                  named.find("events each") == std::string::npos,
+              "the cap is in STEPS for the legs that fill the dataflow views, "
+              "and calling them events understates the capture by ~4x: got \"" +
+                  named + "\"");
+        check("sweep/plan/says-it-truncates",
+              named.find("TRUNCATED") != std::string::npos,
+              "a capped leg's recording is flagged truncated — say so, or the "
+              "truncation banner downstream reads as a fault: got \"" +
+                  named + "\"");
+        check("sweep/plan/led-says-it-truncates",
+              led.find("TRUNCATED") != std::string::npos &&
+                  led.find("step") != std::string::npos,
+              "the auto-led shape is capped identically: got \"" + led + "\"");
     }
 
     // 2026-08-06 plan, Task 12 (M13): the completion note is scored against

@@ -168,11 +168,22 @@ const std::vector<LiveMode> &sweep_legs(bool have_region) {
     return have_region ? named : led;
 }
 
-std::string sweep_plan(bool have_region, long max_events) {
+std::string sweep_plan(bool have_region, long max_cap) {
     std::string legs;
     for (LiveMode m : sweep_legs(have_region))
         legs += (legs.empty() ? "" : " -> ") + std::string(mode_name(m));
-    legs += ", " + std::to_string(max_events) + " events each";
+    // doc 68 T3: the unit, and the consequence. This line said "N events each"
+    // until 2026-08-08, and both halves of that were misleading. `max` is the
+    // engine's own count of the thing the leg produces, which for the two
+    // single-step legs — the ones that fill the Timeline, Loom and Scrubber — is
+    // STEPS: a `--dataflow --max=400` capture measures exactly 400 `df_step` and
+    // 1628 events, so "400 events" understates it about fourfold. And a leg that
+    // stops at its cap writes `truncated: true` into the footer, which every
+    // downstream banner then reports; an operator who was not told the sweep
+    // caps its legs reads that as a fault in the capture.
+    legs += ", " + std::to_string(max_cap) +
+            " steps each (the single-step legs) — a leg that reaches its cap "
+            "stops there and its recording is flagged TRUNCATED";
     if (have_region)
         return legs;
     // The empty region box is not a missing setting here — it is what selects

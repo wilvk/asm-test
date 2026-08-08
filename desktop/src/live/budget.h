@@ -158,7 +158,12 @@ const std::vector<LiveMode> &sweep_legs(bool have_region);
 // sweep_legs so the two can never drift apart. The auto-led form must say that
 // the FIRST leg is what finds the region — otherwise an operator reads the
 // empty region box as the reason the button will fail.
-std::string sweep_plan(bool have_region, long max_events);
+//
+// `max_cap` is the per-leg bound the door will send as `max` (doors.h's
+// sweep_max). It counts STEPS on the single-step legs, not events — see the
+// measurement in sweep_plan's body — and the line says so, along with the fact
+// that reaching it flags the recording truncated.
+std::string sweep_plan(bool have_region, long max_cap);
 
 // Why a sweep cannot start, given the facts the door holds; "" when it can.
 // Every reason names the thing to fix rather than a bare refusal.
