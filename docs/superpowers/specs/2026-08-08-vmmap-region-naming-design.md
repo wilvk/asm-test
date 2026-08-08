@@ -352,6 +352,29 @@ Beyond it:
 
 No new dependencies.
 
+## Post-implementation corrections (2026-08-08)
+
+Landed, then reviewed by 10 agents with every finding verified before report. Three
+things this spec got wrong, recorded here because the spec was the thing that was
+wrong — not the implementation of it:
+
+1. **"rewrites label/kind ONLY, so it is safe" was an incomplete argument.** It is
+   sound for LAYOUT and unsound for the ANCHOR. `resolve_anchor` counts
+   `Region::Code` spans and refuses at two or more, so naming a data touch inside an
+   r-xp mapping strands every routine-relative path in the recording. `kind` is not
+   presentational. The fix is `Region::from_vmmap`, and the lesson is that layout
+   invariance was the wrong invariant to prove safety with.
+2. **Containment must be full, not base-only.** `observed_data_spans` page-rounds and
+   gap-merges, so one span can cover two adjacent kernel mappings — libc's `rw-p` data
+   followed by its anonymous `.bss` overflow, present on any glibc host. A straddling
+   span now stays unknown.
+3. **The two visual layers should not have shipped.** Nothing read
+   `SceneLayers::occupancy` or `::perms`; they were two checkboxes that did nothing.
+   Removed. A real implementation needs a second per-cell channel beside
+   `kind_by_cell` plus shader work — **this remains an open gap**, and the honest
+   version of "shown on the 3D scene with more data" that did land is the region
+   roster and the pick detail, both textual.
+
 ## Explicitly unverified
 
 Carried forward honestly rather than presented as settled:
