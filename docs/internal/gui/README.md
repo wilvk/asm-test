@@ -904,6 +904,16 @@ both surfaces, and it carries an unresolved fidelity question about dropped wind
 [62](62-encoding-integrity-roadmap.md) §5 states the question and what settling it
 would make cuttable as doc 67.
 
+## Capture scope (2026-08-08)
+
+Cut from a session question — *why does the timeline show so few instructions for a
+process that ran billions?* — chased to measurements rather than answered from the
+code. It is not one review's cluster, so it sits outside the table above.
+
+| Doc | Area | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|
+| [68-capture-scope-honesty.md](68-capture-scope-honesty.md) | three scopes narrow a capture to the rows on screen — one region, one invocation pass, and a 400-**step** sweep cap — and the app states none of them; plus the Scrubber is hard-pinned to the LATEST pass while the timeline/slice/Loom are pinnable, so a brushed step means two different instructions in two panes | 3 | none | ☐ 0/3 | *free* |
+
 ## Plan phase mapping
 
 Phase 1 = 01 + 02(T1–T4); Phase 2 = 03 + 04 + 05 + 06 + 02(T5–T6);
