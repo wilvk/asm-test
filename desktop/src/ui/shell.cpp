@@ -119,7 +119,17 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     // ring yields an absent index (the normal case) and the tab says so. The
     // playhead starts at 0; a fresh slot for a reopened index must reset, so it
     // is assigned rather than left to resize's fill.
+    // doc 68 T2: segment it on the SAME `df_invocation` markers as the dataflow
+    // below, and take the latest pass as the visible index — which is exactly
+    // what build_step_index resolves to, so this is the same starting state,
+    // now with the other passes reachable.
     s.stepidx.resize(s.ws.recordings.size());
+    s.seg_stepidx.resize(s.ws.recordings.size());
+    s.stepidx_pass.resize(s.ws.recordings.size());
+    s.seg_stepidx[static_cast<size_t>(idx)] =
+        build_segmented_step_index(s.ws.recordings[static_cast<size_t>(idx)]);
+    s.stepidx_pass[static_cast<size_t>(idx)] =
+        s.seg_stepidx[static_cast<size_t>(idx)].latest();
     s.stepidx[static_cast<size_t>(idx)] =
         build_step_index(s.ws.recordings[static_cast<size_t>(idx)]);
     s.scrubber_playhead.resize(s.ws.recordings.size());
@@ -158,6 +168,10 @@ void shell_close(ShellState &s, size_t idx) {
         s.observers.erase(s.observers.begin() + static_cast<long>(idx));
     if (idx < s.stepidx.size())
         s.stepidx.erase(s.stepidx.begin() + static_cast<long>(idx));
+    if (idx < s.seg_stepidx.size())
+        s.seg_stepidx.erase(s.seg_stepidx.begin() + static_cast<long>(idx));
+    if (idx < s.stepidx_pass.size())
+        s.stepidx_pass.erase(s.stepidx_pass.begin() + static_cast<long>(idx));
     if (idx < s.scrubber_playhead.size())
         s.scrubber_playhead.erase(s.scrubber_playhead.begin() +
                                   static_cast<long>(idx));
@@ -236,6 +250,8 @@ void shell_sync_live_tab(ShellState &s) {
         s.streams.resize(s.ws.recordings.size());
         s.observers.resize(s.ws.recordings.size());
         s.stepidx.resize(s.ws.recordings.size());
+        s.seg_stepidx.resize(s.ws.recordings.size());
+        s.stepidx_pass.resize(s.ws.recordings.size());
         s.scrubber_playhead.resize(s.ws.recordings.size());
         s.scenes.resize(s.ws.recordings.size());
         s.seg_df.resize(s.ws.recordings.size());
@@ -274,6 +290,12 @@ void shell_sync_live_tab(ShellState &s) {
     // Re-segment the grown capture so a new invocation pass appears in the pager;
     // a df_pass following the latest (-1) tracks the new tail automatically.
     s.seg_df[i] = build_segmented_dataflow(s.ws.recordings[i]);
+    // doc 68 T2: the register ring re-segments on the same growth. `stepidx[i]`
+    // was just rebuilt to the LATEST pass above, so record that as the pass it
+    // holds — otherwise a stale ordinal would make the next apply believe a
+    // pinned pass is already in force and skip the swap.
+    s.seg_stepidx[i] = build_segmented_step_index(s.ws.recordings[i]);
+    s.stepidx_pass[i] = s.seg_stepidx[i].latest();
     // 25 T6: force a lazy 3D re-weave over the grown recording, but KEEP the
     // interactive camera / HUD / primer — else a growing capture would snap the
     // user's 3D view back to the default orbit on every event batch.
@@ -2346,6 +2368,24 @@ size_t shell_apply_df_pass(ShellState &s, size_t i) {
     // reaches here for a multi-pass recording, so a one-shot pays no copy.
     if (i < s.streams.size())
         s.streams[i].df = seg.passes[cur];
+    // doc 68 T2: the REGISTER RING follows the same pin, or the Scrubber shows a
+    // different invocation from every other dataflow view while they share one
+    // step brush. Segmented on the same `df_invocation` markers, so the ordinal
+    // means the same thing in both — but bounds-checked rather than assumed: a
+    // recording whose regstate the producer omitted still has passes here (each
+    // simply absent), and a future producer that emitted mismatched marker sets
+    // must leave the ring alone rather than index off the end.
+    //
+    // Gated on an actual CHANGE. The Scrubber's synthesise action (30 R3 T4)
+    // replaces stepidx[i] in place with a re-derived ring, and this runs every
+    // frame the pager is drawn — an unconditional copy would discard it on the
+    // very next frame.
+    if (i < s.seg_stepidx.size() && i < s.stepidx.size() &&
+        i < s.stepidx_pass.size() && cur < s.seg_stepidx[i].passes.size() &&
+        s.stepidx_pass[i] != cur) {
+        s.stepidx[i] = s.seg_stepidx[i].passes[cur];
+        s.stepidx_pass[i] = cur;
+    }
     return cur;
 }
 
@@ -2356,11 +2396,23 @@ size_t shell_apply_df_pass(ShellState &s, size_t i) {
 // the target ran unobserved, so it is deliberate discrete paging, never a faked
 // scrub) and apply the choice to the cached Streams::df the views read. Following
 // the latest by default (the live default), pinnable to an earlier pass. A one-shot
-// recording (one pass) draws nothing — the chrome is byte-identical to pre-40.
+// recording (one pass) draws no PAGER — but it still gets the scope line below,
+// which is the case that needed it most (doc 68 T1).
 static void shell_df_pass_pager(ShellState &s) {
     if (s.active_tab < 0 || static_cast<size_t>(s.active_tab) >= s.seg_df.size())
         return;
     size_t i = static_cast<size_t>(s.active_tab);
+    // doc 68 T1: the scope line, drawn HERE rather than in each view's own draw
+    // because this is already the one strip every dataflow view (timeline, slice,
+    // Loom, Scrubber) puts above itself — four call sites, one line, no chance of
+    // three of them agreeing and the fourth not. It precedes the early return
+    // below on purpose: a ONE-PASS recording draws no pager, and that is exactly
+    // the shape whose row count reads as the whole story.
+    if (const Streams *a = shell_a(s)) {
+        const std::string scope = dt_dataflow_scope(*a);
+        if (!scope.empty())
+            ImGui::TextDisabled("%s", scope.c_str());
+    }
     int npasses = static_cast<int>(s.seg_df[i].passes.size());
     if (npasses <= 1)
         return; // one pass (or none): decode already set df; no chrome, no copy
@@ -2546,6 +2598,12 @@ static void body_scrubber(ShellState &s) {
     // placard (never a register file of zeros), exactly as the standalone draw
     // does. The playhead is the caller's; draw_scrubber returns the moved value.
     dt_view_header("scrubber");
+    // doc 68 T2: the SAME invocation pager the timeline, slice and Loom draw.
+    // The Scrubber was the one dataflow view without it, and the one whose model
+    // (stepidx) the pager did not move — so it silently stayed on the newest
+    // invocation while its peers were pinned to an earlier one, and the shared
+    // step brush then meant two different instructions in two panes.
+    shell_df_pass_pager(s);
     // 26 T4: a LIVE regstate ring is the real architectural register file, but
     // captured perturbingly (single-step) over a still-growing capture — carry the
     // same perturb+torn caveat the live Loom/Slice show (self-gates to the live

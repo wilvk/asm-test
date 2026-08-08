@@ -3878,6 +3878,51 @@ int main() {
             cur = shell_apply_df_pass(ps, i);
             check("dfpass/refollow", cur == 2 && step0(ps.streams[i].df) == 100,
                   "clearing the pin returns to the latest pass");
+
+            // doc 68 T2: the REGISTER RING follows the same pin. It did not:
+            // build_step_index returned seg.passes[latest()] once at open and
+            // shell_apply_df_pass swapped only streams[i].df, so pinning the
+            // timeline to pass 0 left the Scrubber on pass 2 — and because the
+            // Scrubber seeds its playhead from the SHARED selection, brushing
+            // step 0 then showed step 0 of a different invocation. This fixture
+            // makes that visible: rax at step 0 is 6 / 10 / 100 per pass.
+            auto rax0 = [](const StepIndex &si) -> long long {
+                const RegFile *f = si.at_step(0);
+                if (f == nullptr)
+                    return -1;
+                const RegField *r = f->find("rax");
+                return r ? static_cast<long long>(r->value) : -1;
+            };
+            check("dfpass/segstepidx-cached",
+                  i < ps.seg_stepidx.size() &&
+                      ps.seg_stepidx[i].passes.size() == 3,
+                  "the register ring must be cached per pass, like seg_df");
+            check("dfpass/scrubber-follows-latest", rax0(ps.stepidx[i]) == 100,
+                  "following the latest, the ring shows pass 2's step 0");
+            ps.df_pass[i] = 0;
+            cur = shell_apply_df_pass(ps, i);
+            check("dfpass/scrubber-follows-pin",
+                  cur == 0 && rax0(ps.stepidx[i]) == 6,
+                  "pinning pass 0 must move the register ring too — two panes "
+                  "disagreeing about what step 0 means is the defect");
+            ps.df_pass[i] = 1;
+            shell_apply_df_pass(ps, i);
+            check("dfpass/scrubber-follows-middle", rax0(ps.stepidx[i]) == 10,
+                  "pass 1's step 0 is rax=10");
+            ps.df_pass[i] = -1;
+            shell_apply_df_pass(ps, i);
+            check("dfpass/scrubber-refollow", rax0(ps.stepidx[i]) == 100,
+                  "clearing the pin returns the ring to the latest pass");
+
+            // A ring the reader SYNTHESISED (30 R3 T4 replaces stepidx[i] in
+            // place) must not be clobbered by the next frame's re-apply. Only a
+            // pass CHANGE may overwrite it, so re-applying the pass already in
+            // force leaves whatever is there alone.
+            ps.stepidx[i].synthesized = true;
+            shell_apply_df_pass(ps, i);
+            check("dfpass/scrubber-noop-keeps-synth", ps.stepidx[i].synthesized,
+                  "re-applying the SAME pass must not overwrite the index — a "
+                  "synthesised ring would be lost every frame");
         }
         // A one-shot recording (no df_invocation marker): exactly one pass, so the
         // pager draws nothing and shell_apply_df_pass follows that single pass.

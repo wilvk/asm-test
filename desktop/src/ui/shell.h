@@ -469,13 +469,26 @@ struct ShellState {
     // 40 T2: the dataflow stream segmented by df_invocation, one per recording,
     // parallel to `streams`. A continuous dataflow/auto capture is many invocation
     // passes in one recording (35 T1), each restarting df_step at 0; the dataflow
-    // views (Slice / Timeline / Loom) show ONE pass at a time. `df_pass` is the
-    // selected pass per recording: < 0 follows the LATEST pass (the live default,
-    // as build_step_index resolves the register ring for the Scrubber), >= 0 pins
-    // an earlier one. A one-shot recording (one pass) shows no selector and reads
-    // exactly as pre-40. shell_apply_df_pass resolves + applies the choice.
+    // views (Slice / Timeline / Loom / Scrubber) show ONE pass at a time.
+    // `df_pass` is the selected pass per recording: < 0 follows the LATEST pass
+    // (the live default), >= 0 pins an earlier one. A one-shot recording (one
+    // pass) shows no selector and reads exactly as pre-40. shell_apply_df_pass
+    // resolves + applies the choice.
     std::vector<SegmentedDataflow> seg_df;
     std::vector<int> df_pass;
+    // doc 68 T2: the REGISTER RING segmented on the same `df_invocation`
+    // markers, so the Scrubber can follow the same pin. Until this existed,
+    // `stepidx[i]` was resolved once at open to the LATEST pass and never moved
+    // — pinning the timeline to pass 0 left the Scrubber on pass 2, and since
+    // the Scrubber seeds its playhead from the shared selection, brushing step 0
+    // put two panes on two different instructions under one step number.
+    //
+    // `stepidx_pass[i]` is which pass `stepidx[i]` currently HOLDS, so a re-apply
+    // of the pass already in force is a genuine no-op. That is not just an
+    // optimisation: the Scrubber's synthesise action (30 R3 T4) replaces
+    // `stepidx[i]` in place, and a per-frame overwrite would discard it.
+    std::vector<SegmentedStepIndex> seg_stepidx;
+    std::vector<size_t> stepidx_pass;
 
     // The ABI x-ray (09-teaching-producers.md T4), surfaced as a tab that locks
     // the active recording (the SysV leg) against the attached B (the Win64 leg,
@@ -690,6 +703,12 @@ std::string shell_prism_guest(const Streams &a);
 // streams[i].df to the chosen pass (a no-op when following latest — decode_streams
 // already put it there) and returns the resolved pass index (0 when the recording
 // has no dataflow or no segment cache). Pure of ImGui so test_shell drives it.
+//
+// doc 68 T2: it applies the same pass to the Scrubber's register ring
+// (stepidx[i], from seg_stepidx[i]), so the two cannot show different
+// invocations under one shared step brush. That half is gated on the pass
+// actually CHANGING — a synthesised ring (30 R3 T4) lives in stepidx[i] and must
+// survive the per-frame re-apply.
 size_t shell_apply_df_pass(ShellState &s, size_t i);
 
 // Build the operand-timeline model for `a` (with `b` for a diff), projecting the
