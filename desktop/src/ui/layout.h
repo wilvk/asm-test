@@ -59,6 +59,23 @@ bool layout_any_pane_visible(ImGuiID dockspace_id);
 // include imgui_internal.h itself — the containment the doc-12 gate relies on.
 bool layout_exists(ImGuiID dockspace_id);
 
+// Dock `window` into whatever node `anchor` currently occupies, but ONLY while
+// `window` is floating (no DockId of its own) and `anchor` is itself docked.
+// Returns true when it moved the window.
+//
+// This is the MIGRATION path for a persisted `.ini` written before a window
+// joined the default layout. layout_build only runs on first run or an explicit
+// reset, so a window added to it reaches nobody who already has an `.ini` — and
+// imgui disables ImGuiCond_FirstUseEver for any window the `.ini` names
+// (imgui.cpp's UpdateWindowInFocusOrderList/CreateNewWindow path), so the
+// ordinary "default position" mechanism cannot reach it either. Rebuilding the
+// whole split would work and would also throw away the arrangement the operator
+// built, so this moves the ONE stranded window and touches nothing else.
+//
+// The caller must latch it: re-running after a success would re-dock a window
+// the operator has since deliberately torn off.
+bool layout_dock_floating_beside(const char *window, const char *anchor);
+
 // Whether `dockspace_id` needs the default split built into it: true when the
 // node is absent or a bare leaf (a fresh dockspace — DockSpaceOverViewport
 // creates exactly such an empty leaf, so `layout_exists` alone is NOT enough to
@@ -103,6 +120,15 @@ extern const char *const kPanePtSlice;
 // process-details), gated on a Processes selection alone (its own
 // context gate, pctx_details, is NOT pctx_capture's host_started).
 extern const char *const kPaneDetails;
+// The 3D overview's HUD. Unlike every pane above it is not opened by the shell:
+// scene3d/hud.cpp Begins it, and only while the Recording pane's "3D overview"
+// tab is being drawn, so it comes and goes with that tab. It is still a docked
+// window — named here so the default layout gives it a home on the right rail
+// instead of leaving it floating over the app, which is where an unnamed
+// top-level ImGui window lands. The string is scene3d's own (scene3d::kHudWindow);
+// this is a re-export so the layout and the tests can name it without ui/ having
+// to reach into a scene3d header at static-init time.
+extern const char *const kPaneScene3D;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

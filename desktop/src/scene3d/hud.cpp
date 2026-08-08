@@ -561,9 +561,11 @@ static void draw_scene_kind_selector(HudState &s) {
                            "address plane only, never across substrates");
 }
 
+const char *const kHudWindow = "3D overview";
+
 void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                     const space::TrajectorySet &traj) {
-    ImGui::Begin("3D overview");
+    ImGui::Begin(kHudWindow);
 
     // Report HUD keyboard focus (22 T2): the caller applies the camera keys when
     // the HUD OR the 3D viewport holds focus, so orbiting works from either.

@@ -290,6 +290,11 @@ struct ShellState {
     // so the View menu — and the tests — can rebuild presets against it. 0 until
     // the first docked frame (the non-docked path never sets it).
     ImGuiID dockspace_id = 0;
+    // The one-shot latch for the 3D overview HUD's `.ini` migration (see the
+    // layout_dock_floating_beside call in draw_shell). Set the frame the HUD is
+    // first found floating and re-docked; never persisted, so it re-arms each
+    // run and a fresh layout — where the HUD is already docked — is a no-op.
+    bool scene3d_hud_docked = false;
     char open_path[1024] = {0}; // its InputText buffer
     std::string open_error;     // last open failure, rendered verbatim
 

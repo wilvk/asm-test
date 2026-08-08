@@ -437,6 +437,14 @@ struct HudState {
 // standing up the whole HUD. Renders nothing else.
 void draw_scene_axes(SceneKind k);
 
+// The title of the top-level window draw_scene_hud opens. The HUD is its own
+// window (not a child of the 3D tab that hosts the viewport), so the dock layout
+// has to name it to place it — and a name written twice is a name that drifts.
+// It lives HERE, beside the ImGui::Begin that uses it, and ui/layout.cpp imports
+// it: scene3d/ must not depend on ui/, so the arrow can only point this way.
+// test_layout pins that kPaneScene3D and this are the same string.
+extern const char *const kHudWindow;
+
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance
 // and the legend; nothing here is mutated.
 void draw_scene_hud(HudState &s, const space::TerrainModel &terr,

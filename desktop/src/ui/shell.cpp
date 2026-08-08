@@ -3843,6 +3843,19 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             layout_reset(s.dockspace_id, vp->WorkSize);
     }
 
+    // The 3D overview HUD joined the default layout after this build already had
+    // users with a persisted `build/desktop-imgui.ini`, and neither layout_build
+    // (first run / reset only) nor ImGuiCond_FirstUseEver (imgui disables it for
+    // any window the `.ini` names) reaches them — so their HUD would keep
+    // floating over the app and the fix would look like it had not landed. Move
+    // that one stranded window beside the Inspector, ONCE: latched on success so
+    // a HUD the reader later tears off on purpose stays torn off. The HUD does
+    // not exist until the 3D tab is first drawn, hence the retry-until-it-lands
+    // shape rather than a single attempt at init.
+    if (!s.scene3d_hud_docked &&
+        layout_dock_floating_beside(kPaneScene3D, kPaneInspector))
+        s.scene3d_hud_docked = true;
+
     // Mode drives perspective (20 T2 step 5): selecting a task mode on the rail
     // sets `pending_preset`; apply it here where the dockspace id is valid, so
     // the label and the pane arrangement never disagree. Consumed once.

@@ -22,6 +22,7 @@ const char *const kPaneLog = "Log";
 const char *const kPaneSave = "Save capture";
 const char *const kPanePtSlice = "PT slice";
 const char *const kPaneDetails = "Process details";
+const char *const kPaneScene3D = "3D overview";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -61,6 +62,23 @@ bool node_has_window(const ImGuiDockNode *n) {
 
 bool layout_any_pane_visible(ImGuiID dockspace_id) {
     return node_has_window(ImGui::DockBuilderGetNode(dockspace_id));
+}
+
+bool layout_dock_floating_beside(const char *window, const char *anchor) {
+    ImGuiWindow *w = ImGui::FindWindowByName(window);
+    ImGuiWindow *a = ImGui::FindWindowByName(anchor);
+    // Both must have been submitted at least once: a window imgui has never
+    // seen has no DockId to read, and docking it against a node the anchor has
+    // not claimed yet would strand it in node 0. Returning false leaves the
+    // caller's latch unset, so it simply tries again next frame — which is what
+    // makes this correct for the HUD, a window that does not exist until the
+    // reader first opens the 3D tab.
+    if (w == nullptr || a == nullptr)
+        return false;
+    if (w->DockId != 0 || a->DockId == 0)
+        return false;
+    ImGui::DockBuilderDockWindow(window, a->DockId);
+    return true;
 }
 
 DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) {
@@ -125,6 +143,12 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     // action, like Save). Docked the same across presets; its context gate — an
     // Intel PT host — decides whether it ever shows.
     ImGui::DockBuilderDockWindow(kPanePtSlice, L.right);
+    // The 3D overview's HUD lands on the RIGHT rail, not in the centre beside
+    // the Recording pane: the viewport it drives lives in that pane's own "3D
+    // overview" tab, so co-docking the two would make selecting the controls
+    // hide the scene they control. Same node across presets — it is the
+    // instrument panel for a view, not a reading arrangement of its own.
+    ImGui::DockBuilderDockWindow(kPaneScene3D, L.right);
     switch (preset) {
     case LayoutPreset::ReplayInspect:
     case LayoutPreset::Author:

@@ -1265,6 +1265,15 @@ int main() {
         check("T5: convergence layer defaults on (SceneLayers's own default)",
               hs.layers.convergence, "convergence should default true");
 
+        // The HUD is a top-level window, so the dock layout has to name it to
+        // place it — and it names ui/layout.h's re-export, not the string
+        // scene3d::draw_scene_hud actually Begins. Two spellings would leave the
+        // HUD floating over the app while the layout confidently docked a window
+        // nobody opens. This TU links both, so it is where they are compared.
+        check("3D HUD: layout and scene3d name the same window",
+              std::string(kPaneScene3D) == scene3d::kHudWindow,
+              "kPaneScene3D and scene3d::kHudWindow drifted apart");
+
         space::TerrainModel terr;
         space::TrajectorySet traj;
         ImGui::NewFrame();

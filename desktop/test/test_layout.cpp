@@ -94,6 +94,55 @@ int main() {
     check("visible/after-begin", layout_any_pane_visible(dock),
           "a docked, Begun pane must register as visible");
 
+    // --- the 3D overview HUD is a DOCKED pane, not a floating window --------
+    // The title itself is scene3d's (the ImGui::Begin lives there) and layout.cpp
+    // re-exports it; that the two spellings agree is pinned in test_shell, which
+    // already links both TUs — this binary is deliberately layout.o + imgui and
+    // nothing else, so it pins the literal and the placement.
+    check("scene3d/name", std::string(kPaneScene3D) == "3D overview",
+          "the 3D overview HUD's window title drifted");
+    {
+        // The default layout gives it a node. Begin it AFTER the build (as the
+        // app does — the HUD appears only once the 3D tab is opened) and it must
+        // come up docked, never floating.
+        ImGui::Begin(kPaneScene3D);
+        ImGui::End();
+        ImGuiWindow *hud = ImGui::FindWindowByName(kPaneScene3D);
+        check("scene3d/docked-by-default",
+              hud != nullptr && hud->DockId != 0,
+              "the 3D overview HUD must dock into the default layout, not float");
+    }
+
+    // --- layout_dock_floating_beside: the persisted-`.ini` migration --------
+    // A window imgui has never seen cannot be placed (no DockId to read), and
+    // neither can one whose anchor is itself undocked — both are "try again next
+    // frame", not "done".
+    check("migrate/unknown-window",
+          !layout_dock_floating_beside("no such window", kPaneInspector),
+          "a window imgui has never seen must not report as moved");
+    {
+        // A genuinely floating window (Begun outside the dockspace, never docked)
+        // moves in beside the anchor, and reports that it moved.
+        ImGui::Begin("floater");
+        ImGui::End();
+        ImGuiWindow *f = ImGui::FindWindowByName("floater");
+        check("migrate/starts-floating", f != nullptr && f->DockId == 0,
+              "the fixture window must start undocked for this to mean anything");
+        check("migrate/moves", layout_dock_floating_beside("floater",
+                                                           kPaneInspector),
+              "a floating window with a docked anchor must move");
+        ImGuiWindow *anchor = ImGui::FindWindowByName(kPaneInspector);
+        check("migrate/lands-on-anchor-node",
+              f != nullptr && anchor != nullptr && f->DockId == anchor->DockId,
+              "the moved window must land in the anchor's own node");
+        // Idempotent: already docked, so a second call is a no-op that reports
+        // false — which is what lets the caller latch on the first success and
+        // stop fighting a window the reader later tears off.
+        check("migrate/no-op-when-docked",
+              !layout_dock_floating_beside("floater", kPaneInspector),
+              "an already-docked window must not be moved again");
+    }
+
     // layout_reset restores the shipped default from any state — the recovery
     // path the keybinding and the auto-fallback call. It rebuilds a real split
     // tree (not a bare leaf), so layout_needs_default is false afterwards.
