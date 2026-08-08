@@ -43,6 +43,7 @@
 #include "scene3d/pick.h"
 #include "scene3d/standalone.h" // T1-T5 (59): the non-plane substrates
 #include "space/projection.h"
+#include "space/vmmap.h"     // the address-space naming overlay (2026-08-08)
 #include "ui/flow.h"         // narrow-pane wrap + rail stacking
 #include "ui/legend.h"       // shared semantic legend (24 T1/T2)
 #include "ui/palette.h"      // command palette over the spine (21 T1)
@@ -1337,8 +1338,27 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         std::vector<space::Region> obs =
             space::observed_data_spans(r, regs, &span_note);
         regs.insert(regs.end(), obs.begin(), obs.end());
+        // vmmap (2026-08-08): name what the address-space map can name. This
+        // runs AFTER observed_data_spans (it renames what that produced) and
+        // BEFORE build_projection (so the names are in place when the atlas
+        // labels are cut) — and it rewrites label/kind ONLY. base/len are
+        // untouched, which is why the floor cannot move; space/vmmap.h states
+        // why feeding these spans in as regions instead would destroy the pane.
+        // A recording with no `vmmap` is a no-op.
+        const space::VmMap vm = space::vmmap_from_recording(r);
+        const size_t vm_named = space::vmmap_apply_names(regs, vm);
+        std::string vmnote;
+        if (vm.present && !vm.readable)
+            vmnote = "address space NOT READABLE — no region could be named "
+                     "(absent measurement, not a process without mappings)";
+        else if (vm.present)
+            vmnote = "address space: " + std::to_string(vm_named) +
+                     " region(s) named from " + std::to_string(vm.spans.size()) +
+                     " of " + std::to_string(vm.spans_total) + " mapping(s)" +
+                     (vm.truncated ? " (capped)" : "");
         space::Projection proj = space::build_projection(std::move(regs));
         proj.data_span_note = std::move(span_note);
+        proj.vmmap_note = std::move(vmnote);
         // 61 T9: did this weave move the floor the reader was already looking
         // at? Computed HERE, while `proj` is still in scope and before
         // build_terrain moves it.

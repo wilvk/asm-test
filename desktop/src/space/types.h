@@ -80,6 +80,14 @@ struct Projection {
     // it exactly like TerrainModel::mem_note.
     std::string data_span_note;
 
+    // vmmap (2026-08-08): how far the address-space map reached — how many
+    // regions it named, out of how many mappings it carried — or, when
+    // /proc/<pid>/maps could not be read, that it could not. Empty when the
+    // recording carried no `vmmap` at all (nothing to explain). It rides the
+    // Projection rather than HudState because placement_chips() takes only the
+    // terrain and the trajectory, exactly as data_span_note above does.
+    std::string vmmap_note;
+
     // 61 T9: set on a weave whose layout MOVED relative to the previous one —
     // a growing live capture gaining a region, mostly. Empty on a first weave
     // and on any weave that re-laid the floor identically, so a NON-empty note

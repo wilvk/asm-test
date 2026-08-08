@@ -39,12 +39,15 @@ using nlohmann::json;
 // list above. Missed in the original Task 4 diff — review caught that every
 // `--info --json` recording was being counted as unknown-kind noise here,
 // rendered by the shell as "(1 event(s) of unknown kind, kept)".
-static const std::array<const char *, 24> kKnownKinds = {
+// `vmmap` joins on the same rule (asmtrace-schema.md, "`vmmap` — one
+// /proc/<pid>/maps address-space snapshot"): the serve host is a real producer,
+// so it belongs here rather than in the schema's RESERVED list.
+static const std::array<const char *, 25> kKnownKinds = {
     {"trace",  "coverage",  "syscall", "stream",     "call",
      "graph",  "topo",      "survey",  "watch",      "df_step",
      "df_edge", "regstate", "result",  "note",       "stitch",
      "end",    "session",   "cmd",     "err",        "codeimage",
-     "mem",    "blame",     "statediff", "procinfo"}};
+     "mem",    "blame",     "statediff", "procinfo",  "vmmap"}};
 
 bool is_known_kind(const std::string &kind) {
     for (const char *k : kKnownKinds)

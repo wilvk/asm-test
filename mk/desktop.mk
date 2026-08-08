@@ -2222,6 +2222,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \
     $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/vmmap.o \
     $(BUILD)/desktop/test/sp/terrain.o \
     $(BUILD)/desktop/test/sp/trajectory.o \
     $(BUILD)/desktop/test/sp/converge.o \

@@ -375,6 +375,13 @@ int main() {
         std::remove(tmp.c_str());
     }
 
+    // `vmmap` is a real producer kind (2026-08-08 spec). An unlisted kind is
+    // counted as unknown and rendered as "(N event(s) of unknown kind, kept)" —
+    // the exact defect review caught for `procinfo`, which made every
+    // `--info --json` recording read as noise.
+    check("known-kind/vmmap", is_known_kind("vmmap"),
+          "add \"vmmap\" to kKnownKinds and bump the std::array size");
+
     if (failures) {
         std::fprintf(stderr, "test_recording: %d FAILURE(S)\n", failures);
         return 1;
