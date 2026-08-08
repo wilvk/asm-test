@@ -104,6 +104,24 @@ loom_feed_t loom_feed_from_streams(const Streams &s) {
     return f;
 }
 
+std::string loom_no_dataflow_reason(const Streams &s) {
+    // The structural half: true of every dataflow-less recording, and the only
+    // thing worth saying about one that actually ran.
+    static const char *const kStructural =
+        "this recording carries no df_step events, so there are no per-step "
+        "values to weave — the day-one fabric's only L0 value producer is the "
+        "x86-64 emulator producer";
+    if (!s.skipped)
+        return kStructural;
+    // A skip with no text is still worth reporting as a skip: "the capture
+    // never ran" changes what the reader does next even when the footer did not
+    // say why. Never invent a reason for it.
+    return "this capture SKIPPED and recorded nothing — " +
+           (s.skip_reason.empty() ? std::string("the producer stated no reason")
+                                  : s.skip_reason) +
+           ". Nothing below is a fact about the target. (" + kStructural + ")";
+}
+
 bool loom_fabric_from_streams(const Streams &s, loom_feed_t *feed,
                               loom_fabric_t *out, std::string *err) {
     if (feed == nullptr || out == nullptr)
@@ -111,9 +129,7 @@ bool loom_fabric_from_streams(const Streams &s, loom_feed_t *feed,
     *feed = loom_feed_from_streams(s);
     if (!s.df.present()) {
         if (err != nullptr)
-            *err = "this recording carries no df_step events, so there are no "
-                   "per-step values to weave — the day-one fabric's only L0 "
-                   "value producer is the x86-64 emulator producer";
+            *err = loom_no_dataflow_reason(s);
         return false;
     }
     return loom_fabric_build(feed->vt(), feed->g(), feed->prov, out, err);

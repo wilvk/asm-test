@@ -51,10 +51,23 @@ struct loom_feed_t {
 // loom_fabric_build rather than quietly woven.
 loom_feed_t loom_feed_from_streams(const Streams &s);
 
+// Why this recording has no fabric — the text the Loom pane shows in place of
+// one. PURE (a string from a Streams), so every branch is testable without an
+// ImGui frame.
+//
+// The branch that matters is the SKIP. A capture the host refused — Yama
+// ptrace_scope, a locked-down perf, an absent capability — produces exactly the
+// same empty df stream as a capture that ran happily and found no dataflow, and
+// the generic sentence ("no df_step events … the only L0 value producer is the
+// emulator") sends the reader off to find an emulator when what they actually
+// need is a sysctl. The producer measured the real reason and wrote it into the
+// footer; this puts it FIRST, and keeps the structural sentence after it so a
+// recording that genuinely ran still reads as before.
+std::string loom_no_dataflow_reason(const Streams &s);
+
 // Convenience: decode + build in one call. False + `err` on the refusals
 // loom_fabric_build makes, or when the recording carries no dataflow at all
-// (the fabric's only day-one L0 producer is the x86-64 emulator value producer;
-// a trace-only recording has no values to weave and says so).
+// (loom_no_dataflow_reason above says which of those two it is).
 bool loom_fabric_from_streams(const Streams &s, loom_feed_t *feed,
                               loom_fabric_t *out, std::string *err);
 

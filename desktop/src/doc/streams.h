@@ -213,6 +213,15 @@ struct Streams {
     bool statistical = false; // provenance.exact == false
     bool redacted = false;
 
+    // The footer's `end.skip` (Recording::skipped/skip_reason), lifted for the
+    // same reason as the truncation flags above: a builder that only ever sees a
+    // Streams must still be able to tell "this capture ran and found nothing"
+    // from "this capture never ran". They produce the same empty streams and
+    // want opposite sentences — the first is a fact about the target, the second
+    // is a fact about the host, and only the second names a remedy.
+    bool skipped = false;
+    std::string skip_reason;
+
     std::string arch;
     std::string backend;
     std::string id; // the recording's basename — the deep-link `rec` key

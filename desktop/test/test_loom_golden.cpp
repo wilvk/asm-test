@@ -352,6 +352,40 @@ int main() {
         }
     }
 
+    // A capture the HOST refused and one that ran and found nothing produce the
+    // same empty df stream, and the Loom used to give both the same sentence —
+    // which sent a reader whose ptrace_scope refused the attach off to look for
+    // an emulator. loom_no_dataflow_reason splits them; it is pure, so both
+    // branches are asserted here with no file and no ImGui frame.
+    {
+        Streams ran;             // no df, but the capture itself ran
+        const std::string plain = loom_no_dataflow_reason(ran);
+        check("no-dataflow: a capture that RAN keeps the structural sentence",
+              plain.find("no df_step events") != std::string::npos &&
+                  plain.find("SKIPPED") == std::string::npos,
+              plain);
+
+        Streams skipped;
+        skipped.skipped = true;
+        skipped.skip_reason =
+            "PTRACE_SEIZE refused: check ptrace_scope, or whether the target "
+            "is ours to trace";
+        const std::string sk = loom_no_dataflow_reason(skipped);
+        check("no-dataflow: a SKIPPED capture leads with the measured reason",
+              sk.find("SKIPPED") != std::string::npos &&
+                  sk.find("ptrace_scope") != std::string::npos &&
+                  sk.find("SKIPPED") < sk.find("no df_step events"),
+              sk);
+
+        Streams mute;
+        mute.skipped = true; // the footer said it skipped but not why
+        const std::string mu = loom_no_dataflow_reason(mute);
+        check("no-dataflow: a reasonless skip is still reported as a skip",
+              mu.find("SKIPPED") != std::string::npos &&
+                  mu.find("stated no reason") != std::string::npos,
+              mu);
+    }
+
     // 28 R1 T2: the feed prefers the `end` footer's steps_total for the M, so a
     // REPLAYED truncated dataflow recording reads "N of M" instead of naming the
     // gap. It falls back to the trace stream's insns_total, then to unknown (0) —

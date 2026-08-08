@@ -236,6 +236,8 @@ Streams decode_streams(const Recording &r) {
     s.code_len = r.code.len;
     s.has_steps_total = r.has_steps_total;
     s.steps_total = r.steps_total;
+    s.skipped = r.skipped;
+    s.skip_reason = r.skip_reason;
 
     // --- trace ------------------------------------------------------------
     if (const auto *ev = kind(r, "trace")) {
