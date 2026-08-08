@@ -160,6 +160,19 @@ const char *vertical_axes_note();
 // line: an oriented-but-unmapped camera is still a fact worth stating, D7).
 std::string camera_here_text(const space::Projection &proj, float u, float v);
 
+// vmmap (2026-08-08): what the address-space map knows about one region — its
+// permissions, its backing file, its true extent, and how much of that extent
+// the capture reached. Pure, so the WORDING is testable without a frame, which
+// matters here because the phrasing carries a fidelity distinction: the extent
+// is exact (the kernel stated it) while the touched figure is a LOWER BOUND (the
+// capture single-stepped one region and saw a sample of its traffic). "touched
+// at least N of M" is the only honest form, and a test pins it.
+//
+// Empty for a region no `vmmap` named, so a recording without one reads exactly
+// as it did before — never a row of question marks standing in for a
+// measurement nobody made.
+std::vector<std::string> region_detail_lines(const space::Region &r);
+
 // 59 T1: the SAME line, but for whichever substrate the pane is showing. Only
 // the address plane has an address under the camera; the other four have axes
 // that are not addresses at all (a byte index inside a register, a call

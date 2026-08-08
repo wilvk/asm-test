@@ -723,6 +723,47 @@ int main() {
             s3.scenes[static_cast<size_t>(igs)].flat_view = false;
         }
 
+        // === vmmap: region_detail_lines states two DIFFERENT grades ==========
+        // The extent is exact (the kernel said so); the touched figure is a
+        // LOWER BOUND (the capture single-stepped one region and saw a sample).
+        // Wording that conflates them would quietly turn a sample into a total,
+        // so the phrase is pinned here rather than left to drift.
+        {
+            space::Region unnamed;
+            unnamed.base = 0x501000;
+            unnamed.len = 0x2000;
+            check("region-detail/unnamed says nothing",
+                  scene3d::region_detail_lines(unnamed).empty(),
+                  "a region no vmmap named has no measurement to report, and "
+                  "must not print question marks in place of one");
+
+            space::Region named = unnamed;
+            named.extent_base = 0x500000;
+            named.extent_len = 0x40000;
+            named.perms = "rw-p";
+            named.path = "";
+            const std::vector<std::string> lines =
+                scene3d::region_detail_lines(named);
+            check("region-detail/named reports three lines", lines.size() == 3,
+                  std::to_string(lines.size()).c_str());
+            std::string all;
+            for (const std::string &l : lines)
+                all += l + "\n";
+            check("region-detail/anonymous path is named as such",
+                  all.find("(anonymous)") != std::string::npos, all.c_str());
+            check("region-detail/perms verbatim",
+                  all.find("rw-p") != std::string::npos, all.c_str());
+            check("region-detail/extent is stated exactly",
+                  all.find("mapping 0x500000 + 262144 bytes") !=
+                      std::string::npos,
+                  all.c_str());
+            check("region-detail/touched is a LOWER BOUND, and says so",
+                  all.find("touched at least 8192 of 262144 bytes") !=
+                      std::string::npos,
+                  ("the touched figure is a sample, not a total — 'at least' "
+                   "is load-bearing: " + all).c_str());
+        }
+
         // === 48 T4: camera_here_text — a pure function of (Projection, target) ===
         {
             space::Projection p = space::build_projection(

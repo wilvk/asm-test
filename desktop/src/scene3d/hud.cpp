@@ -155,6 +155,16 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
                  "inside an existing region, or none placed"});
         }
     }
+    // vmmap (2026-08-08): how far the address-space map reached. Built by the
+    // weave and carried on the Projection (like data_span_note above), because
+    // this function takes only the terrain and the trajectory. Empty when the
+    // recording carried no `vmmap` at all — nothing to explain.
+    if (!terr.proj.vmmap_note.empty())
+        out.push_back({terr.proj.vmmap_note.find("NOT READABLE") !=
+                               std::string::npos
+                           ? PlacementChip::Warn
+                           : PlacementChip::Ok,
+                       terr.proj.vmmap_note});
     if (terr.mem_accesses > 0) {
         char buf[160];
         if (terr.mem_dropped == 0) {
@@ -345,6 +355,34 @@ std::string camera_here_text(const space::Projection &proj, float u, float v) {
                   static_cast<unsigned long long>(addr),
                   r->label.empty() ? st.name : r->label.c_str());
     return buf;
+}
+
+// vmmap (2026-08-08): what the address-space map knows about the region under
+// the cursor, as extra lines beneath camera_here_text's one. Empty when no
+// `vmmap` named this region, so a recording without one reads exactly as before.
+//
+// The two numbers carry DIFFERENT GRADES and are worded to keep them apart: the
+// extent is exact (the kernel said so), while the touched part is a LOWER BOUND
+// — the capture single-stepped one region, so it saw a sample of the traffic,
+// not all of it. "touched at least N of M" is the only honest phrasing.
+std::vector<std::string> region_detail_lines(const space::Region &r) {
+    std::vector<std::string> out;
+    if (r.extent_len == 0)
+        return out; // no mapping named it: nothing measured, so nothing said
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "%s  %s",
+                  r.perms.empty() ? "????" : r.perms.c_str(),
+                  r.path.empty() ? "(anonymous)" : r.path.c_str());
+    out.push_back(buf);
+    std::snprintf(buf, sizeof buf, "mapping 0x%llx + %llu bytes",
+                  static_cast<unsigned long long>(r.extent_base),
+                  static_cast<unsigned long long>(r.extent_len));
+    out.push_back(buf);
+    std::snprintf(buf, sizeof buf, "touched at least %llu of %llu bytes",
+                  static_cast<unsigned long long>(r.len),
+                  static_cast<unsigned long long>(r.extent_len));
+    out.push_back(buf);
+    return out;
 }
 
 const std::vector<std::string> &scene_control_lines() {
@@ -999,6 +1037,55 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     }
     if (!s.nav_note.empty())
         ImGui::TextColored(kWarn, "%s", s.nav_note.c_str());
+
+    // --- the region roster (vmmap, 2026-08-08) ------------------------------
+    // The floor's index. Every PLACED region with its kind, name, extent and
+    // how much of it was reached, and a button that frames it through the same
+    // scene_goto_region path the combo above uses — one framing implementation,
+    // not two. Collapsed by default: it is a reference, not a running readout.
+    //
+    // It states what it is NOT showing. A capture places only what it touched,
+    // so a roster of six rows against a 1500-mapping process would otherwise
+    // read as the whole address space.
+    if (!terr.proj.regions.empty() &&
+        ImGui::CollapsingHeader("regions##roster")) {
+        size_t named = 0;
+        for (const space::Region &rr : terr.proj.regions)
+            if (rr.extent_len > 0)
+                named++;
+        ImGui::TextColored(kDim, "%zu placed on the floor, %zu named by the "
+                                 "address-space map",
+                           terr.proj.regions.size(), named);
+        for (size_t i = 0; i < terr.proj.regions.size(); i++) {
+            const space::Region &rr = terr.proj.regions[i];
+            const space::RegionStyle st = space::region_style(rr.kind);
+            char label[64];
+            std::snprintf(label, sizeof label, "frame##roster%zu", i);
+            if (ImGui::SmallButton(label)) {
+                float gu = 0.0f, gv = 0.0f, grad = 0.0f;
+                if (scene_goto_region(terr.proj, i, &gu, &gv, &grad)) {
+                    s.req_goto = true;
+                    s.goto_u = gu;
+                    s.goto_v = gv;
+                    s.goto_radius = grad;
+                    s.nav_note.clear();
+                } else {
+                    s.nav_note = "frame: that region has no addressable extent";
+                }
+            }
+            flow_same_line(flow_textf_w("%-5s %s", st.name, rr.label.c_str()));
+            ImGui::Text("%-5s %s", st.name,
+                        rr.label.empty() ? "(unnamed)" : rr.label.c_str());
+            // The touched/extent pair only when a mapping named it — never a
+            // fabricated denominator for a region nothing measured.
+            if (rr.extent_len > 0) {
+                ImGui::Indent();
+                for (const std::string &line : region_detail_lines(rr))
+                    ImGui::TextColored(kDim, "%s", line.c_str());
+                ImGui::Unindent();
+            }
+        }
+    }
     } // end of the plane-only "go to" block (59 T1)
 
     ImGui::Separator();
