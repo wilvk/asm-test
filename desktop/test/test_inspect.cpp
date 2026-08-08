@@ -835,13 +835,63 @@ std::string shape(const std::vector<ProcRow> &rows,
     return o;
 }
 
-// Find the emitted row for a pid; nullptr when it was not emitted at all.
+// Find the emitted PROCESS row for a pid; nullptr when it was not emitted.
 const ProcTreeRow *find(const std::vector<ProcRow> &rows,
                         const std::vector<ProcTreeRow> &t, long pid) {
     for (const ProcTreeRow &n : t)
-        if (rows[n.index].pid == pid)
+        if (n.kind == ProcNode::Process && rows[n.index].pid == pid)
             return &n;
     return nullptr;
+}
+
+// "nothing is collapsed", for the lineage checks that predate collapse and
+// pin shapes it does not affect. show_all_processes rather than an explicit
+// pid set because those cases carry no threads, and a thread group is the one
+// thing this flag deliberately leaves shut.
+ProcTreeExpansion open_all() {
+    ProcTreeExpansion e;
+    e.show_all_processes = true;
+    return e;
+}
+
+// Open exactly these node ids (pid for a process, -pid for its threads group).
+ProcTreeExpansion open_of(std::initializer_list<long> ids) {
+    ProcTreeExpansion e;
+    for (long id : ids)
+        e.open.insert(id);
+    return e;
+}
+
+// A process carrying `n` tasks, leader first — the shape read_threads()
+// produces, without needing a live process to produce it.
+ProcRow with_threads(long pid, long ppid, const char *comm, int n) {
+    ProcRow r = pr(pid, ppid, comm);
+    for (int i = 0; i < n; ++i) {
+        ProcThread t;
+        t.tid = i == 0 ? pid : pid + 1000 + i;
+        t.comm = i == 0 ? comm : (std::string(comm) + "-w") + std::to_string(i);
+        t.state = 'S';
+        r.threads.push_back(t);
+    }
+    return r;
+}
+
+// The emitted rows as "kind:id@depth …", which makes a wrong SHAPE readable
+// in the failure message instead of six index comparisons.
+std::string kshape(const std::vector<ProcRow> &rows,
+                   const std::vector<ProcTreeRow> &t) {
+    std::string o;
+    for (const ProcTreeRow &n : t) {
+        o += o.empty() ? "" : " ";
+        if (n.kind == ProcNode::Process)
+            o += "p" + std::to_string(rows[n.index].pid);
+        else if (n.kind == ProcNode::ThreadGroup)
+            o += "g" + std::to_string(rows[n.index].pid);
+        else
+            o += "t" + std::to_string(n.tid);
+        o += "@" + std::to_string(n.depth);
+    }
+    return o;
 }
 
 } // namespace
@@ -852,7 +902,7 @@ static void test_proc_tree() {
 
     // 1. Everything visible: pre-order, siblings by pid, depth = real ancestry.
     {
-        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, open_all());
         check("tree/order",
               shape(rows, t) == "1@0 842@1 1130@1 2201@2 2260@3 2281@3 3000@0",
               "parent-then-children, siblings by pid: got " + shape(rows, t));
@@ -863,7 +913,8 @@ static void test_proc_tree() {
     // 2. Descending flips the sibling ORDER without changing the SHAPE — the
     // depths are identical, only each group's order reverses.
     {
-        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, true);
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, open_all(), true);
         check("tree/descending",
               shape(rows, t) == "3000@0 1@0 1130@1 2201@2 2281@3 2260@3 842@1",
               "descending reverses each sibling group only: got " +
@@ -878,7 +929,7 @@ static void test_proc_tree() {
     {
         std::vector<char> vis(rows.size(), 0);
         vis[4] = vis[5] = 1; // 2260, 2281 only
-        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis, open_all());
         check("tree/hidden-ancestors-keep-depth",
               shape(rows, t) == "2260@3 2281@3",
               "a hidden ancestor must not re-root its child: got " +
@@ -895,7 +946,7 @@ static void test_proc_tree() {
     // does not carry — a parent that exited mid-scan, or one outside our pid
     // namespace. Nothing can un-hide that one, so the remedy differs.
     {
-        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, open_all());
         const ProcTreeRow *root = find(rows, t, 1);
         const ProcTreeRow *kid = find(rows, t, 2201);
         const ProcTreeRow *orph = find(rows, t, 3000);
@@ -917,14 +968,14 @@ static void test_proc_tree() {
     // branch continuing into a row that is not there.
     {
         std::vector<char> vis(rows.size(), 1);
-        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis, open_all());
         const ProcTreeRow *a = find(rows, t, 2260);
         const ProcTreeRow *b = find(rows, t, 2281);
         check("tree/last-sibling-full",
               a && b && !a->last_sibling && b->last_sibling,
               "with both drawn, the └ belongs to the later pid");
         vis[5] = 0; // hide 2281, the youngest
-        t = proc_tree_layout(rows, vis);
+        t = proc_tree_layout(rows, vis, open_all());
         a = find(rows, t, 2260);
         check("tree/last-sibling-follows-filter", a && a->last_sibling,
               "hiding the youngest sibling must move the └ up, not leave a ├ "
@@ -935,10 +986,11 @@ static void test_proc_tree() {
     // to withhold — an empty result is the safe answer to a caller bug.
     {
         check("tree/empty-mask",
-              proc_tree_layout(rows, std::vector<char>()).empty(),
+              proc_tree_layout(rows, std::vector<char>(), open_all()).empty(),
               "no mask means nothing visible, never everything visible");
         check("tree/empty-rows",
-              proc_tree_layout(std::vector<ProcRow>(), std::vector<char>())
+              proc_tree_layout(std::vector<ProcRow>(), std::vector<char>(),
+                               open_all())
                   .empty(),
               "an empty snapshot lays out empty");
     }
@@ -951,7 +1003,7 @@ static void test_proc_tree() {
     {
         std::vector<ProcRow> cyc = {pr(10, 11, "a"), pr(11, 10, "b")};
         std::vector<ProcTreeRow> t =
-            proc_tree_layout(cyc, std::vector<char>(2, 1));
+            proc_tree_layout(cyc, std::vector<char>(2, 1), open_all());
         check(
             "tree/cycle-still-listed", t.size() == 2,
             "a cycle is cut to roots — neither row may vanish from the table");
@@ -970,7 +1022,7 @@ static void test_proc_tree() {
     {
         std::vector<ProcRow> self = {pr(7, 7, "self")};
         std::vector<ProcTreeRow> t =
-            proc_tree_layout(self, std::vector<char>(1, 1));
+            proc_tree_layout(self, std::vector<char>(1, 1), open_all());
         check("tree/self-parent",
               t.size() == 1 && t[0].depth == 0 &&
                   t[0].parent == ProcParent::None,
@@ -985,10 +1037,227 @@ static void test_proc_tree() {
                                          pr(1, 0, "systemd"),
                                          pr(1130, 1, "gnome-shell")};
         std::vector<ProcTreeRow> t =
-            proc_tree_layout(shuffled, std::vector<char>(3, 1));
+            proc_tree_layout(shuffled, std::vector<char>(3, 1), open_all());
         check("tree/unsorted-input", shape(shuffled, t) == "1@0 1130@1 2201@2",
               "the order is the layout's, not the input's: got " +
                   shape(shuffled, t));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// proc_tree_layout — COLLAPSE and THREADS.
+//
+// Collapse is the half that decides what an operator can even reach, so the
+// cases below are the ones where "closed" and "not there" could be confused:
+// an ancestor the gate removed has no expander to click, so treating it as
+// closed would strand its whole subtree behind a control that is not on
+// screen. Threads are the half where a tid could leak into a pid — every
+// emitted thread row is checked to carry its LEADER in ::pid.
+// ---------------------------------------------------------------------------
+static void test_proc_tree_collapse() {
+    const std::vector<ProcRow> rows = tree_rows();
+    const std::vector<char> all(rows.size(), 1);
+
+    // 1. Nothing open: only the rows with no visible ancestor. This is the
+    //    measured cost of the collapsed default — on a real 604-process
+    //    desktop it is 2 rows, because everything descends from pid 1.
+    {
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, ProcTreeExpansion{});
+        check("collapse/closed-shows-roots", kshape(rows, t) == "p1@0 p3000@0",
+              "fully collapsed shows only what has nothing above it: got " +
+                  kshape(rows, t));
+    }
+
+    // 2. Opening one node reveals ITS children and no further.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, open_of({1}));
+        check("collapse/open-one-level",
+              kshape(rows, t) == "p1@0 p842@1 p1130@1 p3000@0",
+              "opening pid 1 reveals its children only: got " +
+                  kshape(rows, t));
+        const ProcTreeRow *n = find(rows, t, 1130);
+        check("collapse/expandable-flagged", n && n->expandable && !n->expanded,
+              "gnome-shell has a child, so it offers an expander and is shut");
+    }
+
+    // 3. THE RULE COLLAPSE TURNS ON. Hide gnome-shell (1130) with the gate and
+    //    open only pid 1: firefox must appear at its TRUE depth 2, because the
+    //    ancestor between them is not on screen and so has no expander to
+    //    click. Treating an invisible ancestor as closed strands the subtree
+    //    behind a control that does not exist.
+    {
+        std::vector<char> vis(rows.size(), 1);
+        vis[2] = 0; // gnome-shell
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, vis, open_of({1}));
+        check("collapse/invisible-ancestor-does-not-block",
+              kshape(rows, t) == "p1@0 p842@1 p2201@2 p3000@0",
+              "an ancestor the gate removed cannot hold its subtree shut: "
+              "got " +
+                  kshape(rows, t));
+    }
+
+    // 4. A VISIBLE closed ancestor does block — the other half of rule 3, or
+    //    the flag would simply mean "never collapse anything".
+    {
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, open_of({1, 1130}));
+        check("collapse/visible-closed-blocks",
+              kshape(rows, t) == "p1@0 p842@1 p1130@1 p2201@2 p3000@0",
+              "firefox is open's child but firefox itself is shut, so its own "
+              "children stay hidden: got " +
+                  kshape(rows, t));
+    }
+
+    // 5. An expander must not open onto nothing. A leaf offers none, and
+    //    neither does a process whose entire subtree the gate removed.
+    {
+        std::vector<char> vis(rows.size(), 1);
+        vis[4] = vis[5] = 0; // both content processes
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, vis, open_of({1, 1130}));
+        const ProcTreeRow *ff = find(rows, t, 2201);
+        check("collapse/no-expander-onto-nothing", ff && !ff->expandable,
+              "firefox's only children are hidden, so an expander there would "
+              "open onto an empty subtree");
+        const ProcTreeRow *nm = find(rows, t, 842);
+        check("collapse/leaf-has-no-expander", nm && !nm->expandable,
+              "a childless, single-threaded process offers no expander");
+    }
+
+    // 6. show_all_processes (what the filter sets) bypasses process collapse.
+    {
+        ProcTreeExpansion e;
+        e.show_all_processes = true;
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, e);
+        check("collapse/filter-bypasses",
+              kshape(rows, t) ==
+                  "p1@0 p842@1 p1130@1 p2201@2 p2260@3 p2281@3 p3000@0",
+              "a filter must not return nothing merely because the tree was "
+              "shut: got " +
+                  kshape(rows, t));
+    }
+}
+
+static void test_proc_tree_threads() {
+    // firefox has 3 tasks; NetworkManager has exactly ONE — which is what
+    // read_threads() returns for a single-threaded process, and is NOT the
+    // same as the empty vector an unreadable task dir gives. A fixture with
+    // zero threads here would let "group when threads is non-empty" pass,
+    // since it is only wrong at size 1 (mutation-verified).
+    std::vector<ProcRow> rows = {pr(1, 0, "systemd"),
+                                 with_threads(842, 1, "NetworkManager", 1),
+                                 with_threads(2201, 1, "firefox", 3)};
+    const std::vector<char> all(rows.size(), 1);
+
+    // 1. A threads group appears only when the process is OPEN, and sits
+    //    directly under it — before the child processes, so it stays next to
+    //    the row it describes rather than pages below a deep subtree.
+    {
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, open_of({1, 2201}));
+        check("threads/group-under-its-process",
+              kshape(rows, t) == "p1@0 p842@1 p2201@1 g2201@2",
+              "an open multi-threaded process gets a group row: got " +
+                  kshape(rows, t));
+    }
+
+    // 2. Single-threaded processes get NO group — "1 thread" under every row
+    //    is noise, and that one thread is the process already on screen.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, open_all());
+        for (const ProcTreeRow &n : t)
+            check(
+                "threads/no-group-for-single",
+                !(n.kind == ProcNode::ThreadGroup && rows[n.index].pid == 842),
+                "NetworkManager is single-threaded and must offer no group");
+    }
+
+    // 3. Opening the GROUP reveals the tasks, leader first.
+    {
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, open_of({1, 2201, -2201}));
+        check("threads/expand-group",
+              kshape(rows, t) ==
+                  "p1@0 p842@1 p2201@1 g2201@2 t2201@3 t3202@3 t3203@3",
+              "the open group lists its tasks, leader first: got " +
+                  kshape(rows, t));
+    }
+
+    // 4. THE ONE THAT MATTERS. Every thread row targets the thread-group
+    //    LEADER, never its own tid. asmspy's target is a thread group, and
+    //    `--info <tid>` answers with identity.pid set to the tid — so a tid
+    //    reaching ::pid would render a thread as a process duplicating its
+    //    own, and would hand the engine a non-leader to seize.
+    {
+        std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, all, open_of({1, 2201, -2201}));
+        int threads_seen = 0;
+        for (const ProcTreeRow &n : t) {
+            if (n.kind != ProcNode::Thread)
+                continue;
+            threads_seen++;
+            check("threads/targets-the-leader", n.pid == 2201,
+                  "a thread row must target its LEADER (2201), got " +
+                      std::to_string(n.pid));
+            check("threads/tid-kept-for-display", n.tid != 0,
+                  "the tid is still carried, for the row to show");
+        }
+        check("threads/all-three-seen", threads_seen == 3,
+              "expected 3 thread rows, got " + std::to_string(threads_seen));
+        // The non-leader tids must not be mistaken for the leader.
+        const ProcTreeRow *g = nullptr;
+        for (const ProcTreeRow &n : t)
+            if (n.kind == ProcNode::ThreadGroup)
+                g = &n;
+        check("threads/group-targets-leader", g && g->pid == 2201,
+              "the group row targets the process too");
+    }
+
+    // 5. A filter (show_all_processes) reveals processes but NOT threads: the
+    //    query matched pid/comm/cmdline, so answering it with a hundred task
+    //    rows would answer a different question than the one typed.
+    {
+        ProcTreeExpansion e;
+        e.show_all_processes = true;
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, e);
+        for (const ProcTreeRow &n : t)
+            check("threads/filter-does-not-dump-threads",
+                  n.kind == ProcNode::Process,
+                  "show_all_processes must not open thread groups");
+    }
+
+    // 6. A multi-threaded LEAF is still expandable — its group is the thing to
+    //    reveal, even with no child process.
+    {
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, open_of({1}));
+        const ProcTreeRow *ff = find(rows, t, 2201);
+        check("threads/multithreaded-leaf-expandable", ff && ff->expandable,
+              "a childless process with 3 tasks still has a group to open");
+    }
+
+    // 7. proc_tree_all_nodes covers both id kinds — that is what makes
+    //    "Expand all" total rather than "expand all the processes".
+    {
+        std::vector<long> ids = proc_tree_all_nodes(rows, all);
+        bool has_proc = false, has_group = false;
+        for (long id : ids) {
+            if (id == 2201)
+                has_proc = true;
+            if (id == -2201)
+                has_group = true;
+        }
+        check("threads/all-nodes-covers-both", has_proc && has_group,
+              "Expand all must open thread groups too, or it is not 'all'");
+        // Feeding it straight back in must leave nothing shut.
+        ProcTreeExpansion e;
+        for (long id : ids)
+            e.open.insert(id);
+        std::vector<ProcTreeRow> t = proc_tree_layout(rows, all, e);
+        check("threads/all-nodes-opens-everything",
+              kshape(rows, t) ==
+                  "p1@0 p842@1 p2201@1 g2201@2 t2201@3 t3202@3 t3203@3",
+              "Expand all leaves nothing collapsed: got " + kshape(rows, t));
     }
 }
 
@@ -996,6 +1265,8 @@ int main(void) {
     test_attach();
     test_activity();
     test_proc_tree();
+    test_proc_tree_collapse();
+    test_proc_tree_threads();
     test_remedy_command();
     test_evidence();
     test_front_door();

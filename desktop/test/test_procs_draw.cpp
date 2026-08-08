@@ -92,9 +92,36 @@ static std::vector<ProcRow> snapshot() {
 
 // An InspectState with the snapshot already loaded, so draw_processes_pane
 // never touches the host's real /proc.
+//
+// Opens every node by default. The pane itself starts fully COLLAPSED, which
+// on a real snapshot means two or three rows — correct, and deliberately not
+// what most scenarios below want to assert about, so they ask for the state
+// one click of "Expand all" produces. `collapsed()` is the opposite, for the
+// scenarios that ARE about collapse.
 static void load(InspectState &s, std::vector<ProcRow> rows) {
     s.rows = std::move(rows);
     s.scanned = true;
+    for (long id : proc_tree_all_nodes(s.rows, std::vector<char>()))
+        s.proc_open.insert(id);
+}
+static void collapsed(InspectState &s, std::vector<ProcRow> rows) {
+    s.rows = std::move(rows);
+    s.scanned = true;
+    s.proc_open.clear();
+}
+
+// A process carrying `n` tasks, leader first — the shape read_threads()
+// produces, with no live process needed to produce it.
+static ProcRow with_threads(long pid, long ppid, const char *comm, int n) {
+    ProcRow r = pr(pid, ppid, comm);
+    for (int i = 0; i < n; ++i) {
+        ProcThread t;
+        t.tid = i == 0 ? pid : pid + 1000 + i;
+        t.comm = i == 0 ? comm : std::string(comm) + "-w" + std::to_string(i);
+        t.state = 'S';
+        r.threads.push_back(t);
+    }
+    return r;
 }
 
 // Draw the pane once into a fresh frame and return everything ImGui rendered.
@@ -317,6 +344,127 @@ int main() {
         avoid("empty/no-connectors", out, kElbow);
         avoid("empty/no-hidden-note", out,
               "(hidden by the filter / attachable gate)");
+    }
+
+    // --- 11. the collapsed default, and the expander that undoes it ------
+    // The pane starts with nothing open. On this fixture that is the two
+    // rows with no visible ancestor — the same shape that, measured on a
+    // real 604-process desktop, is 2 rows out of 604. Verified by mutation:
+    // defaulting proc_open to every node makes the first two checks fail.
+    {
+        InspectState s;
+        collapsed(s, snapshot());
+        const std::string out = render2(s, io);
+        // Anchored after the expander: the pid cell now reads "[ ▶ ] 1", so a
+        // "| 1 |" needle would be looking for a cell shape that no longer
+        // exists on an expandable row.
+        want("collapsed/root-drawn", out, "] 1 | systemd |");
+        avoid("collapsed/child-hidden", out, "NetworkManager");
+        avoid("collapsed/grandchild-hidden", out, "Web Content");
+        // A row with something under it offers a closed expander; the
+        // Expand-all control is right there too, because at 2 rows it is not
+        // a convenience but the way out.
+        want("collapsed/closed-arrow", out, "\xe2\x96\xb6");
+        want("collapsed/expand-all-offered", out, "Expand all");
+        want("collapsed/collapse-all-offered", out, "Collapse all");
+    }
+
+    // --- 12. opening one node reveals its children and no further --------
+    {
+        InspectState s;
+        collapsed(s, snapshot());
+        s.proc_open.insert(1);
+        const std::string out = render2(s, io);
+        want("open-one/child-revealed", out, "NetworkManager");
+        want("open-one/open-arrow", out, "\xe2\x96\xbc");
+        avoid("open-one/grandchild-still-hidden", out, "Web Content");
+    }
+
+    // --- 13. a filter ignores collapse ------------------------------------
+    // A search that came back empty because the tree happened to be shut is a
+    // search that lied about what is running. Mutation: dropping the
+    // show_all_processes assignment makes this render nothing at all.
+    {
+        InspectState s;
+        collapsed(s, snapshot());
+        std::snprintf(s.proc_filter.buf, sizeof s.proc_filter.buf, "%s",
+                      "Web Content");
+        const std::string out = render2(s, io);
+        want("filter/reaches-into-collapsed-tree", out, "Web Content");
+        want("filter/keeps-depth", out, "2201 firefox");
+    }
+
+    // --- 14. threads ------------------------------------------------------
+    // A multi-threaded process gets a group row that itself expands. The
+    // group is NOT opened by a filter (the query matched process facts), and
+    // a single-threaded process gets no group at all.
+    {
+        InspectState s;
+        // NetworkManager gets exactly ONE task — what read_threads() returns
+        // for a single-threaded process, and not the empty vector an
+        // unreadable task dir gives. The distinction is the whole point of
+        // the "no group for single" check below: it is only wrong at size 1.
+        collapsed(s, {pr(1, 0, "systemd"),
+                      with_threads(842, 1, "NetworkManager", 1),
+                      with_threads(2201, 1, "firefox", 3)});
+        s.proc_open.insert(1);
+        std::string out = render2(s, io);
+        want("threads/process-drawn", out, "firefox");
+        avoid("threads/group-shut-by-default", out, "3 threads");
+
+        s.proc_open.insert(2201);
+        // 842 is OPENED too, or the check below is vacuous: a group row only
+        // draws under an open process, so a shut NetworkManager would show no
+        // group whether or not single-threaded processes are meant to have
+        // one. (Mutation-verified: without this line, "group when threads is
+        // non-empty" passes here.)
+        s.proc_open.insert(842);
+        out = render2(s, io);
+        want("threads/group-row", out, "3 threads");
+        avoid("threads/tasks-still-shut", out, "firefox-w1");
+        // A single-threaded process must never grow a group row.
+        avoid("threads/no-group-for-single", out, "1 threads");
+
+        s.proc_open.insert(-2201);
+        out = render2(s, io);
+        want("threads/task-rows", out, "firefox-w1");
+        want("threads/task-rows-2", out, "firefox-w2");
+        // A thread row STATES which pid a click on it targets, because
+        // asmspy's target is a thread GROUP and a tid handed to it would
+        // seize a non-leader. This line is drawn from the owning ProcRow, so
+        // it is right by construction — what it pins is that the sentence is
+        // on screen at all. The tid-leak itself is caught next door, in 15,
+        // against ProcTreeRow::pid (mutation-verified there, not here).
+        want("threads/says-it-targets-the-group", out, "via pid 2201");
+        want("threads/says-not-a-separate-target", out,
+             "a thread is not a separate target");
+    }
+
+    // --- 15. clicking a thread selects its PROCESS ------------------------
+    // The selection path, asserted on state rather than pixels: whatever the
+    // pane hands downstream must be a thread-group leader. Driven through the
+    // same ProcTreeRow the draw loop reads.
+    {
+        std::vector<ProcRow> rows = {pr(1, 0, "systemd"),
+                                     with_threads(2201, 1, "firefox", 3)};
+        ProcTreeExpansion e;
+        for (long id : proc_tree_all_nodes(rows, std::vector<char>()))
+            e.open.insert(id);
+        const std::vector<ProcTreeRow> t =
+            proc_tree_layout(rows, std::vector<char>(rows.size(), 1), e);
+        int threads = 0;
+        for (const ProcTreeRow &n : t) {
+            if (n.kind != ProcNode::Thread)
+                continue;
+            threads++;
+            check("select/thread-targets-leader", n.pid == 2201,
+                  "a thread row must hand downstream its LEADER, got " +
+                      std::to_string(n.pid));
+            check("select/never-a-tid", n.pid != n.tid || n.tid == 2201,
+                  "the only row whose pid may equal its tid is the leader");
+        }
+        check("select/threads-present", threads == 3,
+              "expected 3 thread rows, got " + std::to_string(threads));
     }
 
     ImGui::DestroyContext();

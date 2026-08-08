@@ -1616,10 +1616,24 @@ void draw_processes_pane(InspectState &s) {
         ImGui::TextDisabled("· a tree has one order — sort by pid to nest "
                             "children under their parent");
     } else if (s.proc_tree) {
-        flow_same_line(flow_text_w("· children are nested under their parent; "
-                                   "the parent column names it either way"));
-        ImGui::TextDisabled("· children are nested under their parent; the "
-                            "parent column names it either way");
+        // Expand/Collapse all are load-bearing here, not chrome: everything
+        // starts closed and almost every process descends from pid 1, so the
+        // opening view is a handful of rows (measured: 2, or 3 with the
+        // attachable gate on, out of 604). These are how you get from that to
+        // a list — as is the filter, which ignores collapse entirely.
+        if (ImGui::SmallButton("Expand all")) {
+            for (long id : proc_tree_all_nodes(s.rows, std::vector<char>()))
+                s.proc_open.insert(id);
+        }
+        flow_same_line(flow_button_w("Collapse all"));
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Collapse all"))
+            s.proc_open.clear();
+        flow_same_line(flow_text_w(
+            "· children and threads start collapsed — expand a row, "
+            "or filter (which ignores collapse)"));
+        ImGui::TextDisabled("· children and threads start collapsed — expand a "
+                            "row, or filter (which ignores collapse)");
     }
 
     // Type-to-narrow (24 T4's shared filter) over pid / comm / cmdline — the
@@ -1746,19 +1760,11 @@ void draw_processes_pane(InspectState &s) {
                 });
         }
 
-        // The lineage, computed over the WHOLE snapshot (live/inspect.h). Built
-        // unconditionally, not only in tree mode: the `parent` column reports
-        // ProcParent for every row, in every sort, and that classification is
-        // this function's, not something the draw loop should re-derive.
-        const std::vector<ProcTreeRow> tree =
-            proc_tree_layout(s.rows, visible, pid_descending);
-        // index -> its ProcTreeRow, so the FLAT path keeps the clicked column's
-        // order while still naming each row's parent.
-        std::vector<int> at(s.rows.size(), -1);
-        for (size_t k = 0; k < tree.size(); ++k)
-            at[tree[k].index] = static_cast<int>(k);
-        // The tree's order, or the sorted one — the row body below is the same
-        // either way, so this is the only place the two modes differ.
+        // The lineage, computed over the WHOLE snapshot (live/inspect.h) —
+        // once per frame, in exactly one of two shapes. Both modes go through
+        // proc_tree_layout rather than the flat one re-deriving each row's
+        // ProcParent locally, so the `parent` column can never disagree with
+        // the tree's about what it is looking at.
         //
         // Gated on `tree_ok` — LAST frame's sort column, the same value the
         // checkbox above was greyed by — and deliberately NOT on the
@@ -1770,15 +1776,39 @@ void draw_processes_pane(InspectState &s) {
         // cost of the other order is one frame of a tree under a fresh
         // non-pid sort, which nothing on screen contradicts.
         const bool use_tree = s.proc_tree && tree_ok;
-        std::vector<size_t> draw_order;
-        draw_order.reserve(tree.size());
+        std::vector<ProcTreeRow> draw;
         if (use_tree) {
-            for (const ProcTreeRow &t : tree)
-                draw_order.push_back(t.index);
+            ProcTreeExpansion expansion;
+            expansion.open = s.proc_open;
+            // A filter ignores process collapse: a search that came back empty
+            // because the tree happened to be shut is a search that lied about
+            // what is running. It does NOT open thread groups — see
+            // ProcTreeExpansion, the query matched process facts.
+            expansion.show_all_processes = !q.empty();
+            draw = proc_tree_layout(s.rows, visible, expansion, pid_descending);
         } else {
-            for (int oi : order)
-                if (visible[static_cast<size_t>(oi)])
-                    draw_order.push_back(static_cast<size_t>(oi));
+            // Flat: processes only, in the clicked column's order. Threads are
+            // deliberately absent — they are the ONE thing a non-pid sort
+            // cannot place, since a thread's position is defined by the
+            // process it belongs to, not by a comparison. Nothing is collapsed
+            // here either: collapse is a tree affordance, and there is no
+            // expander on a flat row to undo it with.
+            ProcTreeExpansion flat;
+            flat.show_all_processes = true;
+            const std::vector<ProcTreeRow> all =
+                proc_tree_layout(s.rows, visible, flat, false);
+            std::vector<int> at(s.rows.size(), -1);
+            for (size_t k = 0; k < all.size(); ++k)
+                at[all[k].index] = static_cast<int>(k);
+            for (int oi : order) {
+                const size_t i = static_cast<size_t>(oi);
+                if (at[i] < 0)
+                    continue; // not visible
+                ProcTreeRow t = all[static_cast<size_t>(at[i])];
+                t.depth = 0;          // flat means flat
+                t.expandable = false; // and nothing to open
+                draw.push_back(t);
+            }
         }
 
         // A parent's comm, by pid, over the whole snapshot — Hidden parents are
@@ -1796,14 +1826,16 @@ void draw_processes_pane(InspectState &s) {
         // window (jiffies / (window_s * ticks_per_s) * 100). One busy core reads
         // ~100%, two ~200% — the same shape top shows.
         const double clk_tck = static_cast<double>(sysconf(_SC_CLK_TCK));
-        for (size_t i : draw_order) {
-            const ProcRow &r = s.rows[i];
-            // Every drawn row is visible, and proc_tree_layout returns exactly
-            // the visible rows — so this lookup always lands.
-            const ProcTreeRow &t = tree[static_cast<size_t>(at[i])];
+        for (const ProcTreeRow &t : draw) {
+            const ProcRow &r = s.rows[t.index];
+            const bool is_thread = t.kind == ProcNode::Thread;
+            const bool is_group = t.kind == ProcNode::ThreadGroup;
+            const ProcThread *th =
+                is_thread ? &r.threads[t.thread_at] : nullptr;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            char lbl[96];
+
+            // --- the pid cell: indent, expander, connector, number ---------
             if (use_tree && t.depth > 0) {
                 // Indent by depth, then ONE connector at the row's own level.
                 // Deliberately no │ continuation lines through the levels
@@ -1814,21 +1846,58 @@ void draw_processes_pane(InspectState &s) {
                 // push the pid off the right edge — and the parent column
                 // below carries the fact regardless of how deep it went.
                 const int cap = t.depth > 12 ? 12 : t.depth;
-                std::string pad(static_cast<size_t>(cap - 1) * 2, ' ');
-                std::snprintf(lbl, sizeof lbl, "%s%s %ld##p%ld", pad.c_str(),
-                              t.last_sibling ? "\xe2\x94\x94" : "\xe2\x94\x9c",
-                              r.pid, r.pid);
-            } else {
-                std::snprintf(lbl, sizeof lbl, "%ld##p%ld", r.pid, r.pid);
+                const std::string pad(static_cast<size_t>(cap - 1) * 2, ' ');
+                ImGui::TextUnformatted(
+                    (pad + (t.last_sibling ? "\xe2\x94\x94" : "\xe2\x94\x9c"))
+                        .c_str());
+                ImGui::SameLine(0, 4);
             }
-            if (ImGui::Selectable(lbl, s.selected_pid == r.pid,
+            // The expander. A button rather than a TreeNode: the rows arrive
+            // as a flat list already carrying their depth, so there is no
+            // TreePush/TreePop nesting to match, and a real widget keeps the
+            // click target away from the row's own Selectable. Rows that open
+            // nothing get no arrow — an expander onto an empty subtree is a
+            // control that lies (see ProcTreeRow::expandable).
+            if (t.expandable) {
+                ImGui::PushID(static_cast<int>(t.node_id));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1, 0));
+                if (ImGui::SmallButton(t.expanded ? "\xe2\x96\xbc"
+                                                  : "\xe2\x96\xb6")) {
+                    if (t.expanded)
+                        s.proc_open.erase(t.node_id);
+                    else
+                        s.proc_open.insert(t.node_id);
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopID();
+                ImGui::SameLine(0, 4);
+            }
+
+            char lbl[96];
+            if (is_group)
+                std::snprintf(lbl, sizeof lbl, "%zu threads##g%ld",
+                              r.threads.size(), r.pid);
+            else if (is_thread)
+                std::snprintf(lbl, sizeof lbl, "%ld##t%ld", th->tid, th->tid);
+            else
+                std::snprintf(lbl, sizeof lbl, "%ld##p%ld", r.pid, r.pid);
+            // SELECTION IS ALWAYS t.pid — the thread-group leader, never a
+            // tid. asmspy's target is a thread GROUP (see ProcTreeRow::pid);
+            // handing it a tid traces the same process with its notion of the
+            // leader wrong, and `--info <tid>` answers with identity.pid set
+            // to the tid, rendering a thread as a process that duplicates its
+            // own. A thread row is still clickable — it selects the process it
+            // belongs to, and the attach cell says so rather than leaving the
+            // operator to discover it.
+            const bool selected = !is_group && s.selected_pid == t.pid;
+            if (ImGui::Selectable(lbl, selected,
                                   ImGuiSelectableFlags_SpanAllColumns |
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
-                s.selected_pid = r.pid;
+                s.selected_pid = t.pid;
                 // Double-click = attach & trace at FULL detail (auto + the register
                 // ring); a single click only selects the target.
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                    inspect_attach_full_detail(s, r.pid);
+                    inspect_attach_full_detail(s, t.pid);
             }
             // Right-click the row: attach at full detail, trace a named function,
             // or reveal the Connect pane. BeginPopupContextItem() with no id binds
@@ -1855,8 +1924,60 @@ void draw_processes_pane(InspectState &s) {
                 ImGui::EndPopup();
             }
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(r.comm.c_str());
+            if (is_thread) {
+                // A thread's comm is what actually distinguishes it — a
+                // managed runtime self-identifies here ("GC Thread#0", "C2
+                // CompilerThread0"), which is the whole reason to show
+                // threads in a picker at all. The state letter rides along
+                // because it is the other per-task fact.
+                ImGui::Text("%s  %c", th->comm.c_str(), th->state);
+            } else if (is_group) {
+                ImGui::TextDisabled("(threads of %ld)", r.pid);
+            } else {
+                ImGui::TextUnformatted(r.comm.c_str());
+            }
             ImGui::TableNextColumn();
+            // A thread and its group both sit under a process that is on
+            // screen directly above them, so their parent is never in doubt
+            // and never needs the four-way analysis below.
+            if (is_thread || is_group) {
+                ImGui::Text("%ld %s", r.pid, r.comm.c_str());
+                ImGui::TableNextColumn();
+                if (!s.sample_cpu) {
+                    ImGui::TextDisabled("—");
+                } else if (is_thread) {
+                    const double pct = clk_tck > 0 ? 100.0 * (double)th->cpu /
+                                                         (0.150 * clk_tck)
+                                                   : 0.0;
+                    dt_cell_magnitude_bar(dt_magnitude_frac(pct, 100.0),
+                                          dt_dim_u32());
+                    ImGui::Text("%.0f%%", pct);
+                } else {
+                    // The group row deliberately does NOT total its threads:
+                    // the process row above already carries the process's own
+                    // measured %CPU, and a second, separately-derived total
+                    // beside it invites the reader to treat a rounding
+                    // difference as a discrepancy.
+                    ImGui::TextDisabled("—");
+                }
+                ImGui::TableNextColumn();
+                // Attachability is a property of the thread GROUP: every task
+                // shares the credentials and dumpability ptrace_may_access
+                // reads, so repeating the verdict per thread would be the
+                // process's answer restated N times. What is worth saying here
+                // is the thing an operator cannot guess — which pid a click
+                // actually targets.
+                if (is_thread)
+                    ImGui::TextDisabled("via pid %ld", r.pid);
+                else
+                    ImGui::TextDisabled("—");
+                ImGui::TableNextColumn();
+                if (is_thread)
+                    ImGui::TextDisabled(
+                        "a thread is not a separate target — selecting this "
+                        "traces the whole process");
+                continue;
+            }
             // The parent, and — when the row is not sitting under it — WHY
             // not. All four ProcParent cases render differently on purpose:
             // "no parent", "the parent is that row up there", "the parent is

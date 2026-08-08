@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_set> // ProcTreeExpansion::open — the tree's open node ids
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -191,6 +192,25 @@ AttachVerdict attach_verdict(const AttachFacts &f);
 // whether to also offer a copy-pasteable command (and the Log echoes it too).
 std::string remedy_command(const std::string &advice);
 
+// One thread (task) of a process.
+//
+// Deliberately NOT a ProcRow, and deliberately carrying no attach verdict of
+// its own. ptrace_may_access is evaluated per task, but every task in a thread
+// group shares the credentials and dumpability that check reads, so a
+// per-thread verdict would be its process's answer repeated N times — and the
+// pane would be inviting a click on a target asmspy cannot take (see
+// ProcTreeRow::pid: selecting a thread targets its thread GROUP). What a
+// thread does carry is what actually differs between the tasks of one process:
+// what it is called, what state it is in, and how much CPU it used.
+struct ProcThread {
+    long tid = 0;
+    std::string comm;
+    char state = '?';
+    // Same measure and the same sample window as ProcRow::cpu, and 0 (never
+    // sampled) on the cheap default list for the same reason.
+    unsigned long long cpu = 0;
+};
+
 // One row of the process list.
 struct ProcRow {
     long pid = 0;
@@ -213,6 +233,13 @@ struct ProcRow {
     // ASMSPY_SORT_ACTIVE ranks on. 0 (and never sampled) on the cheap default
     // list, so the "activity" column shows it only when it was actually measured.
     unsigned long long cpu = 0;
+    // Every task under /proc/<pid>/task, LEADER FIRST then ascending by tid —
+    // the same order cli/asmspy_tidsort.h gives the details pane, so the two
+    // never disagree about which row is the leader. Empty when the task dir
+    // could not be read (an exit mid-scan, or a permission denial), which is
+    // not the same as "one thread": size 1 is a measured single-threaded
+    // process. The pane only offers a threads group when this exceeds 1.
+    std::vector<ProcThread> threads;
 };
 
 // Read /proc/sys/kernel/yama/ptrace_scope; -1 when absent (Yama not enforcing).
@@ -260,9 +287,21 @@ enum class ProcParent {
              // the readdir and the read, or lives outside our pid namespace
 };
 
+// What a drawn row IS. A process list that shows threads has three kinds of
+// row, and flattening them into one would put a tid where a pid goes — the
+// single mistake this whole area has to avoid (see ProcTreeRow::pid).
+enum class ProcNode {
+    Process,     // a thread-group leader: the only kind that is a real target
+    ThreadGroup, // the synthetic "N threads" row a multi-threaded process gets
+    Thread,      // one task under that group
+};
+
 struct ProcTreeRow {
-    size_t index = 0; // into the `rows` handed in
-    int depth = 0;    // ancestors within the snapshot; 0 = nothing above it
+    ProcNode kind = ProcNode::Process;
+    size_t index = 0; // into the `rows` handed in — the owning PROCESS, always
+    // Which of rows[index].threads this is; meaningful only for Thread.
+    size_t thread_at = 0;
+    int depth = 0; // ancestors within the snapshot; 0 = nothing above it
     ProcParent parent = ProcParent::None;
     // The last of its parent's children that this table will actually DRAW —
     // which is what the └ vs ├ connector means. Computed over the VISIBLE
@@ -270,22 +309,72 @@ struct ProcTreeRow {
     // has to move the └ up to the one above it, or the tree renders a branch
     // continuing into nothing.
     bool last_sibling = true;
+    // Does this row have anything under it to reveal? A Process is expandable
+    // when it has a drawable child process or a threads group; a ThreadGroup
+    // always is; a Thread never is.
+    bool expandable = false;
+    bool expanded = false;
+    // The id to toggle in ProcTreeExpansion, and the id the pane keys its
+    // widget on. Processes use their pid; a ThreadGroup uses -pid, so the two
+    // can never collide in one set.
+    long node_id = 0;
+    // WHAT SELECTING THIS ROW TARGETS — always a thread-group leader, never a
+    // tid. asmspy's target is a thread GROUP: seize_threads() SEIZEs the pid
+    // it is handed and then walks /proc/<pid>/task, and /proc/<tid>/task lists
+    // the whole group, so handing it a tid traces the same process with its
+    // notion of the leader wrong. `asmspy --info <tid>` likewise answers with
+    // identity.pid set to the TID, which would render a thread as a process
+    // duplicating its own parent. So a Thread row carries its LEADER's pid
+    // here and the pane says so in the row; nothing downstream ever sees a tid.
+    long pid = 0;
+    // The tid, for display only. 0 unless kind == Thread.
+    long tid = 0;
+};
+
+// Which nodes are open. Empty = everything collapsed, which is the default the
+// pane starts at.
+struct ProcTreeExpansion {
+    // node_id values (pid for a Process, -pid for a ThreadGroup).
+    std::unordered_set<long> open;
+    // Ignore process collapse entirely: every VISIBLE process is emitted at
+    // its true depth. The type-to-narrow filter sets this, because a search
+    // that returned nothing because the tree happened to be collapsed is a
+    // search that lied about the snapshot.
+    //
+    // It deliberately does NOT open thread groups. The filter matches on
+    // pid/comm/cmdline — process facts — so honouring it by dumping a hundred
+    // thread rows nobody asked for would answer a different question than the
+    // one typed.
+    bool show_all_processes = false;
 };
 
 // The visible rows, in parent-then-children order, each at its true depth.
 //
-// `visible[i]` is non-zero for a row the pane will draw; a short or empty
+// `visible[i]` is non-zero for a PROCESS the pane will draw; a short or empty
 // vector reads as "none visible" rather than silently defaulting to shown.
 // `descending` orders siblings (and roots) by descending pid, to match a
 // descending pid sort — the tree SHAPE is identical either way, only the
 // order within each sibling group flips.
+//
+// COLLAPSE IS EVALUATED OVER THE VISIBLE ANCESTORS ONLY. A row is emitted when
+// it passes `visible` and no visible ancestor above it is closed. An ancestor
+// the gate or the filter removed cannot block anything, because there is no
+// row on screen to click open — treating it as closed would strand its whole
+// subtree behind a control that does not exist.
 //
 // Every row of `rows` is consulted for the shape; only the visible ones are
 // returned. Cycles (impossible in a live /proc, reachable in a snapshot read
 // pid-by-pid across a reused pid) are cut to roots rather than walked.
 std::vector<ProcTreeRow> proc_tree_layout(const std::vector<ProcRow> &rows,
                                           const std::vector<char> &visible,
+                                          const ProcTreeExpansion &exp,
                                           bool descending = false);
+
+// Every node_id the tree could open, for the pane's "Expand all". Returned
+// rather than built by the caller so the two can never disagree about what a
+// node id is — and so "expand all" cannot miss a kind added later.
+std::vector<long> proc_tree_all_nodes(const std::vector<ProcRow> &rows,
+                                      const std::vector<char> &visible);
 
 // Parse a scoped-region spec for trace/dataflow's serve `start` params. A spec of
 // the form "0xADDR:LEN" (base and len each 0x-hex or decimal, len > 0) yields

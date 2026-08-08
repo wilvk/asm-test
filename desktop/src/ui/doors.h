@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <string>
+#include <unordered_set> // InspectState::proc_open — the process tree's open nodes
 #include <vector>
 
 #include "author_vm.h"
@@ -265,6 +266,19 @@ struct InspectState {
     // specs only exist INSIDE BeginTable, and the checkbox is drawn above it.
     bool proc_tree = true;
     bool proc_sort_is_pid = true;
+
+    // Which tree nodes are open. Starts EMPTY — everything collapsed — which
+    // is a deliberate cost: measured on a 604-process desktop, a fully
+    // collapsed tree shows 2 rows (3 with the attachable gate on), because
+    // almost every process descends from pid 1. "Expand all" is therefore not
+    // a convenience but the control that makes the collapsed default usable,
+    // and it sits next to the tree checkbox rather than in a menu.
+    //
+    // Node ids are ProcTreeRow::node_id — a pid for a process, MINUS the pid
+    // for its threads group, so one set holds both without collision.
+    // Survives a Rescan on purpose: re-reading /proc must not re-close a tree
+    // the operator just opened.
+    std::unordered_set<long> proc_open;
 
     // The scoped region for trace/dataflow (mode_needs_region): a func NAME or
     // "0xADDR:LEN". Sent as the `start` params (parse_region_spec); ignored by the
