@@ -1421,6 +1421,20 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // 48 T4: the landmark, computed ONCE per weave alongside the models
         // above — never re-derived per frame (see SceneView::home_u's doc).
         sv.has_home = scene3d::scene_home_target(sv.terr, &sv.home_u, &sv.home_v);
+        // This weave just rebuilt Projection::regions, so every region ORDINAL
+        // held across it is now suspect: a growing live capture gains regions,
+        // and the index that named the heap a moment ago names whatever landed
+        // in that slot. Re-resolve both by identity and CLEAR what went away —
+        // a bounds check cannot catch this, because a stale index is in range
+        // and simply points at someone else (scene3d/focus.h).
+        if (sv.hud.focus.region >= 0)
+            sv.hud.focus.region = scene3d::reresolve_region(
+                sv.terr.proj.regions, sv.hud.focus.region_base,
+                sv.hud.focus.region_len);
+        if (sv.hud.goto_region_sel >= 0 &&
+            static_cast<size_t>(sv.hud.goto_region_sel) >=
+                sv.terr.proj.regions.size())
+            sv.hud.goto_region_sel = -1;
         sv.built = true;
         // T1-T5 (59): the four non-plane substrates, woven on the same gate.
         shell_weave_standalone(sv, r, a, shell_b(s));

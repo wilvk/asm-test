@@ -6,6 +6,18 @@
 
 namespace asmdesk::scene3d {
 
+int32_t reresolve_region(const std::vector<space::Region> &regions,
+                         uint64_t base, uint64_t len) {
+    // A zero length is the never-set sentinel, and no real region has one — so
+    // refuse before scanning rather than letting a degenerate entry match it.
+    if (len == 0)
+        return -1;
+    for (size_t i = 0; i < regions.size(); i++)
+        if (regions[i].base == base && regions[i].len == len)
+            return static_cast<int32_t>(i);
+    return -1;
+}
+
 void tid_palette(int idx, float out[4]) {
     static const float pal[6][3] = {
         {0.95f, 0.85f, 0.25f}, {0.40f, 0.80f, 1.00f}, {0.55f, 0.95f, 0.45f},

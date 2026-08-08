@@ -477,6 +477,45 @@ int main() {
                   "kAllKinds must admit every Region::Kind");
     }
 
+    // === a held region index must survive a weave by IDENTITY, not ordinal ==
+    // Projection::regions is rebuilt on every weave, and a growing live capture
+    // gains regions — so an index held across one (SceneFocus::region,
+    // HudState::goto_region_sel) names a DIFFERENT region afterwards. Both were
+    // only ever bounds-checked, which cannot catch that: the stale index is in
+    // range, it is simply wrong.
+    {
+        std::vector<space::Region> before;
+        space::Region a;
+        a.base = 0x1000;
+        a.len = 0x1000;
+        before.push_back(a);
+        space::Region b;
+        b.base = 0x9000;
+        b.len = 0x2000;
+        before.push_back(b);
+        check("reresolve: finds an unmoved region",
+              reresolve_region(before, 0x9000, 0x2000) == 1,
+              "region 1 is (0x9000,0x2000)");
+
+        // A weave that INSERTS a region ahead of it shifts the ordinal.
+        std::vector<space::Region> after;
+        space::Region z;
+        z.base = 0x0500;
+        z.len = 0x0100;
+        after.push_back(z);
+        after.push_back(a);
+        after.push_back(b);
+        check("reresolve: survives an insertion that shifts the ordinal",
+              reresolve_region(after, 0x9000, 0x2000) == 2,
+              "the same region is now at index 2");
+        check("reresolve: refuses a region that went away",
+              reresolve_region(after, 0xdead0000, 0x10) == -1,
+              "a vanished region must clear, never retarget");
+        check("reresolve: an identity never set resolves to nothing",
+              reresolve_region(after, 0, 0) == -1,
+              "0/0 is the never-set sentinel, not region 0");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d focus check(s) failed\n", failures);
         return 1;

@@ -824,8 +824,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                 ? terr.proj.regions[static_cast<size_t>(s.focus.region)].label
                 : std::string("(all regions)");
         if (ImGui::BeginCombo("##focus_region", preview.c_str())) {
-            if (ImGui::Selectable("(all regions)", s.focus.region < 0))
+            if (ImGui::Selectable("(all regions)", s.focus.region < 0)) {
                 s.focus.region = -1;
+                s.focus.region_base = s.focus.region_len = 0;
+            }
             for (size_t i = 0; i < terr.proj.regions.size(); i++) {
                 const space::Region &r = terr.proj.regions[i];
                 char fallback[32];
@@ -833,8 +835,14 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                               static_cast<unsigned long long>(r.base));
                 std::string name = r.label.empty() ? fallback : r.label;
                 const bool sel = s.focus.region == static_cast<int>(i);
-                if (ImGui::Selectable((name + "##fr").c_str(), sel))
+                if (ImGui::Selectable((name + "##fr").c_str(), sel)) {
                     s.focus.region = static_cast<int32_t>(i);
+                    // Record the IDENTITY beside the ordinal: the next weave
+                    // rebuilds Projection::regions and this index alone would
+                    // then name whoever landed in slot i (focus.h).
+                    s.focus.region_base = r.base;
+                    s.focus.region_len = r.len;
+                }
             }
             ImGui::EndCombo();
         }

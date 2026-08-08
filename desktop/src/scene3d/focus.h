@@ -51,7 +51,15 @@ struct SceneFocus {
     // default, in which every worldline is drawn exactly as it is today).
     int32_t tid = -1;
     // An index into Projection::regions, or -1 for "no region is the subject".
+    //
+    // An ORDINAL, and Projection::regions is rebuilt on every weave — so this
+    // must be re-resolved through reresolve_region() after one, never merely
+    // bounds-checked. See region_base/region_len below.
     int32_t region = -1;
+    // The (base,len) `region` was chosen for — its IDENTITY, which survives a
+    // weave that its ordinal does not. Write both whenever `region` is set to a
+    // real index; 0/0 means "never set" and resolves to nothing.
+    uint64_t region_base = 0, region_len = 0;
     // Bit per Region::Kind; kAllKinds == no kind filter.
     uint32_t kind_mask = kAllKinds;
     // 51 T4 ONLY: the distance budget's MID tier drops non-subject worldlines
@@ -65,6 +73,22 @@ struct SceneFocus {
         return tid >= 0 || region >= 0 || kind_mask != kAllKinds;
     }
 };
+
+// Resolve a region by IDENTITY rather than ordinal: the index of the region
+// with exactly this (base,len), or -1 when none has it.
+//
+// Projection::regions is rebuilt from scratch on every weave, and a growing live
+// capture gains regions as it runs — so any index held ACROSS a weave
+// (SceneFocus::region, HudState::goto_region_sel) silently names a different
+// region afterwards. A bounds check cannot catch that, which is exactly why the
+// bug survived: the stale index is in range, it is just pointing somewhere else.
+//
+// A caller re-resolves after each weave and treats -1 as "the subject went away,
+// clear it" — never as "fall back to region 0", which would be the same defect
+// wearing a different number. The 0/0 never-set sentinel resolves to -1 because
+// no real region has zero length.
+int32_t reresolve_region(const std::vector<space::Region> &regions,
+                         uint64_t base, uint64_t len);
 
 // The per-trajectory colour palette. Lives here (pure) rather than in
 // scene.cpp so the HUD roster's swatch and the drawn worldline are ONE table,
