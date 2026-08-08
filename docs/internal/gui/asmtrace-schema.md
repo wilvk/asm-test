@@ -547,6 +547,7 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](../archive/gui/05-loom-day-one.md) |
 | `codeimage` | captured code bytes at a version | [08-observer-views.md](../archive/gui/08-observer-views.md) |
 | `procinfo` | one attach-free process snapshot | [gui process-details](../../superpowers/specs/2026-08-03-gui-process-details-tab-design.md) |
+| `vmmap` | one `/proc/<pid>/maps` address-space snapshot | [vmmap region naming](../../superpowers/specs/2026-08-08-vmmap-region-naming-design.md) |
 
 `session` / `cmd` / `err` were reserved here for 07 and are now **defined** — see
 *Serve protocol* below. They are **serve-only**: they appear on a live control
@@ -563,6 +564,11 @@ access (address stream)* above (29 R2). An ordinary opt-in recording event.
 `procinfo` is **defined** — see *`procinfo` — one attach-free process snapshot*
 below. An ordinary recording event, emitted by `asmspy --info` as the sole event
 of a one-event recording.
+
+`vmmap` is **defined** — see *`vmmap` — one `/proc/<pid>/maps` address-space
+snapshot* below. An ordinary recording event, emitted by `--serve` only: once per
+session after the header, and again on the per-invocation refresh only when the
+address space changed.
 
 `df_invocation` (35) is **defined** — see *`df_invocation` — one continuous-capture
 pass delimiter* above. An ordinary recording event emitted only by a **continuous**
@@ -1194,6 +1200,89 @@ desktop's Process details pane fires a probe on every selection change — and
 a caller that cannot tell that race from a broken `asmspy` reports normal
 behaviour as a failure. A nonexistent pid is never rendered as an empty
 snapshot.
+
+## `vmmap` — one `/proc/<pid>/maps` address-space snapshot
+
+> **Owned by [vmmap region naming](../../superpowers/specs/2026-08-08-vmmap-region-naming-design.md).**
+> Defines the kind reserved above; adds no field to any existing kind and no new
+> envelope major.
+
+```json
+{"k":"vmmap","version":0,"maps_readable":true,
+ "spans_total":23,"spans_truncated":false,
+ "spans":[
+   {"base":"0x764548228000","len":1605632,"perms":"r-xp","name":"libc.so.6",
+    "path":"/usr/lib/x86_64-linux-gnu/libc.so.6"},
+   {"base":"0x55e3c2100000","len":67108864,"perms":"rw-p","name":"[heap]"},
+   {"base":"0x7ffd0a000000","len":135168,"perms":"rw-p","name":"[stack]"},
+   {"base":"0x7f9000000000","len":536870912,"perms":"rw-p"}]}
+```
+
+The address space as the producer read it. It exists so a consumer can say what
+a region **is**: without it the desktop's 3D overview labels nearly every region
+`observed data (unknown)`, because the only named span a capture carries is the
+one `codeimage` armed over the executable's text, and everything else is inferred
+from "a load happened at this address".
+
+Field order: `version`, `maps_readable`, `spans_total`, `spans_truncated`,
+`spans`. Per span: `base`, `len`, `perms`, `name`, `path`.
+
+**Emitted by `--serve` only**, once per session for every attach mode, after the
+header and before the first engine event, then again on the per-invocation
+refresh **only when the address space actually changed**. Headless `--record` and
+the corpus producer never emit it, which is what keeps the golden recordings
+byte-stable: a live maps table is full of ASLR'd absolute addresses while the
+goldens deliberately pin a synthetic base. Same serve-only carve-out `37 T4` took
+for `when`.
+
+**Resolution is by STREAM ORDER, forward-valid.** A `vmmap` describes the address
+space as read at its stream position and applies to events **after** it, up to
+the next `vmmap`. This is the `df_invocation` delimiter rule, and it is chosen
+**explicitly** because it is the *opposite* of `codeimage`, where inferring a
+version from wire order is forbidden — a reader must not carry that habit here.
+
+**`version` is an ordinal, not a resolution key.** It counts emissions within a
+session (0 at attach, +1 per change-gated refresh) so a reader can say "the map
+changed twice during this capture" and a log can name which snapshot it is
+looking at. Resolution is by stream position alone, per the rule above; sorting
+by `version` to decide which map applies to a step is using it wrongly. A
+consumer needing genuine per-step resolution must define that separately rather
+than reinterpreting this field. (The 3D plane does not resolve at all — it
+flattens to last-name-wins, exactly as it already flattens the codeimage version
+timeline.)
+
+**Addresses are hex strings; magnitudes are numbers.** `base` is a string for the
+same reason `procinfo`'s is: a JSON number is a double in many readers, which
+silently rounds a 64-bit pointer. `len`, `spans_total` and `version` are numbers.
+
+**`maps_readable` gates the whole array**, exactly as `procinfo.code.maps_readable`
+does. `false` means the producer could not open `/proc/<pid>/maps` — **absent
+measurement**, never measured zero — and `spans` is then `[]`. This is the normal
+state for a target the running user does not own, so a reader must render it as
+"the address space could not be read", never as "this process has no mappings".
+
+**Caps: at most 256 spans, ranked before capping.** Ranking is executable-first,
+then descending length, then ascending base (a total order, so the output is
+deterministic). Ranking must happen over the **full** table and the cap applied
+after — capping first is what "dropped libc itself while keeping dozens of
+zero-symbol rows" in `procinfo`'s modules. `spans_total` carries the rows the
+producer **saw**, so the truncation magnitude stays recoverable; this closes the
+gap `procinfo.modules` still has, where a truncated list's true size is
+unknowable. Cap, flag, and total — a consumer gets all three or none.
+
+**Rows are never coalesced.** Merging adjacent rows by `(base, end, name)` was
+measured fusing executable with non-executable memory in 102 of 212 spans and
+hiding a real 256 KiB `PROT_NONE → rw-p` transition as merge noise. Every row is
+its own span, and the cap — not coalescing — is what bounds the payload.
+
+**The snapshot is not atomic.** Reading a large map is many `read()` calls (137,
+measured, for a 5618-line map) and the target is not quiesced at either emission
+point, so a torn snapshot is possible: two rows in one event may describe the
+address space microseconds apart. Stated rather than designed away.
+
+**Root pid only.** The engines can follow child processes, which have their own
+address spaces, and no sink surfaces that — so a `vmmap` describes the session's
+own pid and nothing else. A consumer must not attribute it to a followed child.
 
 ## `regstate` descriptor — `emu_x86_regs_t@x86_64/sysv`
 
