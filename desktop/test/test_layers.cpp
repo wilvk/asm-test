@@ -72,6 +72,7 @@ int main() {
         &SceneLayers::data_relief,
         &SceneLayers::working_set, &SceneLayers::lifetime,
         &SceneLayers::data_ribbon, &SceneLayers::sediment,
+        &SceneLayers::occupancy,   &SceneLayers::perms,
         &SceneLayers::crossings,
         &SceneLayers::taint,        &SceneLayers::blame,
         &SceneLayers::ridge,
