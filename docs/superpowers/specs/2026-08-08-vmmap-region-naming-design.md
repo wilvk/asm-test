@@ -35,8 +35,9 @@ bytes were touched, and NOTHING about what they are (not an allocation extent: t
 object may start before and end after)*.
 
 **The names already exist and never reach the capture.** The producer reads
-`/proc/<pid>/maps` already — `scan_modules` ([asmspy_proc.c:358](../../../cli/asmspy_proc.c#L358))
-walks it during `asmspy_symtab_load`. `asmspy --info` emits a `procinfo` event carrying
+`/proc/<pid>/maps` already — `scan_modules` ([asmspy_proc.c:355](../../../cli/asmspy_proc.c#L355))
+walks it during `asmspy_symtab_load` (though it keeps only file-backed offset-0 rows; see
+*Emission points* for why this feature still needs its own walk). `asmspy --info` emits a `procinfo` event carrying
 `modules[]`. But `procinfo` is emitted **only** by `--info`
 ([asmspy.c:8823](../../../cli/asmspy.c#L8823)), into its own one-event recording for the
 Details pane. A capture never carries it, and there is no `regions_from_maps` anywhere
@@ -116,7 +117,26 @@ rather than a half-token ([asmspy.c:8612](../../../cli/asmspy.c#L8612)) — or
 
 #### Emission points
 
-- **Attach:** beside the symtab load, which already walks the maps. Zero extra passes.
+- **Attach:** beside the symtab load, after the recording header is open.
+
+  **A fresh maps walk, not `scan_modules`.** An earlier draft of this spec said the
+  symtab load "already walks the maps" and so this would cost "zero extra passes". That
+  is wrong, and the plan corrects it. `scan_modules`
+  ([asmspy_proc.c:355](../../../cli/asmspy_proc.c#L355)) does walk the same file, and then
+  discards exactly the rows this feature exists to name:
+
+  ```c
+  if (path[0] != '/') /* skip [heap],[stack],[vdso],anon */
+      continue;
+  ...
+  if (off != 0) /* only the ELF-header (offset 0) mapping fixes the base */
+      continue;
+  ```
+
+  plus a dedup by path. It resolves module **bases**; this needs the **table**. The walk
+  is one `fopen` and a few hundred `fgets` — cheap (655 µs measured for the largest map
+  on this host) — so a second pass is the right answer, not a reason to contort
+  `scan_modules` into serving two callers with opposite filters.
 - **Refresh:** beside `serve_codeimage_refresh` in the region and dataflow sinks. See
   *Updating over time* below.
 
