@@ -49,6 +49,7 @@
 #include "asmspy_dataview.h" /* --dataflow value annotation + slice/def-use logic */
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
+#include "asmspy_vmmap.h" /* --serve: the address-space map the 3D plane names from */
 #include "asmtest_codeimage.h" /* --serve: JIT-safe bytes for a region session */
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 #include "asmtrace_ndjson.h" /* --record / --json: the .asmtrace NDJSON writer */
@@ -3583,6 +3584,20 @@ typedef struct {
      */
     uint64_t ci_base;
     uint64_t ci_len;
+    /* --- vmmap: the address-space map, so the 3D plane can NAME its regions -
+     * The change gate. serve_codeimage_refresh gets its suppression free from
+     * the timeline library; a maps table has no such library, so the gate lives
+     * here as the hex digest of the last BODY emitted. Digesting the emitted
+     * payload exactly — never a canonicalised form of it — is deliberate: a
+     * name-coalesced digest was measured reporting "unchanged" while the raw
+     * rows moved +2/-6.
+     *
+     * Cheap in practice: measured across 10 live processes over 30 s, 6 were
+     * byte-identical and the rest drifted 0.04-0.6% of rows, so nearly every
+     * refresh costs one read of /proc/<pid>/maps and emits nothing. */
+    char vm_last[65];
+    int vm_have;
+    unsigned vm_version;
     /* A measured reason no lookup could produce. mode "auto" needs it: when
      * its SAMPLER self-skips, the thing that is unavailable is the sampler,
      * and only the sampler knows why — reporting the capture engine's generic
@@ -3828,6 +3843,87 @@ static void serve_codeimage_refresh(serve_session_t *s) {
         serve_codeimage_emit(s);
 }
 
+/* Emit one `vmmap` — the address-space map the desktop's 3D plane names its
+ * regions from. Without it nearly every region on that floor reads "observed
+ * data (unknown)", because the only named span a capture carries is the one
+ * `codeimage` the serve host arms over the executable's text.
+ *
+ * NEVER rec_emitf. That formats into a 16 KB STACK buffer and discards
+ * vsnprintf's return, so an oversized body would emit syntactically invalid
+ * NDJSON with no flag — a corrupt recording the reader blames on itself. This
+ * follows info_emit_json instead: heap body, and refuse loudly rather than emit
+ * a half-token.
+ *
+ * SERVE-ONLY by construction (it is only ever called from the serve tracer), so
+ * the golden corpus stays byte-stable: a live maps table is full of ASLR'd
+ * absolute addresses, and the goldens deliberately pin a synthetic base. */
+static void serve_vmmap_emit(serve_session_t *s) {
+    char mp[64];
+    FILE *f;
+    asmspy_vmspan_t *sp = NULL;
+    size_t total = 0;
+    int n;
+    char *body;
+    char dg[65];
+
+    if (!rec_on(&s->rec))
+        return;
+    snprintf(mp, sizeof mp, "/proc/%d/maps", (int)s->p.pid);
+    f = fopen(mp, "r");
+    if (!f) {
+        /* ABSENT MEASUREMENT, not measured zero — the state of every process the
+         * running user does not own. Say so on the wire, so the viewer renders
+         * "could not be read" rather than "this process has no mappings". */
+        rec_emitf(&s->rec, "vmmap",
+                  "\"version\":%u,\"maps_readable\":false,\"spans_total\":0,"
+                  "\"spans_truncated\":false,\"spans\":[]",
+                  s->vm_version);
+        s->vm_version++;
+        return;
+    }
+    n = asmspy_vmmap_parse(f, &sp, &total);
+    fclose(f);
+    if (n < 0) {
+        free(sp);
+        return;
+    }
+    body = malloc(256 * 1024);
+    if (!body) {
+        free(sp);
+        return;
+    }
+    if (asmspy_vmmap_body(sp, (size_t)n, total, 1, s->vm_version, body,
+                          256 * 1024) != 0) {
+        rec_emitf(&s->rec, "note",
+                  "\"text\":\"vmmap: %d span(s) did not fit the body buffer; "
+                  "not emitted\"",
+                  n);
+        free(body);
+        free(sp);
+        return;
+    }
+    /* Digest the address space, NOT the body: the body carries `version`,
+     * which increments every emit, so hashing it would defeat the gate
+     * entirely (measured: two identical 23-mapping snapshots re-emitted). */
+    asmspy_vmmap_digest(sp, (size_t)n, total, 1, dg);
+    if (s->vm_have && memcmp(dg, s->vm_last, sizeof dg) == 0) {
+        free(body);
+        free(sp);
+        return; /* the address space did not move: no event */
+    }
+    memcpy(s->vm_last, dg, sizeof dg);
+    s->vm_have = 1;
+    rec_emit(&s->rec, "vmmap", body);
+    s->vm_version++;
+    free(body);
+    free(sp);
+}
+
+/* Re-read after an invocation was captured, on the same cadence (and for the
+ * same reason) as serve_codeimage_refresh. The digest above suppresses nearly
+ * every one of these on a real target; an unchanged map costs one read. */
+static void serve_vmmap_refresh(serve_session_t *s) { serve_vmmap_emit(s); }
+
 static void serve_codeimage_close(serve_session_t *s) {
     if (s->img) {
         serve_codeimage_refresh(s);
@@ -3851,6 +3947,9 @@ static void serve_region_sink(void *ctx, unsigned sample_no, long result,
     /* AFTER the invocation's events: a version emitted before them would date
      * the new bytes to a capture that ran against the old ones. */
     serve_codeimage_refresh(s);
+    /* Same cadence, same reason: an mmap/dlopen this pass caused belongs to
+     * the NEXT one. Change-gated, so a static address space emits nothing. */
+    serve_vmmap_refresh(s);
 }
 
 static void serve_dataflow_sink(void *ctx, long result,
@@ -3872,6 +3971,7 @@ static void serve_dataflow_sink(void *ctx, long result,
     dataflow_record(&s->rec, vt, g, code, len, base, when, s->p.mem, s->p.blame,
                     s->p.statediff, s->p.insns, s->p.continuous, pass, result);
     serve_codeimage_refresh(s);
+    serve_vmmap_refresh(s);
 }
 
 /* ---- a minimal JSON reader for the control channel ------------------ */
@@ -4646,6 +4746,15 @@ static void *serve_tracer(void *arg) {
     if (asmspy_symtab_load(s->p.pid, &s->syms) == 0)
         s->have_syms = 1;
 
+    /* The address-space map, once, for EVERY mode — here rather than per-branch
+     * in serve_run_engine because every attach mode's viewer benefits and none
+     * of them has a reason to differ. It must land AFTER the rec_open above:
+     * the desktop's LiveSession discards a pre-header event as malformed, so an
+     * earlier emission would be invisible rather than early. Best-effort — a
+     * target whose maps cannot be read still captures, and the event says so
+     * rather than being omitted. */
+    serve_vmmap_emit(s);
+
     serve_run_engine(s);
 
     /* One last scan: code patched after the final invocation is still part of
@@ -4663,16 +4772,14 @@ static void *serve_tracer(void *arg) {
         serve_skip_reason(s, s->rc, skiptext, sizeof skiptext);
     /* Cache it into skip_note, the field serve_skip_reason itself already
      * treats as "a reason the session measured for itself" (its very first
-     * check). serve_loop's own `end.skip` fix (below, the call-site half of
-     * this change) does NOT call serve_skip_reason at all — by the time it
-     * runs, serve_stop has already returned (and, as its very last
-     * statement, reset p.mode to SM_NONE), so there is no live mode context
-     * left to key a fresh call off of. It reads skip_note directly instead.
-     * That means the SAMPLE/WATCH branches inside serve_skip_reason — gated
-     * on p.mode, which is only valid HERE, inside serve_tracer, while the
-     * engine that just ran is still the one named in p.mode — have to be
-     * resolved and stashed into skip_note now, or that text is unrecoverable
-     * later. */
+     * check). Two readers need this exact string AFTER this point, and only
+     * one of them still has a live p.mode to key off of: serve_loop's own
+     * `end.skip` fix (below, the call-site half of this change) calls
+     * serve_skip_reason a SECOND time, but by then serve_stop has already
+     * reset p.mode to SM_NONE, which would silently drop the SAMPLE/WATCH
+     * branches (mode-gated) back to the generic asmspy_strerror text. Caching
+     * here — before that reset — makes the second call hit the skip_note
+     * short-circuit and return the identical string regardless of mode. */
     if (skiptext[0] && !s->skip_note[0])
         snprintf(s->skip_note, sizeof s->skip_note, "%s", skiptext);
     /* 2026-08-06 T9: a `note` is the file-legal channel for this reason. The
@@ -4692,14 +4799,11 @@ static void *serve_tracer(void *arg) {
      * same rec_emitf the session file already tees (r->shared, wired at
      * session start), fixes that — and does it per LEG, which a single
      * closing footer (the other half of this fix) cannot. Precedent:
-     * serve_codeimage_arm's "codeimage unavailable" note, identical shape —
-     * no generic prefix here either, since the measured reason (e.g.
-     * "perf_event_open refused (EACCES): ...") already says plainly what
-     * happened without one. */
+     * serve_codeimage_arm's "codeimage unavailable" note, identical shape. */
     if (skiptext[0]) {
         char esc[4 * sizeof skiptext];
         asmtrace_escape(esc, sizeof esc, skiptext);
-        rec_emitf(&s->rec, "note", "\"text\":\"%s\"", esc);
+        rec_emitf(&s->rec, "note", "\"text\":\"skip: %s\"", esc);
     }
     s->events = s->rec.out.events;
     {

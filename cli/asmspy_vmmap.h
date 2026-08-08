@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "asmtrace_ndjson.h" /* asmtrace_escape */
+#include "asmtrace_sha256.h" /* the change gate's digest */
 
 /* Rank-then-cap. Measured 97-118 JSON bytes per span, so 256 spans is ~30 KB of
  * body; a browser-class 5618-row map would be ~550 KB, against golden
@@ -129,6 +130,54 @@ static int asmspy_vmmap_parse(FILE *f, asmspy_vmspan_t **out, size_t *n_total) {
         n = (size_t)ASMSPY_VMMAP_CAP;
     *out = sp;
     return (int)n;
+}
+
+/* Hash what the address space IS, for the caller's change gate.
+ *
+ * Deliberately NOT a hash of the emitted body: the body carries `version`, an
+ * ordinal that increments on every emit, so digesting it would make every
+ * snapshot differ from the last and the gate would never suppress anything —
+ * measured, on a target whose 23 mappings had not moved at all.
+ *
+ * This is not the "lossy canonical form" the design forbids either. That warning
+ * is against COALESCING rows before digesting (which drops evidence: a
+ * name-coalesced digest was measured reporting "unchanged" while the raw rows
+ * moved +2/-6). Every span's full tuple goes in here, in emission order, plus
+ * the two fields that qualify the set. The only thing left out is the serial
+ * number, which is not a fact about the process. */
+static void asmspy_vmmap_digest(const asmspy_vmspan_t *sp, size_t n,
+                                size_t total, int readable, char out[65]) {
+    asmtrace_sha256_t h;
+    size_t i;
+    unsigned char hdr[17];
+    asmtrace_sha256_init(&h);
+    for (i = 0; i < 8; i++) {
+        hdr[i] = (unsigned char)((total >> (i * 8)) & 0xff);
+        hdr[8 + i] = 0;
+    }
+    hdr[16] = (unsigned char)(readable ? 1 : 0);
+    asmtrace_sha256_update(&h, hdr, sizeof hdr);
+    for (i = 0; i < n; i++) {
+        unsigned char row[16];
+        size_t k;
+        for (k = 0; k < 8; k++) {
+            row[k] = (unsigned char)((sp[i].base >> (k * 8)) & 0xff);
+            row[8 + k] = (unsigned char)((sp[i].len >> (k * 8)) & 0xff);
+        }
+        asmtrace_sha256_update(&h, row, sizeof row);
+        /* Include the NUL so "ab"+"c" and "a"+"bc" cannot collide. */
+        asmtrace_sha256_update(&h, sp[i].perms, strlen(sp[i].perms) + 1);
+        asmtrace_sha256_update(&h, sp[i].name, strlen(sp[i].name) + 1);
+        asmtrace_sha256_update(&h, sp[i].path, strlen(sp[i].path) + 1);
+    }
+    {
+        uint8_t d[32];
+        int j;
+        asmtrace_sha256_final(&h, d);
+        for (j = 0; j < 32; j++)
+            snprintf(out + j * 2, 3, "%02x", d[j]);
+        out[64] = '\0';
+    }
 }
 
 /* Build the event BODY (no leading comma — asmtrace_emit prepends

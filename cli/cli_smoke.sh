@@ -3658,8 +3658,11 @@ nk=$(grep -c '"k":"' "$SERVE_OUT" || true)
     || fail "--serve: $nlines lines, $nhdr headers + $nk kinded — some line is neither"
 # Known kinds only: strip the ones the protocol + v1 registry define and expect
 # nothing left. An unknown kind here means the wire grew a shape no reader knows.
+# `vmmap` joins the list because serve_tracer emits one per session for EVERY
+# mode (the address-space map the desktop's 3D plane names its regions from), so
+# it appears in this `log`-mode capture too.
 nunknown=$(grep '"k":"' "$SERVE_OUT" \
-    | grep -cvE '"k":"(session|cmd|err|syscall|stream|end)"' || true)
+    | grep -cvE '"k":"(session|cmd|err|syscall|stream|end|vmmap)"' || true)
 [ "$nunknown" = "0" ] \
     || fail "--serve: $nunknown event(s) carry a kind outside the registry"
 echo "  every line is JSON: $nhdr session headers + $nk kinded events, no unknown kinds"
@@ -3953,6 +3956,53 @@ else
         || fail "--serve dataflow (when): no codeimage, but $ndfw_nowhen df_step events carry when anyway"
     echo "  (no code image on this host — df_step correctly carries no when)"
 fi
+
+# --serve `vmmap`: the address-space map the desktop's 3D plane NAMES its
+# regions from. Without it nearly every region on that floor reads "observed
+# data (unknown)", because the only named span a capture carries is the one
+# codeimage armed over the executable's text.
+#
+# Reuses the still-running auto_victim above. The three assertions that matter
+# are the ones a unit test cannot make: that a real /proc/<pid>/maps parses at
+# all, that ANONYMOUS rows survive (scan_modules drops exactly those, and they
+# are most of what a data trace touches), and that the CHANGE GATE holds across
+# many invocation passes — an unchanged address space must emit ONE event, not
+# one per pass. That last regressed once: hashing the emitted body, which
+# carries `version`, re-emitted 23 identical mappings every pass.
+echo "--- serve: vmmap names the address space ---"
+VM_OUT="$RECDIR/serve_vmmap.ndjson"
+set +e
+{
+    printf '{"cmd":"start","mode":"dataflow","pid":%d,"func":"entered_often","max":64,"continuous":true}\n' "$DFWPID"
+    sleep 3
+    printf '{"cmd":"stop"}\n'
+    sleep 1
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 90 "$ASM" --serve >"$VM_OUT" 2>/dev/null
+vmrc=$?
+set -e
+[ "$vmrc" -eq 124 ] && fail "--serve vmmap: hung"
+[ "$vmrc" -eq 0 ] || fail "--serve vmmap: exited $vmrc"
+nvm=$(grep -c '"k":"vmmap"' "$VM_OUT" || true)
+[ "$nvm" -gt 0 ] || fail "--serve vmmap: no vmmap event emitted"
+grep '"k":"vmmap"' "$VM_OUT" | grep -q '"spans_total":' \
+    || fail "--serve vmmap: no spans_total (cap, flag AND total are all required)"
+grep '"k":"vmmap"' "$VM_OUT" | grep -qE '"base":"0x[0-9a-f]+"' \
+    || fail "--serve vmmap: base is not a hex string"
+grep '"k":"vmmap"' "$VM_OUT" | grep -q '"perms":"r-xp"' \
+    || fail "--serve vmmap: no executable mapping — is the rank/cap dropping code?"
+# An anonymous row: no "name" key at all. scan_modules would have dropped it.
+grep '"k":"vmmap"' "$VM_OUT" \
+    | grep -qE '\{"base":"0x[0-9a-f]+","len":[0-9]+,"perms":"[^"]*"\}' \
+    || fail "--serve vmmap: no anonymous mapping survived the walk"
+# The change gate: an address space that did not move emits ONE event however
+# many invocation passes ran.
+nvmpass=$(grep -c '"k":"df_invocation"' "$VM_OUT" || true)
+if [ "$nvmpass" -gt 2 ] && [ "$nvm" -gt "$nvmpass" ]; then
+    fail "--serve vmmap: $nvm events for $nvmpass passes — the change gate is not suppressing an unchanged map"
+fi
+echo "  $nvm vmmap event(s) across $nvmpass invocation pass(es)"
 
 kill -9 "$DFWPID" 2>/dev/null || true
 wait "$DFWPID" 2>/dev/null || true

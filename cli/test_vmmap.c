@@ -152,6 +152,43 @@ int main(void) {
         free(big);
     }
 
+    /* THE CHANGE GATE. An unchanged address space must digest identically even
+     * though the version ordinal has moved on — otherwise the gate never
+     * suppresses anything and every invocation re-emits the whole table. This
+     * regressed once already: the first implementation hashed the emitted BODY,
+     * which carries "version", and live capture re-emitted 23 identical
+     * mappings. */
+    {
+        FILE *f1 = fmemopen((void *)kMaps, strlen(kMaps), "r");
+        FILE *f2 = fmemopen((void *)kMaps, strlen(kMaps), "r");
+        asmspy_vmspan_t *s1 = NULL, *s2 = NULL;
+        size_t t1 = 0, t2 = 0;
+        int n1 = asmspy_vmmap_parse(f1, &s1, &t1);
+        int n2 = asmspy_vmmap_parse(f2, &s2, &t2);
+        char d1[65], d2[65], b1[64 * 1024], b2[64 * 1024];
+        fclose(f1);
+        fclose(f2);
+        asmspy_vmmap_digest(s1, (size_t)n1, t1, 1, d1);
+        asmspy_vmmap_digest(s2, (size_t)n2, t2, 1, d2);
+        check("gate/stable-across-versions", strcmp(d1, d2) == 0,
+              "the same map must digest the same, whatever the version ordinal");
+        /* And prove the version really does differ in the body, so the check
+         * above is testing what it claims to. */
+        asmspy_vmmap_body(s1, (size_t)n1, t1, 1, 0, b1, sizeof b1);
+        asmspy_vmmap_body(s2, (size_t)n2, t2, 1, 1, b2, sizeof b2);
+        check("gate/body-does-differ-by-version", strcmp(b1, b2) != 0,
+              "if the bodies were equal this test would pass vacuously");
+
+        /* A map that genuinely MOVED must digest differently — the gate has to
+         * still fire when it should. */
+        s2[0].len += 4096;
+        asmspy_vmmap_digest(s2, (size_t)n2, t2, 1, d2);
+        check("gate/detects-a-real-change", strcmp(d1, d2) != 0,
+              "a changed mapping must not be suppressed");
+        free(s1);
+        free(s2);
+    }
+
     /* A malformed line is skipped, not fatal, and does not count toward total. */
     {
         const char *junk = "not a maps line at all\n"
