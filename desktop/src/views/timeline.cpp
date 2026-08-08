@@ -124,6 +124,43 @@ std::string build_banner(const Streams &s) {
 
 } // namespace
 
+std::string dt_dataflow_scope(const Streams &s) {
+    const DataflowStream &df = s.df;
+    if (!df.present())
+        return std::string();
+    const uint32_t recorded =
+        df.nsteps > df.steps_missing ? df.nsteps - df.steps_missing : 0;
+    std::string o = "scope: " + std::to_string(recorded) + " recorded step";
+    o += recorded == 1 ? "" : "s";
+    // The denominator, and only when the producer MEASURED a larger one. An
+    // equal total says nothing ("3 of 3"), and a smaller one would mean the
+    // footer disagrees with the stream — in which case the stream is what
+    // arrived, and inventing an M from it is exactly what feed.cpp's own
+    // steps_total ladder refuses to do.
+    if (s.has_steps_total && s.steps_total > recorded)
+        o += " of " + std::to_string(s.steps_total) + " the producer saw";
+    // The region. `regions()` is the ONE definition of how many there are, so
+    // this line and the timeline's region column cannot disagree.
+    const std::vector<uint64_t> regs = df.regions();
+    if (regs.size() == 1) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "0x%llx",
+                      static_cast<unsigned long long>(regs[0]));
+        o += ", in one single-stepped region (";
+        o += buf;
+        o += ")";
+    } else if (regs.size() > 1) {
+        o += ", across " + std::to_string(regs.size()) +
+             " single-stepped regions";
+    } else {
+        // No `rbase` on the wire: the region is UNKNOWN, never 0. Say that
+        // rather than printing a base the producer never stated.
+        o += ", in one single-stepped region (base not stated)";
+    }
+    o += " — never the whole process";
+    return o;
+}
+
 dt_rowstyle dt_row_style(const dt_slice *cone, uint32_t step) {
     if (cone == nullptr)
         return dt_rowstyle::normal;

@@ -222,5 +222,74 @@ int main() {
                   t2.rows.empty() ? "no rows" : t2.rows[0].ann);
     }
 
+    // --- doc 68 T1: the SCOPE line -----------------------------------------
+    // The banner speaks only when the recording is damaged, so a clean capture
+    // of one function inside a browser rendered N rows under nothing at all —
+    // indistinguishable from a complete trace of a small program. The scope line
+    // is unconditional and says what population the rows are.
+    {
+        // Nothing to scope: a trace-only recording has no dataflow at all, and a
+        // scope line over an empty set would be chrome about nothing.
+        Streams none;
+        vt::check("scope: no dataflow -> no line",
+                  dt_dataflow_scope(none).empty(),
+                  "got: " + dt_dataflow_scope(none));
+
+        Streams s = load("add_signed.asmtrace");
+        const std::string sc = dt_dataflow_scope(s);
+        vt::check("scope: a clean recording still gets a scope line",
+                  !sc.empty(), "a clean capture must not be silent about scope");
+        vt::check("scope: says it is a region, not the process",
+                  sc.find("region") != std::string::npos &&
+                      sc.find("whole process") != std::string::npos,
+                  sc);
+        vt::check("scope: counts the recorded steps",
+                  sc.find("3 ") != std::string::npos, sc);
+        // A clean recording's scope line is NOT the truncation banner: the two
+        // are different facts and must not be conflated.
+        vt::check("scope: is not the banner", dt_timeline_build(s).banner.empty(),
+                  "the scope line must not turn a clean recording's banner on");
+
+        // The denominator is never invented. With no footer total and no trace
+        // stream the line states what it recorded and stops there.
+        vt::check("scope: no invented denominator",
+                  sc.find(" of ") == std::string::npos, sc);
+        // With a stated total LARGER than what arrived, say both — that is the
+        // producer's own measurement, not a guess.
+        Streams big = load("add_signed.asmtrace");
+        big.has_steps_total = true;
+        big.steps_total = 2013;
+        const std::string bsc = dt_dataflow_scope(big);
+        vt::check("scope: a stated total is reported as N of M",
+                  bsc.find("of 2013") != std::string::npos, bsc);
+        // A total that is NOT larger adds nothing and must not be printed as a
+        // tautological "3 of 3".
+        Streams same = load("add_signed.asmtrace");
+        same.has_steps_total = true;
+        same.steps_total = 3;
+        vt::check("scope: an equal total is not printed",
+                  dt_dataflow_scope(same).find(" of ") == std::string::npos,
+                  dt_dataflow_scope(same));
+
+        // The region the rows are relative to, when the wire stated one.
+        Streams reg = load("add_signed.asmtrace");
+        reg.df.rbase_present = true;
+        for (auto &b : reg.df.insn_rbase)
+            b = 0x100000;
+        vt::check("scope: names the region base the offsets are relative to",
+                  dt_dataflow_scope(reg).find("0x100000") != std::string::npos,
+                  dt_dataflow_scope(reg));
+
+        // Two regions in one pass: counted, never printed as one base.
+        Streams two = load("add_signed.asmtrace");
+        two.df.rbase_present = true;
+        for (size_t k = 0; k < two.df.insn_rbase.size(); k++)
+            two.df.insn_rbase[k] = k == 0 ? 0x100000 : 0x200000;
+        vt::check("scope: multiple regions are counted, not collapsed",
+                  dt_dataflow_scope(two).find("2 single-stepped regions") !=
+                      std::string::npos,
+                  dt_dataflow_scope(two));
+    }
+
     return vt::report("test_timeline");
 }

@@ -74,6 +74,22 @@ struct dt_timeline {
     bool two_up = false;
 };
 
+// doc 68 T1: the one-line answer to "N rows out of what?".
+//
+// `dataflow` and `auto` single-step ONE REGION, so a capture of a browser yields
+// a few hundred or a few thousand steps of one function — a correct number that
+// reads as a broken one, because nothing on screen says the population is a
+// region rather than the process. The truncation banner cannot serve: it speaks
+// only when the recording is damaged, and this capture is not.
+//
+// Pure over the decoded stream, and it invents nothing. The step count is what
+// arrived; a denominator appears ONLY when the producer stated a LARGER total in
+// its footer (an equal one is a tautology, not a fact worth printing); the region
+// base appears only when the wire stated one. Empty for a recording with no
+// dataflow at all — there is no population to describe, and the views' own
+// placards already say why they are empty.
+std::string dt_dataflow_scope(const Streams &s);
+
 // `cone` is optional; when non-null, rows carry IN-SLICE / DIMMED emphasis.
 dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone = nullptr);
 // Two-recording form: rows past the divergence are marked `unaligned` so the
