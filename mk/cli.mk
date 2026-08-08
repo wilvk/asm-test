@@ -594,6 +594,17 @@ $(BUILD)/test_ptracesample: cli/test_ptracesample.c \
 $(BUILD)/test_arch: cli/test_arch.c cli/asmspy_arch.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_arch.c
 
+# test_vmmap — the /proc/<pid>/maps parse + rank + JSON body encoder
+# (cli/asmspy_vmmap.h). Carries the real burden for the vmmap kind: emission
+# needs a live target and a serve session, but the parse and the CAP DISCIPLINE
+# are pure over a FILE*, so they run on any host with no /proc and no victim —
+# and "rank the full table, then cap" is the rule whose violation silently drops
+# libc in favour of a 1 GiB anonymous reservation. The smoke lane is then only
+# responsible for the wiring. Same discipline as test_autoregion above.
+$(BUILD)/test_vmmap: cli/test_vmmap.c cli/asmspy_vmmap.h cli/asmtrace_ndjson.h \
+                     $(BUILD)/asmtrace_ndjson.o | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_vmmap.c $(BUILD)/asmtrace_ndjson.o
+
 # test_symtab — unit test for the symbol REVERSE lookup (asmspy_symtab_at), the
 # one function every view that names an address goes through. Pins the edges
 # where a resolver lies quietly instead of failing: one byte past a function,
@@ -806,6 +817,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
            $(BUILD)/test_ptracesample $(BUILD)/test_procinfo \
            $(BUILD)/test_ghash $(BUILD)/test_sha256 $(BUILD)/test_asmtrace \
+           $(BUILD)/test_vmmap \
            $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
