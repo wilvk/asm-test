@@ -1,0 +1,9 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"HAND-AUTHORED fixture for the vmmap naming overlay (docs/superpowers/specs/2026-08-08-vmmap-region-naming-design.md). The `mem` accesses below land inside the [heap] and libc.so.6 mappings the `vmmap` event names, so observed_data_spans derives Unknown spans that the overlay must relabel WITHOUT moving base/len. There is no vmmap producer in the tree yet; this file exists so the viewer half is testable ahead of it, exactly as blame-attribution.asmtrace did for the blame deep link."}
+{"k":"vmmap","version":0,"maps_readable":true,"spans_total":3,"spans_truncated":false,"spans":[{"base":"0x400000","len":65536,"perms":"r-xp","name":"victim","path":"/tmp/victim"},{"base":"0x500000","len":262144,"perms":"rw-p","name":"[heap]"},{"base":"0x7f0000000000","len":2097152,"perms":"r-xp","name":"libc.so.6","path":"/usr/lib/libc.so.6"}]}
+{"k":"codeimage","base":4194304,"len":64,"version":0,"sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+{"k":"df_step","step":0,"off":0,"disasm":"mov rax, [rbx]","ops":[{"space":"abs","addr":5246976,"size":8,"write":false,"value_valid":true,"value":1}]}
+{"k":"df_step","step":1,"off":3,"disasm":"call libc","ops":[{"space":"abs","addr":139637976727552,"size":8,"write":false,"value_valid":true,"value":2}]}
+{"k":"mem","step":0,"ea":5246976,"size":8,"rw":"r","space":"abs"}
+{"k":"mem","step":1,"ea":139637976727552,"size":8,"rw":"r","space":"abs"}
+{"k":"end","events":6,"truncated":false,"drops":{"lost":0,"throttled":false}}

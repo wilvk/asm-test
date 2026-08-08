@@ -644,6 +644,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
+  $(BUILD)/desktop/$(1)/sp/vmmap.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/sp/mnemonic.o $(BUILD)/desktop/$(1)/sp/locate.o \
   $(BUILD)/desktop/$(1)/sp/canopy.o $(BUILD)/desktop/$(1)/sp/opcode_terrain.o \
@@ -1214,6 +1215,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shot_manifest \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
+                 $(BUILD)/desktop_test_vmmap \
                  $(BUILD)/desktop_test_flow \
                  $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_palette \
@@ -1560,6 +1562,17 @@ $(BUILD)/desktop_test_slice: $(BUILD)/desktop/test/t/test_slice.o \
 # for the address-space terrain plane.
 $(BUILD)/desktop_test_projection: $(BUILD)/desktop/test/t/test_projection.o \
     $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/doc/recording.o $(BUILD)/desktop/test/doc/streams.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The vmmap NAMING OVERLAY (2026-08-08 spec): sp/vmmap.o + sp/projection.o (the
+# layout-invariance assertion builds two real Projections) + the document model
+# it decodes from. No ImGui, no GL, no engine — the overlay is pure, which is
+# what makes "naming a region never moves the floor" checkable at all.
+$(BUILD)/desktop/test/t/test_vmmap.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop_test_vmmap: $(BUILD)/desktop/test/t/test_vmmap.o \
+    $(BUILD)/desktop/test/sp/vmmap.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/doc/recording.o $(BUILD)/desktop/test/doc/streams.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 

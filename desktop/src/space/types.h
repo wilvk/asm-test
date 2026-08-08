@@ -21,6 +21,16 @@ struct Region {
     enum Kind { Code, Stack, Heap, Data, Mmap, Unknown } kind = Unknown;
     std::string label;    // "libc .text", "[stack:tid7]", "jit#3", ...
     uint64_t version = 0; // codeimage version (JIT churn); 0 for static
+
+    // vmmap (2026-08-08): the MAPPING this region falls inside, when a `vmmap`
+    // event named one. `base`/`len` above stay what was TOUCHED; these are what
+    // it IS. 0/0 when unknown — the overlay never invents an extent, and an
+    // extent is not an allocation either (the same refusal observed_data_spans
+    // makes in projection.h). Read by the HUD; NEVER by the layout, which is
+    // what keeps naming a region from moving the floor under a reader.
+    uint64_t extent_base = 0, extent_len = 0;
+    std::string perms; // "r-xp" verbatim from maps; "" when unknown
+    std::string path;  // "/usr/lib/libc.so.6"; "" for anonymous or unknown
 };
 
 // 61 T2: one region's rectangle on the cell grid, half-open in CELL
