@@ -912,7 +912,7 @@ code. It is not one review's cluster, so it sits outside the table above.
 
 | Doc | Area | Tasks | Depends on | Status | Claim |
 |---|---|---|---|---|---|
-| [68-capture-scope-honesty.md](68-capture-scope-honesty.md) | three scopes narrow a capture to the rows on screen — one region, one invocation pass, and a 400-**step** sweep cap — and the app states none of them; plus the Scrubber is hard-pinned to the LATEST pass while the timeline/slice/Loom are pinnable, so a brushed step means two different instructions in two panes | 3 | none | ☐ 0/3 | *free* |
+| [68-capture-scope-honesty.md](68-capture-scope-honesty.md) | three scopes narrow a capture to the rows on screen — one region, one invocation pass, and a 400-**step** sweep cap — and the app states none of them; plus the Scrubber is hard-pinned to the LATEST pass while the timeline/slice/Loom are pinnable, so a brushed step means two different instructions in two panes | 3 | none | ☑ 3/3 | landed 2026-08-08 |
 
 ## Plan phase mapping
 

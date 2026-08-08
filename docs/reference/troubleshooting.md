@@ -139,6 +139,47 @@ unavailable (the probe is side-effect-free) yet may still load at init.
 BTF). Run with the capability (`--cap-add=BPF --cap-add=PERFMON` in a container),
 or accept the skip — it degrades cleanly.
 
+## Desktop GUI live capture
+
+**The Loom / Timeline / Scrubber are empty after a capture that "worked".** Read the
+placard: since the capture host records *why*, the pane now leads with the
+producer's own measured reason rather than a generic one. The common cause on an
+idle target is not a permission problem at all:
+
+```
+this capture SKIPPED and recorded nothing — 3 idle sample windows (2000 ms each)
+qualified no region — the target may be idle, or its work may be in a module the
+filter excludes.
+```
+
+`auto` picks its region by watching the target actually *enter* a function. A
+browser sitting on a rendered page enters almost nothing, so the sampler qualifies
+no candidate, `auto` never single-steps, and every dataflow view is correctly
+empty. Give the target work to do while the sample window is open, raise the window
+(the capture pane's `ms` input, default 2000), or name a region yourself and use
+`dataflow` instead of `auto`.
+
+If instead the placard names `PTRACE_SEIZE refused` or `yama ptrace_scope`, that
+*is* a permission problem — see [Host setup for tracing](../getting-started/host-setup.md).
+Run `asmspy --info <pid>` first either way: it never attaches, and it prints which
+of the nine modes will work on that target before you spend a capture finding out.
+
+**The timeline shows far fewer instructions than the process executed.** This is
+three scopes stacking, not a truncated read:
+
+1. `dataflow` and `auto` **single-step one region** — a function — not the process.
+   The rows are that region's steps.
+2. A `continuous` capture (the default for `auto`) records many invocation passes;
+   the dataflow views show **one at a time**. Use the invocation pager above the
+   view to page between them.
+3. A **substrate sweep** bounds each leg at **400 steps** so the first leg cannot
+   run forever and starve the rest. Such a recording comes back flagged truncated,
+   and the timeline says so in its banner.
+
+For scale: one invocation of a 200-iteration loop measures ~2000 `df_step` events
+unbounded, and exactly 400 under a sweep's cap. A hand-driven Start sends no cap
+and runs until the region returns, or until you press Stop.
+
 ## Docker / arm64
 
 **Reproducing the arm64 CI lane locally.** Pass `DOCKER_PLATFORM=linux/arm64`; on
