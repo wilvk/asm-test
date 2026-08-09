@@ -359,6 +359,21 @@ $(BUILD)/hotthreads_victim: $(BUILD)/hotthreads_victim.o
 # scene, threads across libc/libm for the ModuleRibbon, a strided heap walk for
 # the terrain's data spans, and a --seed that changes DATA ONLY so two runs share
 # a code_sha and can diverge. Needs -lpthread and -lm for the module spine.
+#
+# An ARCHITECTURE sentinel like CLI_EVEX_VICTIM above, and for the same reason:
+# the file includes <emmintrin.h> unguarded because the SSE lane writes ARE the
+# LanePrism scene's subject, not an implementation detail of it — desktop/ pins
+# blend_tile's mix as measured constants (test_standalone.cpp:736, standalone.h:295
+# "movdqa x5 and movd x1 of its 11"). A NEON rewrite would keep the name and
+# change the thing being depicted, so aarch64 does not build it at all. Nothing is
+# lost in the smoke: cli-smoke has only ever BUILT this victim, never run it (the
+# runner is scripts/capture-shot-recordings.sh, an x86 doc-generation path).
+ifeq ($(CLI_ARCH),x86_64)
+CLI_SCENES_VICTIM := $(BUILD)/scenes_victim
+else
+CLI_SCENES_VICTIM :=
+endif
+
 $(BUILD)/scenes_victim: $(BUILD)/scenes_victim.o
 	$(CC) $(CFLAGS) $^ -lpthread -lm -o $@
 
@@ -809,7 +824,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
-           $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(BUILD)/scenes_victim \
+           $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim $(CLI_SCENES_VICTIM) \
            $(BUILD)/sigload_victim $(BUILD)/forkhot_victim \
            $(BUILD)/hotthreads_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
