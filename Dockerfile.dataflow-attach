@@ -14,19 +14,33 @@ FROM ${BASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# The analysis lib + operand enumerator need Capstone; the oracle cross-check needs Unicorn.
+# The oracle cross-check needs Unicorn; cmake + git build Capstone from source below.
 # libipt-dev (Ubuntu noble 2.0.6-1build1 = libipt v2.0.6, the same pin Dockerfile.hwtrace carries)
 # is the Intel PT DECODER the F5 dataflow-pt-replay tier needs so its SYNTHETIC-AUX decode->replay
 # bridge (asmtest_pt_encode_fixture -> asmtest_pt_decode_window -> Unicorn replay) actually runs in
 # CI with no PT hardware. It is an apt-pinned distro package — the CLAUDE.md dependency rule
 # (add it where the work runs, do not self-skip); apt distro packages need no
 # scripts/third-party-digests.txt line (only built-from-source deps do).
+#
+# libcapstone-dev is deliberately ABSENT from this list — see the pinned build below.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates pkg-config libcapstone-dev libunicorn-dev libipt-dev \
+      build-essential ca-certificates pkg-config cmake git libunicorn-dev libipt-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
+
+# Capstone from the pinned 5.0.1 source release rather than apt, because noble ships
+# libcapstone-dev 4.0.2 and CS_ARCH_RISCV / RISCV_REG_* first exist in Capstone 5. On 4.0.2
+# src/dataflow_emu.c compiles its RISC-V guest OUT (the CS_API_MAJOR >= 5 guard around
+# DF_HAVE_RISCV_GUEST), df_guest_for(ASMTEST_ARCH_RISCV64) returns NULL, and doc 60 T3's four
+# riscv64 checks in examples/test_dataflow_emu.c FAIL rather than skip — which is what this
+# lane was doing. Mirrors Dockerfile.taint-native/taint-oracle, which carry no apt Capstone
+# for the same reason.
+#
+# The apt line above must NOT reacquire libcapstone-dev: build-capstone.sh is idempotent via
+# pkg-config, so a distro Capstone on the image makes this line silently no-op back to 4.0.2.
+RUN sh scripts/build-capstone.sh && ldconfig
 
 CMD make WERROR=1 dataflow-test
