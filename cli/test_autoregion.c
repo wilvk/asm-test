@@ -427,9 +427,10 @@ int main(void) {
          * `1 < 0` (false) — no advance, no underflow. This is the exact
          * expression that hid the IBS gap (the IBS path returned one pick and
          * left ncand == 0, so its walk never fired). */
-        CHECK(asmspy_autoregion_walk(1, 0, 0) == ASMSPY_WALK_EXHAUSTED,
-              "walk: ncand==0 (no list) -> exhausted, no underflow (the IBS-gap "
-              "expression)");
+        CHECK(
+            asmspy_autoregion_walk(1, 0, 0) == ASMSPY_WALK_EXHAUSTED,
+            "walk: ncand==0 (no list) -> exhausted, no underflow (the IBS-gap "
+            "expression)");
         CHECK(asmspy_autoregion_walk(0, 0, 0) == ASMSPY_WALK_STOP,
               "walk: ncand==0 with a captured outcome -> stop");
     }

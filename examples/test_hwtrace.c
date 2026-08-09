@@ -1038,8 +1038,8 @@ static void test_amd_live(void) {
               "AMD LBR live loop: reconstructs the loop-body block 0x7");
         CHECK(best > 50, "AMD LBR live loop: Tier-B stitched BEYOND a single "
                          "16-deep window");
-        CHECK(best == 0 || best_trunc,
-              "AMD LBR live loop: the over-ring run stays transparently truncated");
+        CHECK(best == 0 || best_trunc, "AMD LBR live loop: the over-ring run "
+                                       "stays transparently truncated");
         munmap(q, sizeof AMD_LOOP);
     }
 }
@@ -10765,9 +10765,10 @@ static void test_crossthread_handle_collision(void) {
           "handle collision: A and B are genuinely two different OS threads");
     CHECK(g_hc_ra == 42 && g_hc_rb1 == 42 && g_hc_rb2 == 42,
           "handle collision: every routine really ran");
-    CHECK(g_hc_rc_foreign == ASMTEST_HW_OK,
-          "handle collision: the foreign close returns OK (graceful degradation, "
-          "not an error)");
+    CHECK(
+        g_hc_rc_foreign == ASMTEST_HW_OK,
+        "handle collision: the foreign close returns OK (graceful degradation, "
+        "not an error)");
 
     /* THE BUG (1/2): a close of ANOTHER thread's window must be a conservative MISS.
      * Against the {idx,gen}-only handle this resolves to B's OWN frame and reports a

@@ -97,7 +97,8 @@ static int asmspy_vmmap_parse(FILE *f, asmspy_vmspan_t **out, size_t *n_total) {
         size_t k;
 
         /* Same sscanf shape scan_modules uses — and then NONE of its filters. */
-        if (sscanf(line, "%" SCNx64 "-%" SCNx64 " %7s %" SCNx64 " %*x:%*x %*u %n",
+        if (sscanf(line,
+                   "%" SCNx64 "-%" SCNx64 " %7s %" SCNx64 " %*x:%*x %*u %n",
                    &lo, &hi, perms, &off, &pathpos) < 4)
             continue;
         if (hi <= lo)

@@ -107,8 +107,8 @@ static inline void asmtrace_sha256_block(asmtrace_sha256_t *s,
     s->h[7] += hh;
 }
 
-static inline void asmtrace_sha256_update(asmtrace_sha256_t *s, const void *data,
-                                          size_t len) {
+static inline void asmtrace_sha256_update(asmtrace_sha256_t *s,
+                                          const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
     s->nbits += (uint64_t)len * 8;
     while (len) {

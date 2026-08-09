@@ -895,6 +895,7 @@ static int ps_rewind(pid_t tid, uint64_t base) {
     if (!base)
         return 0;
 #if defined(__aarch64__)
+    (void)tid;
     (void)regs;
     return 0; /* faulted AT base: already where it must resume */
 #else

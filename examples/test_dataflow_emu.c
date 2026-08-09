@@ -264,8 +264,9 @@ int main(void) {
             for (int i = 0; i < 3; i++)
                 if (vr->insn_off[i] != want[i])
                     ok = 0;
-            CHECK(ok,
-                  "riscv64: per-step offsets are the 4-byte instruction stride");
+            CHECK(
+                ok,
+                "riscv64: per-step offsets are the 4-byte instruction stride");
         }
         uint64_t a2 = 0;
         CHECK(reg_write_value(vr, 0, &a2) && a2 == 12,

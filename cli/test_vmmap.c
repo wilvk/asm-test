@@ -83,7 +83,8 @@ int main(void) {
           asmspy_vmmap_body(sp, (size_t)n, total, 1, 0, buf, sizeof buf) == 0,
           "a small map must fit");
     check("body/has-total", strstr(buf, "\"spans_total\":5") != NULL, buf);
-    check("body/has-flag", strstr(buf, "\"spans_truncated\":false") != NULL, buf);
+    check("body/has-flag", strstr(buf, "\"spans_truncated\":false") != NULL,
+          buf);
     check("body/readable", strstr(buf, "\"maps_readable\":true") != NULL, buf);
     check("body/hex-base", strstr(buf, "\"base\":\"0x500000\"") != NULL,
           "addresses are hex STRINGS, never JSON numbers");
@@ -99,7 +100,8 @@ int main(void) {
      * syntactically invalid JSON that a reader reports as a corrupt recording
      * rather than as our bug. */
     check("body/refuses-overflow",
-          asmspy_vmmap_body(sp, (size_t)n, total, 1, 0, tiny, sizeof tiny) == -1,
+          asmspy_vmmap_body(sp, (size_t)n, total, 1, 0, tiny, sizeof tiny) ==
+              -1,
           "a body that will not fit must refuse, never emit a half-token");
 
     free(sp);
@@ -133,9 +135,10 @@ int main(void) {
         fclose(bf);
         check("cap/enforced", bn == ASMSPY_VMMAP_CAP,
               "the cap must bound what is KEPT");
-        check("cap/total-is-pre-cap", btotal == (size_t)ASMSPY_VMMAP_CAP + 2,
-              "spans_total must count rows SEEN, or the truncation magnitude is "
-              "unrecoverable — the stated v1 gap in procinfo's `modules`");
+        check(
+            "cap/total-is-pre-cap", btotal == (size_t)ASMSPY_VMMAP_CAP + 2,
+            "spans_total must count rows SEEN, or the truncation magnitude is "
+            "unrecoverable — the stated v1 gap in procinfo's `modules`");
         for (k = 0; k < bn; k++)
             if (strcmp(bs[k].name, "libc.so.6") == 0)
                 kept_libc = 1;
@@ -170,8 +173,9 @@ int main(void) {
         fclose(f2);
         asmspy_vmmap_digest(s1, (size_t)n1, t1, 1, d1);
         asmspy_vmmap_digest(s2, (size_t)n2, t2, 1, d2);
-        check("gate/stable-across-versions", strcmp(d1, d2) == 0,
-              "the same map must digest the same, whatever the version ordinal");
+        check(
+            "gate/stable-across-versions", strcmp(d1, d2) == 0,
+            "the same map must digest the same, whatever the version ordinal");
         /* And prove the version really does differ in the body, so the check
          * above is testing what it claims to. */
         asmspy_vmmap_body(s1, (size_t)n1, t1, 1, 0, b1, sizeof b1);

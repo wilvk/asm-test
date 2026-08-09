@@ -32,10 +32,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>    /* strcasecmp — the symbol picker's name sort */
-#include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
+#include <strings.h> /* strcasecmp — the symbol picker's name sort */
 #include <sys/prctl.h> /* PR_(GET|SET)_DUMPABLE: restore after a file-cap execve, M16 */
 #include <sys/ptrace.h> /* doc 45: serve_launch_target's PTRACE_TRACEME/DETACH */
+#include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
 #include <sys/syscall.h> /* __NR_perf_event_open — measured in THIS binary, M8 */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <sys/un.h>
@@ -130,8 +130,8 @@ static void proc_cmdline(pid_t pid, char *out, size_t cap) {
  * line; NULL omits it — the truthful state for a producer without stable bytes. */
 static int rec_open_code(rec_t *r, const char *path, FILE *stream,
                          const char *backend, int exact, const char *trust,
-                         pid_t pid, const char *code_name,
-                         const char *code_sha, unsigned long long code_len) {
+                         pid_t pid, const char *code_name, const char *code_sha,
+                         unsigned long long code_len) {
     asmtrace_prov_t prov = {backend, exact, trust, 0, NULL, 0};
     char cmd[256];
     memset(r, 0, sizeof *r);
@@ -160,8 +160,8 @@ static int rec_open_code(rec_t *r, const char *path, FILE *stream,
 static int rec_open(rec_t *r, const char *path, FILE *stream,
                     const char *backend, int exact, const char *trust,
                     pid_t pid) {
-    return rec_open_code(r, path, stream, backend, exact, trust, pid, NULL, NULL,
-                         0);
+    return rec_open_code(r, path, stream, backend, exact, trust, pid, NULL,
+                         NULL, 0);
 }
 
 static void rec_emit(rec_t *r, const char *kind, const char *body) {
@@ -2312,8 +2312,8 @@ typedef struct {
     pid_t pid;
     const char *func;
     int json;
-    rec_t *r;     /* --record tee (NULL = not recording) */
-    int emit_mem; /* 29 R2: --mem armed the `mem` address stream */
+    rec_t *r;           /* --record tee (NULL = not recording) */
+    int emit_mem;       /* 29 R2: --mem armed the `mem` address stream */
     int emit_blame;     /* 41 L3: --blame armed the `blame` backward cone */
     int emit_statediff; /* 41 L3: --statediff armed the `statediff` delta */
     /* --insns armed the ordered `trace` instruction stream. Off by default:
@@ -2374,7 +2374,8 @@ static void dataflow_emit_blame(rec_t *r, const asmtest_valtrace_t *vt,
     }
     asmtrace_blame_body(body, 4096 + sl->n * 32, seed,
                         (seed < vt->steps_len) ? vt->insn_off[seed] : 0, loc,
-                        cone_steps, cone_offs, ncone, sl->n <= 1 /*born_untraced*/);
+                        cone_steps, cone_offs, ncone,
+                        sl->n <= 1 /*born_untraced*/);
     rec_emit(r, "blame", body);
     free(cone_steps);
     free(cone_offs);
@@ -2560,8 +2561,7 @@ static void dataflow_render_sink(void *ctx, long result,
      * always 0 (omitted) — only the serve sink stamps it. */
     dataflow_record(dc->r, vt, g, code, len, base, 0, dc->emit_mem,
                     dc->emit_blame, dc->emit_statediff, dc->emit_trace,
-                    dc->continuous, pass,
-                    result);
+                    dc->continuous, pass, result);
 
     if (dc->json) {
         char ef[256];
@@ -2722,8 +2722,9 @@ static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
 typedef struct {
     uint64_t base;
     size_t len;
-    unsigned long long weight; /* entry samples (ibs) / residency samples (sw) */
-    unsigned sites;            /* distinct call sites (ibs) / offsets (sw)     */
+    unsigned long long
+        weight;     /* entry samples (ibs) / residency samples (sw) */
+    unsigned sites; /* distinct call sites (ibs) / offsets (sw)     */
     char name[160];
 } auto_cand_copy;
 
@@ -3174,7 +3175,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     size_t len = 0;
     char autoname[160] = "";
     auto_cand_copy cands[AUTO_TRIES];
-    int ncand = 0; /* >0 => the candidate walk below is armed (either sampler) */
+    int ncand =
+        0; /* >0 => the candidate walk below is armed (either sampler) */
     if (auto_region) {
         /* No symbol given: find what the target is DOING and trace that.
          * 2026-08-06 T5: the SAMPLER chain now advances on a REFUSAL (perf
@@ -3269,7 +3271,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         "%s)\n",
                         tried);
             asmspy_symtab_free(&t);
-            return ncand < 0 ? 0 : 1; /* <0 = clean skip (exit 0), 0 = no pick */
+            return ncand < 0 ? 0
+                             : 1; /* <0 = clean skip (exit 0), 0 = no pick */
         }
         base = cands[0].base;
         len = cands[0].len;
@@ -3307,8 +3310,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                 const asmspy_sym_t *s0 = asmspy_symtab_at(&t, base);
                 asmtrace_sha256_hex(rbytes, (size_t)got, code_sha);
                 code_name = s0 ? s0->name
-                                : (auto_region ? (autoname[0] ? autoname : "?")
-                                               : region);
+                               : (auto_region ? (autoname[0] ? autoname : "?")
+                                              : region);
                 code_len = (unsigned long long)got;
             }
             free(rbytes);
@@ -3533,7 +3536,7 @@ typedef struct {
     char func[160]; /* mode trace/dataflow: a symbol instead of base/len */
 
     /* ---- doc 45: `launch` (never set by `start`) ---------------------- */
-    int is_launch;    /* this session's pid was forked by asmspy itself     */
+    int is_launch;      /* this session's pid was forked by asmspy itself     */
     int already_traced; /* pid is already ours via PTRACE_TRACEME on the
                           * tracer thread — attach must SETOPTIONS, never
                           * SEIZE again (asmspy_engine_mark_already_traced).
@@ -3552,7 +3555,7 @@ typedef struct {
     int end_announced; /* 39 T5: the terminal `session` event was emitted by the
                          * tracer tail on a self-end, so serve_stop must not
                          * emit a second one (reset per session start)      */
-    FILE *out;          /* the client's event stream                    */
+    FILE *out;         /* the client's event stream                    */
     /* 61 T7c: the SESSION recording (--serve --record=<f>), or NULL. One
      * writer for however many engines this session runs, so a capture that
      * changes engine is still ONE loadable file. Owned by serve_loop. */
@@ -3562,9 +3565,9 @@ typedef struct {
     asmspy_symtab_t syms;
     int have_syms;
     unsigned long long events; /* this session's emitted event count     */
-    unsigned df_pass; /* 35 T1: continuous dataflow invocation ordinal   */
-    int rc;                    /* the engine's return                    */
-    char autoname[160];        /* mode auto: what the picker chose        */
+    unsigned df_pass;   /* 35 T1: continuous dataflow invocation ordinal   */
+    int rc;             /* the engine's return                    */
+    char autoname[160]; /* mode auto: what the picker chose        */
     /* --- codeimage: the region's bytes AS OF each capture (08 T7) ----- */
     asmtest_codeimage_t *img;      /* NULL when unavailable or not a region   */
     unsigned long long ci_version; /* the next `codeimage` event's version */
@@ -3771,12 +3774,12 @@ static int serve_exe_text_span(pid_t pid, uint64_t *base, uint64_t *len) {
         unsigned long long lo, hi;
         char perms[8], path[PATH_MAX];
         path[0] = '\0';
-        if (sscanf(line, "%llx-%llx %7s %*x %*s %*u %4095[^\n]", &lo, &hi, perms,
-                   path) < 3)
+        if (sscanf(line, "%llx-%llx %7s %*x %*s %*u %4095[^\n]", &lo, &hi,
+                   perms, path) < 3)
             continue;
         if (perms[2] != 'x')
             continue;
-        {   /* strip the leading spaces sscanf's %[^\n] keeps */
+        { /* strip the leading spaces sscanf's %[^\n] keeps */
             const char *p2 = path;
             while (*p2 == ' ')
                 p2++;
@@ -4130,8 +4133,7 @@ static int sj_bool(const char *v, int *out) {
  * escaping for each element. Returns 0 with *count set (1..max_n), or -1 if
  * `v` is not an array, is malformed, holds a non-string element, exceeds
  * max_n entries, or is empty (an empty argv cannot execvp anything). */
-static int sj_str_array(const char *v, char out[][256], int max_n,
-                        int *count) {
+static int sj_str_array(const char *v, char out[][256], int max_n, int *count) {
     int n = 0;
     if (!v || *v != '[')
         return -1;
@@ -5580,8 +5582,9 @@ static int serve_loop(FILE *in, FILE *out, const char *record) {
         {
             int is_launch = strcmp(cmd, "launch") == 0;
             if (!is_launch && strcmp(cmd, "start") != 0) {
-                serve_err(&s, cmd, "unknown command (start|launch|pause|"
-                                   "stop|quit)");
+                serve_err(&s, cmd,
+                          "unknown command (start|launch|pause|"
+                          "stop|quit)");
                 continue;
             }
 
@@ -9423,12 +9426,12 @@ int main(int argc, char **argv) {
         int auto_region = (strcmp(argv[3], "--auto") == 0);
         sampler_mode_t sampler = SAMPLER_AUTO;
         const char *record = NULL;
-        int steps = 0;  /* --steps: arm the per-step register ring (26) */
-        int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
-        int blame = 0;  /* --blame: arm the `blame` backward cone (41 L3) */
-        int statediff = 0; /* --statediff: arm the `statediff` delta (41 L3) */
+        int steps = 0;      /* --steps: arm the per-step register ring (26) */
+        int mem = 0;        /* --mem: arm the `mem` address stream (29 R2) */
+        int blame = 0;      /* --blame: arm the `blame` backward cone (41 L3) */
+        int statediff = 0;  /* --statediff: arm the `statediff` delta (41 L3) */
         int insns = 0;      /* --insns: also emit the ordered `trace` stream */
-        int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
+        int fpregs = 0;     /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
         int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
         int window_ms = AUTO_WINDOW_MS;  /* --window=MS: the --auto sample
                                          * window (39 T3); default unchanged */

@@ -320,9 +320,8 @@ static void add_riscv_ops(const cs_detail *d, const char *mnem,
                 seen[nseen++] = r;
             put_reg(reads, nr, rcap, r, false);
         } else if (op->type == RISCV_OP_MEM) {
-            uint32_t base = op->mem.base == RISCV_REG_INVALID
-                                ? 0
-                                : (uint32_t)op->mem.base;
+            uint32_t base =
+                op->mem.base == RISCV_REG_INVALID ? 0 : (uint32_t)op->mem.base;
             if (op->mem.base != RISCV_REG_INVALID) {
                 bool dup = false;
                 for (int j = 0; j < nseen; j++)
@@ -392,8 +391,8 @@ size_t asmtest_operands(asmtest_arch_t arch, const uint8_t *code, size_t len,
                 for (uint8_t i = 0; i < nw; i++)
                     put_reg(writes, &wc, wcap, rw[i], true);
             }
-            add_mem_ops(a, d, diet, insn[0].mnemonic, reads, &rc, rcap,
-                        writes, &wc, wcap);
+            add_mem_ops(a, d, diet, insn[0].mnemonic, reads, &rc, rcap, writes,
+                        &wc, wcap);
         }
     }
     if (nreads != NULL)

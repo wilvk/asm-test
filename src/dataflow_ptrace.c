@@ -1263,7 +1263,8 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                  * still survives exactly as before. There is deliberately no *result:
                  * the region has not returned, so there is no return value to report,
                  * and `truncated` is what says so. */
-                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
+                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n,
+                                &c->cur_regs);
                 c->have_cur = 0;
                 c->vt->truncated = true;
                 return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
@@ -2782,7 +2783,8 @@ static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
             if (max_insns != 0 && ++info->recorded >= max_insns) {
                 /* Bounded scope reached: append what is open (its writes stay
                  * unfilled), flag truncated, leave the target for the detach. */
-                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
+                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n,
+                                &c->cur_regs);
                 c->have_cur = 0;
                 c->vt->truncated = true;
                 info->nregions = nreg + 1;

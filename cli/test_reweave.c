@@ -34,11 +34,12 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
                              const long *args, int nargs, uint64_t max_insns,
                              asmtest_valtrace_t *vt);
 int asmtest_dataflow_emu_run_hosted(emu_t *e, const uint8_t *code,
-                                    size_t code_len, const long *args, int nargs,
-                                    uint64_t max_insns, asmtest_valtrace_t *vt);
+                                    size_t code_len, const long *args,
+                                    int nargs, uint64_t max_insns,
+                                    asmtest_valtrace_t *vt);
 int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
-                                    size_t code_len, const long *args, int nargs,
-                                    uint64_t max_insns, uint64_t k,
+                                    size_t code_len, const long *args,
+                                    int nargs, uint64_t max_insns, uint64_t k,
                                     asmtest_valtrace_t *vt,
                                     emu_snapshot_t **snap_out);
 int asmtest_dataflow_emu_resume(emu_t *e, const emu_snapshot_t *snap,
@@ -140,8 +141,9 @@ static void assert_tail_identical(const char *label,
               (unsigned long long)full->insn_off[(size_t)k + i]);
     size_t fi = first_rec_at_step(full, k);
     size_t nrec_full = full->recs_len - fi;
-    CHECK(nrec_full == tail->recs_len, "%s: tail recs_len %zu != full[%llu:] %zu",
-          label, tail->recs_len, (unsigned long long)k, nrec_full);
+    CHECK(nrec_full == tail->recs_len,
+          "%s: tail recs_len %zu != full[%llu:] %zu", label, tail->recs_len,
+          (unsigned long long)k, nrec_full);
     size_t nr = nrec_full < tail->recs_len ? nrec_full : tail->recs_len;
     for (size_t i = 0; i < nr; i++) {
         at_val_rec_t a = full->recs[fi + i]; /* copy; shift step for compare */
@@ -149,8 +151,7 @@ static void assert_tail_identical(const char *label,
         CHECK(rec_eq(&a, &tail->recs[i]),
               "%s: tail rec[%zu] differs from full (step %u vs %u, val "
               "0x%llx vs 0x%llx, addr 0x%llx vs 0x%llx)",
-              label, i, a.step, tail->recs[i].step,
-              (unsigned long long)a.value,
+              label, i, a.step, tail->recs[i].step, (unsigned long long)a.value,
               (unsigned long long)tail->recs[i].value,
               (unsigned long long)a.addr,
               (unsigned long long)tail->recs[i].addr);
@@ -223,9 +224,9 @@ int main(void) {
         CHECK(vs && vh, "valtrace_new failed for %s", cases[ci].name);
         if (!vs || !vh)
             return 1;
-        int rcs = asmtest_dataflow_emu_run(cases[ci].code, cases[ci].len,
-                                           cases[ci].args, cases[ci].nargs, 0,
-                                           vs);
+        int rcs =
+            asmtest_dataflow_emu_run(cases[ci].code, cases[ci].len,
+                                     cases[ci].args, cases[ci].nargs, 0, vs);
         emu_t *e = emu_open();
         CHECK(e != NULL, "emu_open failed");
         if (!e)
@@ -234,8 +235,8 @@ int main(void) {
                                                   cases[ci].len, cases[ci].args,
                                                   cases[ci].nargs, 0, vh);
         emu_close(e);
-        CHECK(rcs == rch, "%s: standalone rc=%d != hosted rc=%d", cases[ci].name,
-              rcs, rch);
+        CHECK(rcs == rch, "%s: standalone rc=%d != hosted rc=%d",
+              cases[ci].name, rcs, rch);
         CHECK(rcs == 0, "%s: standalone did not run clean (rc=%d)",
               cases[ci].name, rcs);
         assert_vt_equal(cases[ci].name, vs, vh);
@@ -334,8 +335,8 @@ int main(void) {
     emu_result_t fault_result = {0};
     int rcflt = asmtest_dataflow_emu_run_from_current(
         e, POLY, sizeof POLY, faulted_tail, &fault_result);
-    CHECK(rcflt == 1,
-          "fault case: expected a guest fault (rc==1), got rc=%d", rcflt);
+    CHECK(rcflt == 1, "fault case: expected a guest fault (rc==1), got rc=%d",
+          rcflt);
     CHECK(fault_result.faulted,
           "fault case: emu_result_t.faulted should be true");
     CHECK(fault_result.fault_kind != EMU_FAULT_NONE,

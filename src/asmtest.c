@@ -68,8 +68,12 @@ static int asmtest_loc_line;
 /* (crash/timeout fill the same globals — src/asmtest.c's reaper).      */
 /* ------------------------------------------------------------------ */
 static char asmtest_record_dir[512]; /* "" = not armed                 */
-static char asmtest_record_cur[256]; /* the current test's path, or "" */
-static char asmtest_note_path[256];  /* what a producer noted, or ""   */
+/* Holds dir + "/" + suite + "." + name + ".asmtrace", so it must exceed the
+ * armed dir (511 usable) plus the 12 literal bytes or the compose below
+ * truncates the path a producer then WRITES TO — and -Wformat-truncation says
+ * so under WERROR=1. Sized like asmtest_msg rather than to the exact bound. */
+static char asmtest_record_cur[1024]; /* the current test's path, or "" */
+static char asmtest_note_path[256];   /* what a producer noted, or ""   */
 static long asmtest_note_step = -1;
 
 const char *asmtest_record_path(void) {

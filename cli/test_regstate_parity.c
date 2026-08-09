@@ -43,8 +43,8 @@ int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
                                 asmtest_valtrace_t *vt);
 
 /* The ptrace producer's return codes (cli/asmspy_engine.c; not in a header). */
-#define DFP_OK 0
-#define DFP_FAULT 1
+#define DFP_OK     0
+#define DFP_FAULT  1
 #define DFP_ENOSYS (-3) /* off x86-64 / no Capstone: self-skip */
 #define DFP_ETRACE (-4) /* SEIZE/ptrace/wait failure (seccomp): self-skip */
 
@@ -188,8 +188,9 @@ int main(void) {
         emu_result_t res;
         memset(&res, 0, sizeof res);
         emu_call(e, ROUTINE, sizeof ROUTINE, args, 2, 0, &res);
-        CHECK((long)res.regs.rax == expect, "emulator result rax=%lld, want %ld",
-              (long long)res.regs.rax, expect);
+        CHECK((long)res.regs.rax == expect,
+              "emulator result rax=%lld, want %ld", (long long)res.regs.rax,
+              expect);
         enh = emu_step_count(e);
         for (size_t i = 0; i < enh && i < 64; i++)
             emu_step_at(e, i, NULL, &emu[i]);
@@ -236,11 +237,13 @@ int main(void) {
          * routine, so compare from step 0; rax is garbage until step 0 writes it
          * (the emulator zeroes GP regs, the live tracee does not), so compare it
          * only from step 1 onward. */
-        CHECK(emu[i].rdi == vt->regfile[i].rdi, "step %zu rdi: emu=%llu live=%llu",
-              i, (unsigned long long)emu[i].rdi,
+        CHECK(emu[i].rdi == vt->regfile[i].rdi,
+              "step %zu rdi: emu=%llu live=%llu", i,
+              (unsigned long long)emu[i].rdi,
               (unsigned long long)vt->regfile[i].rdi);
-        CHECK(emu[i].rsi == vt->regfile[i].rsi, "step %zu rsi: emu=%llu live=%llu",
-              i, (unsigned long long)emu[i].rsi,
+        CHECK(emu[i].rsi == vt->regfile[i].rsi,
+              "step %zu rsi: emu=%llu live=%llu", i,
+              (unsigned long long)emu[i].rsi,
               (unsigned long long)vt->regfile[i].rsi);
         if (i >= 1)
             CHECK(emu[i].rax == vt->regfile[i].rax,
@@ -249,7 +252,8 @@ int main(void) {
                   (unsigned long long)vt->regfile[i].rax);
         compared++;
     }
-    CHECK(compared >= 4, "only %zu aligned steps compared (want >= 4)", compared);
+    CHECK(compared >= 4, "only %zu aligned steps compared (want >= 4)",
+          compared);
     CHECK(rip_differs > 0,
           "rip never differed — the two captures share a basis, so the "
           "computation-register agreement is not a cross-basis result");
@@ -263,8 +267,9 @@ int main(void) {
         fprintf(stderr, "test_regstate_parity: %d check(s) FAILED\n", fails);
         return 1;
     }
-    printf("test_regstate_parity: OK (%zu aligned steps; rax/rdi/rsi agree with "
-           "the emulator modulo base, rip differs)\n",
-           compared);
+    printf(
+        "test_regstate_parity: OK (%zu aligned steps; rax/rdi/rsi agree with "
+        "the emulator modulo base, rip differs)\n",
+        compared);
     return 0;
 }

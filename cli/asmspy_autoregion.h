@@ -325,9 +325,10 @@ asmspy_autoregion_rank_ip(const asmspy_ip_hit_t *hits, size_t n,
  * the engine's rc, so this header stays free of cli/asmspy.h's cross-engine code
  * numbers (the caller translates rc == ASMSPY_REGION_NEVER_RAN into the bool). */
 typedef enum {
-    ASMSPY_WALK_STOP = 0,      /* the outcome is final — report it as it stands */
-    ASMSPY_WALK_ADVANCE = 1,   /* not seen entering; arm the next ranked one    */
-    ASMSPY_WALK_EXHAUSTED = 2, /* not seen entering AND no candidates remain    */
+    ASMSPY_WALK_STOP = 0, /* the outcome is final — report it as it stands */
+    ASMSPY_WALK_ADVANCE = 1, /* not seen entering; arm the next ranked one    */
+    ASMSPY_WALK_EXHAUSTED =
+        2, /* not seen entering AND no candidates remain    */
 } asmspy_walk_action_t;
 
 /* Decide what to do after arming candidate `attempt` (0-based) of a `ncand`-long
@@ -359,7 +360,8 @@ asmspy_autoregion_walk(int not_seen_entering, int attempt, int ncand) {
 /* The category reason for the wire/stderr, WITHOUT the per-candidate detail the
  * caller adds (names, counts) — so a client can render the walk state even when
  * it has no candidate metadata. */
-static inline const char *asmspy_autoregion_walk_reason(asmspy_walk_action_t a) {
+static inline const char *
+asmspy_autoregion_walk_reason(asmspy_walk_action_t a) {
     switch (a) {
     case ASMSPY_WALK_ADVANCE:
         return "not seen entering — a residency winner that never re-enters is "

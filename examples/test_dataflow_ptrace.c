@@ -1402,10 +1402,11 @@ static void test_window_survey(void) {
           "window_survey/B: the barrier carries the glue's REAL r10 value "
           "read back from silicon (SENT2), not a guess");
     uint64_t uv = 0;
-    CHECK(reg_read_low8(v, s_r10_use, REG_R10, &uv) && uv == F6_SENT2,
-          "window_survey/B: the VALUE at the read was always faithful (SENT2) — "
-          "it is the EDGE that elision corrupts, which is why a value-only "
-          "check could never have caught this");
+    CHECK(
+        reg_read_low8(v, s_r10_use, REG_R10, &uv) && uv == F6_SENT2,
+        "window_survey/B: the VALUE at the read was always faithful (SENT2) — "
+        "it is the EDGE that elision corrupts, which is why a value-only "
+        "check could never have caught this");
 
     /* --- (C) the gap barrier: a stack slot the glue reused --- */
     CHECK(has_edge(g, s_gap, s_mem_use),
@@ -2254,9 +2255,8 @@ static void test_callout_noreturn(void) {
                                          3, 0, 0, &result, v);
     CHECK(rc != DF_PTRACE_OK,
           "callout-noreturn: non-returning helper did NOT complete the region");
-    CHECK(
-        v->truncated,
-        "callout-noreturn: truncated TRANSPARENTLY (no hang on the missing return)");
+    CHECK(v->truncated, "callout-noreturn: truncated TRANSPARENTLY (no hang on "
+                        "the missing return)");
     CHECK(v->steps_len >= 2 && v->insn_off[0] == 0x00 && v->insn_off[1] == 0x03,
           "callout-noreturn: captured the region up to the call before "
           "truncating");

@@ -29,8 +29,8 @@
 #include "asmtest_valtrace.h"
 
 #include "asmtest_dataflow_internal.h" /* DF_CODE_BASE + df_guest_for + seed/capture */
-#include "asmtest_emu.h"               /* emu_t, emu_snapshot_t + snapshot/restore  */
-#include "asmtest_emu_internal.h"      /* emu_uc — the raw handle behind emu_t      */
+#include "asmtest_emu.h" /* emu_t, emu_snapshot_t + snapshot/restore  */
+#include "asmtest_emu_internal.h" /* emu_uc — the raw handle behind emu_t      */
 #include <stddef.h>
 #include <string.h>
 #include <unicorn/unicorn.h>
@@ -83,7 +83,8 @@ static void df_snap_at_k(struct uc_struct *uc, uint64_t address, uint32_t size,
     (void)size;
     df_ckpt_ctx *cc = (df_ckpt_ctx *)user;
     if (cc->count == cc->k && cc->snap == NULL)
-        cc->snap = emu_snapshot(cc->e); /* read-only query; safe in a code hook */
+        cc->snap =
+            emu_snapshot(cc->e); /* read-only query; safe in a code hook */
     cc->count++;
 }
 
@@ -95,8 +96,8 @@ static void df_snap_at_k(struct uc_struct *uc, uint64_t address, uint32_t size,
  * superset of _run_hosted: with no reachable k it produces the same trace.
  */
 int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
-                                    size_t code_len, const long *args, int nargs,
-                                    uint64_t max_insns, uint64_t k,
+                                    size_t code_len, const long *args,
+                                    int nargs, uint64_t max_insns, uint64_t k,
                                     asmtest_valtrace_t *vt,
                                     emu_snapshot_t **snap_out) {
     if (e == NULL || vt == NULL || code == NULL || snap_out == NULL)
@@ -109,8 +110,9 @@ int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
     vt->mem_space = AT_LOC_MEM_ABS;
     asmtest_df_seed(g, uc, code, code_len, args, nargs, NULL, 0);
     df_ckpt_ctx cc = {e, k, 0, NULL};
-    int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, DF_CODE_BASE,
-                                max_insns, vt, df_snap_at_k, &cc, NULL);
+    int rc =
+        asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, DF_CODE_BASE,
+                           max_insns, vt, df_snap_at_k, &cc, NULL);
     *snap_out = cc.snap;
     return rc;
 }
@@ -145,8 +147,8 @@ int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
     uc_reg_read((uc_engine *)uc, UC_X86_REG_RIP, &rip);
     df_fault_t local_fault = {0};
     int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE, rip, 0, vt,
-                                NULL, NULL, result_out != NULL ? &local_fault
-                                                               : NULL);
+                                NULL, NULL,
+                                result_out != NULL ? &local_fault : NULL);
     if (result_out != NULL) {
         memset(result_out, 0, sizeof *result_out);
         result_out->ok = (rc == 0);

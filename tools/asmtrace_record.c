@@ -1011,8 +1011,8 @@ static uint64_t emit_regstates_riscv(asmtrace_writer_t *w, const uint8_t *code,
  * way, mirroring record_arm64's/record_arm32's own closing note. Returns
  * 0 / -1. */
 static int record_riscv(const char *dir, const char *out, const char *label,
-                        const uint8_t *code, size_t code_len,
-                        const long *args, int nargs, size_t steps_cap) {
+                        const uint8_t *code, size_t code_len, const long *args,
+                        int nargs, size_t steps_cap) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -1959,15 +1959,16 @@ static int record_df_passes(const char *dir, const char *out, const char *label,
         for (int i = 0; i < nargs; i++)
             o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
                           i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") recorded THREE times — `df_invocation` passes armed on span "
-                 "0x%llx, then 0x%llx, then 0x%llx. Every pass restarts at step "
-                 "0 and carries ONE `rbase`, which is how the producer emits a "
-                 "multi-region capture (one region per invocation, never "
-                 "several inside one pass). The walk re-arms on the first span "
-                 "before moving on, so pass->region is NOT a rotation. A reader "
-                 "showing only the latest pass shows only the LAST region.",
-                 pass_base[0], pass_base[1], pass_base[2]);
+        snprintf(
+            text + o, sizeof text - (size_t)o,
+            ") recorded THREE times — `df_invocation` passes armed on span "
+            "0x%llx, then 0x%llx, then 0x%llx. Every pass restarts at step "
+            "0 and carries ONE `rbase`, which is how the producer emits a "
+            "multi-region capture (one region per invocation, never "
+            "several inside one pass). The walk re-arms on the first span "
+            "before moving on, so pass->region is NOT a rotation. A reader "
+            "showing only the latest pass shows only the LAST region.",
+            pass_base[0], pass_base[1], pass_base[2]);
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }

@@ -467,8 +467,8 @@ static void test_df_step_body(void) {
           body);
 
     /* rbase == 0: OMITTED — the body is byte-identical to a pre-37 recording. */
-    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 0, 0, NULL, &r, 1,
-                          NULL, 0);
+    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 0, 0, NULL, &r, 1, NULL,
+                          0);
     check("df_step.body rbase==0 omits the field",
           strstr(body0, "\"rbase\"") == NULL, body0);
     check("df_step.body rbase==0 keeps the pre-37 step/off/ops prefix",
@@ -505,8 +505,8 @@ static void test_df_step_when_body(void) {
           body);
 
     /* when == 0: OMITTED entirely — never null, never a sentinel zero (D7). */
-    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 1048576ULL, 0, NULL,
-                          &r, 1, NULL, 0);
+    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 1048576ULL, 0, NULL, &r,
+                          1, NULL, 0);
     check("df_step.body when==0 omits the field",
           strstr(body0, "\"when\"") == NULL, body0);
     check("df_step.body when==0 keeps the rbase-only body byte-identical",

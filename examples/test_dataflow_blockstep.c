@@ -2044,7 +2044,8 @@ static void run_avx_tcg_sentinel_case(void) {
               e1 == UC_ERR_INSN_INVALID && open2 == UC_ERR_OK &&
               map2 == UC_ERR_OK && vvvv_dropped,
           "upstream sentinel: Unicorn still cannot run AVX — on FAILURE see "
-          "docs/internal/archive/implementations/dataflow-producer-correctness.md T8 "
+          "docs/internal/archive/implementations/"
+          "dataflow-producer-correctness.md T8 "
           "(vaddps ymm: e1=%d want=%d; vpaddd xmm vvvv_dropped=%d e2=%d)",
           (int)e1, (int)UC_ERR_INSN_INVALID, vvvv_dropped, (int)e2);
 }
