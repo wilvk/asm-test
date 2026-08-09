@@ -639,7 +639,38 @@ assert isinstance(d["defuse"], list)' \
     timeout 40 env ASMTEST_DF_ENTRY_WAIT_MS=300 "$ASM" --dataflow "$QHPID" hotfn \
         --continuous --record="$dfq" >/dev/null 2>&1 &
     qpid=$!
-    sleep 6 # warmup-productive, then >=1 quiet stretch, then another hot burst
+    # Wait for the PROPERTY, not for a fixed duration. Under single-step tracing the
+    # victim's phases stretch by a machine-dependent factor, so the old `sleep 6`
+    # RACED the first lull instead of spanning it: on a fast host the capture ran a
+    # full hot burst past the quiet stretch (its 0-step windows land at passes
+    # 1211-1215 of 1716), while the CI runner was SIGINTed at the moment the lull
+    # began — both observed failures reported totals of 1211 and 1215 passes, the
+    # same boundary, with the quiet windows LAST and nothing after them. The feature
+    # was never broken; the window was too short to see it survive.
+    #
+    # Poll the GROWING recording instead, and stop as soon as a productive pass has
+    # followed a quiet one. Every 2 s, not 0.1: this recording grows ~13 MB/s, so a
+    # tight interval re-scans hundreds of MB for nothing. awk exits at the first
+    # match, so the success path stops early. On timeout fall through and let the
+    # checks below report it with their own diagnostics and pass count.
+    #
+    # `/}$/` is what makes reading a file that is still being APPENDED TO safe, and
+    # it is not optional: the final line is routinely half-written, and a truncated
+    # record still carries "k":"df_invocation" while its "steps":0, has not landed
+    # yet — which matches the productive branch and ends the wait on a pass that is
+    # about to turn out quiet. Complete records always end in `}`, so requiring it
+    # ignores exactly the torn tail. (The post-stop checks below read a CLOSED file
+    # and need no such guard.)
+    i=0
+    until awk '
+            /"k":"df_invocation"/ && /}$/ &&  /"steps":0,/ { q = 1 }
+            /"k":"df_invocation"/ && /}$/ && !/"steps":0,/ { if (q) { print "survived"; exit } }
+          ' "$dfq" 2>/dev/null | grep -q survived; do
+        i=$((i+1))
+        [ "$i" -le 15 ] || break # ~30 s cap, inside the `timeout 40` above
+        kill -0 "$qpid" 2>/dev/null || break
+        sleep 2
+    done
     kill -INT "$qpid" 2>/dev/null
     wait "$qpid"; qrc=$?
     set -e
