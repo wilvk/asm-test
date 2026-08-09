@@ -256,7 +256,17 @@ DOCKER_APT_node   := nodejs npm
 # java-jitdump lane). It is a userspace JVMTI agent, so a kernel-version-mismatched
 # package still works in the container; the other java lanes simply ignore it.
 DOCKER_APT_java   := openjdk-25-jdk-headless linux-tools-generic
-DOCKER_APT_dotnet := dotnet-sdk-8.0 libipt-dev
+# libipt-dev (the Intel PT decoder the .NET scoped-tracing lane links) is an x86-only
+# package — Ubuntu ports has no arm64 build of it — so asking for it unconditionally
+# makes `docker-build-dotnet` die on AArch64 with `E: Unable to locate package
+# libipt-dev`, taking the whole hwtrace-bindings (AArch64, live) job with it. Request it
+# only on x86: on arm64 mk/native-trace.mk header-probes libipt, leaves LIBIPT_LIBS
+# empty and the PT tier self-skips, which is the correct answer on silicon that has no
+# Intel PT. Same split ci.yml's cli lane and release.yml's payload lane already make.
+# (DOCKER_UARCH duplicates TAINT_ORACLE_UARCH's expression below because that one is
+# defined further down the file, after this block is expanded.)
+DOCKER_UARCH := $(if $(DOCKER_PLATFORM),$(lastword $(subst /, ,$(DOCKER_PLATFORM))),$(shell uname -m))
+DOCKER_APT_dotnet := dotnet-sdk-8.0 $(if $(filter x86_64 amd64,$(DOCKER_UARCH)),libipt-dev)
 DOCKER_APT_ruby   := ruby
 DOCKER_APT_lua    := luajit
 DOCKER_APT_go     := golang-go
