@@ -217,6 +217,8 @@ at once, which is why the capture asks for `insns` (see below).
 
 ### Session flow
 
+![The session flow scene](../_static/gui/24-session-flow.png)
+
 The whole session as flow. This is the 3D companion of the **Session strip**
 view — the same rows (one per thread, plus the kernel rail and the memory
 channel), drawn as smooth, depth-stacked ribbons whose height is a bucketed
@@ -277,7 +279,7 @@ time.
 |---|---|---|
 | `tree.asmtrace` | `mode: tree` | Module excursion ribbon |
 | `trace-blend.asmtrace` | `mode: trace` over `blend_tile` | Invocation stack |
-| `df-a.asmtrace` | `mode: dataflow` over `blend_tile`, continuous | Address plane, lane prism, divergence A |
+| `df-a.asmtrace` | `mode: dataflow` over `blend_tile`, continuous | Address plane, lane prism, session flow, divergence A |
 | `df-b.asmtrace` | the same, against a `--seed 2` process | Divergence B |
 
 They are captured through `asmspy --serve` rather than the headless

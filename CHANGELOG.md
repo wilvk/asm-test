@@ -240,6 +240,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The 3D overview tab now opens for a recording whose only substrate is the
+  session flow (any strip channel — mem/syscall/trace/call/watch/df_step):
+  previously the Session strip tab lit up while the 3D pane refused the very
+  same channels. The pane's refusal reason now names all five non-plane
+  substrates. Also: `asmspy`'s usage text catches up with the shipped
+  `--insns` flag, the session-flow documentation screenshot renders under its
+  own `24-` manifest slot (the `23-` prefix was doubled), and the
+  `gui-shots` / `gui-shot-recordings` targets appear in `make help`.
 - `asmspy` attach to a multi-process tree no longer kills a followed child:
   the teardown drained a queued single-step trap against the wrong address
   space, which was fatal to the child moments after detach.

@@ -140,22 +140,22 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
     // The session strip (2026-08-10 session-strip spec) — the whole session's
     // mem/syscall/thread/run channels over stream order. Present iff ANY strip
     // channel has an event; the reason names the exact kind set so a reader
-    // knows which producer opt-in would light it up.
-    {
-        static const char *kStripKinds[] = {"mem",  "syscall", "trace",
-                                            "call", "watch",   "df_step"};
-        bool present = false;
-        for (const char *k : kStripKinds) {
-            auto it = r.by_kind.find(k);
-            if (it != r.by_kind.end() && !it->second.empty()) {
-                present = true;
-                break;
-            }
+    // knows which producer opt-in would light it up. The same signal is a 3D
+    // substrate below: the session flow scene buckets exactly these channels,
+    // so the strip tab and the 3D pane may never disagree about them.
+    static const char *kStripKinds[] = {"mem",  "syscall", "trace",
+                                        "call", "watch",   "df_step"};
+    bool has_strip_channel = false;
+    for (const char *k : kStripKinds) {
+        auto it = r.by_kind.find(k);
+        if (it != r.by_kind.end() && !it->second.empty()) {
+            has_strip_channel = true;
+            break;
         }
-        add(ViewId::SessionStrip, "Session strip", present,
-            "recording carries no mem/syscall/trace/call/watch/df_step events",
-            std::nullopt);
     }
+    add(ViewId::SessionStrip, "Session strip", has_strip_channel,
+        "recording carries no mem/syscall/trace/call/watch/df_step events",
+        std::nullopt);
 
     // Scrubber — the register time-travel deck. Present iff a regstate ring was
     // recorded (the `--steps` opt-in). The absent-reason is GRADED by why the ring
@@ -192,12 +192,13 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
         "locks this recording against it",
         std::nullopt);
 
-    // 3D overview — the address-space spacetime surface. Present iff the recording
-    // carries codeimage regions to place the plane.
-    // 59 T1: FIVE substrates, only one of which is the address plane.
-    // Divergence, the module ribbon and the lane prism take no Projection and
-    // carry no terrain, so gating the whole pane on codeimage made a tree-only
-    // or dataflow-only recording unable to reach its own scene.
+    // 3D overview — the address-space spacetime surface. Present iff ANY
+    // substrate can fill.
+    // 59 T1 (+ the 2026-08-10 session flow): SIX substrates, only one of which
+    // is the address plane. Divergence, the module ribbon, the lane prism and
+    // the session flow take no Projection and carry no terrain, so gating the
+    // whole pane on codeimage made a tree-only, dataflow-only or
+    // channels-only recording unable to reach its own scene.
     //
     // Divergence is deliberately NOT a clause here. The only B-side signal in
     // scope is `b_attachable`, which means "a second recording is OPEN", not
@@ -212,12 +213,15 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
     const bool has_plane = !space::regions_from_codeimage(r).empty();
     const bool has_substrate = has_plane || scene3d_has_invocation(obs) ||
                                scene3d_has_module_ribbon(obs) ||
-                               scene3d::lane_prism_any(a.df);
+                               scene3d::lane_prism_any(a.df) ||
+                               has_strip_channel;
     add(ViewId::Scene3D, "3D overview", has_substrate,
         "nothing this pane can show — the address plane needs `codeimage` "
         "events, the invocation stack needs a `coverage` block set, the module "
-        "excursion ribbon needs `call` events, and the SIMD lane prism needs "
-        "wide register writes. This recording carries none of them",
+        "excursion ribbon needs `call` events, the SIMD lane prism needs "
+        "wide register writes, and the session flow needs a strip channel "
+        "(mem/syscall/trace/call/watch/df_step events). This recording "
+        "carries none of them",
         std::nullopt);
 
     return v;

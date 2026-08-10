@@ -74,8 +74,8 @@ int main() {
         check("min/timeline", find(vp, ViewId::Timeline) &&
                                   find(vp, ViewId::Timeline)->present,
               "Timeline is in the lean default");
-        for (ViewId id : {ViewId::Loom, ViewId::Scrubber, ViewId::Scene3D,
-                          ViewId::Diff, ViewId::AbiXray}) {
+        for (ViewId id : {ViewId::Loom, ViewId::Scrubber, ViewId::Diff,
+                          ViewId::AbiXray}) {
             const ViewPresence *e = find(vp, id);
             check("min/reveal-absent", e && !e->present,
                   "a reveal view must be absent for a bare recording");
@@ -92,6 +92,16 @@ int main() {
                   "an absent-reason must not name a capability the tree does "
                   "not implement — no regions_from_maps exists");
         }
+        // A trace event is a strip channel, and the session flow scene buckets
+        // exactly the strip's channels — so the SAME fixture that lights the
+        // Session strip lights the 3D pane (its session-flow substrate). The
+        // strip tab opening while the 3D pane refused was the inconsistency
+        // the session-flow clause closes.
+        check("min/3d-present-via-flow",
+              find(vp, ViewId::Scene3D) && find(vp, ViewId::Scene3D)->present,
+              "a strip channel is a session-flow substrate; the pane must "
+              "open for it");
+
         // The affordance count equals the absent entries.
         size_t nabs = view_absent_count(vp), counted = 0;
         for (const ViewPresence &e : vp)
@@ -192,13 +202,13 @@ int main() {
               "a codeimage recording makes the 3D overview present");
     }
 
-    // 59 T1: three of the five substrates need no address plane, so codeimage
-    // must not gate the whole pane. build_divergence_scene, build_module_ribbon
-    // and build_lane_prism take no space:: parameter, and StandaloneFrame
-    // carries no terrain field — the plane is ONE substrate among five, not a
-    // precondition for the other four. Gating ViewId::Scene3D on
-    // regions_from_codeimage made a tree-only or dataflow-only recording unable
-    // to reach its own scene.
+    // 59 T1 (+ the session flow): most substrates need no address plane, so
+    // codeimage must not gate the whole pane. build_divergence_scene,
+    // build_module_ribbon, build_lane_prism and the session-flow builder take
+    // no space:: parameter, and StandaloneFrame carries no terrain field — the
+    // plane is ONE substrate among six, not a precondition for the other five.
+    // Gating ViewId::Scene3D on regions_from_codeimage made a tree-only,
+    // dataflow-only or channels-only recording unable to reach its own scene.
     {
         // A call tree and nothing else: no codeimage, so no plane.
         auto vp = presence_of(fx + "obs-tree.asmtrace", Mode::Open, false);
@@ -209,17 +219,41 @@ int main() {
     }
     {
         // Nothing at all: no codeimage, no calls, no coverage blocks, no wide
-        // writes. The pane must STILL be absent — widening a gate is not
-        // removing it — and must name what WOULD have opened it.
-        auto vp = presence_of(fx + "min-trace.asmtrace", Mode::Open, false);
-        const ViewPresence *e = find(vp, ViewId::Scene3D);
-        check("3d/min-absent", e && !e->present,
-              "a recording with no substrate at all must not open the pane");
-        check("3d/min-reason-names-all",
-              e && e->reason.find("codeimage") != std::string::npos &&
-                  e->reason.find("call") != std::string::npos,
-              "the reason must name every substrate that would have opened the "
-              "pane, not codeimage alone");
+        // writes — and no strip channel either (min-trace no longer qualifies:
+        // its `trace` events are a session-flow substrate now). The pane must
+        // STILL be absent — widening a gate is not removing it — and must name
+        // what WOULD have opened it.
+        std::string nd =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"})"
+            "\n"
+            R"({"k":"note","text":"x"})"
+            "\n"
+            R"({"k":"end","events":1})"
+            "\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto rec = load_recording(in, err);
+        if (!rec) {
+            std::fprintf(stderr, "FAIL 3d/no-substrate fixture load: %s\n",
+                         err.c_str());
+            failures++;
+        } else {
+            Streams a2 = decode_streams(*rec);
+            StepIndex si2 = build_step_index(*rec);
+            ObserverState obs2;
+            observer_build(obs2, *rec);
+            auto vp = view_presence(a2, obs2, si2, *rec, Mode::Open, false);
+            const ViewPresence *e = find(vp, ViewId::Scene3D);
+            check("3d/min-absent", e && !e->present,
+                  "a recording with no substrate at all must not open the "
+                  "pane");
+            check("3d/min-reason-names-all",
+                  e && e->reason.find("codeimage") != std::string::npos &&
+                      e->reason.find("call") != std::string::npos &&
+                      e->reason.find("session flow") != std::string::npos,
+                  "the reason must name every substrate that would have opened "
+                  "the pane, not codeimage alone");
+        }
     }
 
     // A SKIPPED capture explains ITSELF, in every absent view.

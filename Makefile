@@ -156,6 +156,8 @@ help:
 	@echo '  desktop-icon-regen  redraw the app icon from scripts/gen-app-icon.py (dev tool; needs Pillow)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
 	@echo '  desktop-ui-test imgui_test_engine interaction lane: keymap + door/flow tests, JUnit XML (fetches the one test-lane-only non-MIT dep; make docker-desktop runs it)'
+	@echo '  gui-shot-recordings  capture the documentation recordings from a live sample program (ptrace host)'
+	@echo '  gui-shots       render + size/blank/distinct-verify the doc screenshots from desktop/shots.json'
 	@echo '  addon-fetch-test          exercise scripts/fetch-addon.sh (pin + refuse-unpinned; network)'
 	@echo '  desktop-addon-compile-check  imgui-repin gate: vendored imgui_internal.h addons still build'
 	@echo '  desktop-engine-boundary-check  D4 gate: asmtest-viewer links no unicorn/keystone/capstone'

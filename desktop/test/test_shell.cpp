@@ -1830,15 +1830,22 @@ int main() {
                   find(ViewId::Timeline) && find(ViewId::Timeline)->present,
                   "Timeline is in the lean default");
             // The reveal-when-present views are absent for a bare recording, and
-            // each names WHY (never an empty "unavailable").
-            for (ViewId id :
-                 {ViewId::Loom, ViewId::Scrubber, ViewId::Scene3D}) {
+            // each names WHY (never an empty "unavailable"). Scene3D is no
+            // longer in this list: min-trace's `trace` events are a strip
+            // channel, and a strip channel is the session-flow substrate, so
+            // the 3D pane opens for it (the strip tab and the 3D pane may
+            // never disagree about the same channels).
+            for (ViewId id : {ViewId::Loom, ViewId::Scrubber}) {
                 const ViewPresence *e = find(id);
                 check("20t1/absent", e && !e->present,
                       "a reveal view must be absent for a bare recording");
                 check("20t1/absent-named", e && !e->reason.empty(),
                       "an absent view must carry a non-empty machine reason");
             }
+            check("20t1/3d present via session flow",
+                  find(ViewId::Scene3D) && find(ViewId::Scene3D)->present,
+                  "a strip channel is a session-flow substrate; the pane "
+                  "must open for it");
             // The affordance count equals the number of absent entries.
             size_t nabs = view_absent_count(vp);
             size_t counted = 0;
