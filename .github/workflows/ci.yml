@@ -233,6 +233,7 @@ jobs:
           merge-multiple: true
       - name: Build the cross-system comparison
         run: |
+          set -o pipefail   # else a bench-compare crash yields an empty comparison.md and a green step
           python3 scripts/bench-compare reports/*.json | tee comparison.md
           echo "## Cross-system benchmark comparison" >> "$GITHUB_STEP_SUMMARY"
           cat comparison.md >> "$GITHUB_STEP_SUMMARY"
@@ -526,6 +527,7 @@ jobs:
 
       - name: M0 harness — trace a compiled function through the fork runtime
         run: |
+          set -o pipefail   # else `tee` swallows a failing make/test exit code
           make drtrace-test-macos DYNAMORIO_HOME="$HOME/dr" 2>&1 | tee drtrace-macos.log
           # Self-skip is failure here: this runner just BUILT the runtime, so a
           # "1..0 # skipped" would mean the lane silently stopped testing.
@@ -1792,7 +1794,12 @@ jobs:
         run: sh scripts/thirdparty-cache.sh cached-build keystone   # restores from the cache when warm
 
       - name: Headless desktop tests (null ImGui backend + the GL FBO smoke)
-        run: make WERROR=1 desktop-test | tee /tmp/desktop-test.log
+        # pipefail: without it `tee` swallows a failing test's exit code and this
+        # step goes green while the suite is red (the next step only greps the
+        # log for a self-skip banner, never for a failure).
+        run: |
+          set -eo pipefail
+          make WERROR=1 desktop-test | tee /tmp/desktop-test.log
 
       - name: Prove the GL smoke really ran (it must not self-skip on this lane)
         # A lane that silently degraded to the self-skip path would report green
