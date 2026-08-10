@@ -127,6 +127,39 @@ int main() {
               "mark mode, threshold edge, and deep envelope mode all draw");
     }
 
+    // 3) both reading postures over a Firefox-shaped deck (20 lanes): the
+    //    simplified default and the detailed view must each rasterise
+    st.model = StripModel{};
+    for (int i = 0; i < 20; i++) {
+        StripLane ln;
+        ln.tid = i;
+        ln.label = "[" + std::to_string(i) + "]";
+        st.model.lanes.push_back(ln);
+        std::vector<uint64_t> act;
+        for (int k = 0; k <= i; k++)
+            act.push_back(static_cast<uint64_t>(k));
+        st.model.lane_activity.push_back(act);
+    }
+    st.model.deck_enabled = true;
+    st.model.seq_end = 32;
+    st.model.hud = "x";
+    st.model_gen++; // a NEW model under the same state: invalidate the cache
+    st.cam = strip_view_t{};
+    st.cam.seq_per_px = 8.0; // envelope mode
+    frame([] { draw_strip(st, "rec-x", [](const dt_link &) {}); });
+    {
+        ImDrawData *d3 = ImGui::GetDrawData();
+        check("simplified posture draws", d3 && d3->TotalVtxCount > 0,
+              "top-N + aggregate row rasterise");
+    }
+    st.cam.detail = true; // the toggle's effect, driven directly
+    frame([] { draw_strip(st, "rec-x", [](const dt_link &) {}); });
+    {
+        ImDrawData *d4 = ImGui::GetDrawData();
+        check("detailed posture draws", d4 && d4->TotalVtxCount > 0,
+              "the full deck rasterises");
+    }
+
     ImGui::DestroyContext();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

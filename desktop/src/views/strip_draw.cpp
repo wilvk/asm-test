@@ -177,6 +177,12 @@ void draw_strip(StripState &st, const std::string &rec_id,
     ImGui::SameLine();
     if (ImGui::SmallButton(st.cam.follow_tail ? "following" : "follow"))
         st.cam.follow_tail = true;
+    ImGui::SameLine();
+    // The posture toggle: simplified (top-N + counted aggregates) is the
+    // default; detail is one click away and back. Keyed by strip_plan_key,
+    // so the flip re-plans exactly once.
+    if (ImGui::SmallButton(st.cam.detail ? "simplify" : "detail"))
+        st.cam.detail = !st.cam.detail;
 
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     st.cam.px_w = std::max(64.0f, avail.x);
