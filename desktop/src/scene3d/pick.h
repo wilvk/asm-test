@@ -239,6 +239,11 @@ std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 struct PickSpur {
     int32_t tid;
     uint64_t t;
+    // T3 (47/50): the owning PC vertex's address and placed flag, mirrored from
+    // PickVertex — so a spur resolves through the SAME address-first route
+    // (never the per-tid ordinal `t`, a global step index only by luck).
+    uint64_t addr = 0;
+    bool placed = true;
 };
 std::vector<PickSpur> pick_spur_order(const space::TrajectorySet &traj,
                                       const space::Projection &proj);

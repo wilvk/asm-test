@@ -774,17 +774,34 @@ int main() {
               "the default PickBands changed pre-T3 decode behaviour");
     }
 
-    // === T3: a convergence arc resolves to whichever tid is nearer follow_step
+    // === T3 (50): a convergence resolves by the chosen side's ADDRESS, never
+    // the per-tid ordinal. tid 1 (PCs at +0, +8) and tid 2 (PCs at +16, +20,
+    // +8) both reach +8 (0x400008), so detect_convergences yields one mark with
+    // t_a=1 (tid 1's second PC) and t_b=2 (tid 2's third) — DIFFERENT threads'
+    // step indices, never a shared clock. A df pass places 0x400008 at GLOBAL
+    // step 3 (neither ordinal), so the address route must open the operand
+    // timeline at 3; the old code opened `t_a`/`t_b` — another thread's step.
     {
-        // Two threads (tid 1, tid 2) both touch the same cell — one PC vertex
-        // each — so detect_convergences yields exactly one mark.
         Recording rec = mk_rec(
             std::string(kHdrExact) +
             "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,\"version\":0,"
             "\"when\":1,\"bytes\":\"90\"}\n"
             "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304,\"tid\":1}\n"
-            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304,\"tid\":2}\n"
-            "{\"k\":\"end\",\"events\":3,\"truncated\":false,\"drops\":{"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194312,\"tid\":1}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194320,\"tid\":2}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194324,\"tid\":2}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194312,\"tid\":2}\n"
+            // A df pass that places the converged PC (0x400008) at step 3 —
+            // deliberately NEITHER per-tid ordinal (1 or 2).
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":16,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":2,\"off\":20,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":3,\"off\":8,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"end\",\"events\":9,\"truncated\":false,\"drops\":{"
             "\"lost\":0,\"throttled\":false}}\n");
         space::Projection p =
             space::build_projection(space::regions_from_codeimage(rec));
@@ -793,42 +810,47 @@ int main() {
         space::ConvergenceSet conv = space::detect_convergences(traj, p);
         check("T3 conv: one cross-thread mark", conv.marks.size() == 1,
               "got " + std::to_string(conv.marks.size()));
+        Streams s = decode_streams(rec);
+        check("T3 conv/setup: df placed the converged PC at step 3",
+              s.df.insn_off.size() == 4, "df must decode four steps");
 
         if (conv.marks.size() == 1) {
             const space::ConvergenceMark &m = conv.marks[0];
+            check(
+                "T3 conv/setup: the two sides are DIFFERENT threads' ordinals",
+                m.t_a != m.t_b && m.addr_a == 4194312 && m.addr_b == 4194312,
+                "fixture assumption broke: t_a=" + std::to_string(m.t_a) +
+                    " t_b=" + std::to_string(m.t_b));
             Pick pk;
             pk.kind = Pick::Conv;
             pk.conv = 0;
 
-            // follow_step nearer tid_a's t: resolves to tid_a's step.
-            auto link_a =
-                resolve_pick(terr, traj, "rec.asmtrace", pk, conv, m.t_a);
-            check("T3 conv: resolves to a link", link_a.has_value(),
-                  "no link");
-            if (link_a) {
+            auto link = resolve_pick(terr, traj, "rec.asmtrace", pk, conv,
+                                     m.t_a, &s.df);
+            check("T3 conv: resolves to a link", link.has_value(), "no link");
+            if (link) {
                 check("T3 conv: opens the operand timeline",
-                      link_a->view == dt_view::timeline, "wrong view");
-                check("T3 conv: step names one of the two tids' t",
-                      link_a->step.has_value() &&
-                          (*link_a->step == m.t_a || *link_a->step == m.t_b),
-                      "step names neither tid");
-                check("T3 conv: follow_step==t_a resolves to t_a",
-                      *link_a->step == m.t_a, "did not pick the nearer side");
+                      link->view == dt_view::timeline, "wrong view");
+                check("T3 conv: opens the ADDRESS-matched step (3), not a "
+                      "per-tid ordinal (1 or 2)",
+                      link->step.has_value() && *link->step == 3,
+                      "step wrong: got " +
+                          (link->step ? std::to_string(*link->step) : "none"));
             }
-            // follow_step nearer tid_b's t (if the two differ; else both
-            // sides tie and 'a' wins by the documented tie rule).
-            if (m.t_a != m.t_b) {
-                auto link_b = resolve_pick(terr, traj, "rec.asmtrace", pk,
-                                           conv, m.t_b);
-                check("T3 conv: follow_step==t_b resolves to t_b",
-                      link_b.has_value() && *link_b->step == m.t_b,
-                      "did not pick the nearer side");
-            }
+
+            // No df supplied: the per-tid ordinal is unsound (two trajectories)
+            // and there is no address route, so this degrades to the CANVAS at
+            // the converged address — never a fabricated per-tid step.
+            auto no_df =
+                resolve_pick(terr, traj, "rec.asmtrace", pk, conv, m.t_a);
+            check("T3 conv/no-df: falls back to the canvas, not a fabricated "
+                  "step",
+                  no_df.has_value() && no_df->view == dt_view::canvas,
+                  "wrong view");
 
             // The hint must say WHICH side was chosen, carry gap verbatim,
             // and never upgrade the co-locality hint into a stronger claim.
-            PickHint hint =
-                resolve_pick_hint(terr, traj, conv, pk, m.t_a);
+            PickHint hint = resolve_pick_hint(terr, traj, conv, pk, m.t_a);
             check("T3 conv: hint not empty", !hint.empty, "empty hint");
             check("T3 conv: hint/what == convergence",
                   hint.what == "convergence", hint.what);
@@ -844,9 +866,8 @@ int main() {
                   hint.quantity.find("gap") != std::string::npos &&
                       hint.quantity.find("step") != std::string::npos,
                   hint.quantity);
-            check("T3 conv: hint target agrees with resolve_pick",
-                  link_a.has_value() &&
-                      hint.target == dt_view_name(link_a->view),
+            check("T3 conv: hint target agrees with the address-resolved pick",
+                  link.has_value() && hint.target == dt_view_name(link->view),
                   "target/view disagreement: '" + hint.target + "'");
 
             // An out-of-range conv index resolves to nothing on both sides.
@@ -856,8 +877,7 @@ int main() {
             check("T3 conv: an out-of-range conv index -> no link",
                   !resolve_pick(terr, traj, "r", past, conv, 0).has_value(),
                   "an out-of-range conv index produced a link");
-            PickHint past_hint =
-                resolve_pick_hint(terr, traj, conv, past, 0);
+            PickHint past_hint = resolve_pick_hint(terr, traj, conv, past, 0);
             check("T3 conv: an out-of-range conv index -> empty hint",
                   past_hint.empty, "not empty");
         }
@@ -913,6 +933,71 @@ int main() {
             check("T3 spur: an out-of-range spur index -> no link",
                   !resolve_pick(terr, traj, "r", past, conv, 0).has_value(),
                   "an out-of-range spur index produced a link");
+        }
+    }
+
+    // === T3 (50): a spur in a MULTI-tid trace resolves by its owning PC's
+    // address, not the per-tid ordinal. tid 2's spur owns PC 0x400010 (its own
+    // step 1); a df places that PC at GLOBAL step 2, so the spur must open the
+    // timeline at 2 — the old code opened the per-tid ordinal 1 (which is tid
+    // 2's step 0 vertex, the wrong instruction). Proves pick_spur_order carries
+    // the owning address through to the shared address-first resolver.
+    {
+        Recording rec = mk_rec(
+            std::string(kHdrExact) +
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":4096,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304,\"tid\":1}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194312,\"tid\":2}\n"
+            "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194320,\"tid\":2}\n"
+            "{\"k\":\"mem\",\"step\":0,\"ea\":6291456,\"size\":8,\"rw\":\"r\","
+            "\"tid\":1}\n"
+            "{\"k\":\"mem\",\"step\":1,\"ea\":6291456,\"size\":8,\"rw\":\"r\","
+            "\"tid\":2}\n"
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":8,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"df_step\",\"step\":2,\"off\":16,\"rbase\":4194304,"
+            "\"ops\":[]}\n"
+            "{\"k\":\"end\",\"events\":9,\"truncated\":false,\"drops\":{"
+            "\"lost\":0,\"throttled\":false}}\n");
+        std::vector<space::Region> regs = space::regions_from_codeimage(rec);
+        regs.push_back(region(6291456, 4096, space::Region::Data));
+        space::Projection p = space::build_projection(regs);
+        space::TerrainModel terr = space::build_terrain(p, rec);
+        space::TrajectorySet traj = space::build_trajectories(rec, p);
+        check("T3 spur/multi: two trajectories", traj.trajectories.size() == 2,
+              "got " + std::to_string(traj.trajectories.size()));
+        std::vector<PickSpur> sorder = pick_spur_order(traj, p);
+        check("T3 spur/multi: two spurs (one access per tid)",
+              sorder.size() == 2, "got " + std::to_string(sorder.size()));
+        Streams s = decode_streams(rec);
+        if (sorder.size() == 2) {
+            // spur 1 is tid 2's: owns PC 0x400010, per-tid ordinal 1.
+            check("T3 spur/multi: spur 1 carries its owning PC address",
+                  sorder[1].addr == 4194320 && sorder[1].t == 1,
+                  "addr=" + std::to_string(sorder[1].addr) +
+                      " t=" + std::to_string(sorder[1].t));
+            Pick pk;
+            pk.kind = Pick::Spur;
+            pk.spur = 1;
+            space::ConvergenceSet conv;
+            auto link =
+                resolve_pick(terr, traj, "rec.asmtrace", pk, conv, 0, &s.df);
+            check("T3 spur/multi: opens the ADDRESS-matched step (2), not the "
+                  "per-tid ordinal (1)",
+                  link.has_value() && link->view == dt_view::timeline &&
+                      link->step.has_value() && *link->step == 2,
+                  "step wrong: got " + (link && link->step
+                                            ? std::to_string(*link->step)
+                                            : std::string("none")));
+            // No df: two trajectories, so the ordinal is unsound -> canvas.
+            auto no_df = resolve_pick(terr, traj, "rec.asmtrace", pk, conv, 0);
+            check("T3 spur/multi/no-df: degrades to the canvas, not a "
+                  "fabricated step",
+                  no_df.has_value() && no_df->view == dt_view::canvas,
+                  "wrong view");
         }
     }
 

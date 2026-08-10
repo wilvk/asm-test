@@ -131,6 +131,65 @@ bool conv_pick_a(const space::ConvergenceMark &m, uint64_t follow_step) {
     return da <= db;
 }
 
+// T3 (50-two-way-brushing): the address-first step resolution shared by the
+// Vertex, Conv and Spur branches. A per-tid ordinal is a global dataflow step
+// index only by luck (a multi-tid trace collides tid 1's and tid 2's ordinals
+// onto the same values), so resolve the element's own address to a step the
+// SAME way `go to` / StepAddrResolver would, and fall back to an honest CANVAS
+// offset rather than pass an ordinal the stream cannot honour as a step. The
+// ordinal is trusted ONLY when the trajectory set holds a single tid — the one
+// case nothing else could have collided onto its step numbers.
+//   placed==false  -> `addr` is a raw wire offset: skip the address route and,
+//                     absent the single-tid shortcut, open the canvas at it.
+std::optional<dt_link> resolve_addr_link(const space::TerrainModel &terr,
+                                         const std::string &rec, uint64_t addr,
+                                         bool placed, bool single_tid,
+                                         uint64_t ordinal,
+                                         const DataflowStream *df) {
+    dt_link link;
+    link.rec = rec;
+    if (placed && df != nullptr) {
+        space::StepAddrResolver resolver(terr.proj, *df);
+        for (uint32_t i = 0; i < df->insn_off.size(); i++) {
+            uint64_t a = 0;
+            if (resolver.resolve(i, &a) && a == addr) {
+                link.view = dt_view::timeline;
+                link.step = i;
+                return link;
+            }
+        }
+    }
+    if (single_tid) {
+        link.view = dt_view::timeline;
+        link.step = static_cast<uint32_t>(ordinal);
+        return link;
+    }
+    if (!placed) {
+        link.view = dt_view::canvas;
+        link.off = addr; // the raw wire offset, already the recording's basis
+        return link;
+    }
+    // A placed address the stream could not name a step for: address it by
+    // OFFSET through its owning region rather than fabricate a step.
+    float u = 0.0f, v = 0.0f;
+    const uint32_t n = terr.w;
+    if (n > 0 && terr.proj.project(addr, &u, &v)) {
+        uint32_t x = static_cast<uint32_t>(u * n);
+        uint32_t y = static_cast<uint32_t>(v * n);
+        if (x >= n)
+            x = n - 1;
+        if (y >= n)
+            y = n - 1;
+        const CellFacts f = classify_cell(terr, y * n + x);
+        if (f.have_region) {
+            link.view = dt_view::canvas;
+            link.off = f.off;
+            return link;
+        }
+    }
+    return std::nullopt; // no route can honestly address this element
+}
+
 } // namespace
 
 Pick decode_pick(uint32_t id, uint32_t n, const PickBands &bands) {
@@ -203,6 +262,8 @@ std::vector<PickSpur> pick_spur_order(const space::TrajectorySet &traj,
     std::vector<PickSpur> out;
     for (const space::Trajectory &tr : traj.trajectories) {
         uint64_t last_pc_t = 0;
+        uint64_t last_pc_addr = 0;
+        bool last_pc_placed = true;
         bool have_last_pc = false;
         for (const space::TrajPoint &pt : tr.points) {
             float u = 0.0f, v = 0.0f;
@@ -210,10 +271,13 @@ std::vector<PickSpur> pick_spur_order(const space::TrajectorySet &traj,
             if (!pt.is_access) {
                 if (projected) {
                     last_pc_t = pt.t;
+                    last_pc_addr = pt.addr;
+                    last_pc_placed = pt.placed;
                     have_last_pc = true;
                 }
             } else if (projected && have_last_pc) {
-                out.push_back({tr.tid, last_pc_t});
+                out.push_back(
+                    {tr.tid, last_pc_t, last_pc_addr, last_pc_placed});
             }
         }
     }
@@ -291,106 +355,46 @@ std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
         // Replay the canonical PC-vertex order to recover its (step, fidelity).
         // A statistical residency vertex -> the hot-edge view (08-T4), never the
         // exact operand timeline; an exact PC vertex -> the operand timeline at
-        // that step.
+        // that step, resolved by ADDRESS (resolve_addr_link's contract).
         std::vector<PickVertex> order = pick_vertex_order(traj);
         if (p.vertex >= order.size())
             return std::nullopt;
         const PickVertex &pv = order[p.vertex];
-        dt_link link;
-        link.rec = rec;
         if (pv.statistical) {
+            dt_link link;
+            link.rec = rec;
             link.view = dt_view::hotedges;
             return link;
         }
-
-        // T3 (50-two-way-brushing): prefer the ADDRESS route over the per-tid
-        // ordinal `pv.t` — a dataflow step index only by luck (see this
-        // header's contract block). `pv.placed` guards it: an UNPLACED
-        // vertex's addr is a raw wire offset, not a real address, and
-        // searching a DataflowStream for it could accidentally alias a real
-        // low address. StepAddrResolver resolves each candidate step the
-        // SAME way scene_locate_step would (wire rbase first, else the
-        // single-span anchor), so this can never disagree with what a `go
-        // to` on that address would find. First match wins on a loop — the
-        // hover readout (resolve_pick_hint) is where "one of N" gets said,
-        // not this click resolver.
-        if (pv.placed && df != nullptr) {
-            space::StepAddrResolver resolver(terr.proj, *df);
-            for (uint32_t i = 0; i < df->insn_off.size(); i++) {
-                uint64_t a = 0;
-                if (resolver.resolve(i, &a) && a == pv.addr) {
-                    link.view = dt_view::timeline;
-                    link.step = i;
-                    return link;
-                }
-            }
-        }
-
-        // No `df`, or the address route found no match: the ordinal is
-        // provably a dataflow-pass step index ONLY when this trajectory set
-        // holds exactly one trajectory — the single-tid case where nothing
-        // else could have collided onto the same step numbers.
-        if (traj.trajectories.size() == 1) {
-            link.view = dt_view::timeline;
-            link.step = static_cast<uint32_t>(pv.t);
-            return link;
-        }
-
-        // Neither route can honestly name a step: address it by OFFSET
-        // instead, through whichever basis the vertex itself carries, rather
-        // than pass an index the stream cannot honour.
-        if (!pv.placed) {
-            link.view = dt_view::canvas;
-            link.off = pv.addr; // the raw wire offset, already the recording's
-                                // own basis (TrajPoint::addr's contract)
-            return link;
-        }
-        {
-            float u = 0.0f, v = 0.0f;
-            const uint32_t n = terr.w;
-            if (n > 0 && terr.proj.project(pv.addr, &u, &v)) {
-                uint32_t x = static_cast<uint32_t>(u * n);
-                uint32_t y = static_cast<uint32_t>(v * n);
-                if (x >= n)
-                    x = n - 1;
-                if (y >= n)
-                    y = n - 1;
-                const CellFacts f = classify_cell(terr, y * n + x);
-                if (f.have_region) {
-                    link.view = dt_view::canvas;
-                    link.off = f.off;
-                    return link;
-                }
-            }
-        }
-        return std::nullopt; // no route can honestly address this vertex
+        return resolve_addr_link(terr, rec, pv.addr, pv.placed,
+                                 traj.trajectories.size() == 1, pv.t, df);
     }
 
     if (p.kind == Pick::Conv) {
         // T3 (47): resolve to whichever tid's t is nearer follow_step — see
-        // conv_pick_a's own doc comment for the tie rule.
+        // conv_pick_a's own doc comment for the tie rule. A convergence is
+        // cross-tid BY DEFINITION, so t_a/t_b are two DIFFERENT threads' step
+        // indices, never a shared clock — resolve by the chosen side's ADDRESS
+        // (addr_a/addr_b are real placed addresses), never the per-tid ordinal.
         if (p.conv >= conv.marks.size())
             return std::nullopt;
         const space::ConvergenceMark &m = conv.marks[p.conv];
-        dt_link link;
-        link.rec = rec;
-        link.view = dt_view::timeline;
-        link.step =
-            static_cast<uint32_t>(conv_pick_a(m, follow_step) ? m.t_a : m.t_b);
-        return link;
+        const bool pick_a = conv_pick_a(m, follow_step);
+        return resolve_addr_link(terr, rec, pick_a ? m.addr_a : m.addr_b,
+                                 /*placed=*/true, traj.trajectories.size() == 1,
+                                 pick_a ? m.t_a : m.t_b, df);
     }
 
     if (p.kind == Pick::Spur) {
-        // T3 (47): a spur drills to its owning PC vertex's step — the same
-        // step it already implied before it was independently pickable.
+        // T3 (47): a spur drills to its owning PC vertex's step — resolved by
+        // that vertex's ADDRESS (pick_spur_order carries it), never the per-tid
+        // ordinal, which collides across tids exactly as PC vertices do.
         std::vector<PickSpur> order = pick_spur_order(traj, terr.proj);
         if (p.spur >= order.size())
             return std::nullopt;
-        dt_link link;
-        link.rec = rec;
-        link.view = dt_view::timeline;
-        link.step = static_cast<uint32_t>(order[p.spur].t);
-        return link;
+        const PickSpur &sp = order[p.spur];
+        return resolve_addr_link(terr, rec, sp.addr, sp.placed,
+                                 traj.trajectories.size() == 1, sp.t, df);
     }
 
     return std::nullopt;
