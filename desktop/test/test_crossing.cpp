@@ -14,6 +14,7 @@
 #include "space/projection.h"
 #include "space/terrain.h" // regions_from_codeimage
 #include "views/crossing.h"
+#include "views/syscall_classify.h"
 
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
@@ -56,7 +57,34 @@ static const char *kEnd =
     "{\"k\":\"end\",\"events\":9,\"truncated\":false,\"drops\":{\"lost\":0,"
     "\"throttled\":false}}\n";
 
+// The classify parse, called DIRECTLY (it moved from this .cpp's statics to
+// views/syscall_classify.h so the session strip shares it): the extraction is
+// behaviour-preserving, and these checks pin the three rules by name.
+static void classify_helper_direct() {
+    check("classify: name skips tid prefix",
+          syscall_name_of("[4242] openat(AT_FDCWD, <path>) = 3") == "openat",
+          "the engine's \"[tid] \" prefix must be skipped before the name");
+    check("classify: malformed prefix reads no name",
+          syscall_name_of("[4242 openat(...) = 3").empty(),
+          "an unclosed [ must not be guessed around");
+    check("classify: openat is File",
+          syscall_class_of("openat") == SyscallClass::File, "table entry");
+    check("classify: clone3 is Process",
+          syscall_class_of("clone3") == SyscallClass::Process, "table entry");
+    check("classify: unknown name is Other",
+          syscall_class_of("zzz_not_a_syscall") == SyscallClass::Other,
+          "misses land in the visible grey bucket, never a guessed family");
+    check("classify: '= 3' is Ok",
+          syscall_outcome_of("openat(...) = 3") == SyscallOutcome::Ok, "");
+    check("classify: '= -2' is Error",
+          syscall_outcome_of("openat(...) = -2") == SyscallOutcome::Error, "");
+    check("classify: '= ?' is Unknown",
+          syscall_outcome_of("openat(...) = ?") == SyscallOutcome::Unknown,
+          "\"could not tell\" and \"it worked\" are different facts");
+}
+
 int main() {
+    classify_helper_direct();
     // === anchoring: a syscall between two instructions takes the EARLIER =====
     {
         Recording rec = mk_rec(
