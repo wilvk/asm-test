@@ -129,6 +129,14 @@ extern const char *const kPaneDetails;
 // this is a re-export so the layout and the tests can name it without ui/ having
 // to reach into a scene3d header at static-init time.
 extern const char *const kPaneScene3D;
+// The session strip's OWN dockable pane (2026-08-10 session-strip spec's
+// deferred half, landed): the 2D whole-session scene as a peer window, the
+// same both-tab-and-pane standing the Loom has — co-docked centre, tear-able.
+extern const char *const kPaneStrip;
+// The Scenes control panel: one small launcher listing the 2D session strip
+// and the 3D overview with their availability (verbatim reasons when absent)
+// and open buttons. Left rail, beside Home.
+extern const char *const kPaneScenes;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

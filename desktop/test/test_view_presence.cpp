@@ -11,6 +11,7 @@
 #include "analysis/stepindex.h"
 #include "doc/recording.h"
 #include "doc/streams.h"
+#include "ui/scenes_panel.h"
 #include "ui/view_presence.h"
 #include "views/observer_draw.h"
 
@@ -110,6 +111,26 @@ int main() {
         check("strip/label", e && std::string(e->label) == "Session strip",
               "the tab label");
 
+        // The Scenes launcher rows are the SAME verdicts, re-stated: two
+        // rows (2D first), each mirroring its vp entry verbatim; only the
+        // strip row offers its own dock pane.
+        {
+            auto rows = scenes_panel_build(vp);
+            check("scenes/two rows", rows.size() == 2,
+                  "the session strip and the 3D overview");
+            check("scenes/2d first",
+                  rows.size() == 2 && rows[0].id == ViewId::SessionStrip &&
+                      rows[1].id == ViewId::Scene3D,
+                  "reading order");
+            check("scenes/present mirrors vp",
+                  rows.size() == 2 && e && rows[0].present == e->present,
+                  "the panel may never disagree with the tab bar");
+            check("scenes/own-pane flags",
+                  rows.size() == 2 && rows[0].has_own_pane &&
+                      !rows[1].has_own_pane,
+                  "only the strip also opens as its own dock pane");
+        }
+
         // a recording with NO strip channel at all — note-only
         std::string nd =
             R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"})"
@@ -140,6 +161,13 @@ int main() {
                                       "events",
                   "the reason names the exact kind set, never a vague "
                   "'unavailable'");
+            // The absent verdict flows into the launcher row verbatim — the
+            // panel re-states the machine reason, never re-derives one.
+            auto rows2 = scenes_panel_build(vp2);
+            check("scenes/absent reason passthrough",
+                  rows2.size() == 2 && e2 && !rows2[0].present &&
+                      rows2[0].reason == e2->reason,
+                  "the launcher and the tab bar may never disagree");
         }
     }
 

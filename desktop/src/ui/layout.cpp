@@ -23,6 +23,8 @@ const char *const kPaneSave = "Save capture";
 const char *const kPanePtSlice = "PT slice";
 const char *const kPaneDetails = "Process details";
 const char *const kPaneScene3D = "3D overview";
+const char *const kPaneStrip = "Session strip";
+const char *const kPaneScenes = "Scenes";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -116,6 +118,12 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     ImGui::DockBuilderDockWindow(kPaneHome, L.left);
     ImGui::DockBuilderDockWindow(kPaneRecording, L.center);
     ImGui::DockBuilderDockWindow(kPaneLoom, L.center);
+    // The session strip co-docks centre exactly like the Loom: it is a
+    // whole-session reading surface, tear-able beside the Recording pane. The
+    // Scenes launcher lives on the left rail beside Home — a workflow surface,
+    // not a reading arrangement, so it is docked the same across presets.
+    ImGui::DockBuilderDockWindow(kPaneStrip, L.center);
+    ImGui::DockBuilderDockWindow(kPaneScenes, L.left);
     ImGui::DockBuilderDockWindow(kPaneInspector, L.right);
     // The Inspect/live-capture panes: the target-selection pair (Connect + the
     // searchable Processes list) tab into the left rail beside Home; the Live-

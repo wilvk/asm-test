@@ -1462,6 +1462,24 @@ int main() {
                   dockid(kPaneScrubber) != dockid(kPaneObserver),
               "the three panes must occupy distinct dock nodes");
 
+        // The Scenes launcher (session-strip spec): a default-open pane that
+        // draws for real, listing the 2D strip and 3D overview from the SAME
+        // presence verdicts the tab bar uses. The session strip's OWN pane is
+        // default-closed; opening it draws the same shared body the strip
+        // tab draws (shell_strip_body) — the Loom's both-tab-and-pane
+        // standing, one code path.
+        check("dock/scenes pane exists",
+              ImGui::FindWindowByName(kPaneScenes) != nullptr, kPaneScenes);
+        check("dock/scenes pane active", active(kPaneScenes),
+              "the launcher is default-open and draws with a recording open");
+        ds.pane_open[kPaneStrip] = true;
+        frame(ds);
+        frame(ds);
+        check("dock/strip pane exists",
+              ImGui::FindWindowByName(kPaneStrip) != nullptr, kPaneStrip);
+        check("dock/strip pane active", active(kPaneStrip),
+              "the strip pane, once opened, draws the shared strip body");
+
         // T1 fidelity — the placards survive the move into the panes (D7). Switch
         // the active recording to the producer-absent min-trace and drive frames;
         // the scrubber pane is active (so it drew) while its regstate producer is

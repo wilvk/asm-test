@@ -49,6 +49,7 @@
 #include "ui/legend.h"       // shared semantic legend (24 T1/T2)
 #include "ui/palette.h"      // command palette over the spine (21 T1)
 #include "ui/perspectives.h" // named dock perspectives + filter presets (20 T4)
+#include "ui/scenes_panel.h" // the Scenes launcher's pure rows (session-strip spec)
 #include "ui/terms.h"        // domain-term-first headings + Terms pane (24 T3)
 #include "ui/theme.h" // dt_set_light_theme (20 T5); dt_maybe_col coarse-scrub degrade (23 T4)
 #include "ui/timepos.h" // the one time-position widget: the df pass pager (40 T2)
@@ -2953,38 +2954,45 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         }
         draw_scene_overview(s, *src.rec, *src.streams);
     } break;
-    case ViewId::SessionStrip: {
-        // The strip's substrate is the SAME union-or-tab choice the 3D pane
-        // makes (shell_scene_source), so the two never disagree about what a
-        // live session shows. The model is rebuilt lazily; the camera (zoom,
-        // lane scroll, follow) survives every rebuild.
-        shell_live_weave_banner(s);
-        const SceneSource src = shell_scene_source(s, r, *a);
-        if (s.active_tab >= 0 &&
-            static_cast<size_t>(s.active_tab) < s.strips.size()) {
-            StripState &st = s.strips[static_cast<size_t>(s.active_tab)];
-            const bool stable = s.settings.stable_plane_layout;
-            if (st.built &&
-                (st.woven_union != src.is_union || st.woven_stable != stable))
-                st.built = false;
-            if (!st.built) {
-                st.model = strip_build(
-                    *src.rec,
-                    shell_assemble_regions(*src.rec, stable, nullptr, nullptr),
-                    src.is_union ? s.live_capture_seams
-                                 : std::vector<StripSeam>{});
-                st.built = true;
-                st.woven_union = src.is_union;
-                st.woven_stable = stable;
-            }
-            // links carry the TAB's recording id (the union is not an
-            // openable document; the live tab's basename is)
-            draw_strip(st, a->id, [&s](const dt_link &l) {
-                if (!dt_nav_go(s.nav, l))
-                    s.status = s.nav.last_error;
-            });
+    case ViewId::SessionStrip:
+        shell_strip_body(s, r, a);
+        break;
+    }
+}
+
+// The session strip's ONE body, shared by the recording tab and the
+// kPaneStrip dock pane so the two can never drift. The strip's substrate is
+// the SAME union-or-tab choice the 3D pane makes (shell_scene_source); the
+// model is rebuilt lazily; the camera (zoom, lane scroll, follow) survives
+// every rebuild.
+void shell_strip_body(ShellState &s, const Recording &r, const Streams *a) {
+    if (a == nullptr)
+        return;
+    shell_live_weave_banner(s);
+    const SceneSource src = shell_scene_source(s, r, *a);
+    if (s.active_tab >= 0 &&
+        static_cast<size_t>(s.active_tab) < s.strips.size()) {
+        StripState &st = s.strips[static_cast<size_t>(s.active_tab)];
+        const bool stable = s.settings.stable_plane_layout;
+        if (st.built &&
+            (st.woven_union != src.is_union || st.woven_stable != stable))
+            st.built = false;
+        if (!st.built) {
+            st.model = strip_build(
+                *src.rec,
+                shell_assemble_regions(*src.rec, stable, nullptr, nullptr),
+                src.is_union ? s.live_capture_seams
+                             : std::vector<StripSeam>{});
+            st.built = true;
+            st.woven_union = src.is_union;
+            st.woven_stable = stable;
         }
-    } break;
+        // links carry the TAB's recording id (the union is not an
+        // openable document; the live tab's basename is)
+        draw_strip(st, a->id, [&s](const dt_link &l) {
+            if (!dt_nav_go(s.nav, l))
+                s.status = s.nav.last_error;
+        });
     }
 }
 
@@ -3669,6 +3677,10 @@ static bool pctx_save(const ShellState &s) {
 static bool pctx_pt(const ShellState &) { return inspect_pt_host_available(); }
 static const PaneDef kManagedPanes[] = {
     {kPaneHome, true, pctx_always, ""},
+    // The Scenes launcher: always available — its whole job is to NAME each
+    // scene's availability (the Inspector's reasoning: gating it on a
+    // recording would hide the explanations exactly when they are needed).
+    {kPaneScenes, true, pctx_always, ""},
     {kPaneConnect, false, pctx_always, ""},
     {kPaneProcesses, false, pctx_always, ""},
     {kPaneDetails, false, pctx_details,
@@ -3695,6 +3707,10 @@ static const PaneDef kManagedPanes[] = {
      "the PT slice needs an Intel PT host — no PT silicon here to record a path"},
     {kPaneRecording, true, pctx_recording, "open a recording first"},
     {kPaneLoom, true, pctx_recording, "open a recording first"},
+    // The session strip's own pane (the Loom's both-tab-and-pane standing).
+    // Default CLOSED: the strip tab is already in every recording's tab bar;
+    // the pane is opened deliberately — the Scenes launcher or View ▸ Panels.
+    {kPaneStrip, false, pctx_recording, "open a recording first"},
     {kPaneObserver, true, pctx_recording, "open a recording first"},
     {kPaneTimeline, true, pctx_recording, "open a recording first"},
     {kPaneScrubber, true, pctx_recording, "open a recording first"},
@@ -3738,6 +3754,12 @@ static bool mode_wants_pane(Mode m, const char *name) {
     // focus) and so application events are logged from startup, not only during a
     // live capture.
     if (std::strcmp(name, kPaneLog) == 0)
+        return true;
+    // The Scenes launcher is likewise mode-universal: it is how the scene
+    // surfaces are OPENED, so a mode switch must not close the opener. (The
+    // strip's own pane is deliberately NOT here — it is a deliberate-open
+    // reading surface, and a mode switch resets it like Connect/Details.)
+    if (std::strcmp(name, kPaneScenes) == 0)
         return true;
     switch (m) {
     case Mode::Capture:
@@ -4437,6 +4459,66 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGui::End();
         if (!loom_open)
             s.pane_open[kPaneLoom] = false;
+    }
+
+    // --- kPaneStrip (center, co-docked as a tear-able tab): the session strip
+    // as its own pane — the Loom's both-tab-and-pane standing, one shared body.
+    bool strip_show = pane_shown(s, kPaneStrip);
+    bool strip_open = true;
+    if (strip_show && ImGui::Begin(kPaneStrip, &strip_open)) {
+        if (r != nullptr && a != nullptr)
+            shell_strip_body(s, *r, a);
+        else
+            ImGui::TextDisabled("open a recording to read its session strip");
+    }
+    if (strip_show) {
+        ImGui::End();
+        if (!strip_open)
+            s.pane_open[kPaneStrip] = false;
+    }
+
+    // --- kPaneScenes (left rail): the scene launcher. Rows come from the SAME
+    // view_presence verdicts the recording tab bar draws, via the pure
+    // scenes_panel_build — the panel and the tabs can never disagree (D7).
+    bool scn_show = pane_shown(s, kPaneScenes);
+    bool scn_open = true;
+    if (scn_show && ImGui::Begin(kPaneScenes, &scn_open)) {
+        if (r != nullptr && a != nullptr) {
+            const std::vector<ViewPresence> vp = shell_view_presence(s, *r, a);
+            for (const ScenesPanelEntry &e : scenes_panel_build(vp)) {
+                ImGui::PushID(e.label);
+                ImGui::SeparatorText(e.label);
+                ImGui::TextWrapped("%s", e.blurb);
+                if (e.present) {
+                    if (ImGui::SmallButton("open tab")) {
+                        // the SetSelected intent the tab bar consumes next
+                        // pass (34 T2's want_view_id), plus focus so the
+                        // Recording pane surfaces if it was tabbed away
+                        s.want_view_id = e.id;
+                        ImGui::SetWindowFocus(kPaneRecording);
+                    }
+                    if (e.has_own_pane) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("open pane")) {
+                            s.pane_open[kPaneStrip] = true;
+                            ImGui::SetWindowFocus(kPaneStrip);
+                        }
+                    }
+                } else {
+                    // the machine's verbatim reason, never a vague
+                    // "unavailable" (D7)
+                    ImGui::TextDisabled("%s", e.reason.c_str());
+                }
+                ImGui::PopID();
+            }
+        } else
+            ImGui::TextDisabled(
+                "open a recording first — the scenes read its channels");
+    }
+    if (scn_show) {
+        ImGui::End();
+        if (!scn_open)
+            s.pane_open[kPaneScenes] = false;
     }
 
     // --- kPaneObserver: the live/observer deck (its observer bar is the sub-level)

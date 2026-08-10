@@ -770,6 +770,10 @@ void draw_home_rail(ShellState &s);
 // HUD + placard path. Public so test_shell can drive it without forcing the tab
 // selection. Call inside an ImGui window, with s.active_tab set to the recording.
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a);
+// The session strip's one body — shared by the recording tab and the
+// kPaneStrip dock pane so the two can never drift (2026-08-10 spec's
+// deferred pane, landed). `a` may be null (draws nothing).
+void shell_strip_body(ShellState &s, const Recording &r, const Streams *a);
 
 // The recording+streams the 3D pane weaves for the ACTIVE tab: the session
 // union (ShellState::live_union) when that tab is the live tab and
