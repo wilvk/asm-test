@@ -841,8 +841,34 @@ void draw_status(InspectState &s) {
         s.stream_op.active = false;
         s.stream_op.started_at = 0.0; // re-arm the elapsed clock for the next one
     }
-    if (nrec)
+    if (nrec) {
         ImGui::Text("%zu completed recording(s) this session", nrec);
+        // "Clear previous sessions": the union weave and every accumulating
+        // scene start again from what is still live. Two-step arm (the
+        // reveal-all precedent) — the consequence is NAMED, never "are you
+        // sure?"; greyed with the reason while a capture is growing.
+        ImGui::SameLine();
+        if (s.session.growing() != nullptr) {
+            ImGui::TextDisabled("(stop the capture to clear them)");
+            s.clear_prev_armed = false;
+        } else if (!s.clear_prev_armed) {
+            if (ImGui::SmallButton("clear previous"))
+                s.clear_prev_armed = true; // arms only; nothing cleared yet
+        } else {
+            char lbl[64];
+            std::snprintf(lbl, sizeof lbl, "really clear %zu? not saved",
+                          nrec);
+            const bool confirm = ImGui::SmallButton(lbl);
+            ImGui::SameLine();
+            const bool keep = ImGui::SmallButton("keep");
+            if (confirm)
+                s.session.clear_completed();
+            if (confirm || keep)
+                s.clear_prev_armed = false;
+        }
+    } else {
+        s.clear_prev_armed = false;
+    }
     // Each completed torn recording stays a loud INTEGRITY banner (non-collapsible)
     // — a torn capture is the one signal that means "do not trust the tail".
     for (const Recording &r : s.session.recordings())

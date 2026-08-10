@@ -290,6 +290,53 @@ static bool pump_until(LiveSession &s, bool (*want)(const LiveSession &),
     return want(s);
 }
 
+// clear_completed (2026-08-10 simplified-LOD spec): the "clear previous
+// sessions" contract — refused while a capture is growing; after close it
+// empties recordings + notes while keeping the state machine usable.
+static void test_clear_completed() {
+    LiveSession s;
+    auto run_capture = [&](const char *line) {
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"log","pid":1,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(line);
+        s.feed_line(
+            R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        s.feed_line(
+            R"({"k":"session","state":"stopped","mode":"log","events":1,"reason":"stop"})");
+    };
+    run_capture(R"({"k":"syscall","line":"openat(...) = 3"})");
+    run_capture(R"({"k":"syscall","line":"write(...) = 14"})");
+    check("clear/setup: two completed", s.recordings().size() == 2, "");
+
+    // a THIRD capture left growing pins history
+    s.feed_line(
+        R"({"k":"session","state":"started","mode":"log","pid":1,"params":{}})");
+    s.feed_line(kHeader);
+    s.feed_line(R"({"k":"syscall","line":"read(...) = 1"})");
+    check("clear/refused while growing",
+          !s.clear_completed() && s.recordings().size() == 2 &&
+              !s.notes().empty(),
+          "previous means FINISHED; the open capture pins history");
+
+    s.feed_line(
+        R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+    s.feed_line(
+        R"({"k":"session","state":"stopped","mode":"log","events":1,"reason":"stop"})");
+    check("clear/drops completed",
+          s.clear_completed() && s.recordings().empty() && s.notes().empty() &&
+              s.growing() == nullptr,
+          "done_ and notes_ empty — the affordance's whole contract");
+    check("clear/malformed counter survives", s.malformed_lines() == 0,
+          "wire health is not capture data (trivially true here; the rule is "
+          "that clear_completed never touches it)");
+
+    // the state machine records a LATER capture exactly as before
+    run_capture(R"({"k":"syscall","line":"close(3) = 0"})");
+    check("clear/later capture records", s.recordings().size() == 1,
+          "clearing history must not wedge the session");
+}
+
 static void test_process_path() {
     const std::string fake =
         std::string(ASMTEST_FIXTURE_DIR) + "/fake_serve.sh";
@@ -642,6 +689,7 @@ static void test_host_argv(void) {
 
 int main(void) {
     test_state_machine();
+    test_clear_completed();
     test_process_path();
     test_end_state();
     test_host_argv();

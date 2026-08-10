@@ -231,6 +231,11 @@ void shell_retire_live_tab(ShellState &s) {
 // file — the growing recording is not a second code path, it is the same model.
 void shell_sync_live_tab(ShellState &s) {
     LiveSession &sess = s.inspect.session;
+    // Self-healing dedup watermark: "clear previous" (or any future shrink)
+    // can drop the completed captures below the adopted-tab count; a stale
+    // watermark would then block the NEXT capture's promotion forever.
+    if (s.live_dismissed_done > sess.recordings().size())
+        s.live_dismissed_done = 0;
     const Recording *live = sess.growing();
     // A completed capture stays mirrored as a frozen tab — UNLESS it has already
     // been adopted as a saved file tab (25 T3): past the dedup watermark, the

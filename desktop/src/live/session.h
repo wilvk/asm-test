@@ -145,6 +145,18 @@ class LiveSession {
     // session rather than one still haunted by the previous host's recordings.
     void reset();
 
+    // Drop the COMPLETED recordings and the notes that accompanied them,
+    // keeping the host, the pipes, the status and any still-growing capture
+    // — the "clear previous sessions" affordance (2026-08-10 simplified-LOD
+    // spec): the union weave and every accumulating scene start again from
+    // what is still live. Returns false and does NOTHING while a capture is
+    // growing: "previous" means FINISHED, and refusing while open keeps the
+    // lifecycle notes trivially attributable (the current capture's notes
+    // are never guessed apart from history's). reset() remains the
+    // Disconnect-only full teardown; the malformed-line counter survives —
+    // it is wire health, not capture data.
+    bool clear_completed();
+
     const LiveStatus &status() const { return st_; }
     // Completed recordings, oldest first — one per finished mode session.
     const std::vector<Recording> &recordings() const { return done_; }

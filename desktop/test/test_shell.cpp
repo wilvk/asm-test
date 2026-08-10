@@ -4278,6 +4278,42 @@ int main() {
               "translation (space::opcode_guest_from_arch), not a literal");
     }
 
+    // --- clear-previous (2026-08-10 simplified-LOD spec): the sync's
+    // self-healing dedup watermark. Clearing completed captures shrinks
+    // recordings() below a stale adopted-tab count; the next sync must clamp
+    // it (else the NEXT capture's promotion is blocked forever) and drop the
+    // now-substrate-less live tab.
+    {
+        static const char *kHdrCp =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        ShellState cs;
+        auto one_capture = [&](const char *line) {
+            cs.inspect.session.feed_line(
+                R"({"k":"session","state":"started","mode":"log","pid":9,"params":{}})");
+            cs.inspect.session.feed_line(kHdrCp);
+            cs.inspect.session.feed_line(line);
+            cs.inspect.session.feed_line(R"({"k":"end","events":1})");
+            cs.inspect.session.feed_line(
+                R"({"k":"session","state":"stopped","mode":"log","events":1,"reason":"stop"})");
+        };
+        one_capture(R"({"k":"syscall","line":"a() = 0"})");
+        one_capture(R"({"k":"syscall","line":"b() = 0"})");
+        shell_sync_live_tab(cs);
+        check("clearprev/setup: live tab promoted", cs.live_tab >= 0,
+              "two completed captures must promote the frozen live tab");
+        cs.live_dismissed_done = 5; // a stale adopted count beyond reality
+        check("clearprev/session cleared",
+              cs.inspect.session.clear_completed() &&
+                  cs.inspect.session.recordings().empty(),
+              "no growing capture: the clear must succeed");
+        shell_sync_live_tab(cs);
+        check("clearprev/watermark clamped", cs.live_dismissed_done == 0,
+              "a watermark above recordings().size() must self-heal, or the "
+              "next capture's promotion is blocked forever");
+        check("clearprev/tab dropped", cs.live_tab == -1,
+              "nothing to show after the clear — the promoted tab must go");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

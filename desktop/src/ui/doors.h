@@ -192,6 +192,10 @@ struct InspectState {
     // Save serialises exactly one. Local only; see LiveSession::Spec.
     char record_path[512] = {0};
     bool record_session = false;
+    // Two-step arm for "clear previous captures" (2026-08-10 simplified-LOD
+    // spec): the first click only arms; any frame that does not confirm
+    // disarms. Session-control UI state, never persisted.
+    bool clear_prev_armed = false;
 
     // Pre-fill the asmspy path with resolve_asmspy_path() once, so the Connect
     // pane shows the concrete resolved exe (editable) rather than a blank field.

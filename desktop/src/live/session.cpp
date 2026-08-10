@@ -288,6 +288,15 @@ void LiveSession::reset() {
     inbuf_.clear();
 }
 
+bool LiveSession::clear_completed() {
+    if (open_)
+        return false; // "previous" means FINISHED; the open capture pins
+                      // history until it closes
+    done_.clear();
+    notes_.clear();
+    return true;
+}
+
 void LiveSession::reap(bool blocking) {
     if (child_ < 0)
         return;
