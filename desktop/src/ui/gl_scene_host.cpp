@@ -78,6 +78,11 @@ class GlSceneHost : public SceneHost {
         ensure_fbo(w, h);
         if (fbo_ == 0)
             return (ImTextureID)0;
+        // T1 (59): record the plane as last-rendered, mirroring
+        // render_standalone's kind_ = f.kind. Without this, kind_ stays pinned
+        // to the last standalone scene after switching back here, and pick()/
+        // pick_bands() route every click to the wrong substrate.
+        kind_ = scene3d::SceneKind::Plane;
 
         // Re-upload the worldlines/arcs when the recording changes OR GROWS (a
         // live capture keeps one identity but its generation advances each batch),
