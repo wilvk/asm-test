@@ -137,6 +137,26 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
         add(ViewId::Loom, "Loom", present, reason, std::nullopt);
     }
 
+    // The session strip (2026-08-10 session-strip spec) — the whole session's
+    // mem/syscall/thread/run channels over stream order. Present iff ANY strip
+    // channel has an event; the reason names the exact kind set so a reader
+    // knows which producer opt-in would light it up.
+    {
+        static const char *kStripKinds[] = {"mem",  "syscall", "trace",
+                                            "call", "watch",   "df_step"};
+        bool present = false;
+        for (const char *k : kStripKinds) {
+            auto it = r.by_kind.find(k);
+            if (it != r.by_kind.end() && !it->second.empty()) {
+                present = true;
+                break;
+            }
+        }
+        add(ViewId::SessionStrip, "Session strip", present,
+            "recording carries no mem/syscall/trace/call/watch/df_step events",
+            std::nullopt);
+    }
+
     // Scrubber — the register time-travel deck. Present iff a regstate ring was
     // recorded (the `--steps` opt-in). The absent-reason is GRADED by why the ring
     // is missing (26 T4): a statistical producer never single-steps, so it can

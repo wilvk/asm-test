@@ -150,6 +150,8 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     // index starts clean.
     s.scenes.resize(s.ws.recordings.size());
     s.scenes[static_cast<size_t>(idx)] = SceneView{};
+    s.strips.resize(s.ws.recordings.size());
+    s.strips[static_cast<size_t>(idx)] = StripState{};
     // Remember it (T3): the MRU recents on the rail + File ▸ Open Recent, and a
     // change to persist. `path` is stored, not the basename, so a recent reopens
     // the exact file. main.cpp flushes the store when `ws_dirty` is set.
@@ -183,6 +185,8 @@ void shell_close(ShellState &s, size_t idx) {
         s.df_pass.erase(s.df_pass.begin() + static_cast<long>(idx));
     if (idx < s.scenes.size())
         s.scenes.erase(s.scenes.begin() + static_cast<long>(idx));
+    if (idx < s.strips.size())
+        s.strips.erase(s.strips.begin() + static_cast<long>(idx));
     if (s.b_index == static_cast<int>(idx))
         s.b_index = -1;
     else if (s.b_index > static_cast<int>(idx))
@@ -257,10 +261,12 @@ void shell_sync_live_tab(ShellState &s) {
         s.stepidx_pass.resize(s.ws.recordings.size());
         s.scrubber_playhead.resize(s.ws.recordings.size());
         s.scenes.resize(s.ws.recordings.size());
+        s.strips.resize(s.ws.recordings.size());
         s.seg_df.resize(s.ws.recordings.size());
         s.df_pass.resize(s.ws.recordings.size());
         s.scrubber_playhead[i] = 0;
         s.scenes[i] = SceneView{};
+        s.strips[i] = StripState{};
         s.df_pass[i] = -1; // a live continuous capture follows its latest pass
         s.live_built_events =
             ~static_cast<uint64_t>(0); // force the first build
@@ -364,6 +370,26 @@ void shell_sync_live_tab(ShellState &s) {
         s.scenes[i].prism_reg = prism_reg;
         s.scenes[i].kind_cam = std::move(kind_cam);
         s.scenes[i].kind_cam_inited = std::move(kind_cam_inited);
+    }
+    // The session strip rebuilds lazily on the same watermark: drop the model,
+    // KEEP the camera (zoom, lane scroll, follow) — the same reading-posture
+    // rule the 3D carry-over above applies. And rebuild the capture seams the
+    // strip's run ribbon draws: a seam sits where each LATER capture begins
+    // (a boundary exists only when something follows it).
+    if (i < s.strips.size())
+        s.strips[i].built = false;
+    s.live_capture_seams.clear();
+    {
+        const auto &parts = sess.recordings();
+        uint64_t off = 0;
+        for (size_t pi = 0; pi < parts.size(); pi++) {
+            off += parts[pi].event_count();
+            const bool has_tail =
+                sess.growing() != nullptr || pi + 1 < parts.size();
+            if (has_tail)
+                s.live_capture_seams.push_back(
+                    StripSeam{off, "capture " + std::to_string(pi + 2)});
+        }
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
@@ -1305,6 +1331,42 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
     (void)s;
 }
 
+// The ONE region-list assembly (codeimage regions → observed-data spans →
+// vmmap names), shared by the 3D weave below and the session strip's bands so
+// the two surfaces can never disagree about regions. Extracted verbatim from
+// the weave; the notes are optional because only the weave's HUD states them.
+std::vector<space::Region> shell_assemble_regions(const Recording &r,
+                                                  bool stable,
+                                                  std::string *span_note,
+                                                  std::string *vm_note) {
+    std::vector<space::Region> regs =
+        stable ? space::regions_from_codeimage_seen(r)
+               : space::regions_from_codeimage(r);
+    std::string note;
+    std::vector<space::Region> obs =
+        space::observed_data_spans(r, regs, &note);
+    regs.insert(regs.end(), obs.begin(), obs.end());
+    if (span_note)
+        *span_note = std::move(note);
+    const space::VmMap vm = space::vmmap_from_recording(r);
+    const size_t vm_named = space::vmmap_apply_names(regs, vm);
+    if (vm_note) {
+        if (vm.present && !vm.readable)
+            *vm_note =
+                "address space NOT READABLE — no region could be named "
+                "(absent measurement, not a process without mappings)";
+        else if (vm.present)
+            *vm_note = "address space: " + std::to_string(vm_named) +
+                       " region(s) named from " +
+                       std::to_string(vm.spans.size()) + " of " +
+                       std::to_string(vm.spans_total) + " mapping(s)" +
+                       (vm.truncated ? " (capped)" : "");
+        else
+            vm_note->clear();
+    }
+    return regs;
+}
+
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (s.active_tab < 0 || i >= s.scenes.size())
@@ -1350,36 +1412,20 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // code prefix — they are unstable observations by nature, and the
         // reflow notice below reports honestly when they move the floor.
         const bool stable = s.settings.stable_plane_layout;
-        std::vector<space::Region> regs =
-            stable ? space::regions_from_codeimage_seen(r)
-                   : space::regions_from_codeimage(r);
-        sv.has_regions = !regs.empty();
-        // 54 T1: observed-data-span extension — an access no codeimage region
-        // maps still places, as an Unknown "observed data" span rather than a
-        // dropped point. `existing` is `regs` as built so far (code only), so
-        // an observed address inside a code region never creates a shadow span.
+        // Assembly order (codeimage → observed spans → vmmap names) lives in
+        // shell_assemble_regions, shared with the session strip: 54 T1's
+        // observed-data extension and the 2026-08-08 vmmap naming rules are
+        // stated there, once.
         std::string span_note;
-        std::vector<space::Region> obs =
-            space::observed_data_spans(r, regs, &span_note);
-        regs.insert(regs.end(), obs.begin(), obs.end());
-        // vmmap (2026-08-08): name what the address-space map can name. This
-        // runs AFTER observed_data_spans (it renames what that produced) and
-        // BEFORE build_projection (so the names are in place when the atlas
-        // labels are cut) — and it rewrites label/kind ONLY. base/len are
-        // untouched, which is why the floor cannot move; space/vmmap.h states
-        // why feeding these spans in as regions instead would destroy the pane.
-        // A recording with no `vmmap` is a no-op.
-        const space::VmMap vm = space::vmmap_from_recording(r);
-        const size_t vm_named = space::vmmap_apply_names(regs, vm);
         std::string vmnote;
-        if (vm.present && !vm.readable)
-            vmnote = "address space NOT READABLE — no region could be named "
-                     "(absent measurement, not a process without mappings)";
-        else if (vm.present)
-            vmnote = "address space: " + std::to_string(vm_named) +
-                     " region(s) named from " + std::to_string(vm.spans.size()) +
-                     " of " + std::to_string(vm.spans_total) + " mapping(s)" +
-                     (vm.truncated ? " (capped)" : "");
+        std::vector<space::Region> regs =
+            shell_assemble_regions(r, stable, &span_note, &vmnote);
+        sv.has_regions = false;
+        for (const space::Region &rg : regs)
+            if (rg.kind == space::Region::Code && !rg.from_vmmap) {
+                sv.has_regions = true;
+                break;
+            }
         space::Projection proj =
             space::build_projection(std::move(regs), stable);
         proj.data_span_note = std::move(span_note);
@@ -2906,6 +2952,38 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
             sv.woven_stable = s.settings.stable_plane_layout;
         }
         draw_scene_overview(s, *src.rec, *src.streams);
+    } break;
+    case ViewId::SessionStrip: {
+        // The strip's substrate is the SAME union-or-tab choice the 3D pane
+        // makes (shell_scene_source), so the two never disagree about what a
+        // live session shows. The model is rebuilt lazily; the camera (zoom,
+        // lane scroll, follow) survives every rebuild.
+        shell_live_weave_banner(s);
+        const SceneSource src = shell_scene_source(s, r, *a);
+        if (s.active_tab >= 0 &&
+            static_cast<size_t>(s.active_tab) < s.strips.size()) {
+            StripState &st = s.strips[static_cast<size_t>(s.active_tab)];
+            const bool stable = s.settings.stable_plane_layout;
+            if (st.built &&
+                (st.woven_union != src.is_union || st.woven_stable != stable))
+                st.built = false;
+            if (!st.built) {
+                st.model = strip_build(
+                    *src.rec,
+                    shell_assemble_regions(*src.rec, stable, nullptr, nullptr),
+                    src.is_union ? s.live_capture_seams
+                                 : std::vector<StripSeam>{});
+                st.built = true;
+                st.woven_union = src.is_union;
+                st.woven_stable = stable;
+            }
+            // links carry the TAB's recording id (the union is not an
+            // openable document; the live tab's basename is)
+            draw_strip(st, a->id, [&s](const dt_link &l) {
+                if (!dt_nav_go(s.nav, l))
+                    s.status = s.nav.last_error;
+            });
+        }
     } break;
     }
 }

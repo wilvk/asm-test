@@ -100,6 +100,49 @@ int main() {
               "unavailable-views (N) must equal the absent entries");
     }
 
+    // The session strip: present iff ANY strip channel exists; absent with the
+    // verbatim kind-set reason otherwise (2026-08-10 session-strip spec).
+    {
+        auto vp = presence_of(fx + "min-trace.asmtrace", Mode::Open, false);
+        const ViewPresence *e = find(vp, ViewId::SessionStrip);
+        check("strip/present-on-trace", e && e->present,
+              "a trace event is a strip channel");
+        check("strip/label", e && std::string(e->label) == "Session strip",
+              "the tab label");
+
+        // a recording with NO strip channel at all — note-only
+        std::string nd =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"})"
+            "\n"
+            R"({"k":"note","text":"x"})"
+            "\n"
+            R"({"k":"end","events":1})"
+            "\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto rec = load_recording(in, err);
+        if (!rec) {
+            std::fprintf(stderr, "FAIL strip/absent fixture load: %s\n",
+                         err.c_str());
+            failures++;
+        } else {
+            Streams a2 = decode_streams(*rec);
+            StepIndex si2 = build_step_index(*rec);
+            ObserverState obs2;
+            observer_build(obs2, *rec);
+            auto vp2 = view_presence(a2, obs2, si2, *rec, Mode::Open, false);
+            const ViewPresence *e2 = find(vp2, ViewId::SessionStrip);
+            check("strip/absent", e2 && !e2->present,
+                  "no mem/syscall/trace/call/watch/df_step event anywhere");
+            check("strip/reason-verbatim",
+                  e2 && e2->reason == "recording carries no "
+                                      "mem/syscall/trace/call/watch/df_step "
+                                      "events",
+                  "the reason names the exact kind set, never a vague "
+                  "'unavailable'");
+        }
+    }
+
     // b_attachable flips Diff + ABI x-ray present (a second recording is open).
     {
         auto vp =

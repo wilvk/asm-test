@@ -44,6 +44,10 @@ enum class ViewId {
     Scrubber,
     AbiXray,
     Scene3D,
+    // The session strip (2026-08-10 session-strip spec). Appended LAST, the
+    // dt_view convention: enum order is identity, not tab order — the add()
+    // call in view_presence.cpp decides where the tab reads.
+    SessionStrip,
 };
 
 struct ViewPresence {

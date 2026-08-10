@@ -50,6 +50,7 @@
 #include "views/completeness.h"
 #include "views/hotedges.h" // HotEdgeSceneView (56 T2/T5): SceneView::hotedges_scene
 #include "views/observer_draw.h"
+#include "views/strip.h" // StripState — the session strip's per-recording state
 #include "views/timeline.h" // dt_timeline — shell_timeline_model's return type
 #include "walkthrough.h"
 
@@ -518,6 +519,11 @@ struct ShellState {
     // is reached ONLY through this abstract pointer.
     std::vector<SceneView> scenes;
     SceneHost *scene_host = nullptr;
+    // The session strip's per-recording state (2026-08-10 session-strip
+    // spec), parallel to ws.recordings exactly like `scenes`: the model is
+    // built lazily on first view and invalidated (camera kept) on the live
+    // growth watermark.
+    std::vector<StripState> strips;
 
     // --- 25-live-model-wiring.md: the live capture as a workspace tab ------
     // The growing `asmspy --serve` recording, promoted into ws.recordings (with
@@ -543,6 +549,11 @@ struct ShellState {
     // the address plane instead of replacing it. Derived state, never saved.
     Recording live_union;
     Streams live_union_streams;
+    // Capture seams for the session strip's run ribbon: the union seq where
+    // each later capture begins ("capture 2", …), rebuilt on the same growth
+    // watermark as live_union. Empty for a replayed file — a tee'd file's
+    // seams are derived from df_invocation / coverage-close instead.
+    std::vector<StripSeam> live_capture_seams;
     // 25 T3: the dedup watermark. When an ENDED session's capture is opened as a
     // saved file (the Inspect door's "Open in Loom"), that permanent file tab
     // supersedes the ephemeral live tab — so we retire the live tab and remember

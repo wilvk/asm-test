@@ -222,6 +222,12 @@ struct StripState {
     StripModel model;
     strip_view_t cam;
     bool built = false;
+    // The substrate fingerprint the cached model was built over (the
+    // SceneView::woven_union convention): a Settings flip or a union/tab
+    // switch drops `built` so the strip rebuilds over what the checkboxes now
+    // say — while `cam` (zoom, lane scroll, follow) deliberately survives.
+    bool woven_union = false;
+    bool woven_stable = false;
 };
 
 } // namespace asmdesk
