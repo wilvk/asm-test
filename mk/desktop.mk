@@ -1248,6 +1248,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_canopy \
                  $(BUILD)/desktop_test_opcode_terrain \
                  $(BUILD)/desktop_test_scene2d \
+                 $(BUILD)/desktop_test_strip_model \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
@@ -1660,6 +1661,17 @@ $(BUILD)/desktop_test_scene2d: $(BUILD)/desktop/test/t/test_scene2d.o \
     $(BUILD)/desktop/test/sp/locate.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The session strip's pure closure (2026-08-10 session-strip spec): the strip
+# model + planner + camera math, headless — views/strip.o + nav.o (dt_link for
+# the drill-in links) + the doc model, and nothing else. No space/ objects:
+# the strip takes its region list as an INPUT (the caller assembles it), which
+# is what keeps this test engine-free and projection-free.
+$(BUILD)/desktop_test_strip_model: $(BUILD)/desktop/test/t/test_strip_model.o \
+    $(BUILD)/desktop/test/vw/strip.o \
+    $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
