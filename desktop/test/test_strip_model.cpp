@@ -232,6 +232,64 @@ static void rail_rows() {
           "stated, never quietly absent");
 }
 
+static std::vector<space::Region> two_bands() {
+    space::Region code;
+    code.base = 0x1000;
+    code.len = 0x1000;
+    code.kind = space::Region::Code;
+    code.label = "code";
+    space::Region data;
+    data.base = 0x200000;
+    data.len = 0x10000;
+    data.kind = space::Region::Data;
+    data.label = "observed data";
+    return {code, data};
+}
+
+static void bands_and_marks() {
+    Recording r = mk_rec({
+        R"({"k":"trace","basis":"rel","off":16,"tid":10})",
+        R"({"k":"df_step","step":0,"off":20,"rbase":4096,"ops":[]})",
+        R"({"k":"mem","step":0,"ea":2097160,"size":8,"rw":"w","space":"abs"})",
+        R"({"k":"mem","step":0,"ea":16,"size":4,"rw":"r","space":"off"})",
+        R"({"k":"mem","step":0,"ea":999999999,"size":8,"rw":"r","space":"abs"})",
+        R"({"k":"end","events":5})",
+    });
+    StripModel m = strip_build(r, two_bands(), {});
+    check("bands enabled", m.bands_enabled, "regions were passed");
+    check("bands sorted by base",
+          m.bands.size() == 2 && m.bands[0].region.base == 0x1000, "");
+    check("abs mem placed",
+          m.mem.size() == 1 && m.mem[0].band == 1 && m.mem[0].is_write &&
+              m.mem[0].addr == 2097160,
+          "ea 0x200008 lands in the data band");
+    check("off-space and off-band mem COUNTED", m.off_band_mem == 2,
+          "space:\"off\" is counted, never placed raw; an unmapped abs "
+          "address is counted too");
+    check("rel pc placed via the single Code band",
+          !m.pc.empty() && m.pc[0].band == 0 && m.pc[0].addr == 0x1000 + 16,
+          "basis:rel resolves against the ONE Code band");
+    check("df_step pc placed via rbase",
+          m.pc.size() == 2 && m.pc[1].addr == 4096 + 20,
+          "rbase+off, the df_step's own region identity");
+    check("pc marks keep tid",
+          m.pc.size() == 2 && m.pc[0].tid == 10 && m.pc[1].tid == -1,
+          "df_step never has a tid");
+    check("hud states the counts",
+          m.hud.find("2 mem access(es) off-band") != std::string::npos,
+          "counted facts are stated, not dropped");
+
+    StripModel nb = strip_build(r, {}, {});
+    check("no regions → bands disabled", !nb.bands_enabled, "");
+    check("bands reason verbatim",
+          nb.bands_reason ==
+              "no regions to band — the caller assembled no codeimage, "
+              "observed-data or vmmap regions",
+          "");
+    check("disabled bands still count", nb.off_band_mem == 3 && nb.pc.empty(),
+          "nothing places when no band exists; everything is counted");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -249,6 +307,7 @@ int main() {
     lanes_discovery_and_grouping();
     lanes_single_stream_and_unknown();
     rail_rows();
+    bands_and_marks();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

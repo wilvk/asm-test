@@ -286,6 +286,131 @@ StripModel strip_build(const Recording &r,
     } else {
         m.rail_reason = "no syscall events in this recording";
     }
+
+    // --- address bands + marks ----------------------------------------------
+    for (const auto &rg : regions)
+        m.bands.push_back(StripBand{rg});
+    std::sort(m.bands.begin(), m.bands.end(),
+              [](const StripBand &a, const StripBand &b) {
+                  return a.region.base < b.region.base;
+              });
+    auto band_of = [&](uint64_t addr) -> int {
+        for (size_t i = 0; i < m.bands.size(); i++)
+            if (addr >= m.bands[i].region.base &&
+                addr - m.bands[i].region.base < m.bands[i].region.len)
+                return static_cast<int>(i);
+        return -1;
+    };
+    // The rel→abs anchor: EXACTLY ONE codeimage-anchored Code band, the same
+    // refusal resolve_anchor makes (space/types.h Region::from_vmmap — a
+    // vmmap-named Code mapping can never anchor).
+    int code_band = -1, code_bands = 0;
+    for (size_t i = 0; i < m.bands.size(); i++)
+        if (m.bands[i].region.kind == space::Region::Code &&
+            !m.bands[i].region.from_vmmap) {
+            code_band = static_cast<int>(i);
+            code_bands++;
+        }
+    if (code_bands != 1)
+        code_band = -1;
+    if (m.bands.empty())
+        m.bands_reason = "no regions to band — the caller assembled no "
+                         "codeimage, observed-data or vmmap regions";
+    else
+        m.bands_enabled = true;
+
+    if (auto it = r.by_kind.find("mem"); it != r.by_kind.end())
+        for (const Event &e : it->second) {
+            uint64_t ea = 0, size = 0, step = 0;
+            juint(e.body, "ea", &ea);
+            juint(e.body, "size", &size);
+            juint(e.body, "step", &step);
+            // space:"off" is region-relative with no region identity on the
+            // event: counted, never placed raw (projection.cpp's own rule).
+            const bool abs = jstr(e.body, "space") == "abs";
+            const int band = abs ? band_of(ea) : -1;
+            if (!abs || band < 0) {
+                m.off_band_mem++;
+                continue;
+            }
+            StripMemMark mk;
+            mk.seq = e.seq;
+            mk.addr = ea;
+            mk.size = size;
+            mk.step = static_cast<uint32_t>(step);
+            mk.is_write = jstr(e.body, "rw") == "w";
+            mk.band = band;
+            m.mem.push_back(mk);
+        }
+    auto place_pc = [&](const Event &e, bool is_df) {
+        uint64_t off = 0;
+        if (!juint(e.body, "off", &off))
+            return;
+        uint64_t abs_addr = 0;
+        bool placed = false;
+        uint64_t rbase = 0;
+        if (is_df && juint(e.body, "rbase", &rbase)) {
+            abs_addr = rbase + off; // the df_step's own region identity
+            placed = true;
+        } else if (!is_df && jstr(e.body, "basis") == "abs") {
+            abs_addr = off;
+            placed = true;
+        } else if (code_band >= 0) {
+            abs_addr =
+                m.bands[static_cast<size_t>(code_band)].region.base + off;
+            placed = true;
+        }
+        const int band = placed ? band_of(abs_addr) : -1;
+        if (band < 0) {
+            m.off_band_pc++;
+            return;
+        }
+        StripPcMark p;
+        p.seq = e.seq;
+        p.addr = abs_addr;
+        p.band = band;
+        int64_t tid = -1;
+        if (!is_df && jint(e.body, "tid", &tid))
+            p.tid = tid;
+        m.pc.push_back(p);
+    };
+    if (auto it = r.by_kind.find("trace"); it != r.by_kind.end())
+        for (const Event &e : it->second)
+            place_pc(e, false);
+    if (auto it = r.by_kind.find("df_step"); it != r.by_kind.end())
+        for (const Event &e : it->second)
+            place_pc(e, true);
+    std::sort(m.mem.begin(), m.mem.end(),
+              [](const StripMemMark &a, const StripMemMark &b) {
+                  return a.seq < b.seq;
+              });
+    std::sort(m.pc.begin(), m.pc.end(),
+              [](const StripPcMark &a, const StripPcMark &b) {
+                  return a.seq < b.seq;
+              });
+
+    // --- the one-line honesty summary ---------------------------------------
+    {
+        std::string h;
+        h += std::to_string(m.mem.size()) + " access(es), " +
+             std::to_string(m.sys.size()) + " syscall(s), " +
+             std::to_string(m.lanes.size()) + " lane(s)";
+        if (m.off_band_mem)
+            h += " · " + std::to_string(m.off_band_mem) +
+                 " mem access(es) off-band";
+        if (m.off_band_pc)
+            h += " · " + std::to_string(m.off_band_pc) + " pc mark(s) off-band";
+        if (m.end_truncated)
+            h += " · truncated";
+        if (m.drops_lost)
+            h += " · ring dropped " + std::to_string(m.drops_lost) +
+                 " (tail-drop)";
+        if (m.drops_throttled)
+            h += " · throttled";
+        if (m.torn)
+            h += " · torn (no footer)";
+        m.hud = h;
+    }
     return m;
 }
 
