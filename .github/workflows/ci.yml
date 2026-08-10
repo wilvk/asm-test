@@ -954,8 +954,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Capstone (AMD reconstruction) + libipt (PT decode) + OpenCSD
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev pkg-config python3 python3-pytest
+      - name: Install libipt (PT decode) + OpenCSD (CoreSight decode)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev pkg-config python3 python3-pytest
+
+      # Capstone from the pinned 5.0.1 source, NOT apt: noble's libcapstone-dev is
+      # 4.0.2, which silently degrades some AMD-reconstruction disasm — so this
+      # decode gate would validate against a decoder users never get. Mirrors the
+      # cli/emu/desktop jobs (build-capstone.sh installs to /usr/local).
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build and install Capstone from source (disassembler tier)
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; restores from the cache when warm
 
       - name: Build + run the hardware-trace suite (decode validated; capture self-skips)
         run: make WERROR=1 hwtrace-test
