@@ -610,6 +610,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/vw/abixray.o $(BUILD)/desktop/$(1)/vw/abixray_draw.o \
   $(BUILD)/desktop/$(1)/vw/scene2d.o $(BUILD)/desktop/$(1)/vw/scene2d_draw.o \
   $(BUILD)/desktop/$(1)/vw/strip.o $(BUILD)/desktop/$(1)/vw/strip_draw.o \
+  $(BUILD)/desktop/$(1)/vw/strip_flow.o \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/addon/textselect.o \
@@ -2262,6 +2263,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/vw/scene2d_draw.o \
     $(BUILD)/desktop/test/vw/strip.o \
     $(BUILD)/desktop/test/vw/strip_draw.o \
+    $(BUILD)/desktop/test/vw/strip_flow.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \

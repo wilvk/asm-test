@@ -980,6 +980,13 @@ Camera standalone_default_camera(SceneKind k) {
         c.pitch = 0.30f;
         c.yaw = 0.15f;
         break;
+    case SceneKind::SessionFlow:
+        // Ribbons run along X and stack in Z, like the module ribbon; a
+        // three-quarter view from above reads the rate heights side by side.
+        c.frame(0.5f, 0.5f, 2.5f);
+        c.pitch = 0.5f;
+        c.yaw = 0.4f;
+        break;
     }
     c.target[1] = 0.4f; // the scenes above are authored around mid-height
     return c;

@@ -27,6 +27,7 @@ bool shot_scene_from_name(const std::string &n, scene3d::SceneKind &out) {
     if (n == "Invocation")   { out = K::Invocation;   return true; }
     if (n == "ModuleRibbon") { out = K::ModuleRibbon; return true; }
     if (n == "LanePrism")    { out = K::LanePrism;    return true; }
+    if (n == "SessionFlow")  { out = K::SessionFlow;  return true; }
     return false;
 }
 

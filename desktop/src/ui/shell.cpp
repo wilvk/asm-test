@@ -42,6 +42,7 @@
 #include "scene3d/hud.h"
 #include "scene3d/lod.h" // 51 T4: the camera-distance entity budget
 #include "scene3d/simplify.h" // the simplified posture (2026-08-10 spec)
+#include "views/strip_flow.h" // the session flow builder (2026-08-10 spec)
 #include "scene3d/pick.h"
 #include "scene3d/standalone.h" // T1-T5 (59): the non-plane substrates
 #include "space/projection.h"
@@ -1106,6 +1107,15 @@ shell_kind_availability(const SceneView &sv, const Streams *b) {
                    "registers"
                  : sv.prism.note) +
             sweep_hint;
+    // The session flow reads every channel the strip reads; its builder
+    // states its own refusal (no stream, or no channel events at all).
+    if (!sv.flow.enabled)
+        why[scene_kind_index(scene3d::SceneKind::SessionFlow)] =
+            (sv.flow.disabled_reason.empty()
+                 ? std::string("recording carries no "
+                               "mem/syscall/trace/call/watch/df_step events")
+                 : sv.flow.disabled_reason) +
+            sweep_hint;
     return why;
 }
 
@@ -1221,6 +1231,18 @@ static bool shell_standalone_pick(const SceneView &sv, const std::string &rec,
         *link = scene3d::prism_pick_link(sv.prism, rec, i);
         return true;
     }
+    case scene3d::SceneKind::SessionFlow: {
+        // rows then seams — flow_pick_order's own ordering; one decode
+        // answers the hover line and the drill-in (rows link to the syscalls
+        // view / the timeline; seams are hover-only).
+        const size_t n = flow_pick_order(sv.flow);
+        if (i >= n)
+            return false;
+        *what = flow_pick_hint(sv.flow, i);
+        if (auto l = flow_pick_link(sv.flow, i, rec))
+            *link = *l;
+        return true;
+    }
     }
     return false;
 }
@@ -1332,6 +1354,34 @@ static void shell_standalone_chrome(ShellState &s, SceneView &sv,
         ImGui::TextColored(dt_dim_col(),
                            "colour continuity shows what the BYTES did; it "
                            "never asserts what the instruction meant");
+        return;
+    }
+    case scene3d::SceneKind::SessionFlow: {
+        const space::SessionFlowScene &f = sv.flow;
+        // The three pinned claims ride the chrome so no reading of the
+        // ribbons can mistake a rate for a duration or a hue for a tid the
+        // wire never carried.
+        ImGui::TextColored(dt_dim_col(), "%s",
+                           space::SessionFlowScene::smoothing_note());
+        ImGui::TextColored(dt_dim_col(), "%s", StripModel::axis_label());
+        ImGui::TextColored(dt_dim_col(), "%s", StripModel::mem_tid_note());
+        size_t lanes = 0;
+        bool agg = false;
+        for (const space::FlowRow &row : f.rows) {
+            if (row.kind == space::FlowRowKind::Lane)
+                lanes++;
+            if (row.kind == space::FlowRowKind::AggregateLanes) {
+                agg = true;
+                ImGui::TextColored(dt_dim_col(), "%s", row.label.c_str());
+            }
+        }
+        ImGui::TextColored(dt_dim_col(),
+                           "%zu thread ribbon%s%s · kernel row hued by "
+                           "dominant class (grey = none/tie) · memory row "
+                           "r/w-shaded · %u buckets",
+                           lanes, lanes == 1 ? "" : "s",
+                           agg ? " + the folded remainder" : "",
+                           f.buckets);
         return;
     }
     }
@@ -1545,6 +1595,19 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.built = true;
         // T1-T5 (59): the four non-plane substrates, woven on the same gate.
         shell_weave_standalone(sv, r, a, shell_b(s));
+        // The session flow (2026-08-10 spec): the strip's own model over the
+        // SAME substrate this weave received (the union on the live tab), so
+        // the flow, the strip and the plane can never disagree about the
+        // session. Regions/seams via the same calls shell_strip_body makes.
+        {
+            StripModel sm = strip_build(
+                r,
+                shell_assemble_regions(r, s.settings.stable_plane_layout,
+                                       nullptr, nullptr),
+                sv.woven_union ? s.live_capture_seams
+                               : std::vector<StripSeam>{});
+            sv.flow = build_session_flow(sm);
+        }
         sv.div_b = shell_b(s) != nullptr ? shell_b(s)->id : std::string();
     }
     // T2 (59): the B side can be attached/detached at any time, so the

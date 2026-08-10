@@ -42,11 +42,11 @@ int main() {
         const std::vector<SceneKind> &kinds = all_scene_kinds();
         check("axes/enumeration is complete",
               kinds.size() ==
-                  static_cast<size_t>(SceneKind::LanePrism) + 1u,
+                  static_cast<size_t>(SceneKind::SessionFlow) + 1u,
               "all_scene_kinds() has " + std::to_string(kinds.size()) +
                   " entries but the enum's last value is " +
                   std::to_string(
-                      static_cast<int>(SceneKind::LanePrism)));
+                      static_cast<int>(SceneKind::SessionFlow)));
         std::set<std::string> names, ys;
         for (SceneKind k : kinds) {
             const std::string name = scene_kind_name(k);

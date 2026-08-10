@@ -170,6 +170,19 @@
     "warmup": 30
   },
   {
+    "name": "23-session-flow",
+    "open": [
+      "build/shots/rec/df-a.asmtrace"
+    ],
+    "view": "scene3d",
+    "scene": "SessionFlow",
+    "size": [
+      1600,
+      1000
+    ],
+    "warmup": 30
+  },
+  {
     "name": "23-divergence",
     "open": [
       "build/shots/rec/df-a.asmtrace",

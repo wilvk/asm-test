@@ -54,6 +54,8 @@ enum class SceneKind : uint8_t {
     Invocation,    // 59 T3: one routine's control flow across its calls
     ModuleRibbon,  // 59 T4: which thread is in which library, when
     LanePrism,     // 59 T5: inside one wide vector register, over its writes
+    SessionFlow,   // 2026-08-10: the session-strip channels as smooth
+                   // depth-stacked ribbon rates over stream order
 };
 
 // Every kind, for exhaustive iteration (the axis-labelling walk, the band
@@ -61,8 +63,8 @@ enum class SceneKind : uint8_t {
 // exhaustiveness test asserts the size matches the last enumerator.
 inline const std::vector<SceneKind> &all_scene_kinds() {
     static const std::vector<SceneKind> v = {
-        SceneKind::Plane, SceneKind::Divergence, SceneKind::Invocation,
-        SceneKind::ModuleRibbon, SceneKind::LanePrism};
+        SceneKind::Plane,        SceneKind::Divergence, SceneKind::Invocation,
+        SceneKind::ModuleRibbon, SceneKind::LanePrism,  SceneKind::SessionFlow};
     return v;
 }
 
@@ -83,6 +85,8 @@ inline const char *scene_kind_name(SceneKind k) {
         return "module excursion ribbon";
     case SceneKind::LanePrism:
         return "SIMD lane prism";
+    case SceneKind::SessionFlow:
+        return "session flow";
     }
     return "address plane";
 }
@@ -150,6 +154,13 @@ inline SceneAxes scene_axes(SceneKind k) {
             "stacked writes, oldest nearest",
             "NOT wall clock and NOT an address: there is no address inside a "
             "register, and Z counts recorded writes, not elapsed time"};
+    case SceneKind::SessionFlow:
+        return SceneAxes{
+            "stream order (seq buckets)",
+            "activity rate (events per bucket, smoothed for display)",
+            "session rows (threads \u00b7 kernel \u00b7 memory)",
+            "NOT time and not a duration: stream order only, and a height is "
+            "a bucketed rate, never a measured interval"};
     }
     // Unreachable for a complete enum; kept total rather than UB.
     return SceneAxes{"address (the address plane's u)",

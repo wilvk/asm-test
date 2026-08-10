@@ -31,6 +31,7 @@
 #include "space/crossing.h" // CrossingLayer (57 T2): SceneView::crossings
 #include "space/blameforest.h" // BlameForest (57 T4): SceneView::blame
 #include "space/ridge.h"       // PathRidge (57 T5): SceneView::ridge
+#include "space/sessionflow.h" // SessionFlowScene: SceneView::flow (2026-08-10)
 #include "space/taint.h"    // TaintFront (57 T3): SceneView::taint
 #include "space/opcode_terrain.h" // CellOpcode (56 T4): SceneView::opcode_cells
 #include "space/sediment.h" // SedimentColumns (58 T6): SceneView::sediment
@@ -258,6 +259,10 @@ struct SceneView {
     // rebuilt when the pairing changes rather than on the weave gate.
     std::string div_b;
     scene3d::InvocationScene invocation;  // T3
+    // The session flow (2026-08-10 3d-simplify-and-session-flow spec): the
+    // strip channels as depth-stacked ribbon rates. A space/ POD (D4), built
+    // by views/strip_flow.cpp from the strip's own model.
+    space::SessionFlowScene flow;
     // `module_ribbon`, not `ribbon`: 58 T5 owns `ribbon` above for the
     // data-access ribbon. See the same note in scene_host.h.
     scene3d::ModuleRibbonScene module_ribbon; // T4
