@@ -27,6 +27,7 @@
  * Contract: docs/internal/gui/asmtrace-schema.md.
  * Usage: asmtrace_record [--steps=<cap>] [--mem] [--fpregs] [--blame] [--statediff] <output-directory>
  */
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,27 @@ void *asmtest_corpus_routine(const char *name);
 /* The conformance emulator convention: a corpus routine is captured as a fixed
  * 64-byte window from its entry (bindings/conformance/conformance.c). */
 #define REC_WINDOW 64
+
+/* Append a printf-formatted fragment to buf[cap] at *off, advancing *off but
+ * never past cap-1. snprintf returns the number of bytes it WOULD have written,
+ * so accumulating that raw (o += snprintf(buf + o, cap - o, ...)) walks the
+ * pointer off the end and underflows the remaining size once the content
+ * exceeds cap. Clamp after each append so a long label or wide arg list
+ * truncates cleanly instead of writing out of bounds. */
+static void note_appendf(char *buf, size_t cap, size_t *off, const char *fmt,
+                         ...) {
+    if (cap == 0 || *off >= cap)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, cap - *off, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    *off += (size_t)n;
+    if (*off >= cap)
+        *off = cap - 1; /* content was truncated */
+}
 
 /* Arm the writer's `code` routine-identity header (28 R1 T1) from the fixed
  * bytes this recorder already holds: the SHA-256 of code[0..len) names the
@@ -588,12 +610,13 @@ static int record_arm64(const char *dir, const char *out, const char *label,
 
     {
         char text[256];
-        int o = snprintf(text, sizeof text, "%s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o, "%s(", label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(
-            text + o, sizeof text - (size_t)o,
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(
+            text, sizeof text, &o,
             ") under the deterministic emulator L0 producer, AArch64 guest");
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
@@ -813,12 +836,14 @@ static int record_arm32(const char *dir, const char *out, const char *label,
 
     {
         char text[256];
-        int o = snprintf(text, sizeof text, "%s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o, "%s(", label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") under the deterministic emulator L0 producer, ARM32 guest");
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(text, sizeof text, &o,
+                     ") under the deterministic emulator L0 producer, ARM32 "
+                     "guest");
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -1050,12 +1075,13 @@ static int record_riscv(const char *dir, const char *out, const char *label,
 
     {
         char text[256];
-        int o = snprintf(text, sizeof text, "%s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o, "%s(", label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(
-            text + o, sizeof text - (size_t)o,
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(
+            text, sizeof text, &o,
             ") under the deterministic emulator L0 producer, RISC-V guest");
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
@@ -1365,12 +1391,13 @@ static int record_bytes_fp(const char *dir, const char *out, const char *label,
      * itself without a sidecar: a walkthrough is a recording (schema `note`). */
     {
         char text[256];
-        int o = snprintf(text, sizeof text, "%s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o, "%s(", label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") under the deterministic emulator L0 producer");
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(text, sizeof text, &o,
+                     ") under the deterministic emulator L0 producer");
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -1592,24 +1619,26 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
     /* A note that explains the scene without a sidecar: which routine, why the
      * basis is absolute, and — when capped — exactly what was lost. */
     {
-        int o =
-            snprintf(text, sizeof text, "3D-overview golden scene: %s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o, "3D-overview golden scene: %s(",
+                     label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        o += snprintf(text + o, sizeof text - (size_t)o,
-                      ") under the deterministic emulator L0 producer, written "
-                      "as `codeimage` + ABSOLUTE-basis `trace`. The producer "
-                      "maps the routine window at 0x%lx, so each `off` is the "
-                      "address the guest executed; the loop body's repeats are "
-                      "the terrain's heat.",
-                      REC_CODE_BASE);
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(text, sizeof text, &o,
+                     ") under the deterministic emulator L0 producer, written "
+                     "as `codeimage` + ABSOLUTE-basis `trace`. The producer "
+                     "maps the routine window at 0x%lx, so each `off` is the "
+                     "address the guest executed; the loop body's repeats are "
+                     "the terrain's heat.",
+                     REC_CODE_BASE);
         if (lost)
-            snprintf(text + o, sizeof text - (size_t)o,
-                     " The trace buffer holds %zu of the %zu executed steps: "
-                     "the footer's truncated + drops.lost say so, and every "
-                     "touched terrain cell is TORN — a floor, not an erasure.",
-                     kept, nsteps);
+            note_appendf(text, sizeof text, &o,
+                         " The trace buffer holds %zu of the %zu executed "
+                         "steps: the footer's truncated + drops.lost say so, "
+                         "and every touched terrain cell is TORN — a floor, "
+                         "not an erasure.",
+                         kept, nsteps);
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -1715,14 +1744,15 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     {
-        int o = snprintf(text, sizeof text,
-                         "3D-overview golden scene (live dataflow shape): %s(",
-                         label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o,
+                     "3D-overview golden scene (live dataflow shape): %s(",
+                     label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(
-            text + o, sizeof text - (size_t)o,
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(
+            text, sizeof text, &o,
             ") under the deterministic emulator L0 producer, written as a "
             "live serve dataflow session does: an absolute `codeimage` at "
             "0x%lx plus REGION-RELATIVE `df_step` offsets, and NO `trace`. "
@@ -1830,14 +1860,15 @@ static int record_scene_df_multi(const char *dir, const char *out,
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     {
-        int o = snprintf(
-            text, sizeof text,
-            "3D-overview golden scene (two-span dataflow shape): %s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o,
+                     "3D-overview golden scene (two-span dataflow shape): %s(",
+                     label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(
-            text + o, sizeof text - (size_t)o,
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(
+            text, sizeof text, &o,
             ") — TWO absolute `codeimage` spans at 0x%llx and 0x%llx plus "
             "REGION-RELATIVE `df_step` events tagged (rbase) to one span or "
             "the other, NO `trace`. 36's single-span anchor MUST refuse this "
@@ -1954,13 +1985,14 @@ static int record_df_passes(const char *dir, const char *out, const char *label,
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     {
-        int o = snprintf(text, sizeof text,
-                         "continuous `auto` candidate-walk golden: %s(", label);
+        size_t o = 0;
+        note_appendf(text, sizeof text, &o,
+                     "continuous `auto` candidate-walk golden: %s(", label);
         for (int i = 0; i < nargs; i++)
-            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
-                          i ? ", " : "", args[i]);
-        snprintf(
-            text + o, sizeof text - (size_t)o,
+            note_appendf(text, sizeof text, &o, "%s%ld", i ? ", " : "",
+                         args[i]);
+        note_appendf(
+            text, sizeof text, &o,
             ") recorded THREE times — `df_invocation` passes armed on span "
             "0x%llx, then 0x%llx, then 0x%llx. Every pass restarts at step "
             "0 and carries ONE `rbase`, which is how the producer emits a "
