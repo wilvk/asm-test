@@ -170,7 +170,7 @@ if NativeTrace::available() {
 }
 ```
 
-Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+Linux x86-64 + macOS x86-64 (fork-built runtime); self-skips without DynamoRIO. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -293,8 +293,9 @@ replays the conformance corpus and reproduces every case.
 
 ## Maturity
 
-The published-crate story (a `bindgen`-generated `-sys` crate, `cibuildwheel`-style
-prebuilt libs, crates.io) is future work. The Tier-2 idiomatic assertion layer
+The crate now builds, bundles the prebuilt native libs, and dry-run-publishes
+in the release pipeline (crates.io trusted publishing) — only the credentialed
+go-live remains; a `bindgen`-generated `-sys` split is future work. The Tier-2 idiomatic assertion layer
 ships today (`assert_ret`, `assert_abi_preserved`, `assert_no_fault`, and friends
 — see the section above); this is the binding that proves the no-GC native path.
 See [Packaging the bindings](../reference/packaging.md).

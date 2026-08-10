@@ -36,6 +36,7 @@ robustness model.
 | `--fail-if-no-tests` | Exit nonzero when the selection is empty (e.g. a typo'd `--filter`) |
 | `--record-dir=DIR` | Arm per-test `.asmtrace` recording into `DIR` (also `ASMTEST_RECORD_DIR`) — see [Record mode](#record-mode) |
 | `--bench` | Run `BENCH` cases instead of tests — see [Benchmarks](benchmarks.md) |
+| `--bench-reps=N` | Pin the benchmark inner repeat count (otherwise auto-calibrated) — see [Benchmarks](benchmarks.md) |
 | `--bench-format=text\|json` | Benchmark output: human text (default) or machine-readable JSON — see [Benchmarks](benchmarks.md) |
 | `--help`, `-h` | Print the usage summary and exit |
 
@@ -71,7 +72,9 @@ Three properties are deliberate:
   directory and carries a producer's note; a suite that already links the
   emulator tier calls `asmtest_rec_emu()`
   ([`include/asmtest_rec.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_rec.h))
-  and that is what writes the file. A suite with **no** producer glue accepts
+  and that is what writes the file. (`asmtest_rec.h` ships in the repo but is
+  **not installed** by `make install` — a packaged consumer vendors it or
+  records from a checkout.) A suite with **no** producer glue accepts
   `--record-dir`, writes nothing, and emits **no** `recording:` key — the
   candid degrade, not a `recording: (none)` line nobody can open.
 - **A directory that cannot be created is a hard failure** (exit 2). A run that
@@ -131,7 +134,8 @@ test process, or in an environment without `fork()`.
 
 `-jN` runs up to `N` tests at once (each still in its own child). The report
 preserves a stable order regardless of completion order, so output stays
-deterministic.
+deterministic. Parallelism needs forking: with `--no-fork`, `-jN` silently
+degrades to serial.
 
 ## Guard-page buffers
 

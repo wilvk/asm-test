@@ -105,6 +105,11 @@ void asm_call_capture_vec512(vec512_t *vec, void *fn, const long *iargs,
                              const vec512_t *vargs);                        // zmm
 int  asmtest_cpu_has_avx2(void);      // gate for the _vec256 / ASM_VCALL256 path
 int  asmtest_cpu_has_avx512f(void);   // gate for the _vec512 / ASM_VCALL512 path
+int  asmtest_cpu_has_apx(void);       // APX (r16–r31 EGPRs); 0 on all shipping
+                                      // silicon today — opens under sde64 -future
+int  asmtest_cpu_has_vec128(void);    // native 128-bit vector path present
+                                      // (1 on x86-64/AArch64, 0 on rv64 —
+                                      // the ASM_VCALL* self-skip gate)
 
 // SVE scalable-vector capture (AArch64 Linux; gate on asmtest_cpu_has_sve).
 // Captures the whole z file into z[32] and the predicate file into p[16];
@@ -133,6 +138,8 @@ register is reported preserved but not independently verified by
 |---|---|
 | `regs_t` | Captured register/flag snapshot (arch-specific; see [ABI capture](../guides/abi-capture.md#the-register-snapshot)) |
 | `vec128_t` | 128-bit vector with byte/int/float/double lane views |
+| `vec256_t` / `vec512_t` | 256-bit (AVX2) / 512-bit (AVX-512) vectors with the same lane views |
+| `svec_t` / `spred_t` | SVE scalable vector (256-byte slot) / predicate; only the low `asmtest_sve_vl()` bytes are live |
 | `asmtest_rng_t` | Seedable splitmix64 RNG state |
 
 ## Property-test helpers
@@ -163,11 +170,13 @@ See [guard-page buffers](../guides/runner.md#guard-page-buffers).
 | `ASMTEST_VERSION` | version string, e.g. `"1.1.0"` |
 | `ASMTEST_VERSION_NUM` | numeric version for `#if` compares |
 | `asmtest_cycle_counter()` | inline cycle/tick counter used by `BENCH` |
+| `ASMTEST_NO_MAIN` | compile-time define: suppress the provided `main()` to embed the runner |
 
 | Environment variable | Effect |
 |---|---|
 | `ASMTEST_SEED` | seed for property-test RNG and `--shuffle` (decimal or `0x`-hex) |
 | `ASMTEST_TIMEOUT` | default per-test timeout in seconds (same as `--timeout`) |
+| `ASMTEST_RECORD_DIR` | arm per-test `.asmtrace` recording into a directory (same as `--record-dir`) |
 
 ## Emulator API
 
@@ -215,7 +224,7 @@ consumer points at an older, leaner lib that lacks them.)
 | Cross-arch emu accessors | `asmtest_emu_{arm64,riscv,arm}_result_new`/`_free`, `asmtest_emu_{arm64,riscv,arm}_reg` (register by name), `asmtest_emu_arm64_vec_f64`/`_f32`, `asmtest_emu_riscv_f_f64`, `asmtest_emu_arm_q_f64`/`_f32` | Read a non-x86 guest's per-arch result struct without mirroring its layout; the shared `asmtest_emu_result_*` fault/ok accessors apply to every guest result. |
 | Trace handle | `asmtest_emu_trace_new`/`_free`, `asmtest_emu_trace_covered`, `_insns_total`/`_blocks_len`/`_blocks_total`/`_truncated`/`_block_at` | Opaque wrapper over `emu_trace_t` + its buffers, so a dynamic-FFI binding records execution trace / basic-block coverage. |
 | Call descent (`asmtest_ptrace.h`) | `asmtest_descent_new`/`_free`, `_set_max_depth`/`_set_insn_budget`/`_set_watchdog_ms`, `_allow_region`/`_deny_region`, `_set_resolver`/`_set_denylist`/`_use_default_denylist`; readers `_edges_len`/`_edge_site`/`_edge_target`/`_edge_depth`, `_frames_len`/`_frame_base`/`_frame_len`/`_frame_depth`/`_frame_parent`/`_frame_insn_count`/`_frame_insn_at`/`_frame_block_count`/`_frame_block_at`, `_truncated`/`_depth_capped`; entry points `asmtest_ptrace_trace_call_ex`/`_trace_attached_ex`/`_trace_attached_versioned_ex` | Opaque descent handle: configure the four-level descent policy in, read edges + nested per-callee frames out through one-scalar-per-call accessors (address getters return `uint64`, so bindings must keep them 64-bit — `BigInt`/boxed `uint64` cdata/unsigned mask, not a lossy `Number`). The `_ex` entry points thread the handle through the ptrace loops. See [native-tracing.md](../guides/tracing/native-tracing.md) ("Call descent levels"). |
-| Mid-execution guards | `emu_watch_writes`/`emu_watch_clear`, `emu_guard_reg`/`emu_guard_reg_clear`; opaque handles `asmtest_emu_watch_new`/`_free`/`_violated`/`_addr`/`_size`/`_rip_off`, `asmtest_emu_reg_guard_new`/`_free`/`_violated`/`_got`/`_rip_off` | Arm a write-watchpoint or block-entry register invariant on the handle, run a call, then read the recorded violation by accessor (x86-64 guest, Track F). |
+| Mid-execution guards | `emu_watch_writes`/`emu_watch_reads`/`emu_watch_clear`, `emu_guard_reg`/`emu_guard_reg_clear`, `emu_set_reg`/`emu_clear_regs` (register preloads), the per-step ring `emu_step_capture`/`_clear`/`_count`/`_dropped`/`_at`/`emu_step_mxcsr_at` (and the `emu_{arm64,riscv,arm}_step_*` guest counterparts); opaque handles `asmtest_emu_watch_new`/`_free`/`_violated`/`_addr`/`_size`/`_rip_off`, `asmtest_emu_reg_guard_new`/`_free`/`_violated`/`_got`/`_rip_off` | Arm a read/write watchpoint or block-entry register invariant on the handle, preload registers, capture the per-step register ring, run a call, then read the recorded violation by accessor (x86-64 guest, Track F). |
 | Coverage-guided fuzzing / mutation | `emu_fuzz_cover1`, `emu_mutation_test1`; opaque stats `asmtest_emu_fuzz_stat_new`/`_free`/`_blocks_reached`/`_corpus_len`/`_iterations`, `asmtest_emu_mutation_stat_new`/`_free`/`_mutants`/`_killed`/`_survived` | Run a one-int-arg routine's coverage-guided input search or bit-flip mutation set inside the emulator; read the result counts by accessor (Track E). |
 | Disassembly | `emu_disas`, `emu_disas_available` | Decode the one instruction at a code offset into text (Capstone). Writes into a caller buffer — no opaque handle — and self-skips to empty when absent. Carried by the superset `libasmtest_emu` (Track C). |
 | Guard buffers | `asmtest_guarded_alloc`/`_free`, `asmtest_guarded_alloc_under`/`_free_under` | Share a pointer to a guarded buffer with the routine under test. |

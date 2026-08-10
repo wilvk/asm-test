@@ -1,23 +1,26 @@
 # The desktop GUI and its 3D scenes
 
 The desktop app replays an `.asmtrace` recording. Most of its views are flat —
-a summary, a canvas, a timeline, a register scrubber. This page is mostly about
+a summary, a canvas, a timeline, a register scrubber, a whole-session strip.
+This page is mostly about
 the one that is not: the **3D overview**, which draws a recording as geometry.
 
 Every image here was produced by `make gui-shots` from a live capture of a
 sample program in this repository. Nothing is mocked up, and the section at the
 end shows how to reproduce all of it.
 
-## Two time axes, deliberately not fused
+## Three time axes, deliberately not fused
 
 The single most common misreading of these images is that they share one clock.
 They do not, and the app says so on the plane's own axis label:
 
-> NOT one clock: the terrain playhead (trace-residency time) and a worldline's
-> step axis are separate, and neither is the flat views' execution step
+> NOT one clock: the terrain playhead (trace-residency time), the vehicle's own
+> followed step, and the flat views' execution step are three separate axes
 
-The terrain's playhead walks **trace-residency time**. A worldline's height is
-its **own trace step**. The flat views have a third axis, **execution step**.
+The terrain's playhead walks **trace-residency time**. The vehicle that follows
+a worldline advances by its **own followed step** — the worldline itself lies
+flat on the terrain rather than rising with trace time. The flat views have a
+third axis, **execution step**.
 Fusing them would be convenient and wrong, so the app keeps them apart.
 
 ## The workspace
@@ -31,6 +34,11 @@ ones it cannot collapse into a single **"unavailable views (N)"** affordance
 that still names each absent view *and the machine reason it is absent*. That is
 the app's habit throughout — an absence is stated, never hidden.
 
+The newest flat view is the **Session strip**: the whole session as per-thread
+lanes with run seams, a kernel rail, address bands, and a run-length density
+fill, simplified to the top lanes by default — the rest stay counted, never
+vanished. Its 3D companion is the [session flow scene](#session-flow) below.
+
 ![The canvas view](../_static/gui/02-canvas.png)
 
 ## The 3D HUD
@@ -41,6 +49,11 @@ The HUD is where a scene declares what it is. From the top: which **substrate**
 is being drawn, what its **axes mean** (including what they are *not*), the
 **provenance** chips grading the evidence, the **layer** toggles grouped by what
 kind of claim they make, and the **encodings** legend.
+
+The layer registry currently carries 25 layers; this page shows the terrain
+family. Beyond it, the **causal** group — `crossings`, `taint`, `blame`,
+`ridge` — and the statistical branch-mispredict layer are on by default, and
+each grades its own evidence and refuses in place when its stream is absent.
 
 Two things in it are worth calling out, because they are the reason the rest of
 the page can be trusted. Layers grade *evidence* — what was recorded and how
@@ -53,22 +66,35 @@ In the shots below the HUD is collapsed so the geometry is the subject.
 
 ## The address plane
 
-The default substrate. X and Z are the **address space**, laid out along a
-Hilbert curve so that addresses close in memory stay close on screen. Height is
-access density. A trajectory is one execution path threading across it.
+The default substrate. X and Z are the **address space**. The address→cell
+layout is selectable: the default **region atlas** packs each mapped region
+into its own serpentine-filled rectangle, labelled in place, so a region's
+addresses stay inside its tile; the **Hilbert curve** layout instead keeps
+global address locality, so addresses close in memory stay close on screen.
+Height is access density. A trajectory is one execution path threading across
+it — it lies flat on the terrain and is read through the playhead.
 
 Verbatim, from the app:
 
 | Axis | Means |
 |---|---|
-| X | `address (Hilbert plane, u)` |
-| Y | `terrain height = access density; a worldline's height = its own trace step` |
-| Z | `address (Hilbert plane, v)` |
+| X | `address (the address plane's u)` |
+| Y | `terrain height = access density (log). A worldline does NOT rise with trace time: it lies flat and is read through the playhead. The opt-in lifetime / ribbon / sediment layers DO stand trace time on this axis` |
+| Z | `address (the address plane's v)` |
 
 ![The bare address plane](../_static/gui/10-plane-bare.png)
 
 Layers compose **on this plane only**, never across substrates — two meanings on
 one screen position is exactly what the layer registry exists to prevent.
+
+### The simplified posture
+
+By default the scene draws its **simplified posture**: the eight most active
+worldlines (hue-distinct paths are readable at eight, not at two hundred), with
+the five per-event spike layers — access marks, read/write relief, working set,
+lifetime, sediment — withheld. What was withheld is **counted, never
+vanished**: a placard states how many worldlines and marks are hidden, and the
+HUD's **detail** toggle brings the full population back.
 
 ### Zoning and contours
 
@@ -77,6 +103,11 @@ one screen position is exactly what the layer registry exists to prevent.
 `zoning` hues the terrain by what *kind* of region an address is in — code,
 stack, heap, data, mmap, unknown. `contours` adds iso-density bands, which are a
 re-encoding of height rather than a new claim.
+
+In a serve capture the plane also **names** its regions from the recording's
+own address-space map (the `vmmap` events a serve session emits, re-sent only
+when the map changes): the pick detail and the region roster show the
+mapping's name with a provenance chip, instead of a bare address range.
 
 ### Canopy and opcode
 
@@ -90,7 +121,9 @@ kind of work happens in each cell.
 ![Access marks and read/write relief](../_static/gui/13-plane-access.png)
 
 `access` draws a spur from a PC vertex to the data cell it touched. `relief`
-splits that into read and write twins.
+splits that into read and write twins. Both are per-event spike layers, so the
+[simplified posture](#the-simplified-posture) withholds them until the detail
+toggle is on — the placard counts what is hidden.
 
 ### Weather and ghost fog
 
@@ -103,7 +136,7 @@ residency can never be mistaken for a recorded path.
 
 ## Scenes whose axes are not addresses
 
-Four questions have a load-bearing axis that is **not** an address. Forcing them
+Five questions have a load-bearing axis that is **not** an address. Forcing them
 onto the plane would fabricate a correspondence the recording does not carry, so
 each gets its own substrate. **These do not compose** — the pane shows one at a
 time, and never two together.
@@ -182,6 +215,24 @@ refused rather than drawn.
 This scene is also the one that needs the most from a recording — three streams
 at once, which is why the capture asks for `insns` (see below).
 
+### Session flow
+
+The whole session as flow. This is the 3D companion of the **Session strip**
+view — the same rows (one per thread, plus the kernel rail and the memory
+channel), drawn as smooth, depth-stacked ribbons whose height is a bucketed
+activity rate over the recording's own stream order, with seam walls at the
+strip's run boundaries.
+
+> X: `stream order (seq buckets)`
+> Y: `activity rate (events per bucket, smoothed for display)`
+> Z: `session rows (threads · kernel · memory)`
+>
+> NOT time and not a duration: stream order only, and a height is a bucketed
+> rate, never a measured interval
+
+Like the strip, it opens for any recording that carries an event stream to
+bucket — it takes no projection and carries no terrain.
+
 A rib's thickness is how many registers disagree at that step. A **hollow** rib
 means at least one side had no computed delta there, so agreement was never
 observed — drawn at a minimum width rather than zero, because a zero-width rib
@@ -245,6 +296,15 @@ needs one.
 `--fpregs` appears in the dataflow sessions for the **Scrubber's** wide register
 deck. The lane prism does not need it: the dataflow producer reads XMM operands
 directly.
+
+Three Settings toggles shape a **live** session's 3D pane, all ON by default:
+**live union weave** (the pane accumulates every capture the session makes —
+the in-memory twin of a `--record` tee — so a fresh Start adds to the scene
+instead of replacing it), **stable plane layout** (regions pack the plane in
+first-seen order, so a region already placed keeps its slot when a later
+capture adds more), and **GPU 3D rendering** (turning it off takes the same
+honest degraded 2D branch a no-GL build shows, presented as your Settings
+choice, never as a missing capability).
 
 `insns` is what makes the divergence pair comparable at all. That scene needs
 three streams in one recording — `codeimage` so the 3D pane exists, `trace` or

@@ -37,8 +37,10 @@ matrix in a container (the macOS jobs need a Mac). Highlights:
 make docker-test      # example suites + self-tests (the `test` job)
 make docker-nasm      # NASM backend
 make docker-emu       # emulator tier (libunicorn)
-make docker-ci        # the whole x86-64 Linux matrix end to end
+make docker-ci        # the core x86-64 legs end to end (test/check/nasm/emu/asm/valgrind/sanitize/tidy)
 make docker-bindings  # build + run every language image
+make docker-cli       # asmspy + golden gate + smoke (the `cli` job)
+make docker-desktop   # desktop GUI build + its test suite (the `desktop` job)
 ```
 
 Pass `DOCKER_PLATFORM=linux/arm64` to exercise the aarch64 lane. See the
@@ -50,11 +52,18 @@ The top-level [Makefile](Makefile) holds the core variables, knobs, and the
 native build/test rules. Large self-contained target groups are split into
 [mk/](mk/) by concern and `include`d in place (so they share every variable):
 
-- `mk/docker.mk` — Docker CI lanes
-- `mk/win64.mk` — native Win64 tier (cross-compile + Wine)
-- `mk/native-trace.mk` — DynamoRIO + hardware (Intel PT / CoreSight) trace tiers
+- `mk/bench.mk` — benchmark record/report and the golden-count gate
 - `mk/bindings.mk` — conformance corpus, per-language binding tests, packaging
+- `mk/cli.mk` — the `asmspy` CLI, its smoke, and the `.asmtrace` golden lanes
+- `mk/dataflow.mk` — the data-flow (operand value) tier and its language lanes
+- `mk/desktop.mk` — the desktop GUI app, viewer, addons, and UI tests
+- `mk/docker.mk` — Docker CI lanes
 - `mk/docs.mk` — Sphinx / Read the Docs
+- `mk/fuzz.mk` — the libFuzzer / AFL++ fuzzing shim
+- `mk/native-trace.mk` — DynamoRIO + hardware (Intel PT / AMD LBR / CoreSight) trace and taint tiers
+- `mk/pintool.mk` — the Intel Pin / XED trace tier
+- `mk/sde.mk` — the Intel SDE future-ISA lane
+- `mk/win64.mk` — native Win64 tier (cross-compile + Wine)
 
 Edit a target where it lives; edit knobs/shared variables in the parent Makefile.
 
@@ -126,7 +135,12 @@ conformance coverage at parity with the existing bindings.
 - **Build clean with warnings as errors:** `make WERROR=1 test && make WERROR=1 check`
   (CI runs the gating jobs this way over a controlled gcc/clang toolchain).
 - **Run the relevant tier(s)** for what you touched — the emulator suite
-  (`make emu-test`), a binding (`make <lang>-test`), etc.
+  (`make emu-test`), a binding (`make <lang>-test`), etc. If you touched the
+  CLI or the `.asmtrace` recording surface, run `make cli-smoke` and
+  `make asmtrace-golden-check` (the goldens are byte-exact; regenerate them
+  only inside the `docker-cli` image — see
+  [tests/golden-asmtrace/README.md](tests/golden-asmtrace/README.md)). If you
+  touched the desktop GUI, run `make desktop-test`.
 - **Update the docs** under [docs/](docs/) and the [CHANGELOG.md](CHANGELOG.md)
   `[Unreleased]` section when you change behavior or the public API — and check
   they build warning-free (`make docs` or `make docker-docs`; see

@@ -292,6 +292,11 @@ emu_watch_describe(&w, EMU_ARCH_X86_64, fn, len, EMU_CODE_BASE, buf, sizeof buf)
 //   "write to 0x400800 (8 bytes): mov qword ptr [rdi + 0x800], rax  (@0x3)"
 ```
 
+**Read watchpoints** are the same shape for loads: `emu_watch_reads(e, addr,
+size, mode, &w)` with the same `EMU_WATCH_ONLY` / `EMU_WATCH_NEVER` modes. A
+handle holds **one** data watchpoint — arming a read watch replaces an armed
+write watch, and vice versa.
+
 **Register invariants** assert a register holds a value at every basic-block
 entry — a callee-saved or stack-pointer guard that catches mid-routine corruption
 **even when the value is restored by return** (which ABI capture cannot see):
@@ -307,6 +312,7 @@ ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on 
 | Function | Purpose |
 |---|---|
 | `emu_watch_writes(e, addr, size, mode, &w)` / `emu_watch_clear(e)` | arm/disarm a write watchpoint |
+| `emu_watch_reads(e, addr, size, mode, &w)` | the read counterpart (replaces an armed write watch) |
 | `emu_guard_reg(e, "rbx", want, &g)` / `emu_guard_reg_clear(e)` | arm/disarm a block-entry register invariant |
 | `emu_watch_describe(&w, arch, code, len, base, buf, n)` | a violation line with the offending store disassembled |
 | `ASSERT_NO_WRITE_VIOLATION` / `ASSERT_WRITE_VIOLATION` / `ASSERT_REG_INVARIANT` | the matching assertions |
@@ -317,6 +323,11 @@ ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on 
 > fresh-handle workaround is needed for register carry-over. Mapped memory and
 > the stack, by contrast, **do** persist across calls on a handle (see above), so
 > a sweep of inputs still runs each call against memory an earlier one dirtied.
+>
+> Register **preloads** are the opt-in exception to the zeroing:
+> `emu_set_reg(e, "rbx", value)` pins a register at the start of every call on
+> the handle (applied *after* the per-call zeroing, so the pin wins), and
+> `emu_clear_regs(e)` drops all pins.
 
 **Step-bounded assertions** need no new API: run with `max_insns=N` (the
 single-step path) to stop after N instructions, then inspect `out->regs` with
@@ -360,6 +371,13 @@ new cap. Memory cost is `cap * sizeof(emu_x86_regs_t)`. x86-64 guest.
 | `emu_step_capture(e, cap)` / `emu_step_capture_clear(e)` | arm a `cap`-entry ring / disarm + free |
 | `emu_step_count(e)` / `emu_step_dropped(e)` | entries held / earliest entries evicted |
 | `emu_step_at(e, i, &step, &regs)` | copy held entry `i` (its step number + register file) |
+| `emu_step_mxcsr_at(e, i, &mxcsr)` | the per-step **MXCSR** (kept out of `emu_x86_regs_t`, so read it here) |
+
+The same ring exists on every guest: `emu_arm64_step_capture` /
+`emu_riscv_step_capture` / `emu_arm_step_capture` (with the matching
+`_clear` / `_count` / `_dropped` / `_at` functions) capture the AArch64,
+RISC-V, and ARM32 register files per step with the same bounded,
+drop-accounted contract.
 
 ## Coverage-guided fuzzing & mutation testing
 

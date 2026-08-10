@@ -274,7 +274,7 @@ assert trace2.covered(0)
 NativeTrace.shutdown()
 ```
 
-This tier is Linux x86-64 only and self-skips when DynamoRIO is absent; the full
+This tier is Linux x86-64 + macOS x86-64 (fork-built runtime) and self-skips when DynamoRIO is absent; the full
 reference (lifecycle, env vars, the managed-runtime caveat) lives in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
@@ -283,7 +283,7 @@ reference (lifecycle, env vars, the managed-runtime caveat) lives in
 A sibling native tier (`asmtest.hwtrace`) records the **same** `asmtest_trace_t`
 coverage from the real CPU, but needs no separate engine: it defaults to the
 **single-step** backend (the CPU's `EFLAGS.TF` trap flag), so
-`HwTrace.available(SINGLESTEP)` is true and it **traces live on any x86-64 Linux** —
+`HwTrace.available(SINGLESTEP)` is true and it **traces live on any x86-64 Linux or macOS** —
 including CI and plain containers — where the DynamoRIO tier needs a DynamoRIO
 install. Intel PT and AMD LBR are picked automatically on the bare-metal hardware
 that has them. Build it with `make shared-hwtrace` and point `ASMTEST_HWTRACE_LIB`

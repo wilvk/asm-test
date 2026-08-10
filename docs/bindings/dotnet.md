@@ -220,7 +220,7 @@ try {
 
 Under .NET — a managed runtime — this in-process tier **self-skips at run time**:
 in-process DynamoRIO can't take over the CLR's background threads, so prefer the
-out-of-band Intel PT path (see the central doc). Linux x86-64 only; full reference
+out-of-band Intel PT path (see the central doc). Linux x86-64 + macOS x86-64 (fork-built runtime); full reference
 in [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -228,7 +228,7 @@ in [Native runtime tracing](../guides/tracing/native-tracing.md).
 A sibling native tier records the **same** `asmtest_trace_t` coverage from the real
 CPU, but needs no separate engine install: it defaults to the **single-step**
 backend (the CPU's `EFLAGS.TF` trap flag), so `HwTrace.Available(...)` is true and
-it **traces live on any x86-64 Linux** — CI and plain containers included — where
+it **traces live on any x86-64 Linux or macOS** — CI and plain containers included — where
 the DynamoRIO tier self-skips under .NET (the CLR's threads block in-process
 takeover). Intel PT and AMD LBR are picked automatically on the bare-metal hardware
 that has them.
@@ -422,10 +422,11 @@ isolated container.
 
 ## Maturity
 
-A published NuGet package with `runtimes/<rid>/native/` payloads, a
-`LibraryImport` source generator, and xUnit/NUnit integration of the `Assert`
-helpers are future work; the reusable library module with Tier-2 assertions ships
-today. See [Packaging the bindings](../reference/packaging.md) for the staging plan.
+The NuGet package (with `runtimes/<rid>/native/` payloads) now builds and
+install-smokes in the release pipeline — only the credentialed registry publish
+remains. A `LibraryImport` source generator and xUnit/NUnit integration of the
+`Assert` helpers are future work; the reusable library module with Tier-2
+assertions ships today. See [Packaging the bindings](../reference/packaging.md) for the staging plan.
 
 :::{note}
 The Track D/E/F surface — `Emu.WatchWrites`, `Emu.GuardReg`, `Emu.FuzzCover`,

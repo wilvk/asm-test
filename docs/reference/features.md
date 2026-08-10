@@ -88,8 +88,9 @@ Run a routine in a virtual CPU to do what a real call can't. ([Emulator](../guid
 - **Execution trace & basic-block coverage** (`emu_call_traced`), with union
   across inputs, lcov export, and **source-line coverage** via a caller-supplied
   line map. ([Traces](../guides/tracing/traces.md))
-- **Mid-execution guards**: memory-write watchpoints and block-entry register
-  invariants (catch corruption even when restored before return).
+- **Mid-execution guards**: memory read/write watchpoints and block-entry
+  register invariants (catch corruption even when restored before return),
+  plus per-call register preloads and a per-step register ring on every guest.
 - **Coverage-guided fuzzing** (`emu_fuzz_cover1`) and **mutation testing**
   (`emu_mutation_test1`), contained inside the emulator.
 - **Fault/trace disassembly** (optional, Capstone): annotate offsets with the
@@ -149,16 +150,34 @@ hardware is absent. All are exposed through **all ten language wrappers**
   a **whole-process live instruction stream** (every instruction as it
   executes, resolved to its function), the whole-process **call graph**
   (JSON/DOT export) and **call tree**, the **process/thread topology** with live
-  counts, or **statistical hot edges** sampled via AMD IBS-Op — no ptrace, no
-  single-step, safe on a live JIT. Managed frames are named through the
+  counts, **statistical hot edges** sampled via AMD IBS-Op — no ptrace, no
+  single-step, safe on a live JIT — a function's **value dataflow**
+  (`--dataflow`: def-use, slices, opt-in recorded streams), hardware **data
+  watchpoints** (`--watch`), and an attach-free **process snapshot** (`--info`).
+  Managed frames are named through the
   runtime's JIT perf-map (Node/V8, .NET, JVM); a `--tid` filter isolates one
   thread. Every view is also a headless subcommand (`--list [active|scan]` /
-  `--syms` / `--log` / `--trace` / `--stream` / `--graph` / `--tree` / `--procs`
-  / `--sample`) for scripts and CI (process list sortable by pid, recent CPU
-  activity, or string-scan density).
+  `--syms` / `--info` / `--log` / `--trace` / `--dataflow` / `--watch` /
+  `--stream` / `--graph` / `--tree` / `--procs`
+  / `--sample` / `--launch`) for scripts and CI (process list sortable by pid,
+  recent CPU activity, or string-scan density), and `--serve` is the NDJSON
+  capture host the desktop GUI drives.
   Needs **libncurses** + **Capstone**; `make cli` (or `make docker-cli`) builds
   it and self-skips with build guidance when a dependency is absent.
   ([asmspy](../guides/tracing/asmspy.md))
+
+### Desktop GUI (optional, Linux)
+
+- **`asmtest-desktop`** — a Dear ImGui trace viewer/debugger over `.asmtrace`
+  recordings: flat views (summary, canvas, timeline, register scrubber, the
+  whole-session strip, …) plus a **3D overview** that draws a recording as
+  geometry across six substrates (address plane, divergence worldline,
+  invocation stack, module excursion ribbon, SIMD lane prism, session flow),
+  each with explicit axes and evidence-graded layers. Live capture spawns
+  `asmspy --serve` (locally or over ssh) — the app links no tracer itself —
+  and a session `--record` tees the same `.asmtrace` that File ▸ Open replays.
+  Built with `make desktop`; ships as a `.deb` / AppImage (GPL-2.0 as
+  distributed). ([The desktop GUI and its 3D scenes](../guides/desktop-gui-scenes.md))
 
 ### In-line assembler (optional, Keystone)
 

@@ -128,9 +128,11 @@ cc my_tests.o my_routine.o $(pkg-config --libs asmtest) -o my_tests
 For the optional tiers add, before the consumer build:
 
 ```sh
-make -C asm-test deps DEPS_ARGS=--emu       # libunicorn + capstone + pkg-config
+make -C asm-test deps DEPS_ARGS=--emu       # libunicorn + pkg-config
 asm-test/scripts/build-keystone.sh          # pinned source build (no distro pkg)
-asm-test/scripts/build-capstone.sh          # no-op if the distro one is present
+asm-test/scripts/build-capstone.sh          # pinned source build — Capstone is never
+                                            # taken from a distro package (skips only
+                                            # when a Capstone ≥ 5 is already found)
 make -C asm-test install-shared install-shared-emu PREFIX="$HOME/.asmtest"
 export LD_LIBRARY_PATH="$HOME/.asmtest/lib:$LD_LIBRARY_PATH"
 ```

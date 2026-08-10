@@ -8,7 +8,8 @@ a C source with the test cases. This page covers how they fit together.
 ### The assembly routine
 
 Routines follow the platform calling convention (System V AMD64 on x86-64,
-AAPCS64 on AArch64) and are wrapped in the `asm.h` macros so one source builds on
+AAPCS64 on AArch64, LP64D on RISC-V rv64) and are wrapped in the `asm.h` macros
+so one source builds on
 both ELF and Mach-O:
 
 ```asm
@@ -27,7 +28,9 @@ ASM_ENDFUNC add_signed
 ```
 
 `ASM_FUNC name` / `ASM_ENDFUNC name` emit the right symbol decoration (the
-leading underscore on Mach-O), `.globl`, alignment, and size directives. Because
+leading underscore on Mach-O), the `.globl`, `.type`, and `.size` directives,
+and the `.note.GNU-stack` section that keeps the linker from marking the stack
+executable. Because
 `;` is a comment on AArch64, the macros are `.macro`-based rather than relying on
 statement separators. Write architecture-specific bodies behind
 `#if defined(__x86_64__)` / `#elif defined(__aarch64__)`.
@@ -130,7 +133,8 @@ Drop in a new pair that follows the naming convention and `make test` builds and
 runs it — no Makefile edit required. Two escape hatches: a suite whose routine
 file doesn't match its test name gets one explicit link rule in the Makefile
 (the shipped `test_arith` → `add.o` pairs show the shape), and suites that
-belong to another target group — the benchmark demo, the emulator/trace tiers,
-the intentional-failure demos — are listed in the Makefile's `SUITE_EXCLUDES`
+belong to another target group — the benchmark demo, the intentional-failure
+demos, and every opt-in tier suite (emulator, in-line assembly, the trace and
+data-flow families, …) — are listed in the Makefile's `SUITE_EXCLUDES`
 so `make test` skips them. To consume the framework from a separate project
 instead, see [Integration](../reference/integration.md).

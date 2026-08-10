@@ -246,7 +246,7 @@ if !tr.Covered(0) {
 }
 ```
 
-Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+Linux x86-64 + macOS x86-64 (fork-built runtime); self-skips without DynamoRIO. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -254,7 +254,7 @@ Linux x86-64 only; self-skips without DynamoRIO. Full reference in
 A sibling native tier records the **same** `asmtest_trace_t` coverage from the real
 CPU, but needs no separate engine install: it defaults to the **single-step**
 backend (the CPU's `EFLAGS.TF` trap flag), so `HwTraceAvailable(SingleStep)` is true
-and it **traces live on any x86-64 Linux** — CI and plain containers included —
+and it **traces live on any x86-64 Linux or macOS** — CI and plain containers included —
 where the DynamoRIO tier needs a DynamoRIO install. Intel PT and AMD LBR are picked
 automatically on the bare-metal hardware that has them.
 
@@ -380,7 +380,8 @@ run it on an x86-64 target (e.g. `make docker-go DOCKER_PLATFORM=linux/amd64`).
 
 ## Maturity
 
-A published Go module (with the native libs bundled per platform) is future work;
+The Go package (native libs bundled per platform) now builds and
+install-smokes in the release pipeline — only the go-live remains;
 this is the Tier-1 + Tier-2 binding that proves the `cgo` path. See
 [Packaging the bindings](../reference/packaging.md).
 

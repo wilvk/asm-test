@@ -174,7 +174,7 @@ try {
 }
 ```
 
-Linux x86-64 only; self-skips without DynamoRIO (and the JVM can be flaky for
+Linux x86-64 + macOS x86-64 (fork-built runtime); self-skips without DynamoRIO (and the JVM can be flaky for
 in-process takeover — prefer Intel PT, see the central doc). Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
@@ -184,7 +184,7 @@ A sibling native tier ([`HwTrace.java`](https://github.com/wilvk/asm-test/blob/m
 records the **same** `asmtest_trace_t` coverage from the real CPU, but needs no
 separate engine install: it defaults to the **single-step** backend (the CPU's
 `EFLAGS.TF` trap flag), so `HwTrace.available(...)` is true and it **traces live on
-any x86-64 Linux** — CI and plain containers included — where the in-process
+any x86-64 Linux or macOS** — CI and plain containers included — where the in-process
 DynamoRIO tier can be flaky under the JVM. Intel PT and AMD LBR are picked
 automatically on the bare-metal hardware that has them.
 
@@ -296,6 +296,8 @@ sources, and runs
 
 ## Maturity
 
-A published Maven/Gradle artifact (and JUnit integration of the `assert*` helpers)
-is future work; the reusable module with Tier-2 assertions ships today. See
+The Maven artifact now builds and install-smokes in the release pipeline
+(the Maven Central deploy job is wired) — only the credentialed go-live
+remains. JUnit integration of the `assert*` helpers is future work; the
+reusable module with Tier-2 assertions ships today. See
 [Packaging the bindings](../reference/packaging.md).

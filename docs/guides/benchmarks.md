@@ -30,7 +30,8 @@ make bench                         # build and run all BENCH cases
 ```
 
 For each benchmark the runner reports **min / median / mean cycles per call**.
-The counter is `rdtsc` on x86-64 and `cntvct_el0` on AArch64, read by the inline
+The counter is `rdtsc` on x86-64, `cntvct_el0` on AArch64, and `rdtime` on
+RISC-V, read by the inline
 `asmtest_cycle_counter()`.
 
 | Flag | Effect |
@@ -74,10 +75,12 @@ symbol is opaque to the optimizer.
 
 Each benchmark runs in-process under the same signal and timeout guard as a test,
 so a crashing or hanging routine is reported as an error rather than taking the
-process down.
+process down. (POSIX only: on the native [Win64 tier](win64.md) a `BENCH` runs
+unguarded — it is trusted.)
 
 :::{note}
-On AArch64 the virtual timer (`cntvct_el0`) ticks coarser than a core cycle, so
+On AArch64 (`cntvct_el0`) and RISC-V (`rdtime`) the timer ticks coarser than a
+core cycle, so
 results are reported as **ticks** rather than cycles. Compare like-for-like on
 one machine; absolute cross-architecture numbers are not directly comparable.
 :::

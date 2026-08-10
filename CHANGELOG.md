@@ -8,6 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The **Session strip** desktop view — the whole session as per-thread lanes
+  with run seams, a kernel rail, address bands, and run-length density,
+  simplified to the top lanes by default (the rest counted, never vanished) —
+  and its 3D companion, the **session flow** scene: the strip's channels as
+  smooth, depth-stacked ribbon rates over stream order, with seam walls at the
+  strip's run boundaries.
+- Desktop live sessions: **live union weave** (the 3D pane accumulates every
+  capture the session makes, so a fresh Start adds to the scene) and **stable
+  plane layout** (regions keep their first-seen slot), both ON by default; a
+  **GPU 3D rendering** settings toggle (OFF takes the honest degraded 2D
+  branch); and a two-step **clear previous sessions** affordance.
+- `asmspy --serve` emits the target's **address-space map** as a `vmmap`
+  event, re-sent only when the map changes; the desktop's 3D plane names its
+  regions from it (pick detail, region roster, provenance chip).
+- `asmspy --dataflow --auto --sampler=ptrace` — a third, **perf-free** sampler
+  rung (ptrace residency probes → call-target expansion → `int3` arrival
+  confirmation), so `--auto` keeps working where `perf_event_open` is locked
+  down entirely; the chain advances to it on a perf refusal.
+- The 3D plane's **simplified posture**: the top-8 worldlines with the five
+  per-event spike layers withheld and counted on a placard; the HUD's detail
+  toggle restores the full population. Plus **occupancy** and **permissions**
+  plane layers (default off).
+- The live dataflow producer reads **ymm16–31** (the EVEX registers glibc's
+  EVEX code paths keep vectors in), gated on XCR0 rather than CPUID alone.
 - `asmspy --info <pid>` — an attach-free process snapshot (identity, runtime,
   per-thread `wchan` + current syscall, symbol/JIT surface, and which tracing
   modes will work on the target). `--json` emits it as a one-event `.asmtrace`
@@ -216,6 +240,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `asmspy` attach to a multi-process tree no longer kills a followed child:
+  the teardown drained a queued single-step trap against the wrong address
+  space, which was fatal to the child moments after detach.
+- `asmspy` hardens its JIT perf-map/debug file opens against planted `/tmp`
+  and `/proc` paths (symlink/ownership checks before trusting a path).
 - **`auto` reliably captures — one shot is not a policy**
   (docs/internal/archive/gui/39-auto-capture-reliability.md). The complaint *"start and arm
   a process, it starts then stops, and the pane says `refused: no session is

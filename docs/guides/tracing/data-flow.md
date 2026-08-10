@@ -25,7 +25,7 @@ same address). Independent chains stay disjoint: no spurious cross-links.
 
 ## Producers
 
-The analysis is producer-agnostic. Three producers fill the same value trace:
+The analysis is producer-agnostic. Five producers fill the same value trace:
 
 - **Emulator (L0 oracle)** — replay under Unicorn; deterministic, runs in CI,
   used to cross-validate the live producers.
@@ -35,6 +35,10 @@ The analysis is producer-agnostic. Three producers fill the same value trace:
 - **DynamoRIO (in-band)** — instrument a target under real DR and capture
   per-instruction operand values in-band; the whole-process analog of the
   scoped producer. (Software DBI: Intel or AMD, no privilege.)
+- **Intel PT replay (out-of-band)** — record a PT trace plus the code image,
+  then replay the recorded bytes under Unicorn to reconstruct the same
+  per-step values with no single-stepping of the live target — see
+  [Native runtime tracing](native-tracing.md).
 - **Intel Pin probe-mode** — splice a *probe* (a jump) at a named routine's entry
   and exit and read its SysV argument / return registers plus a pointed-to buffer
   at **native speed** (no code cache), into the same `at_val_rec_t` records. A
@@ -90,9 +94,11 @@ identities, so a slice survives the runtime moving code and objects:
 
 ## Language bindings
 
-The analysis library `libasmtest_dataflow` (`make shared-dataflow`) is wrapped by
-language bindings. Each exposes the pure helpers and a `ValueTrace` over the full
-L0→L1→L2 pipeline:
+The analysis library `libasmtest_dataflow` (`make shared-dataflow`) is wrapped
+by **all ten language bindings** — `make dataflow-<lang>-test` runs each, and
+the `dataflow-bindings` CI matrix keeps them green. Each exposes the pure
+helpers and a `ValueTrace` over the full
+L0→L1→L2 pipeline; the three reference shapes:
 
 | Language | Module | Build + test |
 |---|---|---|

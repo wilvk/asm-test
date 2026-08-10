@@ -45,6 +45,11 @@ permissions, or (for CoreSight) a live trace decoder are unavailable. See
   attaches to a live process out of band and shows its syscalls-with-data, a
   chosen function's live assembly + call-graph, whole-process call graph/tree
   and instruction stream, or IBS-sampled hot edges (safe on a live JIT).
+- A **desktop GUI** (`make desktop`) — a Dear ImGui trace viewer/debugger that
+  replays `.asmtrace` recordings or captures live through `asmspy --serve`,
+  with flat views (including a whole-session strip) and a 3D overview across
+  six substrates (address plane, divergence, invocation stack, module ribbon,
+  SIMD lane prism, session flow).
 - A **native Win64 tier** (cross-compile + Wine, or the `ms_abi` lane) and
   **ten language bindings** (Python, .NET, Go, Rust, C++, Zig, Node, Java, Ruby,
   Lua).
@@ -69,6 +74,7 @@ Where to start:
   [The runner](docs/guides/runner.md) · [Benchmarks](docs/guides/benchmarks.md) ·
   [Property testing](docs/guides/property-testing.md) ·
   [Emulator](docs/guides/emulator.md) ·
+  [Desktop GUI & 3D scenes](docs/guides/desktop-gui-scenes.md) ·
   [Disassembly](docs/guides/disassembly.md) ·
   [Windows x64 tier](docs/guides/win64.md) ·
   [CI integration](docs/guides/ci-integration.md) ·
@@ -82,6 +88,7 @@ Where to start:
   LBR, ARM CoreSight, single-step, plus the statistical AMD IBS-Op lane), and
   [`asmspy`](docs/guides/tracing/asmspy.md), the interactive process tracer.
 - **Reference** — [API reference](docs/reference/api-reference.md) ·
+  [Code map](docs/reference/code-map.md) ·
   [Integration](docs/reference/integration.md) ·
   [vs. alternatives](docs/reference/comparison.md) ·
   [Packaging](docs/reference/packaging.md) ·

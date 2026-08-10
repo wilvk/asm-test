@@ -174,7 +174,7 @@ NativeTrace.shutdown();
   time**: in-process DynamoRIO can't take over V8's background threads, so
   `available()` may return true yet tracing yields no coverage. Intel PT is the
   recommended backend on such hosts (see the central doc).
-* Linux x86-64 only; full reference in [Native runtime tracing](../guides/tracing/native-tracing.md).
+* Linux x86-64 + macOS x86-64 (fork-built runtime); full reference in [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
 
@@ -182,7 +182,7 @@ A sibling native tier ([`hwtrace.js`](https://github.com/wilvk/asm-test/blob/mai
 records the **same** `asmtest_trace_t` coverage from the real CPU, but needs no
 separate engine install: it defaults to the **single-step** backend (the CPU's
 `EFLAGS.TF` trap flag), so `HwTrace.available(SINGLESTEP)` is true and it **traces
-live on any x86-64 Linux** — CI and plain containers included — where the in-process
+live on any x86-64 Linux or macOS** — CI and plain containers included — where the in-process
 DynamoRIO tier self-skips under V8. Intel PT and AMD LBR are picked automatically on
 the bare-metal hardware that has them.
 
@@ -291,6 +291,7 @@ make docker-node      # or in an isolated container (koffi preinstalled)
 
 ## Maturity
 
-A published npm package with prebuilt binaries (and `vitest`/`jest` integration of
-the `assert*` helpers) is future work; the reusable module with Tier-2 assertions
-ships today. See [Packaging the bindings](../reference/packaging.md).
+The npm package with prebuilt binaries now builds and install-smokes in the
+release pipeline — only the credentialed publish remains. `vitest`/`jest`
+integration of the `assert*` helpers is future work; the reusable module with
+Tier-2 assertions ships today. See [Packaging the bindings](../reference/packaging.md).

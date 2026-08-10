@@ -10,7 +10,8 @@ there is no separate binding to build. See [Language bindings](index.md) for
 the shared architecture.
 
 Unlike the dynamic-FFI bindings, C++ gates the optional emulator and assembler at
-**build time** with `-DASMTEST_ENABLE_EMU` / `-DASMTEST_ENABLE_ASM`, so a
+**build time** with `-DASMTEST_ENABLE_EMU` / `-DASMTEST_ENABLE_ASM` /
+`-DASMTEST_ENABLE_DISAS`, so a
 Keystone-free build compiles the assembler out entirely.
 
 ## `asmtest.hpp`
@@ -171,7 +172,7 @@ tr2.covered(0);                            // recorded with no manual marker
 NativeTrace::shutdown();                   // dr_app_stop_and_cleanup (back to native)
 ```
 
-Linux x86-64 only, self-skips when DynamoRIO is absent; full reference in
+Linux x86-64 + macOS x86-64 (fork-built runtime), self-skips when DynamoRIO is absent; full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -300,5 +301,6 @@ make cpp-test       # from the repo root
 It builds and runs
 [`test_cpp.cpp`](https://github.com/wilvk/asm-test/blob/main/bindings/cpp/test_cpp.cpp),
 an example suite that exercises capture (int / FP / SIMD / flags / ABI), the
-verdict predicates, and the RAII emulator from C++. The asm path builds as a
-separate Keystone-carrying target so the base `cpp-test` stays Keystone-free.
+verdict predicates, and the RAII emulator from C++. The lane builds with all three
+optional tiers enabled (`-DASMTEST_ENABLE_EMU -DASMTEST_ENABLE_ASM
+-DASMTEST_ENABLE_DISAS`) and links Keystone + Capstone.

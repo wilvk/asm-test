@@ -79,6 +79,9 @@ comparison and roadmap.
   & ABI capture, differential testing, benchmarking, and crash/hang containment.
 - Want the full capability list and what's available across architectures, OSes,
   and languages? See [Features & support matrix](reference/features.md).
+- Wondering where something lives in the repository — and which page documents
+  it? See the [Code map](reference/code-map.md), a mind map of the tree with
+  every part linked to its docs.
 - Weighing this against cmocka/Criterion + `.s`, raw Unicorn scripting, or
   qemu+gdb? See [asm-test vs. alternatives](reference/comparison.md).
 - Consuming the framework from another project? See
@@ -132,6 +135,7 @@ clean-room-testing
 :hidden:
 
 reference/features
+reference/code-map
 reference/comparison
 reference/portability
 reference/integration

@@ -221,10 +221,13 @@ asmspy --info   <pid> [--json] [--record=<f>]  # process snapshot: identity, run
 asmspy --log    <pid> [n] [--follow]                   # stream n syscalls with decoded data (default 20)
 asmspy --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]   # n live samples of a function (default 3;
                                    # samples whichever thread reaches it first, --tid pins one)
-asmspy --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] [--max=<n>] [--module=<m>] [--sampler=ibs|sw]
-                                   # value trace + def-use of ONE invocation; --auto picks the target
+asmspy --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] [--max=<n>] [--module=<m>]
+                  [--sampler=ibs|sw|ptrace] [--window=<ms>] [--steps] [--mem] [--blame]
+                  [--statediff] [--insns] [--fpregs] [--continuous]
+                                   # value trace + def-use of ONE invocation; --auto picks the target;
+                                   # the opt-in flags arm extra recorded streams (see the metrics page)
 asmspy --stream <pid> [n] [--tid=<t>] [--follow]       # stream n instructions live (default 20)
-asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>] [--follow]
+asmspy --graph  <pid> [n] [--sort=invocations|fanout|functions-called] [--json|--dot] [--tid=<t>] [--follow]
                                    # whole-process call graph over n calls (default 200)
 asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>] [--follow]
                                    # whole-process live call tree (default 40 lines)
@@ -232,6 +235,8 @@ asmspy --procs  <pid> [n] [--count=syscalls|calls] [--json|--dot]   # process/th
 asmspy --sample <pid> [ms] [--json]                    # statistical hot edges via AMD IBS-Op (default 300 ms)
 asmspy --watch  <pid> <sym|sym+off|0xADDR> [n] [--rw] [--len=1|2|4|8] [--json]
                                    # hardware DATA watchpoint: who touches a field, and the value
+asmspy --launch <mode> -- <cmd> [args...]   # spawn <cmd> already traced from its first instruction
+                                   # (mode: log|stream|graph|tree|procs|sample)
 ```
 
 Every field these emit — in the human text, in `--json`, and in an `.asmtrace`
@@ -505,7 +510,8 @@ breakpoint on a thread that may never arrive.
 
 Off AMD-IBS hosts (Intel, VMs, containers with perf allowed), `--auto` falls
 back to a **portable software-clock sampler** (`PERF_COUNT_SW_TASK_CLOCK` +
-`PERF_SAMPLE_IP`: no PMU at all; `--sampler=ibs|sw` forces either side). The
+`PERF_SAMPLE_IP`: no PMU at all; `--sampler=ibs|sw|ptrace` forces a specific
+rung). The
 portable rule is admittedly **weaker**: an IP histogram measures *residency* —
 where time is spent — and residency's winner is often exactly the
 entered-once-never-returns shape the entry rule rejects. So the sw path ranks
@@ -523,8 +529,14 @@ data flow — entered_often @ 0x... of pid 1234   ret=...   10 steps, 24 records
 ```
 
 Where perf refuses the open entirely (Docker's default seccomp profile blocks
-`perf_event_open`; `perf_event_paranoid` > 2 without `CAP_PERFMON`), both
-samplers print a `# SKIP` naming the real errno and exit 0.
+`perf_event_open`; `perf_event_paranoid` > 2 without `CAP_PERFMON`), the chain
+advances to its third rung: a **perf-free ptrace sampler** (`--sampler=ptrace`
+forces it). It opens no perf event at all — brief attach-and-sample residency
+probes rank candidate regions, call-target expansion follows the hottest
+observed call edges, and an `int3` arrival breakpoint confirms the pick with
+real **entry** evidence before the capture arms. That is what keeps `--auto`
+working on hosts where perf is locked down entirely; only when every rung has
+refused does the run print a `# SKIP` naming the measured reason and exit 0.
 
 **Data watchpoint** — `--watch` answers *who touches this field, and with
 what value*: it arms a hardware **data** watchpoint (x86-64 DR0-3, or AArch64

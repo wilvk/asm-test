@@ -34,6 +34,12 @@ value that actually triggers the bug — `shrinks to [0, 1]` — instead of a ra
 64-bit draw. The shrink is deterministic, adds at most a few hundred extra
 calls, and the original input is still reported alongside it.
 
+:::{note}
+Shrinking applies to the **integer** engine only — the FP variants below report
+the raw failing tuple. And the whole differential engine is POSIX-only: on the
+native [Win64 tier](win64.md) the `ASSERT_MATCHES_*` family is compiled out.
+:::
+
 ## The FP variants
 
 ```c

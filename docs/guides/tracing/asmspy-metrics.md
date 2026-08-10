@@ -29,10 +29,10 @@ its endpoints `from`/`from_name`; the recorded `survey` event names them
 `from_addr`/`from`. Neither is a bug — they are two contracts — but a consumer
 must pick one and not assume the other.
 
-`--json` is available on `--log`, `--stream`, `--graph`, `--tree`, `--procs`,
-`--sample`, `--watch` and `--dataflow`. `--dot` (Graphviz) is available on
-`--graph`, `--tree` and `--procs`. `--record=<f>` works on **every** headless
-view.
+`--json` is available on `--info`, `--log`, `--stream`, `--graph`, `--tree`,
+`--procs`, `--sample`, `--watch` and `--dataflow`. `--dot` (Graphviz) is
+available on `--graph`, `--tree` and `--procs`. `--record=<f>` works on
+**every** headless view.
 
 ## Fidelity metrics — the ones that ride every view
 
@@ -42,7 +42,7 @@ footer (and, for the statistical sampler, in `--json` too).
 
 | Metric | Values | Meaning |
 |---|---|---|
-| `provenance.backend` | `ptrace-syscalls`, `ptrace-stream`, `ptrace-region`, `ptrace-tree`, `ptrace-graph`, `ptrace-procs`, `ptrace-dataflow`, `hwdebug-watch`, `ibs-op` | Which engine produced the file. |
+| `provenance.backend` | `ptrace-syscalls`, `ptrace-stream`, `ptrace-region`, `ptrace-tree`, `ptrace-graph`, `ptrace-procs`, `ptrace-dataflow`, `hwdebug-watch`, `ibs-op`, `proc-snapshot` (`--info`) | Which engine produced the file. |
 | `provenance.exact` | `true` \| `false` | `true` = every event in the window was observed; `false` = a **sample**. Only `--sample` is `false`. |
 | `provenance.trust` | `exact` \| `statistical` (asmspy emits these two; the vocabulary also has `weak`/`strong`) | The tier word for the same fact. |
 | `provenance.window` | `{base,len}` | Present when the capture was scoped to a region (`--trace`, `--dataflow`). |
@@ -327,6 +327,17 @@ Opt-in event streams (all absent by default, all `--record`/`--serve` only):
 | `--blame` | `blame` | `step`, `off`, `loc`, `cone[]`, `born_untraced` | Backward def-use cone, **including the sink**. `born_untraced:true` = no traced producer (argument, constant, pre-existing state) — provenance starts at instrumentation, and the cone is the sink alone, never empty. |
 | `--statediff` | `statediff` | `step`, `changed{}`, `computed` | Register delta vs the previous held step. `computed:false` on the first held step, with an empty `changed` — a full delta there would claim everything changed. |
 | `--continuous` | `df_invocation` | `pass`, `result`, `steps_total`, `truncated` | Delimits each re-armed pass; every pass restarts `df_step` at step 0, so a reader needs the marker to segment them. |
+| `--insns` | `trace` | `step`, `off`, `disasm` | The ordered instruction stream the session already single-stepped through. Off by default so existing recordings are unchanged; a divergence pair needs it, because it is what lets two dataflow recordings be **aligned**. |
+
+### Serve-session events
+
+A `--serve` session emits two streams no headless `--record` carries:
+`codeimage` (versioned, JIT-safe code bytes — the `when` timestamp above) and
+`vmmap` — the target's address-space map (`/proc/<pid>/maps` parsed, ranked
+and encoded), emitted at session start and re-emitted **only when the map
+changes** (a digest gates re-emission). `vmmap` is what lets a consumer name
+address regions; the desktop's 3D plane reads it for its region naming and
+roster.
 
 ### `--auto` — what the picker chose, and on what evidence
 
@@ -336,7 +347,7 @@ itself reported (on stderr headless, as a `session state:"pick"` event under
 
 | Metric | Values | Meaning |
 |---|---|---|
-| `sampler` | `ibs-op` \| `sw-clock` | Which sampler actually ran after `auto` resolved. |
+| `sampler` | `ibs-op` \| `sw-clock` \| `ptrace-pc` | Which sampler actually ran after `auto` resolved. |
 | `evidence` | `entry` \| `residency` \| `idle` | **The load-bearing field.** `entry` = a branch was observed landing on the function's first byte. `residency` = an IP histogram said time was spent there, which is *not* entry evidence. `idle` = nothing qualified. |
 | `func`, `base`, `len` | string, u64, u64 | The region handed to the capture. |
 | `weight` | u64 | Entry samples (`entry`) or residency samples (`residency`). |
@@ -367,6 +378,7 @@ BSD or Windows body, and no 32-bit body — a 32-bit tracee is refused at attach
 | `--dataflow` (+ `regstate`/`mem`/`blame`/`statediff`/`fpenv`) | ✅ | ✅ | ❌ `# SKIP` | live value producer: Linux **x86-64** + Capstone |
 | `--dataflow --auto --sampler=ibs` | ❌ | ✅ | ❌ | AMD IBS-Op |
 | `--dataflow --auto --sampler=sw` | ✅ | ✅ | ❌ | `PERF_COUNT_SW_TASK_CLOCK`, x86-64 build only |
+| `--dataflow --auto --sampler=ptrace` | ✅ | ✅ | ❌ | ptrace only — opens **no** perf event |
 | `--serve`, `--record`, `--launch` | ✅ | ✅ | ✅ | the underlying view |
 
 Every ❌ above is a **clean self-skip**: `# SKIP` with the measured reason and
@@ -405,7 +417,7 @@ An architecture ✅ above still needs the host to cooperate.
 | `ptrace` rights | every view except `--sample` and process details | same-uid **and** `ptrace_scope=0`, or `CAP_SYS_PTRACE`, or the target opted in via `PR_SET_PTRACER` |
 | kernel floor | attach | Linux 3.4+ for `PTRACE_SEIZE`. An older kernel fails at the `ptrace` call and *looks like* a permission denial — check `uname -r` first |
 | `PTRACE_GET_SYSCALL_INFO` | `--log` entry/exit split | Linux 5.3+; below that it falls back to an entry/exit toggle, which can desync when a thread is seized mid-syscall |
-| `perf_event_open` | `--sample`, `--dataflow --auto` | same-uid at the default `perf_event_paranoid=2`; in a container either `--security-opt seccomp=unconfined` or **`--cap-add=PERFMON`** (which also bypasses a raised sysctl) |
+| `perf_event_open` | `--sample`, `--dataflow --auto --sampler=ibs|sw` | same-uid at the default `perf_event_paranoid=2`; in a container either `--security-opt seccomp=unconfined` or **`--cap-add=PERFMON`** (which also bypasses a raised sysctl). The `ptrace` sampler opens no perf event, so `--auto`'s third rung survives a fully locked-down perf |
 | IBS `swfilt` | `--sample` | Linux ≳ 6.2 — the user-only filter that makes IBS unprivileged |
 | Capstone | `disasm` fields, `--dataflow`, watchpoint direction decode | linked at build time; without it offsets and counts are still exact, the text is simply absent |
 | soft-dirty / `PAGEMAP_SCAN` | `codeimage` events under `--serve` | Linux ≥ 6.7. Where absent, the session emits the measured reason as a `note` and captures anyway — a recording with no `codeimage` is normal |

@@ -119,7 +119,8 @@ uses:
   on each of `ubuntu-latest` (linux-x86_64), `ubuntu-24.04-arm` (linux-aarch64),
   and `macos-latest` (darwin-arm64), uploading each `build/dist/native/<plat>/`
   as a `native-payload-<os>` artifact. The scarce/slow Intel-macOS corner
-  (`darwin-x86_64`) builds nightly + on dispatch in `payloads (macos-13, nightly)`,
+  (`darwin-x86_64`) builds nightly + on dispatch in `payloads (macos-15-intel,
+  nightly)` — the `macos-13` image was retired 2025-12-08 —
   mirroring how `test-macos-x86` gates that runner off the per-push path.
 - **`payloads (collect + verify)`** downloads every `native-payload-*` artifact,
   merges them into one `build/dist/native/` tree, runs `make package-libs-verify`

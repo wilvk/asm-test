@@ -169,7 +169,7 @@ tr2.covered?(0)           # symbol-mode block entered?
 NativeTrace.shutdown
 ```
 
-Linux x86-64 only; self-skips without DynamoRIO; full reference in
+Linux x86-64 + macOS x86-64 (fork-built runtime); self-skips without DynamoRIO; full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -179,7 +179,7 @@ A sibling native tier in
 (`Asmtest::HwTrace`) records the **same** `asmtest_trace_t` coverage from the real
 CPU, but needs no separate engine install: it defaults to the **single-step**
 backend (the CPU's `EFLAGS.TF` trap flag), so `HwTrace.available?(SINGLESTEP)` is
-true and it **traces live on any x86-64 Linux** — CI and plain containers included —
+true and it **traces live on any x86-64 Linux or macOS** — CI and plain containers included —
 where the DynamoRIO tier needs a DynamoRIO install. Intel PT and AMD LBR are picked
 automatically on the bare-metal hardware that has them.
 
@@ -285,6 +285,8 @@ pointing `ASMTEST_LIB` / `ASMTEST_CORPUS_LIB` at the built libs.
 
 ## Maturity
 
-A published gem (and RSpec/minitest integration of the `assert_*` helpers) is
-future work; the reusable module with Tier-2 assertions ships today. See
+The gem now builds and install-smokes in the release pipeline — only the
+credentialed publish remains. RSpec/minitest integration of the `assert_*`
+helpers is future work; the reusable module with Tier-2 assertions ships
+today. See
 [Packaging the bindings](../reference/packaging.md).

@@ -10,8 +10,8 @@ targets) pull in extra tools you can install on demand.
 | | Required for | Notes |
 |---|---|---|
 | **C compiler** (`cc` — gcc or clang) + `make` | The core framework | Also assembles the `.s` sources |
-| x86-64 **or** AArch64 CPU | Running native tests | Both are first-class targets |
-| Linux **or** macOS | Everything | ELF and Mach-O handled by `asm.h` |
+| x86-64, AArch64, **or** RISC-V (rv64) CPU | Running native tests | All three are native host tiers (see [Portability](../reference/portability.md)) |
+| Linux **or** macOS | Everything | ELF and Mach-O handled by `asm.h`; Windows is covered by the [Win64 tier](../guides/win64.md) |
 | `nasm` | The NASM backend (`ASM_SYNTAX=nasm`) | x86-64 only, opt-in |
 | `pkg-config` | Installing/consuming `asmtest.pc` | See [Integration](../reference/integration.md) |
 | `libunicorn` | The [emulator tier](../guides/emulator.md) (`make emu-test`) | Optional |
@@ -54,7 +54,10 @@ maintainers is in [releasing.md](../reference/releasing.md#system-packages).
 ## Install the desktop GUI app
 
 The desktop app (`asmtest-desktop`, built with `make desktop`) — the full Dear
-ImGui trace viewer/debugger — has its own Debian package and AppImage, separate
+ImGui trace viewer/debugger — can also be set up straight from a checkout:
+`make desktop-setup` installs the host build dependencies, and
+`make desktop-install` builds and installs the app with a `.desktop` launcher.
+For a packaged install it has its own Debian package and AppImage, separate
 from the C-core specs above because it ships a different artifact under a
 different license: it links the GPL-2.0 Unicorn emulator directly, so the built
 package is effectively GPL-2.0 as a whole (see each spec's copyright/NOTICE).

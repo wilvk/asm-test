@@ -170,7 +170,7 @@ tr2:covered(0)
 NativeTrace.shutdown()
 ```
 
-Linux x86-64 only; self-skips without DynamoRIO. Full reference in
+Linux x86-64 + macOS x86-64 (fork-built runtime); self-skips without DynamoRIO. Full reference in
 [Native runtime tracing](../guides/tracing/native-tracing.md).
 
 ### Hardware / single-step tracing — `HwTrace` (optional)
@@ -180,7 +180,7 @@ A sibling native tier
 records the **same** `asmtest_trace_t` coverage from the real CPU, but needs no
 separate engine install: it defaults to the **single-step** backend (the CPU's
 `EFLAGS.TF` trap flag), so `HwTrace.available(SINGLESTEP)` is true and it **traces
-live on any x86-64 Linux** — CI and plain containers included — where the DynamoRIO
+live on any x86-64 Linux or macOS** — CI and plain containers included — where the DynamoRIO
 tier needs a DynamoRIO install. Intel PT and AMD LBR are picked automatically on the
 bare-metal hardware that has them.
 
@@ -288,6 +288,7 @@ make docker-lua       # or in an isolated container
 
 ## Maturity
 
-A published LuaRocks rock (and `busted` integration of the `assert_*` helpers) is
-future work; the reusable module with Tier-2 assertions ships today. See
+The rock now builds in the release pipeline (the LuaRocks upload itself stays
+a manual step). `busted` integration of the `assert_*` helpers is future work;
+the reusable module with Tier-2 assertions ships today. See
 [Packaging the bindings](../reference/packaging.md).

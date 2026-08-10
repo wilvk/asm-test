@@ -18,14 +18,17 @@ Both extra tiers now ship inside `libasmtest_emu` itself — it is the full
 superset (emulator + Keystone assembler + Capstone disassembler), so they are on
 by default (see [The optional native tiers](#the-optional-native-tiers) below).
 
-Two further **native-trace** tiers — in-process **DynamoRIO** (`libasmtest_drapp`)
-and the **hardware / single-step** tier (`libasmtest_hwtrace`) — are *separate*,
-advanced opt-ins (neither is part of the superset). **Every** binding ships a
-wrapper for both: a `drtrace` (`NativeTrace`) and an `hwtrace` (`HwTrace`) module,
+Three further tiers — in-process **DynamoRIO** (`libasmtest_drapp`),
+the **hardware / single-step** tier (`libasmtest_hwtrace`), and the
+**data-flow** tier (`libasmtest_dataflow`) — are *separate*,
+advanced opt-ins (none is part of the superset). **Every** binding ships a
+wrapper for all three: a `drtrace` (`NativeTrace`), an `hwtrace` (`HwTrace`),
+and a `dataflow` (value-trace L0→L1→L2) module,
 each dlopen-loading its library at run time and self-skipping when it is absent. The
-single-step backend in particular traces live on any x86-64 Linux with no engine
+single-step backend in particular traces live on any x86-64 Linux or macOS with no engine
 install, so each language page works it end to end. See
-[Native runtime tracing](../guides/tracing/native-tracing.md). A binding still keeps an
+[Native runtime tracing](../guides/tracing/native-tracing.md) and
+[Data-flow tracing](../guides/tracing/data-flow.md). A binding still keeps an
 `asm_available` / `disas_available` probe so it can self-skip if pointed at an
 older/leaner lib that lacks them.
 
