@@ -1961,11 +1961,20 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // state its reason wherever it is shown.
     shell_standalone_chrome(s, sv, a);
 
-    if (s.scene_host == nullptr) {
-        ImGui::TextDisabled(
-            "3D viewport unavailable — no GL context in this build/run "
-            "(headless test, or a viewer with no display). The scene's models, "
-            "provenance and legend above are fully woven.");
+    if (s.scene_host == nullptr || !s.settings.use_gpu) {
+        // Same degraded body, two distinct causes — a capability this
+        // build/run lacks vs a Settings choice the user made and can undo.
+        if (s.scene_host != nullptr)
+            ImGui::TextDisabled(
+                "GPU rendering is OFF (Settings \xe2\x96\xb8 3D scene) — the "
+                "flat 2D reading surface below stands in for the 3D "
+                "viewport. The scene's models, provenance and legend above "
+                "are fully woven.");
+        else
+            ImGui::TextDisabled(
+                "3D viewport unavailable — no GL context in this build/run "
+                "(headless test, or a viewer with no display). The scene's "
+                "models, provenance and legend above are fully woven.");
         // T1 (59): the flat reading surface is the ADDRESS PLANE's 2D form
         // (52). It is not a substitute for a standalone scene — those have no
         // plane — so it is offered only for the Plane kind, and the other
@@ -4645,6 +4654,12 @@ static void draw_settings(ShellState &s) {
             s.settings_dirty = true;
         ImGui::TextDisabled("A region already placed keeps its spot when a "
                             "later capture adds more.");
+        if (ImGui::Checkbox("Use GPU for the 3D viewport",
+                            &s.settings.use_gpu))
+            s.settings_dirty = true;
+        ImGui::TextDisabled("Unchecked: the pane draws the flat 2D reading "
+                            "surface instead of the GL scene. Models are "
+                            "woven either way.");
 
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());

@@ -115,6 +115,22 @@ int main() {
               sl.stable_plane_layout,
           "an old store without the keys must keep the checked defaults");
 
+    // The GPU toggle: the 3D viewport's GL render path, ON by default; OFF
+    // takes the same honest degraded branch a no-GL build shows (flat 2D
+    // surface for the plane), as a user CHOICE rather than a missing
+    // capability.
+    Settings gd;
+    check("gpu defaults ON", gd.use_gpu, "GPU rendering starts checked");
+    Settings gs;
+    gs.use_gpu = false;
+    Settings gb;
+    check("gpu toggle round-trips",
+          settings_parse(settings_serialize(gs), gb) && !gb.use_gpu,
+          "use_gpu must persist");
+    Settings gl2;
+    check("gpu absent key stays ON", settings_parse("{}", gl2) && gl2.use_gpu,
+          "an old store must not disable the GPU path");
+
     ImGui::DestroyContext();
     if (failures) {
         std::fprintf(stderr, "test_settings: %d FAILURE(S)\n", failures);

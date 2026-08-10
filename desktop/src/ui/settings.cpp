@@ -28,6 +28,7 @@ std::string settings_serialize(const Settings &s) {
     j["ssh_host"] = s.ssh_host;
     j["live_union_weave"] = s.live_union_weave;
     j["stable_plane_layout"] = s.stable_plane_layout;
+    j["use_gpu"] = s.use_gpu;
     return j.dump(2);
 }
 
@@ -64,6 +65,8 @@ bool settings_parse(const std::string &text, Settings &out) {
     if (auto it = j.find("stable_plane_layout");
         it != j.end() && it->is_boolean())
         out.stable_plane_layout = it->get<bool>();
+    if (auto it = j.find("use_gpu"); it != j.end() && it->is_boolean())
+        out.use_gpu = it->get<bool>();
     return true;
 }
 

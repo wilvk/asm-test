@@ -43,6 +43,13 @@ struct Settings {
     bool live_union_weave = true;
     bool stable_plane_layout = true;
 
+    // The 3D viewport's GPU (offscreen-GL) render path, ON by default. OFF
+    // takes the SAME honest degraded branch a no-GL build shows — the flat 2D
+    // reading surface for the address plane, a stated "no flat form" for the
+    // standalone kinds — presented as the user's Settings choice, never as a
+    // missing capability. The scene MODELS are woven either way.
+    bool use_gpu = true;
+
     static constexpr float kTextScaleMin = 0.8f;
     static constexpr float kTextScaleMax = 2.0f;
 };
