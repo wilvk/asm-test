@@ -205,6 +205,14 @@ struct SceneView {
     // regardless of this flag.
     bool flat_view = false;
 
+    // Which 3D-scene settings the CACHED weave above was built with, stamped
+    // by the Scene3D dispatch before draw_scene_overview runs. A toggle flip
+    // (Settings pane) then mismatches and drops `built`, so the pane re-weaves
+    // on the next frame instead of showing a scene the settings no longer
+    // describe. Both default false so the very first weave stamps them.
+    bool woven_union = false;
+    bool woven_stable = false;
+
     // 56 T2/T5 (fidelity-and-module-layers): the survey's scene-facing extract
     // — woven once per recording alongside terr/traj/conv above (a survey
     // aggregate does not change with the playhead), shared by T2's
@@ -523,6 +531,18 @@ struct ShellState {
     int live_tab = -1;
     uint64_t live_built_events = 0;
     size_t live_built_recordings = 0;
+    // Growing-ness at the last rebuild — the watermark's third component. A
+    // new session's growing capture can hold exactly as many events as the
+    // frozen one last built (ndone unchanged), and the counts alone would
+    // early-return on that moved boundary with every live model stale.
+    bool live_built_growing = false;
+    // The SESSION UNION the 3D pane weaves when Settings::live_union_weave is
+    // on: recordings() ∪ growing, rebuilt by shell_sync_live_tab on the same
+    // growth watermark as the slot copy above — the in-memory twin of a
+    // `--serve --record` tee (doc/recording_union.h), so a fresh Start ADDS to
+    // the address plane instead of replacing it. Derived state, never saved.
+    Recording live_union;
+    Streams live_union_streams;
     // 25 T3: the dedup watermark. When an ENDED session's capture is opened as a
     // saved file (the Inspect door's "Open in Loom"), that permanent file tab
     // supersedes the ephemeral live tab — so we retire the live tab and remember
@@ -739,6 +759,19 @@ void draw_home_rail(ShellState &s);
 // HUD + placard path. Public so test_shell can drive it without forcing the tab
 // selection. Call inside an ImGui window, with s.active_tab set to the recording.
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a);
+
+// The recording+streams the 3D pane weaves for the ACTIVE tab: the session
+// union (ShellState::live_union) when that tab is the live tab and
+// Settings::live_union_weave is on, else the tab's own pair exactly as today.
+// Pure over ShellState, so test_shell pins the seam with no ImGui at all;
+// the Scene3D dispatch is its one production caller.
+struct SceneSource {
+    const Recording *rec;
+    const Streams *streams;
+    bool is_union = false;
+};
+SceneSource shell_scene_source(const ShellState &s, const Recording &r,
+                               const Streams &a);
 
 // T3 (44-faithful-city-phase-a): the fidelity-tier -> Atmosphere mapping,
 // pure and public so it is unit-testable with NO ImGui frame and no GL

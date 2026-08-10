@@ -35,6 +35,7 @@
 #include "analysis/diff.h" // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
 #include "doc/df_passes.h" // 37 T1: the pass pager's region words
+#include "doc/recording_union.h" // live union weave: recordings() ∪ growing
 #include "live/inspect.h" // live_session_toasts (16 T1)
 #include "scene3d/focus.h" // 51 T1/T2: SceneFocus, build_focus_mask
 #include "scene3d/goto.h"
@@ -212,6 +213,7 @@ void shell_retire_live_tab(ShellState &s) {
     shell_close(s, idx); // erases every parallel slot + clears live_tab
     s.live_built_events = 0;
     s.live_built_recordings = 0;
+    s.live_built_growing = false;
     if (was_active)
         s.active_tab =
             s.ws.recordings.empty()
@@ -271,14 +273,26 @@ void shell_sync_live_tab(ShellState &s) {
 
     // Rebuild only when the capture grew, or a session boundary moved which
     // recording `live` points at — the same gate draw_live_views uses, so a
-    // static frame re-decodes nothing.
+    // static frame re-decodes nothing. Growing-ness is part of the watermark:
+    // a NEW session whose growing capture happens to hold exactly as many
+    // events as the frozen one this slot last built (with ndone unchanged)
+    // is a moved boundary the two counts alone cannot see, and returning
+    // early there leaves every live model — slot copy, streams, union — on
+    // the previous capture until the next event lands.
     uint64_t n = live->event_count();
     size_t ndone = sess.recordings().size();
-    if (n == s.live_built_events && ndone == s.live_built_recordings)
+    const bool growing_now = sess.growing() != nullptr;
+    if (n == s.live_built_events && ndone == s.live_built_recordings &&
+        growing_now == s.live_built_growing)
         return;
     size_t i = static_cast<size_t>(s.live_tab);
     s.ws.recordings[i] = *live; // the r/a-based views (Summary, 3D, observer)
     s.streams[i] = decode_streams(s.ws.recordings[i]);
+    // The session union the 3D pane weaves (Settings::live_union_weave) —
+    // maintained on this same watermark, so it is exactly as fresh as the slot
+    // copy above. Completed captures are immutable, so (n, ndone) covers it.
+    s.live_union = merge_session_recordings(sess.recordings(), sess.growing());
+    s.live_union_streams = decode_streams(s.live_union);
     // A live session keeps its lifecycle OUTSIDE the recording (07-T3); feed it
     // in so the observer deck reads the started-params + skip the way a file's
     // inline lifecycle is read.
@@ -353,6 +367,7 @@ void shell_sync_live_tab(ShellState &s) {
     }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
+    s.live_built_growing = growing_now;
     shell_wire_nav(
         s); // the decoded stream id is now live — point the router at it
 }
@@ -1328,7 +1343,16 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // from the recording's `codeimage` code regions (08-T7); a replay file with
     // none yields an empty plane, which the pane SAYS rather than drawing a void.
     if (!sv.built) {
-        std::vector<space::Region> regs = space::regions_from_codeimage(r);
+        // Stable plane layout (settings-gated): pack code regions in
+        // FIRST-SEEN order and keep that order through build_projection, so a
+        // region a previous capture already placed keeps its domain slot when
+        // this weave adds more. The observed data spans still append AFTER the
+        // code prefix — they are unstable observations by nature, and the
+        // reflow notice below reports honestly when they move the floor.
+        const bool stable = s.settings.stable_plane_layout;
+        std::vector<space::Region> regs =
+            stable ? space::regions_from_codeimage_seen(r)
+                   : space::regions_from_codeimage(r);
         sv.has_regions = !regs.empty();
         // 54 T1: observed-data-span extension — an access no codeimage region
         // maps still places, as an Unknown "observed data" span rather than a
@@ -1356,7 +1380,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
                      " region(s) named from " + std::to_string(vm.spans.size()) +
                      " of " + std::to_string(vm.spans_total) + " mapping(s)" +
                      (vm.truncated ? " (capped)" : "");
-        space::Projection proj = space::build_projection(std::move(regs));
+        space::Projection proj =
+            space::build_projection(std::move(regs), stable);
         proj.data_span_note = std::move(span_note);
         proj.vmmap_note = std::move(vmnote);
         // 61 T9: did this weave move the floor the reader was already looking
@@ -2848,10 +2873,32 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
     case ViewId::AbiXray:
         body_abixray(s, a, b);
         break;
-    case ViewId::Scene3D:
-        draw_scene_overview(s, r, *a);
-        break;
+    case ViewId::Scene3D: {
+        // The 3D pane's weave source: the session union for the live tab
+        // (settings-gated), else the tab's own recording. A settings flip
+        // since the cached weave drops `built`, so the scene re-weaves with
+        // what the checkboxes now say instead of keeping a stale substrate.
+        const SceneSource src = shell_scene_source(s, r, *a);
+        if (s.active_tab >= 0 &&
+            static_cast<size_t>(s.active_tab) < s.scenes.size()) {
+            SceneView &sv = s.scenes[static_cast<size_t>(s.active_tab)];
+            if (sv.built && (sv.woven_union != src.is_union ||
+                             sv.woven_stable != s.settings.stable_plane_layout))
+                sv.built = false;
+            sv.woven_union = src.is_union;
+            sv.woven_stable = s.settings.stable_plane_layout;
+        }
+        draw_scene_overview(s, *src.rec, *src.streams);
+    } break;
     }
+}
+
+SceneSource shell_scene_source(const ShellState &s, const Recording &r,
+                               const Streams &a) {
+    const bool live_active = s.live_tab >= 0 && s.active_tab == s.live_tab;
+    if (live_active && s.settings.live_union_weave)
+        return SceneSource{&s.live_union, &s.live_union_streams, true};
+    return SceneSource{&r, &a, false};
 }
 
 // The ONE faithful "unavailable views (N)" affordance body (T1 step 4, D7). It

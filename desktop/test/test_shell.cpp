@@ -2002,6 +2002,64 @@ int main() {
               "reset() must drop the ephemeral live tab");
     }
 
+    // --- live union weave: the 3D pane's source spans EVERY capture this
+    // session made (recordings() ∪ growing), so a fresh Start on the same
+    // process ADDS to the address plane instead of replacing it. Pure model:
+    // two fed sessions over different codeimage regions, then the seam the
+    // Scene3D dispatch reads (shell_scene_source) must hand back the union —
+    // and fall back to the per-capture recording when the setting is off.
+    {
+        static const char *kHdr =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
+            R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        ShellState ls;
+        ls.mode = Mode::Capture;
+        LiveSession &sess = ls.inspect.session;
+        // Capture A: one code region at 4096, one step, clean end.
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":77,"params":{}})");
+        sess.feed_line(kHdr);
+        sess.feed_line(R"({"k":"codeimage","base":4096,"len":64,"version":0})");
+        sess.feed_line(R"({"k":"df_step","step":0,"off":0})");
+        sess.feed_line(
+            R"({"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        sess.feed_line(
+            R"({"k":"session","state":"stopped","mode":"dataflow","events":2,"reason":"stop"})");
+        shell_sync_live_tab(ls);
+        // Capture B: the SAME process again, a different region, still growing.
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":77,"params":{}})");
+        sess.feed_line(kHdr);
+        sess.feed_line(R"({"k":"codeimage","base":8192,"len":32,"version":0})");
+        sess.feed_line(R"({"k":"df_step","step":0,"off":4})");
+        shell_sync_live_tab(ls);
+        check("union/live tab exists", ls.live_tab >= 0,
+              "two sessions must still yield the one live tab");
+        size_t i = static_cast<size_t>(ls.live_tab);
+        check("union/recording spans both captures",
+              ls.live_union.event_count() == 4 &&
+                  ls.live_union.by_kind.count("codeimage") == 1 &&
+                  ls.live_union.by_kind.at("codeimage").size() == 2,
+              "the maintained union must hold A's AND B's events");
+        SceneSource src =
+            shell_scene_source(ls, ls.ws.recordings[i], ls.streams[i]);
+        check("union/source on by default",
+              src.is_union && src.rec == &ls.live_union,
+              "live tab + default settings must weave the session union");
+        check("union/streams decoded from the union",
+              src.streams == &ls.live_union_streams,
+              "the union weave needs the union's own decoded streams");
+        ls.settings.live_union_weave = false;
+        SceneSource cur =
+            shell_scene_source(ls, ls.ws.recordings[i], ls.streams[i]);
+        check("union/setting off falls back to the current capture",
+              !cur.is_union && cur.rec == &ls.ws.recordings[i] &&
+                  cur.streams == &ls.streams[i],
+              "the toggle must restore today's per-capture weave");
+    }
+
     // --- 26 T5.3: a live --dataflow --steps capture lights the Scrubber ------
     // The live regstate producer (26) emits one `regstate` per df_step under the
     // user_regs@x86_64/sysv descriptor. Feeding them makes the live tab's
