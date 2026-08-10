@@ -673,6 +673,61 @@ static void plan_key_sensitivity() {
           "follow only moves seq0, which is keyed on its own");
 }
 
+static void density_rle() {
+    StripModel m;
+    m.deck_enabled = true;
+    StripLane ln;
+    ln.tid = 1;
+    ln.label = "[1]";
+    m.lanes.push_back(ln);
+    // seq_per_px=2, px_w=8: cols 0,1 hold 2 events each; cols 2,3 empty;
+    // cols 4,5 hold 2 each — two equal runs split by a gap
+    m.lane_activity.push_back({0, 1, 2, 3, 16, 17, 18, 19});
+    m.seq_end = 32;
+    strip_view_t v;
+    v.px_w = 8;
+    v.px_h = 200;
+    v.seq_per_px = 4.0 + 1e-9; // just past the mark threshold: envelope mode
+    std::vector<strip_prim_t> p;
+    strip_plan(m, v, &p);
+    size_t density = 0;
+    for (auto &q : p)
+        if (q.kind == strip_prim::lane_density) {
+            density++;
+            check("rle: run spans the equal stretch", q.x1 - q.x0 >= 2.0f,
+                  "adjacent equal columns merged into one prim");
+        }
+    check("rle: two runs, not four columns", density == 2,
+          "equal-intensity neighbours collapse; the gap breaks the run");
+
+    // envelope merge: one band, identical min/max in adjacent columns
+    StripModel me;
+    me.bands_enabled = true;
+    StripBand bd;
+    bd.region.base = 0x1000;
+    bd.region.len = 0x1000;
+    bd.region.label = "code";
+    me.bands.push_back(bd);
+    for (int i = 0; i < 8; i++) {
+        StripMemMark mk;
+        mk.seq = static_cast<uint64_t>(i * 4); // one per column
+        mk.addr = 0x1800;                      // SAME address every column
+        mk.size = 8;
+        mk.is_write = true;
+        mk.band = 0;
+        me.mem.push_back(mk);
+    }
+    me.seq_end = 32;
+    std::vector<strip_prim_t> pe;
+    strip_plan(me, v, &pe);
+    size_t envs = 0;
+    for (auto &q : pe)
+        if (q.kind == strip_prim::mem_envelope)
+            envs++;
+    check("envelope merge: one run, not eight columns", envs == 1,
+          "identical adjacent column rects extend, never restack");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -697,6 +752,7 @@ int main() {
     plan_key_sensitivity();
     simplified_selection();
     simplified_plan_rows();
+    density_rle();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

@@ -702,21 +702,42 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
             row_of[lsel.keep[r]] = static_cast<int>(r);
         const int rows = L.deck_rows;
         const int last = std::min<int>(rows, v.lane0 + L.lanes_visible);
+        // Density is RUN-LENGTH merged: adjacent columns with the same
+        // quantized intensity become ONE prim (hot loops and idle stretches
+        // collapse); a zero column or a changed intensity breaks the run.
         auto emit_density = [&](const std::vector<uint64_t> &act, float ly,
                                 uint32_t a) {
+            uint32_t run_q = 0;
+            int run_c0 = -1;
+            auto flush = [&](int c_end) {
+                if (run_c0 >= 0)
+                    push(strip_prim::lane_density,
+                         static_cast<float>(run_c0), ly + 2.0f,
+                         static_cast<float>(c_end), ly + v.lane_h - 2.0f, a,
+                         run_q, std::string());
+                run_c0 = -1;
+            };
             for (int c = 0; c < cols; c++) {
                 size_t i0, i1;
                 col_range(act, c, &i0, &i1);
                 const uint64_t n = i1 - i0;
-                if (!n || !density_max)
+                uint32_t q = 0;
+                if (n && density_max)
+                    q = std::min<uint32_t>(
+                        255, static_cast<uint32_t>(
+                                 (n * 255 + density_max - 1) / density_max));
+                if (q == 0) {
+                    flush(c);
                     continue;
-                const uint32_t q = static_cast<uint32_t>(
-                    (n * 255 + density_max - 1) / density_max);
-                push(strip_prim::lane_density, static_cast<float>(c),
-                     ly + 2.0f, static_cast<float>(c + 1),
-                     ly + v.lane_h - 2.0f, a, std::min<uint32_t>(255, q),
-                     std::string());
+                }
+                if (run_c0 >= 0 && q != run_q)
+                    flush(c);
+                if (run_c0 < 0) {
+                    run_c0 = c;
+                    run_q = q;
+                }
             }
+            flush(cols);
         };
         for (int rrow = v.lane0; rrow < last; rrow++) {
             const float ly =
@@ -864,19 +885,38 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                 col_range(hidden_seqs, c, &i0, &i1);
                 row_max = std::max<uint64_t>(row_max, i1 - i0);
             }
+            // the same RLE the deck densities use: equal neighbours merge
+            uint32_t run_q = 0;
+            int run_c0 = -1;
+            auto flush = [&](int c_end) {
+                if (run_c0 >= 0)
+                    push(strip_prim::lane_density,
+                         static_cast<float>(run_c0), by + 12.0f,
+                         static_cast<float>(c_end), by + L.band_h - 2.0f,
+                         kStripAggRow, run_q, std::string());
+                run_c0 = -1;
+            };
             for (int c = 0; c < cols && row_max; c++) {
                 size_t i0, i1;
                 col_range(hidden_seqs, c, &i0, &i1);
                 const uint64_t n = i1 - i0;
-                if (!n)
+                uint32_t q = 0;
+                if (n)
+                    q = std::min<uint32_t>(
+                        255, static_cast<uint32_t>((n * 255 + row_max - 1) /
+                                                   row_max));
+                if (q == 0) {
+                    flush(c);
                     continue;
-                const uint32_t q = static_cast<uint32_t>(
-                    (n * 255 + row_max - 1) / row_max);
-                push(strip_prim::lane_density, static_cast<float>(c),
-                     by + 12.0f, static_cast<float>(c + 1),
-                     by + L.band_h - 2.0f, kStripAggRow,
-                     std::min<uint32_t>(255, q), std::string());
+                }
+                if (run_c0 >= 0 && q != run_q)
+                    flush(c);
+                if (run_c0 < 0) {
+                    run_c0 = c;
+                    run_q = q;
+                }
             }
+            flush(cols);
         }
         std::vector<uint64_t> mem_seqs;
         mem_seqs.reserve(m.mem.size());
@@ -904,6 +944,26 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                      std::string());
             }
         } else {
+            // Envelopes merge horizontally: an adjacent column whose rect is
+            // IDENTICAL (same band, rw, y0, y1 — a hot loop touching the
+            // same span) extends the previous prim instead of restacking a
+            // new one per column. `last_env` maps the exact rect identity to
+            // the prim it may extend; contiguity is enforced by x1 == c.
+            struct EnvKey {
+                int band;
+                bool rw;
+                float y0, y1;
+                bool operator<(const EnvKey &o) const {
+                    if (band != o.band)
+                        return band < o.band;
+                    if (rw != o.rw)
+                        return rw < o.rw;
+                    if (y0 != o.y0)
+                        return y0 < o.y0;
+                    return y1 < o.y1;
+                }
+            };
+            std::map<EnvKey, size_t> last_env; // → index into *out
             for (int c = 0; c < cols; c++) {
                 size_t i0, i1;
                 col_range(mem_seqs, c, &i0, &i1);
@@ -932,10 +992,18 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                     const int band = kv.first.first;
                     const float y0 = band_y(band, kv.second.lo);
                     const float y1 = band_y(band, kv.second.hi) + 1.0f;
+                    const EnvKey key{band, kv.first.second, y0, y1};
+                    auto it = last_env.find(key);
+                    if (it != last_env.end() &&
+                        (*out)[it->second].x1 == static_cast<float>(c)) {
+                        (*out)[it->second].x1 = static_cast<float>(c + 1);
+                        continue;
+                    }
                     push(strip_prim::mem_envelope, static_cast<float>(c), y0,
                          static_cast<float>(c + 1), y1,
                          static_cast<uint32_t>(band),
                          kv.first.second ? 1u : 0u, std::string());
+                    last_env[key] = out->size() - 1;
                 }
             }
         }
