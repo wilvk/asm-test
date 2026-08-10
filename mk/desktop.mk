@@ -1249,6 +1249,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_opcode_terrain \
                  $(BUILD)/desktop_test_scene2d \
                  $(BUILD)/desktop_test_strip_model \
+                 $(BUILD)/desktop_test_strip_draw \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
@@ -1543,6 +1544,16 @@ $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
     $(BUILD)/desktop/test/vw/overview.o \
     $(DESKTOP_TEST_UI_OBJ) \
     $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The session strip's painter under a headless context (2026-08-10
+# session-strip spec): the pure prim walk over EVERY prim kind, then the full
+# panel over a tiny in-memory model at three zooms. Geometry oracle
+# (TotalVtxCount) — a LogToClipboard text oracle cannot see geometry.
+$(BUILD)/desktop_test_strip_draw: $(BUILD)/desktop/test/t/test_strip_draw.o \
+    $(BUILD)/desktop/test/vw/strip.o $(BUILD)/desktop/test/vw/strip_draw.o \
+    $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The differential slice-parity test is the ONE binary here that links an engine

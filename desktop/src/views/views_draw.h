@@ -20,6 +20,7 @@
 #include "views/scene2d.h"
 #include "views/scrubber.h"
 #include "views/slice_view.h"
+#include "views/strip.h"
 #include "views/timeline.h"
 #include "walkthrough.h"
 
@@ -125,6 +126,16 @@ void draw_scene2d(const Scene2dPlan &plan, const space::TerrainModel &terr,
                   uint64_t playhead_t, uint64_t follow_step,
                   const DataflowStream *df,
                   const std::function<void(const dt_link &)> &go);
+// The session strip (2026-08-10 session-strip spec): draw_strip_plan is the
+// pure painter — walks pixel-space prims and writes the topmost hovered
+// prim's own text into `hover`; draw_strip is the panel (camera controls +
+// plan + paint + pick), the Loom's shape. Hue decisions ride IN the prims
+// (`b` carries class*4+outcome / rw bit / lane ordinal) — the painter never
+// reaches back into the model to decide a colour.
+void draw_strip_plan(const std::vector<strip_prim_t> &prims,
+                     std::string *hover);
+void draw_strip(StripState &st, const std::string &rec_id,
+                const std::function<void(const dt_link &)> &go);
 // The two-recording summary (04-replay-views.md T7). Every navigable row's "go"
 // button routes its deep link through `go` (the shell's dt_nav_go seam, exactly
 // as the Observer deck does) — NOT the clipboard: a nav button that only copied
