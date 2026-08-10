@@ -290,6 +290,64 @@ static void bands_and_marks() {
           "nothing places when no band exists; everything is counted");
 }
 
+static void run_seams() {
+    Recording r = mk_rec({
+        R"({"k":"df_invocation","pass":0,"result":42,"steps":8,"truncated":false})",
+        R"({"k":"df_step","step":0,"off":0,"ops":[]})",
+        R"({"k":"df_invocation","pass":1,"result":0,"steps":0,"truncated":false})",
+        R"({"k":"trace","basis":"rel","off":0})",
+        R"({"k":"coverage","basis":"rel","blocks":[0]})",
+        R"({"k":"end","events":5})",
+    });
+    StripModel m = strip_build(r, {}, {{3, "capture 2"}});
+    check("three derivations present", m.seams.size() == 4,
+          "2 invocation + 1 coverage-close + 1 capture");
+    check("seams sorted by seq",
+          std::is_sorted(m.seams.begin(), m.seams.end(),
+                         [](const StripRunSeam &a, const StripRunSeam &b) {
+                             return a.seq < b.seq;
+                         }),
+          "");
+    check("invocation label carries pass/result/steps",
+          !m.seams.empty() && m.seams[0].kind == StripSeamKind::Invocation &&
+              m.seams[0].label == "pass 0 = 42, 8 steps",
+          "result is a NUMBER (routine return), not a status word");
+    check("steps:0 is armed-and-waiting, not a verdict",
+          m.seams.size() > 1 && m.seams[1].armed_waiting &&
+              m.seams[1].label == "pass 1 — armed, region quiet",
+          "39 T4");
+    check("capture seam verbatim",
+          [&] {
+              for (auto &s : m.seams)
+                  if (s.kind == StripSeamKind::Capture)
+                      return s.label == std::string("capture 2");
+              return false;
+          }(),
+          "the caller's ordinal label passes through");
+    check("coverage closes the block BEFORE it",
+          [&] {
+              for (auto &s : m.seams)
+                  if (s.kind == StripSeamKind::CoverageClose)
+                      return s.seq > 0;
+              return false;
+          }(),
+          "seam sits after the closer");
+
+    // pass back-fill: same step value, different pass — the marker ordinal is
+    // the discriminator (stepindex keys segments the same stream-order way)
+    Recording r2 = mk_rec({
+        R"({"k":"df_invocation","pass":0,"result":1,"steps":2,"truncated":false})",
+        R"({"k":"mem","step":1,"ea":4200,"size":8,"rw":"w","space":"abs"})",
+        R"({"k":"df_invocation","pass":1,"result":1,"steps":2,"truncated":false})",
+        R"({"k":"mem","step":0,"ea":4208,"size":8,"rw":"w","space":"abs"})",
+        R"({"k":"end","events":4})",
+    });
+    StripModel m2 = strip_build(r2, two_bands(), {});
+    check("mem pass back-fill",
+          m2.mem.size() == 2 && m2.mem[0].pass == 0 && m2.mem[1].pass == 1,
+          "same step value, different pass — the marker is the discriminator");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -308,6 +366,7 @@ int main() {
     lanes_single_stream_and_unknown();
     rail_rows();
     bands_and_marks();
+    run_seams();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

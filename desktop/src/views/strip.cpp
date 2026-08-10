@@ -389,6 +389,71 @@ StripModel strip_build(const Recording &r,
                   return a.seq < b.seq;
               });
 
+    // --- run seams: three derivations, labelled by kind ---------------------
+    if (auto it = r.by_kind.find("df_invocation"); it != r.by_kind.end())
+        for (const Event &e : it->second) {
+            StripRunSeam s;
+            s.kind = StripSeamKind::Invocation;
+            s.seq = e.seq; // the marker precedes its pass's block
+            uint64_t pass = 0, steps = 0;
+            int64_t result = 0;
+            juint(e.body, "pass", &pass);
+            juint(e.body, "steps", &steps);
+            jint(e.body, "result", &result);
+            auto tr = e.body.find("truncated");
+            s.truncated =
+                tr != e.body.end() && tr->is_boolean() && tr->get<bool>();
+            if (steps == 0) {
+                // armed-and-waiting, not a verdict (39 T4)
+                s.armed_waiting = true;
+                s.label =
+                    "pass " + std::to_string(pass) + " — armed, region quiet";
+            } else {
+                s.label = "pass " + std::to_string(pass) + " = " +
+                          std::to_string(result) + ", " +
+                          std::to_string(steps) + " steps";
+            }
+            m.seams.push_back(std::move(s));
+        }
+    if (auto it = r.by_kind.find("coverage"); it != r.by_kind.end())
+        for (const Event &e : it->second) {
+            StripRunSeam s;
+            s.kind = StripSeamKind::CoverageClose;
+            s.seq = e.seq + 1; // a coverage event CLOSES the block before it
+            s.label = "coverage close";
+            m.seams.push_back(std::move(s));
+        }
+    for (const StripSeam &cs : capture_seams) {
+        StripRunSeam s;
+        s.kind = StripSeamKind::Capture;
+        s.seq = cs.seq;
+        s.label = cs.label;
+        m.seams.push_back(std::move(s));
+    }
+    std::stable_sort(m.seams.begin(), m.seams.end(),
+                     [](const StripRunSeam &a, const StripRunSeam &b) {
+                         return a.seq < b.seq;
+                     });
+    // Pass back-fill: a mem mark belongs to the last Invocation seam ≤ its
+    // seq. The ordinal is the Nth MARKER in stream order (0-based), NOT the
+    // marker's own `pass` field — a live union concatenates captures whose
+    // `pass` fields both restart at 0, and dt_link.invocation wants the
+    // segmented index's stream-order ordinal (analysis/stepindex.cpp keys
+    // segments the same way).
+    {
+        std::vector<std::pair<uint64_t, int32_t>> inv; // seq → marker ordinal
+        int32_t ord = 0;
+        for (const auto &s : m.seams)
+            if (s.kind == StripSeamKind::Invocation)
+                inv.emplace_back(s.seq, ord++);
+        for (auto &mk : m.mem) {
+            auto it2 = std::upper_bound(
+                inv.begin(), inv.end(),
+                std::make_pair(mk.seq, std::numeric_limits<int32_t>::max()));
+            mk.pass = it2 == inv.begin() ? -1 : std::prev(it2)->second;
+        }
+    }
+
     // --- the one-line honesty summary ---------------------------------------
     {
         std::string h;
