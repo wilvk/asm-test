@@ -98,13 +98,155 @@ const char *strip_prim_name(strip_prim k) {
     return "?";
 }
 
+namespace {
+// json field helpers, mirroring the get()-style reads the other views use
+inline bool jint(const nlohmann::json &b, const char *k, int64_t *out) {
+    auto it = b.find(k);
+    if (it == b.end() || !it->is_number_integer())
+        return false;
+    *out = it->get<int64_t>();
+    return true;
+}
+inline bool juint(const nlohmann::json &b, const char *k, uint64_t *out) {
+    auto it = b.find(k);
+    if (it == b.end() || !it->is_number())
+        return false;
+    *out = it->get<uint64_t>();
+    return true;
+}
+inline std::string jstr(const nlohmann::json &b, const char *k) {
+    auto it = b.find(k);
+    return (it != b.end() && it->is_string()) ? it->get<std::string>()
+                                              : std::string();
+}
+} // namespace
+
 StripModel strip_build(const Recording &r,
                        const std::vector<space::Region> &regions,
                        const std::vector<StripSeam> &capture_seams) {
-    (void)r;
     (void)regions;
     (void)capture_seams;
-    return StripModel{}; // built test-first across Tasks 3-6
+    StripModel m;
+    m.seq_end = r.event_count();
+    m.torn = r.torn;
+    m.end_truncated = r.end_truncated;
+    m.drops_lost = r.drops_lost;
+    m.drops_throttled = r.drops_throttled;
+
+    // --- lanes: tids discovered from what the strip actually draws ----------
+    // (NOT stitch.tid — a tid known only from PT slices has no strip-visible
+    // events and would make an empty lane.)
+    std::map<int64_t, std::vector<uint64_t>> activity; // tid → seqs
+    size_t activity_events = 0;
+    for (const char *kind : {"trace", "call", "watch"}) {
+        auto it = r.by_kind.find(kind);
+        if (it == r.by_kind.end())
+            continue;
+        for (const Event &e : it->second) {
+            activity_events++;
+            int64_t tid = -1;
+            jint(e.body, "tid", &tid);
+            activity[tid].push_back(e.seq);
+        }
+    }
+    // A syscall with a tid (a v2 writer) creates a lane too — its rail tick is
+    // its mark; it carries no activity count.
+    if (auto it = r.by_kind.find("syscall"); it != r.by_kind.end())
+        for (const Event &e : it->second) {
+            int64_t tid = -1;
+            if (jint(e.body, "tid", &tid))
+                activity.emplace(tid, std::vector<uint64_t>{});
+        }
+
+    if (activity.empty()) {
+        m.deck_reason = "no trace/call/watch events in this recording — "
+                        "there is no thread activity to lane";
+    } else {
+        m.deck_enabled = true;
+        // The LAST topo snapshot names tasks (topo.h: a snapshot is a complete
+        // statement of the tree at a moment; merging several would invent a
+        // tree that never existed at any one time).
+        struct Task {
+            long tgid = -1;
+            bool leader = false;
+            std::string comm;
+        };
+        std::map<int64_t, Task> tasks;
+        if (auto it = r.by_kind.find("topo");
+            it != r.by_kind.end() && !it->second.empty()) {
+            const Event &last = it->second.back();
+            auto ts = last.body.find("tasks");
+            if (ts != last.body.end() && ts->is_array())
+                for (const auto &t : *ts) {
+                    int64_t tid = -1;
+                    if (!jint(t, "tid", &tid))
+                        continue;
+                    Task k;
+                    int64_t tg = -1;
+                    jint(t, "tgid", &tg);
+                    k.tgid = static_cast<long>(tg);
+                    auto ld = t.find("leader");
+                    k.leader =
+                        ld != t.end() && ld->is_boolean() && ld->get<bool>();
+                    k.comm = jstr(t, "comm");
+                    tasks[tid] = k;
+                }
+        }
+        // Order: known tgids first (grouped, leader first, tid asc), then
+        // unknown-tgid lanes ascending tid (the -1 stream lane lands there).
+        std::vector<int64_t> tids;
+        tids.reserve(activity.size());
+        for (auto &kv : activity)
+            tids.push_back(kv.first);
+        std::sort(tids.begin(), tids.end(), [&](int64_t A, int64_t B) {
+            auto ka = tasks.find(A), kb = tasks.find(B);
+            const bool ha = ka != tasks.end(), hb = kb != tasks.end();
+            if (ha != hb)
+                return ha; // known before unknown
+            if (ha) {
+                if (ka->second.tgid != kb->second.tgid)
+                    return ka->second.tgid < kb->second.tgid;
+                if (ka->second.leader != kb->second.leader)
+                    return ka->second.leader; // leader first
+            }
+            return A < B;
+        });
+        {
+            std::vector<long> gs;
+            for (auto &kv : tasks)
+                gs.push_back(kv.second.tgid);
+            std::sort(gs.begin(), gs.end());
+            m.multi_tgid =
+                static_cast<size_t>(std::unique(gs.begin(), gs.end()) -
+                                    gs.begin()) > 1;
+        }
+        long seen_tgid = -2;
+        for (int64_t tid : tids) {
+            StripLane ln;
+            ln.tid = tid;
+            auto k = tasks.find(tid);
+            if (tid == -1) {
+                ln.label = "(single stream)";
+            } else if (k != tasks.end()) {
+                ln.tgid = k->second.tgid;
+                ln.leader = k->second.leader;
+                ln.label = k->second.comm + " [" + std::to_string(tid) + "]";
+                if (k->second.tgid != seen_tgid) {
+                    ln.group_head = true;
+                    ln.group_label = k->second.comm + " [" +
+                                     std::to_string(k->second.tgid) + "]";
+                    seen_tgid = k->second.tgid;
+                }
+            } else {
+                ln.label = "[" + std::to_string(tid) + "]";
+            }
+            m.lanes.push_back(std::move(ln));
+            auto &v = activity[tid];
+            std::sort(v.begin(), v.end());
+            m.lane_activity.push_back(std::move(v));
+        }
+    }
+    return m;
 }
 
 size_t strip_plan(const StripModel &m, const strip_view_t &v,

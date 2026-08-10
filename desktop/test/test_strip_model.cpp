@@ -98,6 +98,94 @@ static void layout_sums() {
           "absent channels shrink to note rows; the sum invariant holds");
 }
 
+static const char *kHdr =
+    R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"})";
+
+static Recording mk_rec(std::initializer_list<const char *> lines) {
+    std::string nd = std::string(kHdr) + "\n";
+    for (const char *l : lines) {
+        nd += l;
+        nd += "\n";
+    }
+    std::istringstream in(nd);
+    std::string err;
+    auto rec = load_recording(in, err);
+    if (!rec) {
+        fail("load recording", err);
+        return Recording{};
+    }
+    return *rec;
+}
+
+static void lanes_discovery_and_grouping() {
+    // Two processes (tgid 10: tids 10,11; tgid 20: tid 20) plus a tid no topo
+    // task names (30): discovered from tid-bearing events, labelled from the
+    // LAST topo snapshot only.
+    Recording r = mk_rec({
+        R"({"k":"trace","basis":"abs","off":4096,"tid":10})",
+        R"({"k":"trace","basis":"abs","off":4100,"tid":11})",
+        R"({"k":"trace","basis":"abs","off":4104,"tid":20})",
+        R"({"k":"trace","basis":"abs","off":4108,"tid":30})",
+        R"({"k":"topo","mode":"syscalls","tasks":[{"tid":99,"tgid":99,"ppid":1,"leader":true,"comm":"stale","exe":"stale","inv":1}]})",
+        R"({"k":"topo","mode":"syscalls","tasks":[{"tid":10,"tgid":10,"ppid":1,"leader":true,"comm":"alpha","exe":"alpha","inv":3},{"tid":11,"tgid":10,"ppid":1,"leader":false,"comm":"alpha-w","exe":"","inv":2},{"tid":20,"tgid":20,"ppid":10,"leader":true,"comm":"beta","exe":"beta","inv":1}]})",
+        R"({"k":"end","events":6})",
+    });
+    StripModel m = strip_build(r, {}, {});
+    check("deck enabled", m.deck_enabled, "tid-bearing events exist");
+    check("four lanes", m.lanes.size() == 4, "tids 10, 11, 20, 30");
+    check("lane order (tgid, leader, tid; unknown last)",
+          m.lanes.size() == 4 && m.lanes[0].tid == 10 && m.lanes[1].tid == 11 &&
+              m.lanes[2].tid == 20 && m.lanes[3].tid == 30,
+          "grouped by tgid; leader first inside a group; unlabelled tids last");
+    check("labels from LAST topo snapshot",
+          m.lanes.size() == 4 && m.lanes[0].label == "alpha [10]" &&
+              m.lanes[2].label == "beta [20]",
+          "the stale first snapshot must not label anything");
+    check("unknown-tgid label is bare tid",
+          m.lanes.size() == 4 && m.lanes[3].label == "[30]" &&
+              m.lanes[3].tgid == -1,
+          "a tid with no topo task never gets a guessed comm");
+    check("multi tgid flags grouping", m.multi_tgid, "two known tgids");
+    check("group heads",
+          m.lanes.size() == 4 && m.lanes[0].group_head &&
+              m.lanes[2].group_head && !m.lanes[1].group_head,
+          "first lane of each tgid group");
+    check("group label",
+          m.lanes.size() == 4 && m.lanes[0].group_label == "alpha [10]",
+          "comm [tgid] on the head row");
+    check("activity recorded per lane",
+          m.lane_activity.size() == 4 && m.lane_activity[0].size() == 1,
+          "one trace event for tid 10");
+    check("seq_end covers the stream", m.seq_end == r.event_count(),
+          "the axis extent is the whole stream");
+}
+
+static void lanes_single_stream_and_unknown() {
+    Recording r = mk_rec({
+        R"({"k":"trace","basis":"rel","off":0})",
+        R"({"k":"trace","basis":"rel","off":4})",
+        R"({"k":"end","events":2})",
+    });
+    StripModel m = strip_build(r, {}, {});
+    check("single-stream lane", m.lanes.size() == 1 && m.lanes[0].tid == -1,
+          "no tids anywhere → ONE lane, never hidden");
+    check("single-stream label",
+          m.lanes.size() == 1 && m.lanes[0].label == "(single stream)", "");
+    check("no grouping", !m.multi_tgid, "");
+
+    Recording bare =
+        mk_rec({R"({"k":"note","text":"x"})", R"({"k":"end","events":1})"});
+    StripModel mb = strip_build(bare, {}, {});
+    check("deck disabled without activity", !mb.deck_enabled,
+          "no trace/call/watch events at all");
+    check("deck reason verbatim",
+          mb.deck_reason ==
+              "no trace/call/watch events in this recording — there is no "
+              "thread activity to lane",
+          "a quietly absent channel is indistinguishable from one that found "
+          "nothing");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -112,6 +200,8 @@ static void pinned_strings() {
 int main() {
     camera_math();
     layout_sums();
+    lanes_discovery_and_grouping();
+    lanes_single_stream_and_unknown();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
