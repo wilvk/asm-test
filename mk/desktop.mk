@@ -597,6 +597,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/vm_compat.o $(BUILD)/desktop/$(1)/src/main.o \
   $(BUILD)/desktop/$(1)/src/nav.o \
   $(BUILD)/desktop/$(1)/doc/recording.o $(BUILD)/desktop/$(1)/doc/workspace.o \
+  $(BUILD)/desktop/$(1)/doc/recording_union.o \
   $(BUILD)/desktop/$(1)/doc/streams.o $(BUILD)/desktop/$(1)/doc/df_passes.o \
   $(BUILD)/desktop/$(1)/an/slice.o $(BUILD)/desktop/$(1)/an/diff.o \
   $(BUILD)/desktop/$(1)/an/stepindex.o \
@@ -724,6 +725,7 @@ DESKTOP_CAP_OBJ := $(HWTRACE_OBJS)
 # test-tree shared objects (no backends, no main, no engines).
 DESKTOP_TEST_IG  := $(addprefix $(BUILD)/desktop/test/ig/,$(addsuffix .o,$(DESKTOP_IMGUI_CORE)))
 DESKTOP_TEST_DOC := $(BUILD)/desktop/test/doc/recording.o \
+                    $(BUILD)/desktop/test/doc/recording_union.o \
                     $(BUILD)/desktop/test/doc/workspace.o \
                     $(BUILD)/desktop/test/doc/workspace_state.o \
                     $(BUILD)/desktop/test/doc/streams.o \
@@ -1210,6 +1212,7 @@ desktop-setup-render:
 # CLAUDE.md). vm_compat.o compiling in the test tree IS the regression test that
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
+                 $(BUILD)/desktop_test_recording_union \
                  $(BUILD)/desktop_test_scene_traj \
                  $(BUILD)/desktop_test_png_write \
                  $(BUILD)/desktop_test_shot_manifest \
@@ -2178,6 +2181,11 @@ $(BUILD)/desktop_test_null: $(BUILD)/desktop/test/t/test_null_render.o $(DESKTOP
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The session-union Recording (live union weave): the same pure document-model
+# closure as test_recording — DESKTOP_TEST_DOC and nothing else.
+$(BUILD)/desktop_test_recording_union: $(BUILD)/desktop/test/t/test_recording_union.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # shell.o now draws the replay views, so the shell test links the pure builders,
