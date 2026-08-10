@@ -291,6 +291,17 @@ void LiveSession::reset() {
 void LiveSession::reap(bool blocking) {
     if (child_ < 0)
         return;
+    if (blocking) {
+        // A blocking wait must never hang the UI thread. EOF on the read pipe
+        // (or a drained `quit`) does NOT mean the child exited -- it may have
+        // closed its stdout and kept running, or ignored quit -- so a plain
+        // waitpid(…, 0) here can block the whole app forever. Force the host
+        // down first, exactly as procinfo.cpp's reaper does. A child that has
+        // already exited is a zombie, on which kill() is a harmless no-op, so
+        // the clean-exit path (including execvp's 127) still reports its real
+        // status below.
+        ::kill(child_, SIGKILL);
+    }
     int status = 0;
     pid_t r = ::waitpid(child_, &status, blocking ? 0 : WNOHANG);
     if (r != child_)
