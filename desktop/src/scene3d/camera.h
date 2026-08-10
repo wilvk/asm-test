@@ -68,6 +68,17 @@ struct Camera {
         target[0] = clampf(target[0] + du, 0.0f, 1.0f);
         target[2] = clampf(target[2] + dv, 0.0f, 1.0f);
     }
+    // VIEW-relative pan: rotate the (du, dv) delta by yaw so screen-right
+    // stays screen-right whatever the orbit — derived from eye()'s own trig
+    // (screen-right on the plane is (cos yaw, -sin yaw), screen-back is
+    // (sin yaw, cos yaw)), and the IDENTITY at yaw=0, so pan_view(du, dv)
+    // there is exactly pan(du, dv). Both pan funnels (mouse drag, keyboard
+    // keys) route through this; pan() itself stays the raw plane-axis
+    // primitive for callers that mean plane coordinates (frame/goto).
+    void pan_view(float du, float dv) {
+        const float cy = std::cos(yaw), sy = std::sin(yaw);
+        pan(du * cy + dv * sy, -du * sy + dv * cy);
+    }
     // 48 T1: point the camera at a plane coordinate without reorienting it —
     // yaw/pitch stay bit-identical, because recentring must not also reorient
     // (the user would lose the mental map they just built). `radius` is
@@ -198,9 +209,14 @@ inline void camera_key(Camera &c, CamKey k) {
     constexpr float kOrbitStep = 0.12f;
     constexpr float kDollyIn = 1.0f / 1.1f;
     constexpr float kDollyOut = 1.1f;
-    // 48 T1: a comfortable keyboard pan nudge in plane units (the plane spans
-    // [0,1] on each axis, so this moves the target ~4% of the model per press).
-    constexpr float kPanStep = 0.04f;
+    // 48 T1 (revised): the keyboard pan nudge is ZOOM-PROPORTIONAL, exactly
+    // like the mouse pan's `0.0015f * radius` scale — a dollied-in camera
+    // takes fine steps, a dollied-out one crosses the plane in a few presses.
+    // 0.0182 * the default radius 2.2 ~= the historical fixed 0.04 nudge, so
+    // the default-view feel is unchanged. Applied through pan_view, so the
+    // keys are VIEW-relative like the mouse too (test_camera pins both).
+    constexpr float kPanStepPerRadius = 0.0182f;
+    const float kPanStep = kPanStepPerRadius * c.radius;
     switch (k) {
     case CamKey::OrbitLeft:
         c.orbit(-kOrbitStep, 0.0f);
@@ -227,16 +243,16 @@ inline void camera_key(Camera &c, CamKey k) {
         c.top_down();
         break;
     case CamKey::PanLeft:
-        c.pan(-kPanStep, 0.0f);
+        c.pan_view(-kPanStep, 0.0f);
         break;
     case CamKey::PanRight:
-        c.pan(+kPanStep, 0.0f);
+        c.pan_view(+kPanStep, 0.0f);
         break;
     case CamKey::PanForward:
-        c.pan(0.0f, -kPanStep);
+        c.pan_view(0.0f, -kPanStep);
         break;
     case CamKey::PanBack:
-        c.pan(0.0f, +kPanStep);
+        c.pan_view(0.0f, +kPanStep);
         break;
     }
 }

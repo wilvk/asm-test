@@ -2243,7 +2243,11 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         if (pan_drag) {
             sv.nav_dragging = true; // suppresses the pending click-to-pick too
             const float scale = 0.0015f * sv.cam.radius;
-            sv.cam.pan(-io.MouseDelta.x * scale, -io.MouseDelta.y * scale);
+            // pan_view: the drag is VIEW-relative (screen-right stays
+            // screen-right at any orbit), identical to pan() at yaw=0 — the
+            // same funnel the keyboard pan keys ride (camera.h).
+            sv.cam.pan_view(-io.MouseDelta.x * scale,
+                            -io.MouseDelta.y * scale);
         } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
             sv.nav_dragging = true;
             sv.cam.orbit(-io.MouseDelta.x * 0.008f, -io.MouseDelta.y * 0.008f);

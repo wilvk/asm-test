@@ -288,24 +288,32 @@ int main() {
               "reset must fully restore the default target");
     }
 
-    // === 48 T1: the keyboard pan keys apply the SAME deltas Camera::pan does ==
+    // === 48 T1 (revised): the keyboard pan keys apply the SAME deltas
+    // Camera::pan_view does — VIEW-relative and zoom-proportional, the exact
+    // funnel the mouse pan rides. ===
     {
         Camera viaKey, viaCall;
         camera_key(viaKey, CamKey::PanRight);
-        viaCall.pan(0.04f, 0.0f); // kPanStep, mirrored (see camera.h)
-        check("key/pan-right matches Camera::pan",
+        // kPanStepPerRadius, mirrored (see camera.h): ~today's 0.04 nudge at
+        // the default radius 2.2, and it scales with the dolly.
+        viaCall.pan_view(0.0182f * viaCall.radius, 0.0f);
+        check("key/pan-right matches Camera::pan_view",
               viaKey.target[0] == viaCall.target[0] &&
                   viaKey.target[2] == viaCall.target[2],
-              "PanRight must apply the documented kPanStep");
+              "PanRight must ride the documented pan_view funnel");
     }
     {
+        // At yaw=0 the view axes ARE the plane axes, so the historical
+        // axis-nudge semantics hold there exactly.
         Camera c;
+        c.yaw = 0.0f;
         float u0 = c.target[0], v0 = c.target[2];
         camera_key(c, CamKey::PanLeft);
         check("key/pan-left decreases target[0]", c.target[0] < u0,
               "PanLeft did not move target[0] left");
-        check("key/pan-left leaves target[2] alone", c.target[2] == v0,
-              "PanLeft must be a pure X-axis nudge");
+        check("key/pan-left leaves target[2] alone",
+              std::fabs(c.target[2] - v0) < 1e-6f,
+              "at yaw=0, PanLeft must be a pure X-axis nudge");
         camera_key(c, CamKey::PanRight);
         camera_key(c, CamKey::PanRight);
         check("key/pan-right increases target[0]", c.target[0] > u0,
@@ -314,12 +322,47 @@ int main() {
         camera_key(c, CamKey::PanForward);
         check("key/pan-forward decreases target[2]", c.target[2] < v0,
               "PanForward did not move target[2] forward");
-        check("key/pan-forward leaves target[0] alone", c.target[0] == u1,
-              "PanForward must be a pure Z-axis nudge");
+        check("key/pan-forward leaves target[0] alone",
+              std::fabs(c.target[0] - u1) < 1e-6f,
+              "at yaw=0, PanForward must be a pure Z-axis nudge");
         camera_key(c, CamKey::PanBack);
         camera_key(c, CamKey::PanBack);
         check("key/pan-back increases target[2]", c.target[2] > v0,
               "PanBack did not move target[2] back");
+    }
+    {
+        // pan_view is the identity at yaw=0 and a quarter-turn maps
+        // screen-right onto the OTHER plane axis — view-relative, not
+        // axis-locked.
+        Camera a, b;
+        a.yaw = b.yaw = 0.0f;
+        a.pan(0.1f, 0.02f);
+        b.pan_view(0.1f, 0.02f);
+        check("pan_view at yaw=0 IS pan",
+              std::fabs(a.target[0] - b.target[0]) < 1e-6f &&
+                  std::fabs(a.target[2] - b.target[2]) < 1e-6f,
+              "the rotation must be the identity at yaw 0");
+        Camera q;
+        q.yaw = 1.5707963f; // pi/2: the eye is at +X of the target
+        q.pan_view(0.1f, 0.0f);
+        check("pan_view at yaw=pi/2 rotates onto the other axis",
+              std::fabs(q.target[0] - 0.5f) < 1e-4f &&
+                  std::fabs(q.target[2] - 0.5f) > 0.05f,
+              "a quarter-turn view must map screen-right onto plane Z");
+    }
+    {
+        // Keyboard pan is zoom-proportional: the same key at double the
+        // radius covers double the plane distance, exactly like the mouse
+        // pan's radius scale.
+        Camera near_c, far_c;
+        near_c.radius = 1.0f;
+        far_c.radius = 2.0f;
+        camera_key(near_c, CamKey::PanRight);
+        camera_key(far_c, CamKey::PanRight);
+        check("key/pan is zoom-proportional",
+              std::fabs((far_c.target[0] - 0.5f) -
+                        2.0f * (near_c.target[0] - 0.5f)) < 1e-5f,
+              "a dollied-out camera must pan farther per press");
     }
     {
         // Keyboard pan clamps exactly like the mouse path (Camera::pan itself).
