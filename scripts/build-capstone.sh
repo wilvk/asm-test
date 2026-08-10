@@ -16,9 +16,19 @@ PREFIX="${CAPSTONE_PREFIX:-/usr/local}"
 prog=$(basename "$0")
 . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib-thirdparty.sh"
 
-# Already present? (the in-tree builds find it via pkg-config.)
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists capstone 2>/dev/null; then
-    echo "$prog: capstone already installed ($(pkg-config --modversion capstone)), skipping"
+# Already a compatible major? The in-tree builds find it via pkg-config. A
+# version constraint is REQUIRED: a bare `--exists capstone` is satisfied by a
+# distro Capstone 4.x too, which would silently no-op this pinned build and
+# leave consumers on the degraded 4.x decoder — the exact drift
+# Dockerfile.dataflow-attach's comment warns about. We gate on the MAJOR version,
+# which is the code's own boundary (the CS_API_MAJOR >= 5 guards): Capstone
+# reports its pkg-config version as major.minor ("5.0" even for the 5.0.1 tag),
+# so an exact --atleast-version="$VERSION" would never be satisfied and the build
+# would never be idempotent.
+capstone_major="${VERSION%%.*}"
+if command -v pkg-config >/dev/null 2>&1 &&
+    pkg-config --atleast-version="$capstone_major" capstone 2>/dev/null; then
+    echo "$prog: capstone $(pkg-config --modversion capstone) already installed (major >= $capstone_major), skipping"
     exit 0
 fi
 

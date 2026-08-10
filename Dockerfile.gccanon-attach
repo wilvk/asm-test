@@ -37,15 +37,23 @@ FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
+# libcapstone-dev is deliberately ABSENT — see the pinned build below. cmake is
+# for build-capstone.sh.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential pkg-config curl ca-certificates git \
-      libcapstone-dev \
+      build-essential pkg-config curl ca-certificates git cmake \
       dotnet-sdk-8.0 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 COPY . .
+
+# Capstone from the pinned 5.0.1 source rather than noble's apt libcapstone-dev
+# 4.0.2: this lane exercises the scoped ptrace L0 producer's operand enumerator,
+# which 4.x silently degrades. Mirrors Dockerfile.dataflow-attach. The apt line
+# above must NOT reacquire libcapstone-dev — build-capstone.sh skips only when a
+# capstone >= 5.0.1 is already present, so a distro 4.x no longer no-ops it.
+RUN sh scripts/build-capstone.sh && ldconfig
 
 # Builds the GC-move-feed attach profiler, the tracer (which links the SHIPPING scoped ptrace L0
 # producer + the landed pure GC-move transform, not copies of them), a PLAIN managed victim (started
