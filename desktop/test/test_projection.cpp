@@ -911,6 +911,44 @@ int main() {
               "a floor drawn for the first time is not a floor that moved");
     }
 
+    {
+        // keep_order: the caller's order IS the domain order, and appending a
+        // region never moves an existing region's domain slot — the hinge the
+        // stable-plane-layout setting turns on (a grown live session's regions
+        // pack append-only instead of re-sorting by base).
+        Region hi;
+        hi.base = 0x2000;
+        hi.len = 64;
+        hi.kind = Region::Code;
+        Region lo;
+        lo.base = 0x1000;
+        lo.len = 128;
+        lo.kind = Region::Code;
+        Region add;
+        add.base = 0x1800;
+        add.len = 32;
+        add.kind = Region::Code;
+        const Projection p1 =
+            build_projection({hi, lo}, /*keep_order=*/true);
+        check("keep_order preserves caller order",
+              p1.regions.size() == 2 && p1.regions[0].base == 0x2000,
+              "first-given must own the first domain slot");
+        const Projection p2 =
+            build_projection({hi, lo, add}, /*keep_order=*/true);
+        check("append keeps existing domain slots",
+              p2.domain_off.size() == 4 &&
+                  p2.domain_off[0] == p1.domain_off[0] &&
+                  p2.domain_off[1] == p1.domain_off[1] &&
+                  p2.regions[2].base == 0x1800,
+              "an appended region must land AFTER the existing slots");
+        check("append keeps the plane order stable",
+              p2.order == p1.order,
+              "this small a domain must not re-size the plane");
+        const Projection ps = build_projection({hi, lo});
+        check("default still sorts by base", ps.regions[0].base == 0x1000,
+              "the one-arg default must stay byte-identical to today");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d projection check(s) failed\n", failures);
         return 1;

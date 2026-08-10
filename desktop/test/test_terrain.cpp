@@ -963,6 +963,33 @@ int main() {
         }
     }
 
+    {
+        // regions_from_codeimage_seen: FIRST-SEEN order (the append-only feed
+        // for keep_order packing), same dedup as the sorted twin — one Region
+        // per base, widest len, latest version.
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-region\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":8192,\"len\":32,\"version\":0}\n"
+            "{\"k\":\"codeimage\",\"base\":4096,\"len\":64,\"version\":0}\n"
+            "{\"k\":\"codeimage\",\"base\":8192,\"len\":48,\"version\":1}\n"
+            "{\"k\":\"end\",\"events\":3}\n");
+        std::vector<Region> seen = regions_from_codeimage_seen(rec);
+        check("seen order is first-encounter",
+              seen.size() == 2 && seen[0].base == 8192 &&
+                  seen[1].base == 4096,
+              "8192 arrived first and must stay first");
+        check("seen keeps widest len + latest version",
+              seen.size() == 2 && seen[0].len == 48 && seen[0].version == 1,
+              "dedup must match regions_from_codeimage");
+        std::vector<Region> sorted = regions_from_codeimage(rec);
+        check("seen and sorted agree on the region SET",
+              sorted.size() == 2 && sorted[0].base == 4096 &&
+                  sorted[0].len == 64 && sorted[1].base == 8192 &&
+                  sorted[1].len == 48,
+              "only the order may differ between the twins");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d terrain check(s) failed\n", failures);
         return 1;

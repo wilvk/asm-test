@@ -106,6 +106,40 @@ std::vector<Region> regions_from_codeimage(const Recording &rec) {
     return out;
 }
 
+std::vector<Region> regions_from_codeimage_seen(const Recording &rec) {
+    std::vector<Region> out;
+    auto it = rec.by_kind.find("codeimage");
+    if (it == rec.by_kind.end())
+        return out;
+    // Same dedup as regions_from_codeimage (one Region per distinct base,
+    // widest len, latest version) — but `out` keeps FIRST-SEEN order, which is
+    // what makes keep_order packing append-only over a growing session union.
+    std::map<uint64_t, size_t> slot_of;
+    for (const Event &e : it->second) {
+        uint64_t base = e.body.value("base", uint64_t{0});
+        uint64_t len = e.body.value("len", uint64_t{0});
+        uint64_t ver = e.body.value("version", uint64_t{0});
+        auto f = slot_of.find(base);
+        if (f == slot_of.end()) {
+            Region r;
+            r.base = base;
+            r.len = len;
+            r.kind = Region::Code;
+            r.version = ver;
+            r.label = "code@" + hex(base);
+            slot_of.emplace(base, out.size());
+            out.push_back(std::move(r));
+        } else {
+            Region &r = out[f->second];
+            if (len > r.len)
+                r.len = len;
+            if (ver > r.version)
+                r.version = ver;
+        }
+    }
+    return out;
+}
+
 TerrainModel build_terrain(Projection proj, const Recording &rec) {
     TerrainModel m;
     m.w = m.h = uint32_t{1} << proj.order;

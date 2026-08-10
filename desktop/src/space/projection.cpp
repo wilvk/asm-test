@@ -219,14 +219,19 @@ bool split_rect(const std::vector<uint64_t> &b, size_t lo, size_t hi,
 
 } // namespace
 
-Projection build_projection(std::vector<Region> regions) {
+Projection build_projection(std::vector<Region> regions, bool keep_order) {
     Projection p;
 
     // Sort by base so memory neighbours become domain — and therefore plane —
     // neighbours. std::sort is not stable, but bases are distinct in a real map;
     // two regions sharing a base are ordered arbitrarily and it does not matter.
-    std::sort(regions.begin(), regions.end(),
-              [](const Region &a, const Region &b) { return a.base < b.base; });
+    // keep_order trusts the caller's order instead (see the header: append-only
+    // packing is what keeps a grown live session's regions in place).
+    if (!keep_order)
+        std::sort(regions.begin(), regions.end(),
+                  [](const Region &a, const Region &b) {
+                      return a.base < b.base;
+                  });
 
     // Compact: domain_off is the running prefix sum of lengths, with a trailing
     // total. regions[i] owns the slot [domain_off[i], domain_off[i+1]).

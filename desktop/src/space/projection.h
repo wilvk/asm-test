@@ -27,7 +27,15 @@ namespace asmdesk::space {
 // Precondition: regions do not overlap (a /proc/maps snapshot and codeimage
 // bases satisfy this). If two do overlap, project() resolves an address to the
 // region with the greatest base <= addr; no region is dropped or merged.
-Projection build_projection(std::vector<Region> regions);
+//
+// `keep_order` (stable-plane-layout setting): true skips the by-base sort, so
+// the CALLER's order is the domain order and a region set that only ever grows
+// packs append-only — an existing region's domain slot never moves when a
+// later capture adds regions. The stated cost: memory neighbours are plane
+// neighbours only as far as the caller's order makes them. The default (false)
+// is byte-identical to the historical sort-by-base behaviour.
+Projection build_projection(std::vector<Region> regions,
+                            bool keep_order = false);
 
 // 61 T2: recompute the layout for p.layout. For Atlas this fills p.rects with
 // an order-preserving binary-split treemap whose cell budgets are proportional

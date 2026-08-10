@@ -248,6 +248,13 @@ TerrainModel build_terrain(Projection proj, const Recording &rec);
 // is the coarse-rung projection.
 std::vector<Region> regions_from_codeimage(const Recording &rec);
 
+// The same region set in FIRST-SEEN event order instead of by-base order: the
+// feed for build_projection(..., keep_order=true), where a session-union
+// recording's later captures must APPEND regions rather than re-sort the ones
+// already placed. Same dedup as regions_from_codeimage (one Region per base,
+// widest len, latest version) — only the order differs.
+std::vector<Region> regions_from_codeimage_seen(const Recording &rec);
+
 } // namespace space
 } // namespace asmdesk
 #endif // ASMDESK_SPACE_TERRAIN_H
