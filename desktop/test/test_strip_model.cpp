@@ -348,6 +348,147 @@ static void run_seams() {
           "same step value, different pass — the marker is the discriminator");
 }
 
+static void plan_determinism_and_modes() {
+    Recording r = mk_rec({
+        R"({"k":"df_invocation","pass":0,"result":42,"steps":8,"truncated":false})",
+        R"({"k":"trace","basis":"rel","off":16,"tid":10})",
+        R"({"k":"syscall","line":"openat(AT_FDCWD, <path>) = 3","tid":10})",
+        R"({"k":"mem","step":0,"ea":4200,"size":8,"rw":"w","space":"abs"})",
+        R"({"k":"end","events":4})",
+    });
+    StripModel m = strip_build(r, two_bands(), {});
+    strip_view_t v;
+    v.px_w = 400;
+    v.px_h = 300;
+    v.seq_per_px = 0.05; // mark mode (≤ 4)
+    std::vector<strip_prim_t> a, b;
+    strip_plan(m, v, &a);
+    strip_plan(m, v, &b);
+    check("plan deterministic", strip_plan_dump(a) == strip_plan_dump(b),
+          "same (model, view) → byte-identical plans");
+    auto has = [&](strip_prim k) {
+        for (auto &p : a)
+            if (p.kind == k)
+                return true;
+        return false;
+    };
+    check("mark mode emits marks",
+          has(strip_prim::mem_mark) && has(strip_prim::rail_tick) &&
+              has(strip_prim::pc_mark),
+          "");
+    check("hud carries the pinned notes",
+          [&] {
+              for (auto &p : a)
+                  if (p.kind == strip_prim::hud_note)
+                      return p.text.find(StripModel::axis_label()) !=
+                                 std::string::npos &&
+                             p.text.find(StripModel::mem_tid_note()) !=
+                                 std::string::npos;
+              return false;
+          }(),
+          "the axis claim and the no-tid claim ride in the plan itself");
+    check("run seam emitted with label",
+          [&] {
+              for (auto &p : a)
+                  if (p.kind == strip_prim::run_seam)
+                      return p.text == "pass 0 = 42, 8 steps";
+              return false;
+          }(),
+          "");
+    check("syscall tick is a POINT",
+          [&] {
+              for (auto &p : a)
+                  if (p.kind == strip_prim::rail_tick)
+                      return (p.x1 - p.x0) <= 2.0f;
+              return true;
+          }(),
+          "no along-axis extent a reader could mistake for a duration");
+    check("rail tick carries class+outcome in b",
+          [&] {
+              for (auto &p : a)
+                  if (p.kind == strip_prim::rail_tick)
+                      return p.b ==
+                             static_cast<uint32_t>(space::SyscallClass::File) *
+                                     4 +
+                                 static_cast<uint32_t>(
+                                     space::SyscallOutcome::Ok);
+              return false;
+          }(),
+          "the painter has no model; hue rides in the prim");
+
+    strip_view_t vz = v;
+    vz.seq_per_px = 100.0; // envelope mode
+    std::vector<strip_prim_t> c;
+    strip_plan(m, vz, &c);
+    bool env_ok = true;
+    for (auto &p : c)
+        if (p.kind == strip_prim::mem_mark || p.kind == strip_prim::pc_mark)
+            env_ok = false;
+    check("envelope mode has no per-event marks", env_ok,
+          "the doc-65 lesson: never one drawable per event above threshold");
+    check("envelope mode emits envelopes/density",
+          [&] {
+              bool env = false, den = false;
+              for (auto &p : c) {
+                  if (p.kind == strip_prim::mem_envelope)
+                      env = true;
+                  if (p.kind == strip_prim::lane_density)
+                      den = true;
+              }
+              return env && den;
+          }(),
+          "aggregation replaces marks; the channels do not go blank");
+
+    // hover + click
+    for (auto &p : a)
+        if (p.kind == strip_prim::rail_tick) {
+            check("rail hover text",
+                  strip_hover_text(m, p).find("openat") != std::string::npos,
+                  "");
+            auto lk = strip_click_link(m, p, "rec-x");
+            check("rail click links to syscalls view",
+                  lk.has_value() && lk->view == dt_view::syscalls &&
+                      lk->rec == "rec-x",
+                  "");
+        }
+    for (auto &p : a)
+        if (p.kind == strip_prim::mem_mark) {
+            auto lk = strip_click_link(m, p, "rec-x");
+            check("mem click links to timeline step+invocation",
+                  lk.has_value() && lk->view == dt_view::timeline &&
+                      lk->step.has_value() && *lk->step == 0 &&
+                      lk->invocation.has_value() && *lk->invocation == 0,
+                  "step is per-pass; the invocation ordinal disambiguates");
+        }
+}
+
+static void plan_stable_tint_parity() {
+    Recording r = mk_rec({
+        R"({"k":"df_invocation","pass":0,"result":1,"steps":1,"truncated":false})",
+        R"({"k":"trace","basis":"rel","off":0})",
+        R"({"k":"df_invocation","pass":1,"result":1,"steps":1,"truncated":false})",
+        R"({"k":"trace","basis":"rel","off":4})",
+        R"({"k":"end","events":4})",
+    });
+    StripModel m = strip_build(r, two_bands(), {});
+    strip_view_t v;
+    v.px_w = 100;
+    v.px_h = 300;
+    v.seq_per_px = 0.05;
+    v.seq0 = 3.0; // window shows only the SECOND run
+    std::vector<strip_prim_t> p;
+    strip_plan(m, v, &p);
+    bool saw_tint = false;
+    for (auto &q : p)
+        if (q.kind == strip_prim::run_tint) {
+            saw_tint = true;
+            check("tint ordinal is global", q.a == 2,
+                  "interval index over ALL seams (0: pre-pass0, 1: pass0, "
+                  "2: pass1) — parity stable while panning");
+        }
+    check("a tint interval was emitted", saw_tint, "");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -367,6 +508,8 @@ int main() {
     rail_rows();
     bands_and_marks();
     run_seams();
+    plan_determinism_and_modes();
+    plan_stable_tint_parity();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

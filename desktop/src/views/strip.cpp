@@ -479,12 +479,304 @@ StripModel strip_build(const Recording &r,
     return m;
 }
 
+// The plan. Deterministic by construction: sorted vectors only, pixel-space
+// bucketing (doc 65's lesson — never one drawable per event above the
+// threshold), fixed emission order so the dump is byte-stable.
 size_t strip_plan(const StripModel &m, const strip_view_t &v,
                   std::vector<strip_prim_t> *out) {
-    (void)m;
-    (void)v;
-    out->clear(); // built test-first in Task 7
-    return 0;
+    out->clear();
+    if (v.seq_per_px <= 0 || v.px_w <= 0 || v.px_h <= 0)
+        return 0;
+    const StripLayout L = strip_layout(m, v);
+    const double lo = v.seq0;
+    const double hi = v.seq0 + v.seq_per_px * static_cast<double>(v.px_w);
+    auto X = [&](double seq) {
+        return static_cast<float>((seq - lo) / v.seq_per_px);
+    };
+    auto push = [&](strip_prim k, float x0, float y0, float x1, float y1,
+                    uint32_t a, uint32_t b, std::string text) {
+        out->push_back(strip_prim_t{k, x0, y0, x1, y1, a, b, std::move(text)});
+    };
+    const bool marks = v.seq_per_px <= kStripEnvelopeSeqPerPx;
+    const int cols = static_cast<int>(v.px_w);
+    auto col_range = [&](const std::vector<uint64_t> &seqs, int col,
+                         size_t *i0, size_t *i1) {
+        const double a = lo + v.seq_per_px * col;
+        const double b = a + v.seq_per_px;
+        *i0 = std::lower_bound(seqs.begin(), seqs.end(),
+                               static_cast<uint64_t>(std::max(0.0, a))) -
+              seqs.begin();
+        *i1 = std::lower_bound(seqs.begin(), seqs.end(),
+                               static_cast<uint64_t>(std::max(0.0, b))) -
+              seqs.begin();
+    };
+
+    // 1) hud_note — the HUD line + the two pinned claims (and, in envelope
+    //    mode, the density normalisation so the ribbon's scale is stated).
+    std::string hud = m.hud;
+    uint64_t density_max = 0;
+    if (!marks && m.deck_enabled) {
+        for (size_t ln = 0; ln < m.lane_activity.size(); ln++)
+            for (int c = 0; c < cols; c++) {
+                size_t i0, i1;
+                col_range(m.lane_activity[ln], c, &i0, &i1);
+                density_max = std::max<uint64_t>(density_max, i1 - i0);
+            }
+        if (density_max)
+            hud += " · density max " + std::to_string(density_max) + "/col";
+    }
+    hud += std::string(" · ") + StripModel::axis_label() + " · " +
+           StripModel::mem_tid_note();
+    push(strip_prim::hud_note, 0, L.ribbon_y0, v.px_w,
+         L.ribbon_y0 + L.ribbon_h, 0, 0, hud);
+
+    // 2) channel_absent rows — a quietly absent channel is indistinguishable
+    //    from one that found nothing, so the reason draws where the channel
+    //    would have.
+    if (!m.deck_enabled)
+        push(strip_prim::channel_absent, 0, L.deck_y0, v.px_w,
+             L.deck_y0 + L.deck_h, 0, 0, m.deck_reason);
+    if (!m.rail_enabled)
+        push(strip_prim::channel_absent, 0, L.rail_y0, v.px_w,
+             L.rail_y0 + L.rail_h, 1, 0, m.rail_reason);
+    if (!m.bands_enabled)
+        push(strip_prim::channel_absent, 0, L.bands_y0, v.px_w,
+             L.bands_y0 + L.bands_h, 2, 0, m.bands_reason);
+
+    // 3) run_tint — boundaries are {0} ∪ seam seqs ∪ {seq_end}; the ordinal
+    //    is the GLOBAL interval index so alternation is stable while panning.
+    {
+        std::vector<uint64_t> bounds;
+        bounds.push_back(0);
+        for (const auto &s : m.seams)
+            bounds.push_back(s.seq);
+        bounds.push_back(m.seq_end);
+        for (size_t i = 0; i + 1 < bounds.size(); i++) {
+            const double a = static_cast<double>(bounds[i]);
+            const double b = static_cast<double>(bounds[i + 1]);
+            if (b <= a || b <= lo || a >= hi)
+                continue;
+            push(strip_prim::run_tint, std::max(0.0f, X(a)), 0,
+                 std::min(v.px_w, X(b)), v.px_h, static_cast<uint32_t>(i), 0,
+                 std::string());
+        }
+    }
+
+    // 4) the thread deck
+    if (m.deck_enabled) {
+        const int last =
+            std::min<int>(static_cast<int>(m.lanes.size()),
+                          v.lane0 + L.lanes_visible);
+        for (int i = v.lane0; i < last; i++) {
+            const float ly = L.deck_y0 + static_cast<float>(i - v.lane0) *
+                                             v.lane_h;
+            const auto &ln = m.lanes[static_cast<size_t>(i)];
+            if (ln.group_head && m.multi_tgid)
+                push(strip_prim::group_header, 0, ly, v.px_w, ly + 2.0f,
+                     static_cast<uint32_t>(i), 0, ln.group_label);
+            push(strip_prim::lane_header, 0, ly, 120.0f, ly + v.lane_h,
+                 static_cast<uint32_t>(i), 0, ln.label);
+            if (!marks) {
+                const auto &act = m.lane_activity[static_cast<size_t>(i)];
+                for (int c = 0; c < cols; c++) {
+                    size_t i0, i1;
+                    col_range(act, c, &i0, &i1);
+                    const uint64_t n = i1 - i0;
+                    if (!n || !density_max)
+                        continue;
+                    const uint32_t q = static_cast<uint32_t>(
+                        (n * 255 + density_max - 1) / density_max);
+                    push(strip_prim::lane_density, static_cast<float>(c),
+                         ly + 2.0f, static_cast<float>(c + 1),
+                         ly + v.lane_h - 2.0f, static_cast<uint32_t>(i),
+                         std::min<uint32_t>(255, q), std::string());
+                }
+            }
+        }
+        // per-thread syscall ticks (only syscalls whose wire carried a tid)
+        for (size_t si = 0; si < m.sys.size(); si++) {
+            const StripSys &s = m.sys[si];
+            if (s.lane < v.lane0 || s.lane >= last)
+                continue;
+            if (static_cast<double>(s.seq) < lo ||
+                static_cast<double>(s.seq) >= hi)
+                continue;
+            const float ly = L.deck_y0 +
+                             static_cast<float>(s.lane - v.lane0) * v.lane_h;
+            const float x = X(static_cast<double>(s.seq));
+            push(strip_prim::lane_sys_tick, x, ly + 2.0f, x + 2.0f,
+                 ly + v.lane_h - 2.0f, static_cast<uint32_t>(si),
+                 static_cast<uint32_t>(s.cls) * 4 +
+                     static_cast<uint32_t>(s.outcome),
+                 std::string());
+        }
+    }
+
+    // 5) the kernel rail — ticks are POINTS (2px, no along-axis extent);
+    //    a column with more than kStripRailTicksPerCol shows "+N".
+    if (m.rail_enabled) {
+        push(strip_prim::rail_frame, 0, L.rail_y0, v.px_w,
+             L.rail_y0 + L.rail_h, 0, 0, std::string());
+        std::vector<uint64_t> sys_seqs;
+        sys_seqs.reserve(m.sys.size());
+        for (const auto &s : m.sys)
+            sys_seqs.push_back(s.seq);
+        for (int c = 0; c < cols; c++) {
+            size_t i0, i1;
+            col_range(sys_seqs, c, &i0, &i1);
+            const size_t n = i1 - i0;
+            if (!n)
+                continue;
+            const size_t shown =
+                std::min<size_t>(n, static_cast<size_t>(kStripRailTicksPerCol));
+            for (size_t k = 0; k < shown; k++) {
+                const StripSys &s = m.sys[i0 + k];
+                const float x = X(static_cast<double>(s.seq));
+                push(strip_prim::rail_tick, x, L.rail_y0 + 2.0f, x + 2.0f,
+                     L.rail_y0 + L.rail_h - 2.0f,
+                     static_cast<uint32_t>(i0 + k),
+                     static_cast<uint32_t>(s.cls) * 4 +
+                         static_cast<uint32_t>(s.outcome),
+                     std::string());
+            }
+            if (n > shown)
+                push(strip_prim::rail_overflow, static_cast<float>(c),
+                     L.rail_y0 + 2.0f, static_cast<float>(c) + 14.0f,
+                     L.rail_y0 + L.rail_h - 2.0f,
+                     static_cast<uint32_t>(i0), 0,
+                     "+" + std::to_string(n - shown));
+        }
+    }
+
+    // 6) address bands + marks/envelopes
+    if (m.bands_enabled) {
+        auto band_y = [&](int band, uint64_t addr) {
+            const auto &rg = m.bands[static_cast<size_t>(band)].region;
+            const double f =
+                rg.len ? static_cast<double>(addr - rg.base) /
+                             static_cast<double>(rg.len)
+                       : 0.0;
+            return L.bands_y0 + static_cast<float>(band) * L.band_h +
+                   static_cast<float>(f) * L.band_h;
+        };
+        for (size_t bi = 0; bi < m.bands.size(); bi++) {
+            const float by = L.bands_y0 + static_cast<float>(bi) * L.band_h;
+            push(strip_prim::band_frame, 0, by, v.px_w, by + L.band_h,
+                 static_cast<uint32_t>(bi), 0, std::string());
+            push(strip_prim::band_label, 2.0f, by, 160.0f,
+                 std::min(by + 12.0f, by + L.band_h),
+                 static_cast<uint32_t>(bi), 0, m.bands[bi].region.label);
+            if (bi > 0) {
+                const auto &prev = m.bands[bi - 1].region;
+                if (prev.base + prev.len != m.bands[bi].region.base)
+                    push(strip_prim::gap_notch, 0, by - 1.0f, v.px_w,
+                         by + 1.0f, static_cast<uint32_t>(bi), 0,
+                         std::string());
+            }
+        }
+        std::vector<uint64_t> mem_seqs;
+        mem_seqs.reserve(m.mem.size());
+        for (const auto &k : m.mem)
+            mem_seqs.push_back(k.seq);
+        if (marks) {
+            const size_t i0 = std::lower_bound(mem_seqs.begin(),
+                                               mem_seqs.end(),
+                                               static_cast<uint64_t>(
+                                                   std::max(0.0, lo))) -
+                              mem_seqs.begin();
+            for (size_t i = i0; i < m.mem.size(); i++) {
+                const StripMemMark &k = m.mem[i];
+                if (static_cast<double>(k.seq) >= hi)
+                    break;
+                const float x = X(static_cast<double>(k.seq));
+                const float y = band_y(k.band, k.addr);
+                const float h = std::min(
+                    6.0f, std::max(1.0f, 1.0f + static_cast<float>(k.size) /
+                                                    4.0f));
+                push(strip_prim::mem_mark, x, y, x + 2.0f, y + h,
+                     static_cast<uint32_t>(i), k.is_write ? 1u : 0u,
+                     std::string());
+            }
+        } else {
+            for (int c = 0; c < cols; c++) {
+                size_t i0, i1;
+                col_range(mem_seqs, c, &i0, &i1);
+                if (i0 == i1)
+                    continue;
+                // per band per rw: the column's touched min..max addr
+                struct Env {
+                    uint64_t lo = 0, hi = 0;
+                    bool any = false;
+                };
+                std::map<std::pair<int, bool>, Env> envs;
+                for (size_t i = i0; i < i1; i++) {
+                    const StripMemMark &k = m.mem[i];
+                    Env &e = envs[{k.band, k.is_write}];
+                    if (!e.any) {
+                        e.lo = e.hi = k.addr;
+                        e.any = true;
+                    } else {
+                        e.lo = std::min(e.lo, k.addr);
+                        e.hi = std::max(e.hi, k.addr);
+                    }
+                }
+                for (const auto &kv : envs) {
+                    const int band = kv.first.first;
+                    const float y0 = band_y(band, kv.second.lo);
+                    const float y1 = band_y(band, kv.second.hi) + 1.0f;
+                    push(strip_prim::mem_envelope, static_cast<float>(c), y0,
+                         static_cast<float>(c + 1), y1,
+                         static_cast<uint32_t>(band),
+                         kv.first.second ? 1u : 0u, std::string());
+                }
+            }
+        }
+        if (marks) {
+            std::vector<uint64_t> pc_seqs;
+            pc_seqs.reserve(m.pc.size());
+            for (const auto &k : m.pc)
+                pc_seqs.push_back(k.seq);
+            const size_t i0 =
+                std::lower_bound(pc_seqs.begin(), pc_seqs.end(),
+                                 static_cast<uint64_t>(std::max(0.0, lo))) -
+                pc_seqs.begin();
+            for (size_t i = i0; i < m.pc.size(); i++) {
+                const StripPcMark &k = m.pc[i];
+                if (static_cast<double>(k.seq) >= hi)
+                    break;
+                const float x = X(static_cast<double>(k.seq));
+                const float y = band_y(k.band, k.addr);
+                uint32_t lane_ord = 0; // palette hue; 0 when the tid has no
+                for (size_t l = 0; l < m.lanes.size(); l++) // lane (df tid -1
+                    if (m.lanes[l].tid == k.tid) {          // in a multi-tid
+                        lane_ord = static_cast<uint32_t>(l); // recording)
+                        break;
+                    }
+                push(strip_prim::pc_mark, x, y, x + 2.0f, y + 2.0f,
+                     static_cast<uint32_t>(i), lane_ord, std::string());
+            }
+        }
+    }
+
+    // 7) run seams — full-height, labelled by their derivation
+    for (size_t i = 0; i < m.seams.size(); i++) {
+        const double sq = static_cast<double>(m.seams[i].seq);
+        if (sq < lo || sq >= hi)
+            continue;
+        const float x = X(sq);
+        push(strip_prim::run_seam, x, 0, x + 1.0f, v.px_h,
+             static_cast<uint32_t>(i), m.seams[i].armed_waiting ? 1u : 0u,
+             m.seams[i].label);
+    }
+
+    // 8) torn edge — the recorded window ended before the run did
+    if (m.torn && static_cast<double>(m.seq_end) >= lo &&
+        static_cast<double>(m.seq_end) < hi)
+        push(strip_prim::torn_edge, X(static_cast<double>(m.seq_end)), 0,
+             X(static_cast<double>(m.seq_end)) + 4.0f, v.px_h, 0, 0,
+             std::string());
+
+    return out->size();
 }
 
 std::string strip_plan_dump(const std::vector<strip_prim_t> &prims) {
@@ -500,18 +792,86 @@ std::string strip_plan_dump(const std::vector<strip_prim_t> &prims) {
 }
 
 std::string strip_hover_text(const StripModel &m, const strip_prim_t &p) {
-    (void)m;
-    (void)p;
-    return std::string(); // Task 7
+    switch (p.kind) {
+    case strip_prim::rail_tick:
+    case strip_prim::lane_sys_tick: {
+        if (p.a >= m.sys.size())
+            return std::string();
+        const StripSys &s = m.sys[p.a];
+        std::string t = s.line + " — " + space::syscall_class_name(s.cls) +
+                        ", " + space::syscall_outcome_name(s.outcome) +
+                        ", seq " + std::to_string(s.seq);
+        if (s.tid != -1)
+            t += " [tid " + std::to_string(s.tid) + "]";
+        return t;
+    }
+    case strip_prim::mem_mark: {
+        if (p.a >= m.mem.size())
+            return std::string();
+        const StripMemMark &k = m.mem[p.a];
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "%s %lluB @ 0x%llx, seq %llu",
+                      k.is_write ? "w" : "r",
+                      static_cast<unsigned long long>(k.size),
+                      static_cast<unsigned long long>(k.addr),
+                      static_cast<unsigned long long>(k.seq));
+        std::string t = buf;
+        if (k.pass >= 0)
+            t += " (pass " + std::to_string(k.pass) + ")";
+        return t;
+    }
+    case strip_prim::pc_mark: {
+        if (p.a >= m.pc.size())
+            return std::string();
+        const StripPcMark &k = m.pc[p.a];
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "pc 0x%llx, seq %llu",
+                      static_cast<unsigned long long>(k.addr),
+                      static_cast<unsigned long long>(k.seq));
+        std::string t = buf;
+        if (k.tid != -1)
+            t += " [tid " + std::to_string(k.tid) + "]";
+        return t;
+    }
+    case strip_prim::lane_header:
+        return p.a < m.lanes.size() ? m.lanes[p.a].label : std::string();
+    case strip_prim::band_label:
+        return p.a < m.bands.size() ? m.bands[p.a].region.label
+                                    : std::string();
+    case strip_prim::run_seam:
+        return p.a < m.seams.size() ? m.seams[p.a].label : std::string();
+    default:
+        return std::string();
+    }
 }
 
 std::optional<dt_link> strip_click_link(const StripModel &m,
                                         const strip_prim_t &p,
                                         const std::string &rec_id) {
-    (void)m;
-    (void)p;
-    (void)rec_id;
-    return std::nullopt; // Task 7
+    if (p.kind == strip_prim::rail_tick ||
+        p.kind == strip_prim::lane_sys_tick) {
+        if (p.a >= m.sys.size())
+            return std::nullopt;
+        dt_link l;
+        l.rec = rec_id;
+        l.view = dt_view::syscalls;
+        const StripSys &s = m.sys[p.a];
+        if (s.lane >= 0 && m.lanes[static_cast<size_t>(s.lane)].tgid != -1)
+            l.pid = m.lanes[static_cast<size_t>(s.lane)].tgid;
+        return l;
+    }
+    if (p.kind == strip_prim::mem_mark) {
+        if (p.a >= m.mem.size())
+            return std::nullopt;
+        dt_link l;
+        l.rec = rec_id;
+        l.view = dt_view::timeline;
+        l.step = m.mem[p.a].step;
+        if (m.mem[p.a].pass >= 0)
+            l.invocation = static_cast<uint32_t>(m.mem[p.a].pass);
+        return l;
+    }
+    return std::nullopt;
 }
 
 } // namespace asmdesk
