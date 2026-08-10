@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <map>
 
@@ -56,9 +57,15 @@ StripLayout strip_layout(const StripModel &m, const strip_view_t &v) {
     StripLayout L;
     const float note_h = 14.0f;
     if (m.deck_enabled) {
+        // Drawn rows are the POSTURE's, not the model's: kept lanes plus the
+        // aggregate row when anything hides (the selection is the same pure
+        // function the plan uses, so the two can never disagree).
+        const StripSelection sel = strip_selected_lanes(m, v.detail);
+        L.deck_rows =
+            static_cast<int>(sel.keep.size() + (sel.hidden ? 1 : 0));
         const int cap = std::max(
             1, static_cast<int>((0.4f * v.px_h) / std::max(1.0f, v.lane_h)));
-        L.lanes_visible = std::min<int>(static_cast<int>(m.lanes.size()), cap);
+        L.lanes_visible = std::min<int>(L.deck_rows, cap);
         L.deck_h = static_cast<float>(L.lanes_visible) * v.lane_h;
     } else {
         L.deck_h = note_h;
@@ -70,8 +77,9 @@ StripLayout strip_layout(const StripModel &m, const strip_view_t &v) {
     L.bands_y0 = L.rail_y0 + L.rail_h;
     L.bands_h = std::max(0.0f, v.px_h - L.deck_h - L.rail_h - L.ribbon_h);
     L.ribbon_y0 = L.bands_y0 + L.bands_h;
-    L.band_h =
-        L.bands_h / static_cast<float>(std::max<size_t>(1, m.bands.size()));
+    const StripSelection bsel = strip_selected_bands(m, v.detail);
+    const size_t band_rows = bsel.keep.size() + (bsel.hidden ? 1 : 0);
+    L.band_h = L.bands_h / static_cast<float>(std::max<size_t>(1, band_rows));
     return L;
 }
 
@@ -480,6 +488,71 @@ StripModel strip_build(const Recording &r,
     return m;
 }
 
+namespace {
+// One ranking shape for both selections: keep the top `cap` scorers (ties by
+// `tie_lt`), returned IN MODEL ORDER; count what hides. Detail or a small
+// model keeps everything — the byte-identical-below-threshold guarantee.
+StripSelection select_top(const std::vector<uint64_t> &score, size_t cap,
+                          bool detail,
+                          const std::function<bool(size_t, size_t)> &tie_lt) {
+    StripSelection s;
+    const size_t n = score.size();
+    if (detail || n <= cap) {
+        for (size_t i = 0; i < n; i++)
+            s.keep.push_back(i);
+        return s;
+    }
+    std::vector<size_t> rank(n);
+    for (size_t i = 0; i < n; i++)
+        rank[i] = i;
+    std::sort(rank.begin(), rank.end(), [&](size_t A, size_t B) {
+        if (score[A] != score[B])
+            return score[A] > score[B];
+        return tie_lt(A, B);
+    });
+    std::vector<char> kept(n, 0);
+    for (size_t i = 0; i < cap; i++)
+        kept[rank[i]] = 1;
+    for (size_t i = 0; i < n; i++) {
+        if (kept[i])
+            s.keep.push_back(i); // model order survives
+        else {
+            s.hidden++;
+            s.hidden_events += score[i];
+        }
+    }
+    return s;
+}
+} // namespace
+
+StripSelection strip_selected_lanes(const StripModel &m, bool detail) {
+    std::vector<uint64_t> score(m.lanes.size(), 0);
+    for (size_t i = 0; i < m.lane_activity.size() && i < score.size(); i++)
+        score[i] = m.lane_activity[i].size();
+    for (const StripSys &sy : m.sys)
+        if (sy.lane >= 0 && static_cast<size_t>(sy.lane) < score.size())
+            score[static_cast<size_t>(sy.lane)]++;
+    return select_top(score, kStripSimplifiedLanes, detail,
+                      [&](size_t A, size_t B) {
+                          return m.lanes[A].tid < m.lanes[B].tid;
+                      });
+}
+
+StripSelection strip_selected_bands(const StripModel &m, bool detail) {
+    std::vector<uint64_t> score(m.bands.size(), 0);
+    for (const StripMemMark &k : m.mem)
+        if (k.band >= 0 && static_cast<size_t>(k.band) < score.size())
+            score[static_cast<size_t>(k.band)]++;
+    for (const StripPcMark &k : m.pc)
+        if (k.band >= 0 && static_cast<size_t>(k.band) < score.size())
+            score[static_cast<size_t>(k.band)]++;
+    return select_top(score, kStripSimplifiedBands, detail,
+                      [&](size_t A, size_t B) {
+                          return m.bands[A].region.base <
+                                 m.bands[B].region.base;
+                      });
+}
+
 uint64_t strip_plan_key(const strip_view_t &v, uint64_t model_gen) {
     uint64_t h = 1469598103934665603ull;
     auto mix = [&](uint64_t x) {
@@ -539,20 +612,50 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
               seqs.begin();
     };
 
+    // 0) the posture's selections — the same pure functions strip_layout
+    //    used, so the row counts agree by construction. The aggregate lane's
+    //    density source is the hidden lanes' activity, merged and sorted once.
+    const StripSelection lsel = strip_selected_lanes(m, v.detail);
+    const StripSelection bsel = strip_selected_bands(m, v.detail);
+    std::vector<uint64_t> agg_activity;
+    if (lsel.hidden) {
+        std::vector<char> kept(m.lanes.size(), 0);
+        for (size_t k : lsel.keep)
+            kept[k] = 1;
+        for (size_t i = 0; i < m.lane_activity.size(); i++)
+            if (!kept[i])
+                agg_activity.insert(agg_activity.end(),
+                                    m.lane_activity[i].begin(),
+                                    m.lane_activity[i].end());
+        std::sort(agg_activity.begin(), agg_activity.end());
+    }
+
     // 1) hud_note — the HUD line + the two pinned claims (and, in envelope
-    //    mode, the density normalisation so the ribbon's scale is stated).
+    //    mode, the density normalisation so the ribbon's scale is stated;
+    //    and the simplification posture, stated ONLY when something hid —
+    //    a screenshot must never pass a simplified strip off as the whole).
     std::string hud = m.hud;
     uint64_t density_max = 0;
     if (!marks && m.deck_enabled) {
-        for (size_t ln = 0; ln < m.lane_activity.size(); ln++)
+        auto max_of = [&](const std::vector<uint64_t> &act) {
             for (int c = 0; c < cols; c++) {
                 size_t i0, i1;
-                col_range(m.lane_activity[ln], c, &i0, &i1);
+                col_range(act, c, &i0, &i1);
                 density_max = std::max<uint64_t>(density_max, i1 - i0);
             }
+        };
+        for (size_t k : lsel.keep)
+            max_of(m.lane_activity[k]);
+        if (!agg_activity.empty())
+            max_of(agg_activity);
         if (density_max)
             hud += " · density max " + std::to_string(density_max) + "/col";
     }
+    if (lsel.hidden || bsel.hidden)
+        hud += " · simplified — top " + std::to_string(lsel.keep.size()) +
+               " of " + std::to_string(m.lanes.size()) + " lanes, top " +
+               std::to_string(bsel.keep.size()) + " of " +
+               std::to_string(m.bands.size()) + " regions";
     hud += std::string(" · ") + StripModel::axis_label() + " · " +
            StripModel::mem_tid_note();
     push(strip_prim::hud_note, 0, L.ribbon_y0, v.px_w,
@@ -590,47 +693,74 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
         }
     }
 
-    // 4) the thread deck
+    // 4) the thread deck — rows are the POSTURE's: kept lanes in model
+    //    order, then the aggregate row when anything hid. `row_of` maps a
+    //    model lane index to its deck row (-1 = hidden this posture).
     if (m.deck_enabled) {
-        const int last =
-            std::min<int>(static_cast<int>(m.lanes.size()),
-                          v.lane0 + L.lanes_visible);
-        for (int i = v.lane0; i < last; i++) {
-            const float ly = L.deck_y0 + static_cast<float>(i - v.lane0) *
-                                             v.lane_h;
-            const auto &ln = m.lanes[static_cast<size_t>(i)];
-            if (ln.group_head && m.multi_tgid)
-                push(strip_prim::group_header, 0, ly, v.px_w, ly + 2.0f,
-                     static_cast<uint32_t>(i), 0, ln.group_label);
-            push(strip_prim::lane_header, 0, ly, 120.0f, ly + v.lane_h,
-                 static_cast<uint32_t>(i), 0, ln.label);
-            if (!marks) {
-                const auto &act = m.lane_activity[static_cast<size_t>(i)];
-                for (int c = 0; c < cols; c++) {
-                    size_t i0, i1;
-                    col_range(act, c, &i0, &i1);
-                    const uint64_t n = i1 - i0;
-                    if (!n || !density_max)
-                        continue;
-                    const uint32_t q = static_cast<uint32_t>(
-                        (n * 255 + density_max - 1) / density_max);
-                    push(strip_prim::lane_density, static_cast<float>(c),
-                         ly + 2.0f, static_cast<float>(c + 1),
-                         ly + v.lane_h - 2.0f, static_cast<uint32_t>(i),
-                         std::min<uint32_t>(255, q), std::string());
-                }
+        std::vector<int> row_of(m.lanes.size(), -1);
+        for (size_t r = 0; r < lsel.keep.size(); r++)
+            row_of[lsel.keep[r]] = static_cast<int>(r);
+        const int rows = L.deck_rows;
+        const int last = std::min<int>(rows, v.lane0 + L.lanes_visible);
+        auto emit_density = [&](const std::vector<uint64_t> &act, float ly,
+                                uint32_t a) {
+            for (int c = 0; c < cols; c++) {
+                size_t i0, i1;
+                col_range(act, c, &i0, &i1);
+                const uint64_t n = i1 - i0;
+                if (!n || !density_max)
+                    continue;
+                const uint32_t q = static_cast<uint32_t>(
+                    (n * 255 + density_max - 1) / density_max);
+                push(strip_prim::lane_density, static_cast<float>(c),
+                     ly + 2.0f, static_cast<float>(c + 1),
+                     ly + v.lane_h - 2.0f, a, std::min<uint32_t>(255, q),
+                     std::string());
+            }
+        };
+        for (int rrow = v.lane0; rrow < last; rrow++) {
+            const float ly =
+                L.deck_y0 + static_cast<float>(rrow - v.lane0) * v.lane_h;
+            if (static_cast<size_t>(rrow) < lsel.keep.size()) {
+                const size_t i = lsel.keep[static_cast<size_t>(rrow)];
+                const auto &ln = m.lanes[i];
+                // group separators only in detail: the simplified deck is a
+                // flat top-N (labels still carry the comm), and a kept lane
+                // whose group head hid would otherwise orphan a header
+                if (v.detail && ln.group_head && m.multi_tgid)
+                    push(strip_prim::group_header, 0, ly, v.px_w, ly + 2.0f,
+                         static_cast<uint32_t>(i), 0, ln.group_label);
+                push(strip_prim::lane_header, 0, ly, 120.0f, ly + v.lane_h,
+                     static_cast<uint32_t>(i), 0, ln.label);
+                if (!marks)
+                    emit_density(m.lane_activity[i], ly,
+                                 static_cast<uint32_t>(i));
+            } else {
+                // the aggregate row: everything hidden, COUNTED — its label
+                // is the claim, its density the hidden lanes' sum
+                push(strip_prim::lane_header, 0, ly, 160.0f, ly + v.lane_h,
+                     kStripAggRow, 0,
+                     "(+" + std::to_string(lsel.hidden) + " lanes, " +
+                         std::to_string(lsel.hidden_events) + " events)");
+                if (!marks)
+                    emit_density(agg_activity, ly, kStripAggRow);
             }
         }
-        // per-thread syscall ticks (only syscalls whose wire carried a tid)
+        // per-thread syscall ticks (only syscalls whose wire carried a tid);
+        // a HIDDEN lane's syscalls still show on the rail — nothing vanishes
         for (size_t si = 0; si < m.sys.size(); si++) {
             const StripSys &s = m.sys[si];
-            if (s.lane < v.lane0 || s.lane >= last)
+            if (s.lane < 0 ||
+                static_cast<size_t>(s.lane) >= row_of.size())
+                continue;
+            const int rrow = row_of[static_cast<size_t>(s.lane)];
+            if (rrow < v.lane0 || rrow >= last)
                 continue;
             if (static_cast<double>(s.seq) < lo ||
                 static_cast<double>(s.seq) >= hi)
                 continue;
-            const float ly = L.deck_y0 +
-                             static_cast<float>(s.lane - v.lane0) * v.lane_h;
+            const float ly =
+                L.deck_y0 + static_cast<float>(rrow - v.lane0) * v.lane_h;
             const float x = X(static_cast<double>(s.seq));
             push(strip_prim::lane_sys_tick, x, ly + 2.0f, x + 2.0f,
                  ly + v.lane_h - 2.0f, static_cast<uint32_t>(si),
@@ -676,30 +806,76 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
         }
     }
 
-    // 6) address bands + marks/envelopes
+    // 6) address bands + marks/envelopes — rows are the posture's kept bands
+    //    (base order), then the elsewhere COUNTS row when anything hid. A
+    //    hidden band's addresses are never mapped into a wrong band's y:
+    //    counts only, and the row label says so.
     if (m.bands_enabled) {
+        std::vector<int> brow_of(m.bands.size(), -1);
+        for (size_t r = 0; r < bsel.keep.size(); r++)
+            brow_of[bsel.keep[r]] = static_cast<int>(r);
         auto band_y = [&](int band, uint64_t addr) {
             const auto &rg = m.bands[static_cast<size_t>(band)].region;
             const double f =
                 rg.len ? static_cast<double>(addr - rg.base) /
                              static_cast<double>(rg.len)
                        : 0.0;
-            return L.bands_y0 + static_cast<float>(band) * L.band_h +
+            const int rrow = brow_of[static_cast<size_t>(band)];
+            return L.bands_y0 + static_cast<float>(rrow) * L.band_h +
                    static_cast<float>(f) * L.band_h;
         };
-        for (size_t bi = 0; bi < m.bands.size(); bi++) {
-            const float by = L.bands_y0 + static_cast<float>(bi) * L.band_h;
+        for (size_t r = 0; r < bsel.keep.size(); r++) {
+            const size_t bi = bsel.keep[r];
+            const float by = L.bands_y0 + static_cast<float>(r) * L.band_h;
             push(strip_prim::band_frame, 0, by, v.px_w, by + L.band_h,
                  static_cast<uint32_t>(bi), 0, std::string());
             push(strip_prim::band_label, 2.0f, by, 160.0f,
                  std::min(by + 12.0f, by + L.band_h),
                  static_cast<uint32_t>(bi), 0, m.bands[bi].region.label);
-            if (bi > 0) {
-                const auto &prev = m.bands[bi - 1].region;
+            if (r > 0) {
+                const auto &prev = m.bands[bsel.keep[r - 1]].region;
                 if (prev.base + prev.len != m.bands[bi].region.base)
                     push(strip_prim::gap_notch, 0, by - 1.0f, v.px_w,
                          by + 1.0f, static_cast<uint32_t>(bi), 0,
                          std::string());
+            }
+        }
+        if (bsel.hidden) {
+            // the elsewhere row: label + a per-column count ribbon over the
+            // hidden bands' accesses (lane_density's painter reads only `b`)
+            const float by = L.bands_y0 +
+                             static_cast<float>(bsel.keep.size()) * L.band_h;
+            uint64_t hidden_mem = 0;
+            std::vector<uint64_t> hidden_seqs;
+            for (const auto &k : m.mem)
+                if (k.band >= 0 && brow_of[static_cast<size_t>(k.band)] < 0) {
+                    hidden_mem++;
+                    hidden_seqs.push_back(k.seq);
+                }
+            push(strip_prim::band_frame, 0, by, v.px_w, by + L.band_h,
+                 kStripAggRow, 0, std::string());
+            push(strip_prim::band_label, 2.0f, by, 260.0f,
+                 std::min(by + 12.0f, by + L.band_h), kStripAggRow, 0,
+                 "(+" + std::to_string(bsel.hidden) + " regions — " +
+                     std::to_string(hidden_mem) + " access(es), counts only)");
+            uint64_t row_max = 0;
+            for (int c = 0; c < cols; c++) {
+                size_t i0, i1;
+                col_range(hidden_seqs, c, &i0, &i1);
+                row_max = std::max<uint64_t>(row_max, i1 - i0);
+            }
+            for (int c = 0; c < cols && row_max; c++) {
+                size_t i0, i1;
+                col_range(hidden_seqs, c, &i0, &i1);
+                const uint64_t n = i1 - i0;
+                if (!n)
+                    continue;
+                const uint32_t q = static_cast<uint32_t>(
+                    (n * 255 + row_max - 1) / row_max);
+                push(strip_prim::lane_density, static_cast<float>(c),
+                     by + 12.0f, static_cast<float>(c + 1),
+                     by + L.band_h - 2.0f, kStripAggRow,
+                     std::min<uint32_t>(255, q), std::string());
             }
         }
         std::vector<uint64_t> mem_seqs;
@@ -716,6 +892,8 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                 const StripMemMark &k = m.mem[i];
                 if (static_cast<double>(k.seq) >= hi)
                     break;
+                if (brow_of[static_cast<size_t>(k.band)] < 0)
+                    continue; // hidden band: the elsewhere row counted it
                 const float x = X(static_cast<double>(k.seq));
                 const float y = band_y(k.band, k.addr);
                 const float h = std::min(
@@ -739,6 +917,8 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                 std::map<std::pair<int, bool>, Env> envs;
                 for (size_t i = i0; i < i1; i++) {
                     const StripMemMark &k = m.mem[i];
+                    if (brow_of[static_cast<size_t>(k.band)] < 0)
+                        continue; // hidden band: counts only, never a fake y
                     Env &e = envs[{k.band, k.is_write}];
                     if (!e.any) {
                         e.lo = e.hi = k.addr;
@@ -772,6 +952,8 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                 const StripPcMark &k = m.pc[i];
                 if (static_cast<double>(k.seq) >= hi)
                     break;
+                if (brow_of[static_cast<size_t>(k.band)] < 0)
+                    continue; // hidden band this posture
                 const float x = X(static_cast<double>(k.seq));
                 const float y = band_y(k.band, k.addr);
                 uint32_t lane_ord = 0; // palette hue; 0 when the tid has no
@@ -862,8 +1044,12 @@ std::string strip_hover_text(const StripModel &m, const strip_prim_t &p) {
         return t;
     }
     case strip_prim::lane_header:
+        if (p.a == kStripAggRow)
+            return p.text; // the aggregate row's own counted claim
         return p.a < m.lanes.size() ? m.lanes[p.a].label : std::string();
     case strip_prim::band_label:
+        if (p.a == kStripAggRow)
+            return p.text;
         return p.a < m.bands.size() ? m.bands[p.a].region.label
                                     : std::string();
     case strip_prim::run_seam:

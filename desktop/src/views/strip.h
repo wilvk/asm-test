@@ -166,8 +166,11 @@ struct StripLayout {
     float rail_y0 = 0, rail_h = 0;
     float bands_y0 = 0, bands_h = 0;
     float ribbon_y0 = 0, ribbon_h = 0;
-    float band_h = 0; // bands_h / max(1, band_count)
+    float band_h = 0; // bands_h / max(1, drawn band rows)
     int lanes_visible = 0;
+    // Total deck rows the current posture draws (kept lanes + the aggregate
+    // row when anything is hidden) — the lane-scroll clamp's denominator.
+    int deck_rows = 0;
 };
 StripLayout strip_layout(const StripModel &m, const strip_view_t &v);
 
@@ -207,6 +210,31 @@ struct strip_prim_t {
 // it (the doc-65 lesson: bucket in pixel space, never one drawable per event).
 inline constexpr double kStripEnvelopeSeqPerPx = 4.0;
 inline constexpr int kStripRailTicksPerCol = 3;
+
+// --- the simplified default (2026-08-10 simplified-LOD spec) -----------------
+// The model stays complete; the CAMERA decides what is drawn. Simplified
+// (detail == false) draws the top-N most active lanes/bands plus one COUNTED
+// aggregate row each; at or below the thresholds the two postures render
+// byte-identically, so small recordings see zero change.
+inline constexpr size_t kStripSimplifiedLanes = 8;
+inline constexpr size_t kStripSimplifiedBands = 6;
+// The aggregate rows' prim identity: existing prim kinds with `a` set to this
+// sentinel (the painter reads only `b` for density; hover returns the prim's
+// own label). Never a valid model index.
+inline constexpr uint32_t kStripAggRow = 0xFFFFFFFFu;
+
+// What the plan draws: the kept model indices IN MODEL ORDER, plus the counted
+// remainder. Pure and shared by strip_layout and strip_plan so the row counts
+// they derive can never disagree. Ranking: lanes by activity events + owned
+// syscall ticks (ties: ascending tid); bands by placed mem+pc marks (ties:
+// ascending base).
+struct StripSelection {
+    std::vector<size_t> keep;  // model indices, model order
+    size_t hidden = 0;         // how many the posture hides
+    uint64_t hidden_events = 0; // the hidden rows' summed metric
+};
+StripSelection strip_selected_lanes(const StripModel &m, bool detail);
+StripSelection strip_selected_bands(const StripModel &m, bool detail);
 size_t strip_plan(const StripModel &m, const strip_view_t &v,
                   std::vector<strip_prim_t> *out);
 std::string strip_plan_dump(const std::vector<strip_prim_t> &prims);
