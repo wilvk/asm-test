@@ -948,6 +948,34 @@ int main() {
         check("default still sorts by base", ps.regions[0].base == 0x1000,
               "the one-arg default must stay byte-identical to today");
     }
+    {
+        // keep_order + project(): the freeze regression. Domain order is the
+        // caller's, but an ADDRESS must still resolve — project() searches a
+        // base-sorted index, never the domain order (which keep_order breaks
+        // as a search key by design).
+        Region code;
+        code.base = 0x2000;
+        code.len = 64;
+        code.kind = Region::Code;
+        Region data;
+        data.base = 0x1000;
+        data.len = 128;
+        data.kind = Region::Unknown;
+        const Projection p =
+            build_projection({code, data}, /*keep_order=*/true);
+        float u = 0, v = 0;
+        check("keep_order: high-base region still places",
+              p.project(0x2010, &u, &v),
+              "the region out of sorted position must not vanish from lookup");
+        uint64_t back = 0;
+        const Region *r = nullptr;
+        check("keep_order: placed cell round-trips to the SAME region",
+              p.project(0x2010, &u, &v) && p.unproject(u, v, &back, &r) &&
+                  r != nullptr && r->base == 0x2000,
+              "u,v must land in the code region's own cells");
+        check("keep_order: low-base region places too",
+              p.project(0x1008, &u, &v), "both orders must resolve");
+    }
 
     if (failures) {
         std::fprintf(stderr, "%d projection check(s) failed\n", failures);

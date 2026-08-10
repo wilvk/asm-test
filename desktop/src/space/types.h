@@ -76,7 +76,10 @@ struct AtlasNode {
 // a raw address axis useless — see T1). Build one with build_projection()
 // (projection.h); the two methods below are its read side.
 struct Projection {
-    std::vector<Region> regions; // sorted by base, non-overlapping, compacted
+    // DOMAIN order: by base under the default build, the CALLER's order under
+    // build_projection(..., keep_order=true) — address lookups go through
+    // `by_base` below, never through this vector's order directly.
+    std::vector<Region> regions; // non-overlapping, compacted
     uint32_t order = 0; // Hilbert order: plane is 2^order x 2^order cells
 
     // domain_off[i] is the start of regions[i] in the compacted domain
@@ -86,6 +89,14 @@ struct Projection {
     // pointer, so a copied Projection never dangles — and it gives the O(log n)
     // address<->domain lookup both project() and unproject() need.
     std::vector<uint64_t> domain_off;
+
+    // LOOKUP order: indices into `regions`, sorted by Region::base. project()
+    // binary-searches an address through this indirection, which is what lets
+    // keep_order hand the DOMAIN an append-only order (stable plane layout)
+    // without the address search silently refusing every region that is not in
+    // sorted position — the measured cause of the frozen-scene regression: a
+    // worldline/heat/pick lookup that returns false draws nothing.
+    std::vector<uint32_t> by_base;
 
     // 54 T1: how the `observed data` regions (space/projection.h's
     // observed_data_spans) were derived — span count, source address count, the

@@ -244,6 +244,17 @@ Projection build_projection(std::vector<Region> regions, bool keep_order) {
     p.domain_off.push_back(total);
     p.regions = std::move(regions);
 
+    // The base-sorted LOOKUP index project() searches. Identity under the
+    // default (regions were just sorted by base); a real permutation under
+    // keep_order, where the domain keeps the caller's append-only order.
+    p.by_base.resize(p.regions.size());
+    for (uint32_t i = 0; i < p.by_base.size(); i++)
+        p.by_base[i] = i;
+    std::sort(p.by_base.begin(), p.by_base.end(),
+              [&p](uint32_t a, uint32_t b) {
+                  return p.regions[a].base < p.regions[b].base;
+              });
+
     // Size the plane: the smallest order in [6, 12] whose 4^order cells hold the
     // compacted domain. total 0 (no regions) yields the floor order.
     uint32_t order = 6;
@@ -525,19 +536,23 @@ bool Projection::project(uint64_t addr, float *u, float *v) const {
     if (regions.empty())
         return false;
 
-    // Binary search: the last region with base <= addr is the only one that can
-    // contain it (regions are sorted and, by precondition, non-overlapping).
-    size_t lo = 0, hi = regions.size();
+    // Binary search THROUGH by_base (the base-sorted index): the last region
+    // with base <= addr is the only one that can contain it (non-overlapping
+    // by precondition). Under keep_order the `regions` vector itself is in
+    // DOMAIN order, not base order — searching it directly is the measured
+    // frozen-scene regression (a lookup that refuses draws nothing).
+    size_t lo = 0, hi = by_base.size();
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        if (regions[mid].base <= addr)
+        if (regions[by_base[mid]].base <= addr)
             lo = mid + 1;
         else
             hi = mid;
     }
     if (lo == 0)
         return false; // addr is below every region
-    const Region &r = regions[lo - 1];
+    const size_t idx = by_base[lo - 1]; // the DOMAIN index for rects/domain_off
+    const Region &r = regions[idx];
     if (addr - r.base >= r.len)
         return false; // in the gap above r (or r is zero-length): unmapped
 
@@ -545,8 +560,8 @@ bool Projection::project(uint64_t addr, float *u, float *v) const {
     // — there is no second address->region resolution to drift. Placed BELOW
     // that refusal deliberately: an address in the gap above `r` still resolves
     // to `r` here, and placing it would be a fabricated location.
-    if (layout == Layout::Atlas && lo - 1 < rects.size()) {
-        const AtlasRect &rect = rects[lo - 1];
+    if (layout == Layout::Atlas && idx < rects.size()) {
+        const AtlasRect &rect = rects[idx];
         const uint64_t cells =
             uint64_t(rect.x1 - rect.x0) * uint64_t(rect.y1 - rect.y0);
         // k < cells always: k_max = (len-1)/ceil(len/cells) <=
@@ -560,7 +575,7 @@ bool Projection::project(uint64_t addr, float *u, float *v) const {
         return true;
     }
 
-    const uint64_t d = domain_off[lo - 1] + (addr - r.base);
+    const uint64_t d = domain_off[idx] + (addr - r.base);
     const uint64_t total = domain_off.back();
     const uint32_t n = uint32_t(1) << order;
     const uint64_t h = d >> domain_shift(order, total);
