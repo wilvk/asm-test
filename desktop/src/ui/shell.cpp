@@ -2159,6 +2159,7 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     f.invocation = &sv.invocation;
     f.module_ribbon = &sv.module_ribbon;
     f.prism = &sv.prism;
+    f.flow = &sv.flow;
     f.terr = &sv.terr;
     f.traj = &sv.traj;
     f.conv = &sv.conv;

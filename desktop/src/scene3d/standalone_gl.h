@@ -29,6 +29,7 @@
 #include "scene3d/pick.h"
 #include "scene3d/scene_kind.h"
 #include "scene3d/standalone.h"
+#include "space/sessionflow.h"
 
 namespace asmdesk::scene3d {
 
@@ -42,6 +43,7 @@ struct StandaloneFrame {
     const InvocationScene *invocation = nullptr;
     const ModuleRibbonScene *ribbon = nullptr;
     const LanePrismScene *prism = nullptr;
+    const space::SessionFlowScene *flow = nullptr;
 };
 
 class StandaloneRenderer {
@@ -92,6 +94,11 @@ class StandaloneRenderer {
     void build_invocation(const InvocationScene &s);
     void build_ribbon(const ModuleRibbonScene &s);
     void build_prism(const LanePrismScene &s);
+    void build_flow(const space::SessionFlowScene &s);
+    // Push one filled triangle (the flow's ribbon surfaces + seam walls —
+    // the ONE batch here that is a surface, not a line).
+    void tri(const float p0[3], const float p1[3], const float p2[3],
+             const float rgba[4]);
     void flush_geometry();
     // Push one line segment / one axis-aligned box outline.
     void line(float x0, float y0, float z0, float x1, float y1, float z1,
@@ -106,9 +113,11 @@ class StandaloneRenderer {
     unsigned prog_col_ = 0, prog_pick_ = 0;
     unsigned vao_lines_ = 0, vbo_lines_ = 0;
     unsigned vao_hits_ = 0, vbo_hits_ = 0;
-    int line_count_ = 0, hit_count_ = 0;
+    unsigned vao_tris_ = 0, vbo_tris_ = 0;
+    int line_count_ = 0, hit_count_ = 0, tri_count_ = 0;
     std::vector<Vtx> lines_;
     std::vector<PickVtx> hits_;
+    std::vector<Vtx> tris_;
     SceneKind kind_ = SceneKind::Plane;
     PickBands bands_;
     GlPickTarget pick_target_;

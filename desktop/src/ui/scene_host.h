@@ -23,6 +23,7 @@
 #include "scene3d/scene.h" // SceneLayers (a POD; no GL pulled in by the header)
 #include "scene3d/scene_kind.h" // T1 (59): SceneKind, SceneFrame::kind
 #include "scene3d/standalone.h" // T1 (59): the four non-plane scene models
+#include "space/sessionflow.h" // SessionFlowScene (2026-08-10)
 #include "space/canopy.h" // T3 (56): ModuleCanopy, SceneFrame::canopies
 #include "space/converge.h"
 #include "space/datacell.h" // T2 (58): DataReliefLayer, SceneFrame::relief
@@ -172,6 +173,9 @@ struct SceneFrame {
     // which, exactly as `SceneLayers::data_ribbon` already does.
     const scene3d::ModuleRibbonScene *module_ribbon = nullptr; // T4
     const scene3d::LanePrismScene *prism = nullptr;         // T5
+    // The session flow (2026-08-10): a space/ POD, so this header stays free
+    // of any further views/ reach.
+    const space::SessionFlowScene *flow = nullptr;
 
     // The axes this frame's kind declares — a pure function of `kind`
     // (scene3d::scene_axes), exposed here so the HUD and the tests read the

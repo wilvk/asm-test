@@ -269,6 +269,7 @@ class GlSceneHost : public SceneHost {
         sf.invocation = f.invocation;
         sf.ribbon = f.module_ribbon;
         sf.prism = f.prism;
+        sf.flow = f.flow;
         // A kind switch ALWAYS re-uploads: the previous kind's geometry means
         // nothing here, and merging it would be exactly the composition this
         // brief rules out.

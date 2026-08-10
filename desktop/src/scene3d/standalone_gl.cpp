@@ -163,6 +163,8 @@ bool StandaloneRenderer::init_gl(std::string *err) {
     glGenBuffers(1, &vbo_lines_);
     glGenVertexArrays(1, &vao_hits_);
     glGenBuffers(1, &vbo_hits_);
+    glGenVertexArrays(1, &vao_tris_);
+    glGenBuffers(1, &vbo_tris_);
     ready_ = true;
     return true;
 }
@@ -177,7 +179,12 @@ void StandaloneRenderer::shutdown() {
         glDeleteBuffers(1, &vbo_hits_);
     if (vao_hits_)
         glDeleteVertexArrays(1, &vao_hits_);
+    if (vbo_tris_)
+        glDeleteBuffers(1, &vbo_tris_);
+    if (vao_tris_)
+        glDeleteVertexArrays(1, &vao_tris_);
     vbo_lines_ = vao_lines_ = vbo_hits_ = vao_hits_ = 0;
+    vbo_tris_ = vao_tris_ = 0;
     for (unsigned p : {prog_col_, prog_pick_})
         if (p)
             glDeleteProgram(p);
@@ -189,8 +196,103 @@ void StandaloneRenderer::shutdown() {
 void StandaloneRenderer::free_geometry() {
     lines_.clear();
     hits_.clear();
-    line_count_ = hit_count_ = 0;
+    tris_.clear();
+    line_count_ = hit_count_ = tri_count_ = 0;
     bands_ = PickBands{};
+}
+
+void StandaloneRenderer::tri(const float p0[3], const float p1[3],
+                             const float p2[3], const float c[4]) {
+    for (const float *p : {p0, p1, p2})
+        tris_.push_back(Vtx{p[0], p[1], p[2], c[0], c[1], c[2], c[3]});
+}
+
+// The session flow's geometry: one smooth ridge surface per row (a top strip
+// over the bucket heights — a SURFACE, deliberately not per-event marks) plus
+// translucent seam walls. Everything sits in the unit cube like the other
+// standalone kinds; row hues mirror the strip's palettes so a thread keeps
+// one colour across every surface.
+void StandaloneRenderer::build_flow(const space::SessionFlowScene &f) {
+    if (!f.enabled || f.rows.empty())
+        return;
+    static const float kTid[6][4] = {
+        {0.95f, 0.85f, 0.25f, 0.9f}, {0.40f, 0.80f, 1.00f, 0.9f},
+        {0.55f, 0.95f, 0.45f, 0.9f}, {1.00f, 0.55f, 0.55f, 0.9f},
+        {0.80f, 0.60f, 1.00f, 0.9f}, {0.35f, 0.95f, 0.85f, 0.9f}};
+    // SyscallClass hue table, index = class value (File..Other), the strip
+    // painter's own values; [6] doubles as the grey none/tie bucket.
+    static const float kCls[7][4] = {
+        {0.34f, 0.61f, 0.84f, 0.9f}, {0.31f, 0.79f, 0.69f, 0.9f},
+        {0.85f, 0.63f, 0.87f, 0.9f}, {0.86f, 0.80f, 0.49f, 0.9f},
+        {0.88f, 0.42f, 0.46f, 0.9f}, {0.60f, 0.76f, 0.47f, 0.9f},
+        {0.50f, 0.50f, 0.50f, 0.9f}};
+    static const float kAgg[4] = {0.55f, 0.55f, 0.58f, 0.85f};
+    static const float kMem[4] = {0.42f, 0.62f, 0.86f, 0.85f};
+    const size_t nr = f.rows.size();
+    const float y0 = 0.05f, yspan = 0.85f;
+    const float zlo = 0.08f, zhi = 0.92f;
+    const float slot = (zhi - zlo) / static_cast<float>(nr);
+    const float half = slot * 0.38f;
+    const uint32_t nb = f.buckets;
+    for (size_t i = 0; i < nr; i++) {
+        const space::FlowRow &r = f.rows[i];
+        const float z = zlo + slot * (static_cast<float>(i) + 0.5f);
+        for (uint32_t b = 0; b + 1 < nb; b++) {
+            const float x0 = (static_cast<float>(b) + 0.5f) /
+                             static_cast<float>(nb);
+            const float x1 = (static_cast<float>(b) + 1.5f) /
+                             static_cast<float>(nb);
+            const float h0 = y0 + r.heights[b] * yspan;
+            const float h1 = y0 + r.heights[b + 1] * yspan;
+            if (r.counts[b] == 0 && r.counts[b + 1] == 0)
+                continue; // a silent stretch stays flat AND unpainted —
+                          // absence reads as absence, not as a floor
+            const float *c = kAgg;
+            float cls_c[4];
+            switch (r.kind) {
+            case space::FlowRowKind::Lane:
+                c = kTid[r.lane_ord % 6];
+                break;
+            case space::FlowRowKind::AggregateLanes:
+                c = kAgg;
+                break;
+            case space::FlowRowKind::Kernel: {
+                const uint8_t cl = r.bucket_class[b];
+                const float *src = cl ? kCls[(cl - 1) % 7] : kCls[6];
+                for (int k = 0; k < 4; k++)
+                    cls_c[k] = src[k];
+                c = cls_c;
+                break;
+            }
+            case space::FlowRowKind::Memory:
+                c = kMem;
+                break;
+            }
+            const float a0[3] = {x0, h0, z - half};
+            const float a1[3] = {x0, h0, z + half};
+            const float b0[3] = {x1, h1, z - half};
+            const float b1[3] = {x1, h1, z + half};
+            tri(a0, a1, b0, c);
+            tri(a1, b1, b0, c);
+        }
+        // the row's hit proxy, at its crest
+        float crest = 0.0f;
+        for (uint32_t b = 0; b < nb; b++)
+            crest = std::max(crest, r.heights[b]);
+        hit(0.5f, y0 + crest * yspan + 0.02f, z, i);
+    }
+    static const float kSeam[4] = {0.90f, 0.88f, 0.55f, 0.28f};
+    for (size_t j = 0; j < f.seams.size(); j++) {
+        const float x = (static_cast<float>(f.seams[j].bucket) + 0.5f) /
+                        static_cast<float>(nb);
+        const float w0[3] = {x, y0, zlo};
+        const float w1[3] = {x, y0, zhi};
+        const float w2[3] = {x, y0 + yspan, zlo};
+        const float w3[3] = {x, y0 + yspan, zhi};
+        tri(w0, w1, w2, kSeam);
+        tri(w1, w3, w2, kSeam);
+        hit(x, y0 + yspan + 0.02f, 0.5f, nr + j);
+    }
 }
 
 void StandaloneRenderer::line(float x0, float y0, float z0, float x1, float y1,
@@ -506,6 +608,10 @@ void StandaloneRenderer::upload(const StandaloneFrame &f) {
         if (f.prism)
             build_prism(*f.prism);
         break;
+    case SceneKind::SessionFlow:
+        if (f.flow)
+            build_flow(*f.flow);
+        break;
     }
     bands_.kind = kind_;
     bands_.nelem = static_cast<uint64_t>(hits_.size());
@@ -520,6 +626,18 @@ void StandaloneRenderer::flush_geometry() {
     glBufferData(GL_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(lines_.size() * sizeof(Vtx)),
                  lines_.empty() ? nullptr : lines_.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(kAttrPos);
+    glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx),
+                          (void *)0);
+    glEnableVertexAttribArray(kAttrCol);
+    glVertexAttribPointer(kAttrCol, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx),
+                          (void *)(sizeof(float) * 3));
+    tri_count_ = static_cast<int>(tris_.size());
+    glBindVertexArray(vao_tris_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_tris_);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(tris_.size() * sizeof(Vtx)),
+                 tris_.empty() ? nullptr : tris_.data(), GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(kAttrPos);
     glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx),
                           (void *)0);
@@ -542,7 +660,8 @@ void StandaloneRenderer::flush_geometry() {
 }
 
 void StandaloneRenderer::render(const Camera &cam, int fbw, int fbh) {
-    if (!ready_ || fbw <= 0 || fbh <= 0 || line_count_ == 0)
+    if (!ready_ || fbw <= 0 || fbh <= 0 ||
+        (line_count_ == 0 && tri_count_ == 0))
         return;
     float mvp[16];
     cam.mvp(mvp, static_cast<float>(fbw) / fbh);
@@ -556,6 +675,11 @@ void StandaloneRenderer::render(const Camera &cam, int fbw, int fbh) {
     // Line width stays at the spec's guaranteed floor: glLineWidth(>1) is
     // invalid on a core forward-compatible context (55 T6).
     glLineWidth(1.0f);
+    if (tri_count_ > 0) {
+        // the flow's surfaces draw first so its seam walls blend over them
+        glBindVertexArray(vao_tris_);
+        glDrawArrays(GL_TRIANGLES, 0, tri_count_);
+    }
     glBindVertexArray(vao_lines_);
     glDrawArrays(GL_LINES, 0, line_count_);
     glBindVertexArray(0);
