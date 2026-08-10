@@ -250,6 +250,12 @@ $(BUILD)/spy_victim: $(BUILD)/spy_victim.o
 $(BUILD)/threads_victim: $(BUILD)/threads_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# proctree_victim is a fork+exec CHILD with poll()-parked worker threads — the
+# MULTI-PROCESS shape that catches the topology engine's teardown killing a
+# followed child (the Firefox attach bug). Multi-threaded, so -pthread.
+$(BUILD)/proctree_victim: $(BUILD)/proctree_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 # tid_victim runs two threads in DISTINCT functions (alpha_work/beta_work) for
 # the --tid per-thread filter smoke; multi-threaded, so -pthread.
 $(BUILD)/tid_victim: $(BUILD)/tid_victim.o
@@ -835,7 +841,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/test_vmmap \
            $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
-           $(BUILD)/fork_victim $(BUILD)/clone_victim \
+           $(BUILD)/fork_victim $(BUILD)/clone_victim $(BUILD)/proctree_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
            $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_EVEX_VICTIM) \

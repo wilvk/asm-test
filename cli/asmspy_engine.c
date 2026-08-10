@@ -2169,12 +2169,24 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
             return -1;
         ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
     }
-    if (!thr_get(tab, pid)) {
+    thr_t *lt = thr_get(tab, pid);
+    if (!lt) {
         /* OOM tabling the leader: DETACH so the target is not left seize-stopped
          * for asmspy's lifetime (the empty table means detach_threads can't). */
         ptrace(PTRACE_DETACH, pid, NULL, NULL);
         return -1;
     }
+    /* Every task enumerated from /proc/<pid>/task is, BY DEFINITION, in thread
+     * group `pid`. Record it now so the table carries each task's OWN address
+     * space — the invariant detach_threads' phase-2 drain relies on (it reads a
+     * thread's guard instruction through its tgid). seize_process_tree calls
+     * this once per PROCESS in a descendant tree, so without it a followed
+     * child process's threads keep tgid 0 and the drain reads them against the
+     * ROOT leader's address space — unrelated bytes for a fork+exec child (a
+     * Firefox content process, own ASLR), which decides "don't step" (a queued
+     * step #DB then survives DETACH) or "do step" (arms one on a syscall-blocked
+     * thread). Either kills the content process a second after we detach. */
+    lt->tgid = pid;
 
     char path[64];
     snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
@@ -2192,9 +2204,11 @@ static int seize_threads(pid_t pid, long opts, thr_tab_t *tab) {
                 continue;
             if (ptrace(PTRACE_SEIZE, tid, NULL, (void *)opts) == 0) {
                 ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
-                if (thr_get(tab, tid))
+                thr_t *tt = thr_get(tab, tid);
+                if (tt) {
+                    tt->tgid = pid; /* same group as its leader (this /proc) */
                     added = 1;
-                else
+                } else
                     /* OOM: can't track it — DETACH rather than strand it seized. */
                     ptrace(PTRACE_DETACH, tid, NULL, NULL);
             }
@@ -4948,8 +4962,25 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
-            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
-                thr_get(&tab, (pid_t)child); /* a new thread OR child process */
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
+                thr_t *ct =
+                    thr_get(&tab, (pid_t)child); /* a new thread OR process */
+                /* Record the child's thread group NOW, at the event that
+                 * created it — the invariant thr_tgid documents and every
+                 * other single-step engine keeps (syscalls/stream/tree/graph).
+                 * detach_threads' phase-2 drain reads a followed thread's guard
+                 * instruction through this tgid; left 0 it falls back to the
+                 * ROOT leader's address space, and for a fork+exec child (a
+                 * Firefox content process, own ASLR) that reads unrelated bytes
+                 * — deciding "don't step" (queued step #DB survives DETACH) or
+                 * "do step" (arms one on a syscall-blocked thread). Either way
+                 * a fatal SIGTRAP kills the content process ~a second after we
+                 * detach. CLONE joins this group; FORK/VFORK starts its own. */
+                if (ct)
+                    ct->tgid = (event == PTRACE_EVENT_CLONE)
+                                   ? thr_tgid(&tab, tid, pid)
+                                   : (pid_t)child;
+            }
             TOPO_RESUME(tid, 0);
             continue;
         }

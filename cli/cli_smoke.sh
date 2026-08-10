@@ -3040,6 +3040,52 @@ out2=$(timeout 40 "$ASM" --procs "$TVPID" 60 --count=calls 2>&1) \
     || fail "--procs --count=calls"
 printf '%s\n' "$out2" | grep -qE '^node [0-9]+.*inv=[0-9]' \
     || fail "--procs --count=calls: no counted node"
+
+# TEARDOWN SAFETY on a MULTI-PROCESS tree (the Firefox attach bug). The
+# topology engine SEIZEs a target's whole descendant tree and, in --count=calls
+# mode, SINGLE-STEPS it. A followed child PROCESS has its own address space; if
+# the engine tabled it without its thread-group id, the single-step teardown
+# drained the child's poll()-parked worker against the ROOT leader's memory and
+# the mishandled step outlived the DETACH as a fatal SIGTRAP ~a second later —
+# killing the child on attach. proctree_victim is a fork+exec child with parked
+# workers; here we attach --count=calls to the PARENT and require the CHILD to
+# survive the grace window. The kill was intermittent, so we run several rounds.
+echo "--- asmspy --procs (multi-process teardown safety: a followed child must survive) ---"
+pt_survived=0
+pt_clean=0
+pt_rounds=6
+for pt in $(seq 1 "$pt_rounds"); do
+    "$BUILD/proctree_victim" 3>"$BUILD/proctree_child.txt" >/dev/null 2>&1 &
+    PTPID=$!
+    sleep 0.6
+    pt_child=$(cat "$BUILD/proctree_child.txt" 2>/dev/null | head -1)
+    if [ -z "$pt_child" ]; then
+        kill "$PTPID" 2>/dev/null; wait "$PTPID" 2>/dev/null; continue
+    fi
+    # single-step the whole tree to a small call budget, then CLEANLY detach.
+    # rc must be 0 (reached the budget and ran detach_threads): a timeout kill
+    # would auto-detach via the kernel and the child would survive vacuously,
+    # so a non-clean exit is itself a failure of this test's premise.
+    set +e
+    timeout 15 "$ASM" --procs "$PTPID" 200 --count=calls >/dev/null 2>&1
+    ptrc=$?
+    set -e
+    [ "$ptrc" -eq 0 ] && pt_clean=$((pt_clean+1))
+    sleep 1.5  # the delayed fatal SIGTRAP fires ~1s after detach
+    if kill -0 "$pt_child" 2>/dev/null; then
+        pt_survived=$((pt_survived+1))
+    else
+        echo "  round $pt: followed child $pt_child DIED after --procs --count=calls detach"
+    fi
+    kill "$PTPID" "$pt_child" 2>/dev/null
+    wait "$PTPID" 2>/dev/null
+done
+rm -f "$BUILD/proctree_child.txt"
+[ "$pt_clean" -ge 1 ] \
+    || fail "--procs --count=calls never reached a clean detach ($pt_clean/$pt_rounds rc=0) — the survival check below would be vacuous"
+[ "$pt_survived" -eq "$pt_rounds" ] \
+    || fail "--procs --count=calls killed a followed child process ($pt_survived/$pt_rounds survived) — the topology teardown drained a child against the wrong address space"
+echo "  followed child survived --procs --count=calls teardown ($pt_survived/$pt_rounds, $pt_clean clean detaches)"
 # --procs JSON export (asmspy-plan Theme E): the flat TASK list, which is what
 # the engine actually observed — the forest the human view draws is derivable
 # from tgid+ppid, so exporting a rendered tree would throw information away and
