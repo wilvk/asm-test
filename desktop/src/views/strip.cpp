@@ -246,6 +246,46 @@ StripModel strip_build(const Recording &r,
             m.lane_activity.push_back(std::move(v));
         }
     }
+
+    // --- kernel rail: every syscall, at its OWN Event::seq ------------------
+    // (Loader-assigned stream position, recording.h — no anchor approximation
+    // is needed here, and the crossing layer's seq_present guard does not
+    // apply: that guard is about a RECORDED per-row seq field, which the
+    // strip never reads.)
+    if (auto it = r.by_kind.find("syscall");
+        it != r.by_kind.end() && !it->second.empty()) {
+        m.rail_enabled = true;
+        size_t row = 0;
+        for (const Event &e : it->second) {
+            StripSys s;
+            s.row = row++;
+            s.seq = e.seq;
+            s.line = jstr(e.body, "line");
+            int64_t tid = -1;
+            if (jint(e.body, "tid", &tid))
+                s.tid = tid;
+            auto pl = e.body.find("payload");
+            if (pl != e.body.end() && pl->is_string()) {
+                s.has_payload = true;
+                s.payload_bytes = pl->get<std::string>().size();
+            }
+            s.cls = syscall_class_of(syscall_name_of(s.line));
+            s.outcome = syscall_outcome_of(s.line);
+            if (s.tid != -1)
+                for (size_t i = 0; i < m.lanes.size(); i++)
+                    if (m.lanes[i].tid == s.tid) {
+                        s.lane = static_cast<int>(i);
+                        break;
+                    }
+            m.sys.push_back(std::move(s));
+        }
+        std::sort(m.sys.begin(), m.sys.end(),
+                  [](const StripSys &a, const StripSys &b) {
+                      return a.seq < b.seq;
+                  });
+    } else {
+        m.rail_reason = "no syscall events in this recording";
+    }
     return m;
 }
 

@@ -186,6 +186,52 @@ static void lanes_single_stream_and_unknown() {
           "nothing");
 }
 
+static void rail_rows() {
+    Recording r = mk_rec({
+        R"({"k":"trace","basis":"abs","off":4096,"tid":10})",
+        R"({"k":"syscall","line":"[10] openat(AT_FDCWD, <path>) = 3","tid":10})",
+        R"({"k":"syscall","line":"write(1, <14 bytes>) = -9","payload":"AAAABBBBCCCCDD"})",
+        R"({"k":"syscall","line":"zzz_mystery(1) = ?"})",
+        R"({"k":"end","events":4})",
+    });
+    StripModel m = strip_build(r, {}, {});
+    check("rail enabled", m.rail_enabled, "syscall events exist");
+    check("three rows", m.sys.size() == 3, "");
+    check("rows sorted by seq",
+          m.sys.size() == 3 && m.sys[0].seq < m.sys[1].seq &&
+              m.sys[1].seq < m.sys[2].seq,
+          "");
+    check("class from shared parse",
+          m.sys.size() == 3 && m.sys[0].cls == space::SyscallClass::File &&
+              m.sys[2].cls == space::SyscallClass::Other,
+          "openat → File; a miss stays in the visible grey bucket");
+    check("outcome from shared parse",
+          m.sys.size() == 3 &&
+              m.sys[0].outcome == space::SyscallOutcome::Ok &&
+              m.sys[1].outcome == space::SyscallOutcome::Error &&
+              m.sys[2].outcome == space::SyscallOutcome::Unknown,
+          "");
+    check("tid-ful syscall maps to its lane",
+          m.sys.size() == 3 && m.sys[0].tid == 10 && m.sys[0].lane == 0,
+          "a v2 writer's tid joins the thread lane");
+    check("tid-less syscall is rail-only",
+          m.sys.size() == 3 && m.sys[1].tid == -1 && m.sys[1].lane == -1,
+          "v1 writers omit tid — never guessed into a lane");
+    check("payload counted, never copied",
+          m.sys.size() == 3 && m.sys[1].has_payload &&
+              m.sys[1].payload_bytes == 14 &&
+              m.sys[1].line.find("AAAA") == std::string::npos,
+          "count only; the line is the payload-free rendering");
+
+    Recording none = mk_rec(
+        {R"({"k":"trace","basis":"rel","off":0})", R"({"k":"end","events":1})"});
+    StripModel mn = strip_build(none, {}, {});
+    check("rail disabled without syscalls", !mn.rail_enabled, "");
+    check("rail reason verbatim",
+          mn.rail_reason == "no syscall events in this recording",
+          "stated, never quietly absent");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -202,6 +248,7 @@ int main() {
     layout_sums();
     lanes_discovery_and_grouping();
     lanes_single_stream_and_unknown();
+    rail_rows();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
