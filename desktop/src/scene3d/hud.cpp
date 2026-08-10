@@ -597,6 +597,16 @@ static void draw_scene_kind_selector(HudState &s) {
         ImGui::TextColored(kDim,
                            "one scene at a time — layers compose on the "
                            "address plane only, never across substrates");
+    // The simplified posture toggle (2026-08-10 3d-simplify spec) — the
+    // strip's exact labels; the shell's substrate fingerprint re-weaves on a
+    // flip, the camera survives. The placard line states what was withheld,
+    // and only when something actually was.
+    if (ImGui::SmallButton(s.detail ? "simplify" : "detail"))
+        s.detail = !s.detail;
+    if (!s.simplify_line.empty()) {
+        ImGui::SameLine();
+        ImGui::TextColored(kDim, "%s", s.simplify_line.c_str());
+    }
 }
 
 const char *const kHudWindow = "3D overview";

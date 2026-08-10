@@ -41,6 +41,7 @@
 #include "scene3d/goto.h"
 #include "scene3d/hud.h"
 #include "scene3d/lod.h" // 51 T4: the camera-distance entity budget
+#include "scene3d/simplify.h" // the simplified posture (2026-08-10 spec)
 #include "scene3d/pick.h"
 #include "scene3d/standalone.h" // T1-T5 (59): the non-plane substrates
 #include "space/projection.h"
@@ -1470,6 +1471,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         // (build_terrain moved it into sv.terr.proj above; the terrain is built
         // first precisely so it is available here).
         sv.traj = space::build_trajectories(r, sv.terr.proj);
+        // The simplified posture's worldline cap (2026-08-10 3d-simplify
+        // spec): top-8 by point count, the rest COUNTED into the placard.
+        // At or under the cap this is the identity, so small scenes weave
+        // byte-identically. Applied before convergence detection so the
+        // arcs follow what is actually drawn.
+        sv.simplify = space::SimplifyNote{};
+        if (!sv.hud.detail)
+            sv.traj = space::simplify_trajectories(
+                sv.traj, scene3d::kSceneSimplifiedTrajs, &sv.simplify);
         sv.conv = space::detect_convergences(sv.traj, sv.terr.proj);
         // 56 T2/T5: the survey aggregate does not change with the playhead,
         // so it is woven once here, like terr/traj/conv above.
@@ -1716,6 +1726,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             scene3d::lod_drops_unfocused(sv.hud.lod, sv.hud.focus.tid >= 0);
         sv.hud.lod_note = scene3d::lod_placard(sv.hud.layers, sv.hud.lod,
                                                sv.hud.focus.tid >= 0);
+        sv.hud.simplify_line = scene3d::simplify_note(
+            sv.hud.detail, sv.simplify, sv.hud.layers.access_marks);
     }
     // 58 T2: traffic whose direction was never recorded is drawn on NEITHER
     // relief surface, so the HUD states it rather than letting it vanish
@@ -2112,7 +2124,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // 51 T4: the entity budget draws LESS, never more — lod_apply can only
     // clear a layer the reader asked for, and everything it cleared is named
     // in sv.hud.lod_note (drawn above and in the HUD).
-    f.layers = scene3d::lod_apply(sv.hud.layers, sv.hud.lod);
+    // The simplified posture withholds the per-event spike layers first;
+    // lod_apply still degrades further on top when the camera/budget say so.
+    f.layers = scene3d::lod_apply(
+        scene3d::simplify_apply(sv.hud.layers, sv.hud.detail), sv.hud.lod);
     // 51 T1/T2: the subject filter and (only when a region is focused) its
     // per-cell mask.
     f.focus = sv.hud.focus;
@@ -2951,11 +2966,14 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         if (s.active_tab >= 0 &&
             static_cast<size_t>(s.active_tab) < s.scenes.size()) {
             SceneView &sv = s.scenes[static_cast<size_t>(s.active_tab)];
-            if (sv.built && (sv.woven_union != src.is_union ||
-                             sv.woven_stable != s.settings.stable_plane_layout))
+            if (sv.built &&
+                (sv.woven_union != src.is_union ||
+                 sv.woven_stable != s.settings.stable_plane_layout ||
+                 sv.woven_detail != sv.hud.detail))
                 sv.built = false;
             sv.woven_union = src.is_union;
             sv.woven_stable = s.settings.stable_plane_layout;
+            sv.woven_detail = sv.hud.detail;
         }
         draw_scene_overview(s, *src.rec, *src.streams);
     } break;

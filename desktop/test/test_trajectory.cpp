@@ -728,6 +728,52 @@ int main() {
               "an unchanged recording must NOT re-upload the worldlines");
     }
 
+    // --- simplify_trajectories (2026-08-10 3d-simplify spec): the posture's
+    // worldline cap — top-N by point count, ties ascending tid, MODEL order
+    // kept, the rest COUNTED; at or under the cap the identity.
+    {
+        auto mk_set = [](std::initializer_list<std::pair<int, int>> spec) {
+            space::TrajectorySet s;
+            for (auto &p : spec) {
+                space::Trajectory t;
+                t.tid = p.first;
+                t.points.resize(static_cast<size_t>(p.second));
+                s.trajectories.push_back(std::move(t));
+            }
+            return s;
+        };
+        space::TrajectorySet big =
+            mk_set({{10, 5}, {11, 1}, {12, 9}, {13, 1}, {14, 3}});
+        space::SimplifyNote note;
+        space::TrajectorySet capped =
+            space::simplify_trajectories(big, 3, &note);
+        check("simplify/top-3 kept, model order",
+              capped.trajectories.size() == 3 &&
+                  capped.trajectories[0].tid == 10 &&
+                  capped.trajectories[1].tid == 12 &&
+                  capped.trajectories[2].tid == 14,
+              "sizes 5,9,3 win; order stays 10,12,14 (model order)");
+        check("simplify/hidden counted",
+              note.hidden_threads == 2 && note.hidden_points == 2,
+              "tids 11 and 13 fold, one point each");
+        // tie at the cut: sizes {2,2,2}, cap 2 -> the two LOWEST tids win
+        space::TrajectorySet tie = mk_set({{31, 2}, {30, 2}, {32, 2}});
+        space::SimplifyNote tnote;
+        space::TrajectorySet tc = space::simplify_trajectories(tie, 2, &tnote);
+        check("simplify/ties by ascending tid",
+              tc.trajectories.size() == 2 && tc.trajectories[0].tid == 31 &&
+                  tc.trajectories[1].tid == 30 && tnote.hidden_threads == 1,
+              "31 and 30 keep (model order preserved), 32 folds");
+        // at/under the cap: the identity, note zeroed
+        space::SimplifyNote inote;
+        space::TrajectorySet same =
+            space::simplify_trajectories(big, 5, &inote);
+        check("simplify/under-cap identity",
+              same.trajectories.size() == big.trajectories.size() &&
+                  inote.hidden_threads == 0 && inote.hidden_points == 0,
+              "the byte-identical-below-threshold rule");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d trajectory check(s) failed\n", failures);
         return 1;

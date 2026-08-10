@@ -213,6 +213,12 @@ struct SceneView {
     // describe. Both default false so the very first weave stamps them.
     bool woven_union = false;
     bool woven_stable = false;
+    // The simplified posture the cached weave was built under (2026-08-10
+    // 3d-simplify spec): a HUD detail/simplify flip mismatches and re-weaves
+    // — camera and HUD survive, exactly like the toggles above. The weave's
+    // SimplifyNote rides here so the placard can COUNT what the cap folded.
+    bool woven_detail = false;
+    space::SimplifyNote simplify;
 
     // 56 T2/T5 (fidelity-and-module-layers): the survey's scene-facing extract
     // — woven once per recording alongside terr/traj/conv above (a survey

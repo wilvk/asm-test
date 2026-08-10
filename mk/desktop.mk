@@ -1252,6 +1252,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_strip_model \
                  $(BUILD)/desktop_test_strip_draw \
                  $(BUILD)/desktop_test_session_flow \
+                 $(BUILD)/desktop_test_simplify \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_drillin \
@@ -2121,6 +2122,11 @@ $(BUILD)/desktop_test_mnemonic: $(BUILD)/desktop/test/t/test_mnemonic.o \
 # the registry touches no Scene method, so this is the same engine-free,
 # ImGui-free closure proof test_fabric makes for the document model, now for
 # the layer table.
+# The 3D simplified posture's pure rules (2026-08-10 3d-simplify spec):
+# the spike-layer gate + the pinned placard. Header-only closures, one .o.
+$(BUILD)/desktop_test_simplify: $(BUILD)/desktop/test/t/test_simplify.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_layers: $(BUILD)/desktop/test/t/test_layers.o \
     $(BUILD)/desktop/test/s3/layers.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@

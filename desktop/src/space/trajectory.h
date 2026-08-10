@@ -105,5 +105,17 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj);
 // Production always passes the terrain's Projection so a rel path can be placed.
 TrajectorySet build_trajectories(const Recording &r);
 
+// The 3D simplified posture's worldline cap (2026-08-10 3d-simplify spec):
+// keep the `cap` LARGEST trajectories (by point count, ties by ascending
+// tid) IN MODEL ORDER; count what hides into `note` — the placard states it,
+// never a silent drop. At or under the cap the returned set is the input,
+// element for element (the byte-identical-below-threshold rule). Pure (D4).
+struct SimplifyNote {
+    size_t hidden_threads = 0;
+    uint64_t hidden_points = 0;
+};
+TrajectorySet simplify_trajectories(const TrajectorySet &t, size_t cap,
+                                    SimplifyNote *note);
+
 } // namespace asmdesk::space
 #endif // ASMDESK_SPACE_TRAJECTORY_H

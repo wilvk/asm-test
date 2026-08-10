@@ -355,4 +355,36 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     return set;
 }
 
+TrajectorySet simplify_trajectories(const TrajectorySet &t, size_t cap,
+                                    SimplifyNote *note) {
+    if (note)
+        *note = SimplifyNote{};
+    if (t.trajectories.size() <= cap)
+        return t; // at or under the cap: the input, element for element
+    std::vector<size_t> rank(t.trajectories.size());
+    for (size_t i = 0; i < rank.size(); i++)
+        rank[i] = i;
+    std::sort(rank.begin(), rank.end(), [&](size_t A, size_t B) {
+        const size_t a = t.trajectories[A].points.size();
+        const size_t b = t.trajectories[B].points.size();
+        if (a != b)
+            return a > b;
+        return t.trajectories[A].tid < t.trajectories[B].tid;
+    });
+    std::vector<char> kept(t.trajectories.size(), 0);
+    for (size_t i = 0; i < cap; i++)
+        kept[rank[i]] = 1;
+    TrajectorySet out = t;
+    out.trajectories.clear();
+    for (size_t i = 0; i < t.trajectories.size(); i++) {
+        if (kept[i]) {
+            out.trajectories.push_back(t.trajectories[i]); // model order
+        } else if (note) {
+            note->hidden_threads++;
+            note->hidden_points += t.trajectories[i].points.size();
+        }
+    }
+    return out;
+}
+
 } // namespace asmdesk::space

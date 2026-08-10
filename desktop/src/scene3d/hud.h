@@ -384,6 +384,15 @@ struct HudState {
     SceneKind kind = SceneKind::Plane;
     bool req_kind_change = false;
     SceneKind req_kind = SceneKind::Plane;
+    // The simplified reading posture (2026-08-10 3d-simplify spec): false
+    // (the default) caps the worldlines to the top-8 and withholds the
+    // per-event spike layers; true draws everything. A posture, not a
+    // Settings field — it lives with the camera-ish HUD state and survives
+    // growth rebuilds the way the camera does. `simplify_line` is the
+    // placard, synced by the shell — non-empty ONLY when something was
+    // actually withheld (a small scene stays silent and byte-identical).
+    bool detail = false;
+    std::string simplify_line;
     // The one-line reason a kind is unavailable for this recording (no second
     // recording to diverge against, no region capture, no call tree, no wide
     // register writes). Synced by the caller; a kind with a reason is offered
