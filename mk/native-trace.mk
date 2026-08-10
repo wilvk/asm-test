@@ -547,8 +547,8 @@ pin-taint-test:
 	  echo "1..0 # skipped"; \
 	  exit 0; \
 	fi; \
-	$(MAKE) --no-print-directory $(BUILD)/pin_taint; \
-	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_taint || exit 1; \
+	$(MAKE) --no-print-directory dr-taint-oracle-tool || exit 1; \
 	echo "=== pin-taint-test (shared fixtures under pin -t oracle.so) ==="; \
 	rc=0; \
 	for mode in seeded sink sink-negative callarg memlen; do \
@@ -593,9 +593,9 @@ else
 	  echo "1..0 # skipped"; \
 	  exit 0; \
 	fi; \
-	$(MAKE) --no-print-directory drtrace-client; \
-	$(MAKE) --no-print-directory $(BUILD)/pin_taint $(BUILD)/taint_oracle_diff; \
-	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
+	$(MAKE) --no-print-directory drtrace-client || exit 1; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_taint $(BUILD)/taint_oracle_diff || exit 1; \
+	$(MAKE) --no-print-directory dr-taint-oracle-tool || exit 1; \
 	echo "=== dr-taint-oracle-test (DR ≡ libdft64 on the GP/integer-memory subset) ==="; \
 	echo "# libdft64 coverage-gap tokens (disclosed-boundary record, PIN-4 exit criterion):"; \
 	echo "#   libdft-partial-sse-avx    XMM/YMM: basic SSE/AVX, rules unverified upstream -> INFORMATIONAL skip"; \

@@ -89,11 +89,11 @@ PIN_SHM ?= /asmtest_pin_trace_ci
 pintool-test:
 	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
 	echo "== pintool-test (PIN_ROOT=$$home) =="; \
-	$(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home; \
-	$(MAKE) --no-print-directory $(BUILD)/pin_trace_workload $(BUILD)/pin_trace_validator; \
+	$(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home || exit 1; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_trace_workload $(BUILD)/pin_trace_validator || exit 1; \
 	dr_env=""; \
 	if [ -n "$(DR_AVAILABLE)" ]; then \
-	  $(MAKE) --no-print-directory drtrace-client; \
+	  $(MAKE) --no-print-directory drtrace-client || exit 1; \
 	  dr_env="ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) ASMTEST_DR_LIB=$(abspath $(DR_DLLIB))"; \
 	fi; \
 	rm -f /dev/shm$(PIN_SHM) 2>/dev/null || true; \
@@ -140,16 +140,16 @@ PIN_APX_SHM ?= /asmtest_pin_apx_ci
 pintool-apx-test:
 	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
 	echo "== pintool-apx-test (PIN_ROOT=$$home) =="; \
-	$(MAKE) --no-print-directory $(BUILD)/pin_apx_decode PIN_HOME=$$home; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_apx_decode PIN_HOME=$$home || exit 1; \
 	echo "-- apx XED decode assertion (ungated) --"; \
-	$(BUILD)/pin_apx_decode; \
+	$(BUILD)/pin_apx_decode || exit 1; \
 	if $(BUILD)/pin_apx_decode cpuid; then \
 	  echo "-- apx execution halves (CPUID APX_F present) --"; \
-	  $(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home; \
-	  $(MAKE) --no-print-directory $(BUILD)/pin_apx_workload $(BUILD)/pin_apx_validator; \
+	  $(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home || exit 1; \
+	  $(MAKE) --no-print-directory $(BUILD)/pin_apx_workload $(BUILD)/pin_apx_validator || exit 1; \
 	  dr_env=""; \
 	  if [ -n "$(DR_AVAILABLE)" ]; then \
-	    $(MAKE) --no-print-directory drtrace-client; \
+	    $(MAKE) --no-print-directory drtrace-client || exit 1; \
 	    dr_env="ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) ASMTEST_DR_LIB=$(abspath $(DR_DLLIB))"; \
 	  fi; \
 	  rm -f /dev/shm$(PIN_APX_SHM) 2>/dev/null || true; \
@@ -202,11 +202,11 @@ $(BUILD)/pin_probe_validator: examples/pin_probe_validator.c \
 # PR_SET_PTRACER_ANY. Self-skips off x86-64/Linux via the arch gate above.
 PIN_PROBE_SHM ?= /asmtest_valtrace_pin_ci
 pin-probe-test:
-	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	@set -e; \
+	home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
 	echo "== pin-probe-test (PIN_ROOT=$$home) =="; \
 	$(MAKE) --no-print-directory pin-probe-tool PIN_HOME=$$home; \
 	$(MAKE) --no-print-directory $(BUILD)/pin_probe_victim $(BUILD)/pin_probe_validator; \
-	set -e; \
 	for sc in capture badptr skip; do \
 	  func=capref; [ $$sc = skip ] && func=tiny; \
 	  shm=$(PIN_PROBE_SHM)_$$sc; \
