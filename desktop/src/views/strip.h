@@ -140,6 +140,11 @@ struct strip_view_t {
     float lane_h = 18.0f;
     float px_w = 800.0f, px_h = 400.0f;
     bool follow_tail = true; // reading posture, not a Settings field
+    // The other reading posture (2026-08-10 simplified-LOD spec): false (the
+    // default) draws the top-N most active lanes/bands plus COUNTED aggregate
+    // rows; true draws everything. Never touches the model — at or below the
+    // thresholds the two postures render byte-identically.
+    bool detail = false;
 };
 
 void strip_view_window(const strip_view_t &v, double *lo, double *hi);
@@ -206,6 +211,13 @@ size_t strip_plan(const StripModel &m, const strip_view_t &v,
                   std::vector<strip_prim_t> *out);
 std::string strip_plan_dump(const std::vector<strip_prim_t> &prims);
 
+// The plan cache's key: a pure FNV-1a hash over every camera field the plan
+// reads (bit patterns, so -0.0 vs 0.0 style aliasing cannot false-hit) plus
+// the model generation and the pixel size. `follow_tail` is deliberately NOT
+// keyed — following only moves seq0, which is keyed on its own. A static
+// frame whose key matches re-plans nothing (the Firefox-scale per-frame fix).
+uint64_t strip_plan_key(const strip_view_t &v, uint64_t model_gen);
+
 // ---- hover / drill-in (pure) ---------------------------------------------------
 
 std::string strip_hover_text(const StripModel &m, const strip_prim_t &p);
@@ -228,6 +240,12 @@ struct StripState {
     // say — while `cam` (zoom, lane scroll, follow) deliberately survives.
     bool woven_union = false;
     bool woven_stable = false;
+    // The plan cache: valid iff `plan_key` equals strip_plan_key(cam,
+    // model_gen). `model_gen` increments on every model rebuild, so growth
+    // invalidates exactly one plan; camera stillness re-plans nothing.
+    std::vector<strip_prim_t> plan_cache;
+    uint64_t plan_key = 0;
+    uint64_t model_gen = 0;
 };
 
 } // namespace asmdesk

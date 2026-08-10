@@ -2984,6 +2984,7 @@ void shell_strip_body(ShellState &s, const Recording &r, const Streams *a) {
                 src.is_union ? s.live_capture_seams
                              : std::vector<StripSeam>{});
             st.built = true;
+            st.model_gen++; // invalidates exactly one cached plan
             st.woven_union = src.is_union;
             st.woven_stable = stable;
         }

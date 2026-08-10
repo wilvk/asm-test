@@ -489,6 +489,32 @@ static void plan_stable_tint_parity() {
     check("a tint interval was emitted", saw_tint, "");
 }
 
+static void plan_key_sensitivity() {
+    strip_view_t v;
+    v.px_w = 800;
+    v.px_h = 400;
+    v.seq_per_px = 1.0;
+    const uint64_t k0 = strip_plan_key(v, 7);
+    check("key stable", strip_plan_key(v, 7) == k0,
+          "identical inputs → identical key (the cache's whole premise)");
+    strip_view_t w;
+    w = v; w.seq0 = 1;       check("key: seq0", strip_plan_key(w, 7) != k0, "");
+    w = v; w.seq_per_px = 2; check("key: zoom", strip_plan_key(w, 7) != k0, "");
+    w = v; w.lane0 = 1;      check("key: lane0", strip_plan_key(w, 7) != k0, "");
+    w = v; w.lane_h = 20;    check("key: lane_h", strip_plan_key(w, 7) != k0, "");
+    w = v; w.px_w = 801;     check("key: px_w", strip_plan_key(w, 7) != k0, "");
+    w = v; w.px_h = 401;     check("key: px_h", strip_plan_key(w, 7) != k0, "");
+    w = v; w.detail = true;  check("key: detail", strip_plan_key(w, 7) != k0, "");
+    check("key: model_gen", strip_plan_key(v, 8) != k0, "");
+    check("key: follow does NOT key",
+          [&] {
+              strip_view_t f = v;
+              f.follow_tail = false;
+              return strip_plan_key(f, 7) == k0;
+          }(),
+          "follow only moves seq0, which is keyed on its own");
+}
+
 static void pinned_strings() {
     check("axis label pinned",
           std::string(StripModel::axis_label()) == "stream order — not time",
@@ -510,6 +536,7 @@ int main() {
     run_seams();
     plan_determinism_and_modes();
     plan_stable_tint_parity();
+    plan_key_sensitivity();
     pinned_strings();
     if (failures) {
         std::fprintf(stderr, "%d failure(s)\n", failures);

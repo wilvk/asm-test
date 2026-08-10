@@ -188,8 +188,14 @@ void draw_strip(StripState &st, const std::string &rec_id,
     if (st.cam.follow_tail)
         strip_view_follow(st.cam, m.seq_end);
 
-    std::vector<strip_prim_t> prims;
-    strip_plan(m, st.cam, &prims);
+    // The plan cache: a static frame — no growth, no interaction — walks the
+    // cached vector and plans nothing (the Firefox-scale per-frame fix).
+    const uint64_t key = strip_plan_key(st.cam, st.model_gen);
+    if (key != st.plan_key) {
+        strip_plan(m, st.cam, &st.plan_cache);
+        st.plan_key = key;
+    }
+    const std::vector<strip_prim_t> &prims = st.plan_cache;
 
     ImGui::BeginChild("strip-canvas", ImVec2(st.cam.px_w, st.cam.px_h), true,
                       ImGuiWindowFlags_NoScrollbar);

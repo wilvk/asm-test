@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <map>
 
@@ -477,6 +478,33 @@ StripModel strip_build(const Recording &r,
         m.hud = h;
     }
     return m;
+}
+
+uint64_t strip_plan_key(const strip_view_t &v, uint64_t model_gen) {
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&](uint64_t x) {
+        h ^= x;
+        h *= 1099511628211ull;
+    };
+    auto bits_d = [](double d) {
+        uint64_t u;
+        std::memcpy(&u, &d, sizeof u);
+        return u;
+    };
+    auto bits_f = [](float f) {
+        uint32_t u;
+        std::memcpy(&u, &f, sizeof u);
+        return static_cast<uint64_t>(u);
+    };
+    mix(bits_d(v.seq0));
+    mix(bits_d(v.seq_per_px));
+    mix(static_cast<uint64_t>(v.lane0));
+    mix(bits_f(v.lane_h));
+    mix(bits_f(v.px_w));
+    mix(bits_f(v.px_h));
+    mix(v.detail ? 1u : 0u);
+    mix(model_gen);
+    return h;
 }
 
 // The plan. Deterministic by construction: sorted vectors only, pixel-space
