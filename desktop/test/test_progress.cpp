@@ -81,6 +81,20 @@ int main() {
           "a golden-sized terrain never degrades — the full slice lands");
     check("degrade/at-budget", !should_degrade(200000, 200000),
           "exactly at budget is not over budget");
+    // --- playback holds the coarse plane (animation cost bound) --------------
+    // The transport already keeps the RATE wall-clock steady (transport_tick);
+    // this keeps the per-frame COST bounded: an over-budget slice never lands
+    // mid-play, so the frame rate holds too. Paused behavior is unchanged:
+    // coarse for the in-flight frame, full one frame later.
+    check("scrub/paused first frame degrades", scrub_hold_coarse(false, false),
+          "an over-budget scrub still shows coarse for the in-flight frame");
+    check("scrub/paused second frame lands full",
+          !scrub_hold_coarse(false, true),
+          "the full slice must land one frame later when not playing");
+    check("scrub/playing always holds coarse",
+          scrub_hold_coarse(true, false) && scrub_hold_coarse(true, true),
+          "playback must never pay the full re-slice per animated frame");
+
     check("degrade/zero-budget-never", !should_degrade(999999999, 0),
           "a zero (unmeasured) budget means never degrade");
     // The degraded frame carries a coarse provenance label — not measured

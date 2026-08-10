@@ -81,6 +81,18 @@ inline bool should_degrade(uint64_t cell_count, uint64_t budget_cells) {
     return budget_cells != 0 && cell_count > budget_cells;
 }
 
+// Must an OVER-BUDGET slice stay coarse this frame? While PLAYING, always:
+// transport_tick already keeps the playback RATE wall-clock steady, and this
+// keeps the per-frame COST bounded too — a running animation never pays the
+// full re-slice every frame, so the frame rate holds instead of the animation
+// appearing to slow down. Not playing, the historical two-step is unchanged:
+// coarse for the in-flight frame (`pending` false), the full slice lands one
+// frame later (`pending` true). The full slice therefore lands on the first
+// frame after pause/stop. Pure, beside should_degrade, for the same D4 reason.
+inline bool scrub_hold_coarse(bool playing, bool pending) {
+    return playing || !pending;
+}
+
 // The provenance note the degraded (coarse) scrub frame carries, so the flat
 // plane is NEVER presented as measured emptiness (terrain.h:22 / D7) — it is the
 // same labelled coarse rung the terrain shows normally, shown while the full

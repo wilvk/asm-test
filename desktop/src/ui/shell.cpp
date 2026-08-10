@@ -1799,9 +1799,13 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // (D7). The budget is generous — a golden-sized terrain never degrades.
     if (sv.slice_t != sv.hud.t) {
         const uint64_t cells = sv.terr.code.size() + sv.terr.data.size();
-        if (!sv.scrub_pending && should_degrade(cells, kSceneCellBudget)) {
+        // While PLAYING an over-budget scene, the coarse plane is held for the
+        // whole run (scrub_hold_coarse) — the full slice lands on the first
+        // frame after pause/stop. Paused scrubs keep the historical two-step.
+        if (should_degrade(cells, kSceneCellBudget) &&
+            scrub_hold_coarse(sv.play.playing, sv.scrub_pending)) {
             sv.slice = sv.terr.coarse_slice(); // cheap, labelled coarse
-            sv.scrub_pending = true; // finish the full slice next frame
+            sv.scrub_pending = true; // the full slice lands when eligible
         } else {
             sv.slice = sv.terr.slice(sv.hud.t); // the full slice lands
             // 56 T2: the confidence layer's coverage-window mask — a no-op
