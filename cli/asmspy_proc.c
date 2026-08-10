@@ -502,13 +502,19 @@ static int sym_push(asmspy_symtab_t *t, size_t *cap, uint64_t addr,
     return 0;
 }
 
-/* mmap a file read-only. Returns base + sets *len, or NULL. */
+/* mmap a file read-only. Returns base + sets *len, or NULL. The paths reach
+ * here from target-controlled data (a module's .gnu_debuglink, /proc/<pid>/maps
+ * entries), so O_NONBLOCK stops a planted FIFO from blocking open() forever past
+ * the caller's time budget, and S_ISREG refuses anything that is not a real
+ * file (fstat runs only AFTER open returns, so the flag is what protects the
+ * open itself). */
 static uint8_t *map_file(const char *path, size_t *len) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0)
         return NULL;
     struct stat st;
-    if (fstat(fd, &st) != 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr)) {
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size < (off_t)sizeof(Elf64_Ehdr)) {
         close(fd);
         return NULL;
     }
@@ -2482,6 +2488,39 @@ static int jitdump_discover(asmspy_jitmap_t *j) {
     return -1;
 }
 
+/* Open a JIT symbol file (text perf-map or binary jitdump) that lives at a
+ * world-writable, pid-predictable /tmp path. The names are trivially guessable
+ * (/tmp/perf-<pid>.map, /tmp/jit-<pid>.dump), so a local attacker can pre-create
+ * one for a target we are about to inspect: a planted FIFO would block the open
+ * past our time budget, and a regular file owned by ANOTHER user could spoof
+ * symbol names into the trace. O_NONBLOCK guards the open itself; the checks run
+ * on the opened fd (no TOCTOU) and demand a regular file owned by us or by the
+ * target (whose own JIT is the only legitimate writer). Returns a FILE* or the
+ * open failure as NULL. */
+static FILE *jit_open_trusted(const char *path, const char *mode,
+                              pid_t target) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0)
+        return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return NULL;
+    }
+    char tp[32];
+    snprintf(tp, sizeof tp, "%d", (int)target);
+    uid_t towner = proc_uid(tp);
+    if (st.st_uid != geteuid() &&
+        !(towner != (uid_t)-1 && st.st_uid == towner)) {
+        close(fd);
+        return NULL;
+    }
+    FILE *f = fdopen(fd, mode);
+    if (!f)
+        close(fd);
+    return f;
+}
+
 /* Parse one jitdump file into the map: every JIT_CODE_LOAD contributes a sized,
  * named entry (the trailing code bytes are skipped, not read); JIT_CODE_MOVE
  * relocates the matching earlier load (tiered recompile / GC code motion); any
@@ -2489,7 +2528,7 @@ static int jitdump_discover(asmspy_jitmap_t *j) {
  * may be appending while we read — just ends the parse, keeping what's whole.
  * Returns entries added, or -1 if the file is unreadable / not an LE jitdump. */
 static int jitdump_read(asmspy_jitmap_t *j, const char *path) {
-    FILE *f = fopen(path, "rb");
+    FILE *f = jit_open_trusted(path, "rb", j->pid);
     if (!f)
         return -1;
     jitdump_hdr_t h;
@@ -2597,7 +2636,7 @@ int asmspy_jitmap_refresh(asmspy_jitmap_t *j) {
      * (exact sizes, tiered-recompile-aware; the text map is the LCD). */
     char path[64];
     snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)j->pid);
-    FILE *f = fopen(path, "r");
+    FILE *f = jit_open_trusted(path, "r", j->pid);
     if (!f && dumped < 0)
         return -1; /* no JIT source at all: an empty map, resolves nothing */
 
