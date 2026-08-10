@@ -32,6 +32,17 @@ struct Settings {
     std::string asmspy_path; // asmspy the host spawns; blank = auto-resolve
     std::string ssh_host;    // ssh target; blank = local
 
+    // The 3D scene's session behaviours, both ON by default so an `auto`-led
+    // session gets them from its very first Start ("all options start as
+    // checked"). `live_union_weave`: the live tab's 3D pane weaves the UNION
+    // of every capture this session made (recordings() ∪ growing — the
+    // in-memory twin of a `--record` tee), so a fresh Start ADDS to the scene
+    // instead of replacing it. `stable_plane_layout`: regions pack the plane
+    // in first-seen order (build_projection keep_order), so a region already
+    // placed keeps its domain slot when a later capture adds more.
+    bool live_union_weave = true;
+    bool stable_plane_layout = true;
+
     static constexpr float kTextScaleMin = 0.8f;
     static constexpr float kTextScaleMax = 2.0f;
 };

@@ -4575,6 +4575,22 @@ static void draw_settings(ShellState &s) {
                             "resolves $PATH then "
                             "./build/asmspy; from another OS set an ssh host.");
 
+        // 3D scene: the session-union weave + append-only plane packing. Both
+        // default ON (settings.h states why); a toggle takes effect on the
+        // next frame — the Scene3D dispatch re-weaves when either changes.
+        ImGui::Separator();
+        ImGui::TextUnformatted("3D scene");
+        if (ImGui::Checkbox("Live capture: weave session union",
+                            &s.settings.live_union_weave))
+            s.settings_dirty = true;
+        ImGui::TextDisabled("Each Start ADDS this session's capture to the "
+                            "address plane instead of replacing it.");
+        if (ImGui::Checkbox("Stable plane layout (append-only regions)",
+                            &s.settings.stable_plane_layout))
+            s.settings_dirty = true;
+        ImGui::TextDisabled("A region already placed keeps its spot when a "
+                            "later capture adds more.");
+
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());
         ImGui::TextWrapped(

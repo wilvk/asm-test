@@ -26,6 +26,8 @@ std::string settings_serialize(const Settings &s) {
     j["light_theme"] = s.light_theme;
     j["asmspy_path"] = s.asmspy_path;
     j["ssh_host"] = s.ssh_host;
+    j["live_union_weave"] = s.live_union_weave;
+    j["stable_plane_layout"] = s.stable_plane_layout;
     return j.dump(2);
 }
 
@@ -56,6 +58,12 @@ bool settings_parse(const std::string &text, Settings &out) {
         out.asmspy_path = it->get<std::string>();
     if (auto it = j.find("ssh_host"); it != j.end() && it->is_string())
         out.ssh_host = it->get<std::string>();
+    // Absent keys keep the checked defaults (an old store predates them).
+    if (auto it = j.find("live_union_weave"); it != j.end() && it->is_boolean())
+        out.live_union_weave = it->get<bool>();
+    if (auto it = j.find("stable_plane_layout");
+        it != j.end() && it->is_boolean())
+        out.stable_plane_layout = it->get<bool>();
     return true;
 }
 

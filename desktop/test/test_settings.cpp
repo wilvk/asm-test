@@ -94,6 +94,27 @@ int main() {
     check("parse-bounds-ts", hb.text_scale == Settings::kTextScaleMax,
           "an absurd text_scale is clamped");
 
+    // The 3D-scene toggles (live union weave + stable plane layout): both
+    // default ON — "all options start as checked", so an `auto`-led session
+    // gets both from its very first Start — and an OLD store with neither key
+    // must not silently uncheck them.
+    Settings sd;
+    check("scene-defaults-on", sd.live_union_weave && sd.stable_plane_layout,
+          "both 3D-scene toggles must default checked");
+    Settings so;
+    so.live_union_weave = false;
+    so.stable_plane_layout = false;
+    Settings sb;
+    check("scene-roundtrip",
+          settings_parse(settings_serialize(so), sb) && !sb.live_union_weave &&
+              !sb.stable_plane_layout,
+          "serialize/parse must carry both bools");
+    Settings sl;
+    check("scene-absent-keys-stay-checked",
+          settings_parse("{}", sl) && sl.live_union_weave &&
+              sl.stable_plane_layout,
+          "an old store without the keys must keep the checked defaults");
+
     ImGui::DestroyContext();
     if (failures) {
         std::fprintf(stderr, "test_settings: %d FAILURE(S)\n", failures);
