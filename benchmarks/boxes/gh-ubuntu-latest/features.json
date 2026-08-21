@@ -2,7 +2,7 @@
   "system": {
     "box_id": "gh-ubuntu-latest",
     "os": "linux",
-    "os_version": "Ubuntu 24.04.4 LTS / 6.17.0-1020-azure",
+    "os_version": "Ubuntu 24.04.4 LTS / 6.17.0-1022-azure",
     "arch": "x86_64",
     "cpu": "AMD EPYC 7763 64-Core Processor",
     "uarch": "zen3-4",
@@ -10,8 +10,8 @@
     "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "ae6ac4a",
-    "timestamp": "2026-08-14T08:12:00Z"
+    "commit": "592cbd0",
+    "timestamp": "2026-08-21T07:39:03Z"
   },
   "features": [
     {
