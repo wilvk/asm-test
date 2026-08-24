@@ -1121,7 +1121,7 @@ jobs:
             sudo systemctl start docker
           fi
           docker version
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1424,7 +1424,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1459,7 +1459,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1504,7 +1504,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1548,7 +1548,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1586,7 +1586,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1641,7 +1641,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with: { go-version: "stable" }
       # libasmtest_emu is the superset the cgo module links against; Keystone has no
       # apt package, so both pinned engines are built from source (as release.yml does).
@@ -1881,7 +1881,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install the docs toolchain
