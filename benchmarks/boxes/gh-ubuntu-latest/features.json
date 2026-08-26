@@ -4,14 +4,14 @@
     "os": "linux",
     "os_version": "Ubuntu 24.04.4 LTS / 6.17.0-1022-azure",
     "arch": "x86_64",
-    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
     "uarch": "zen3-4",
     "vendor": "AuthenticAMD",
     "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "592cbd0",
-    "timestamp": "2026-08-21T07:39:03Z"
+    "commit": "0080e34",
+    "timestamp": "2026-08-26T07:42:16Z"
   },
   "features": [
     {
