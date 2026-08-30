@@ -4,14 +4,14 @@
     "os": "linux",
     "os_version": "Ubuntu 24.04.4 LTS / 6.17.0-1022-azure",
     "arch": "x86_64",
-    "cpu": "AMD EPYC 7763 64-Core Processor",
-    "uarch": "zen3-4",
-    "vendor": "AuthenticAMD",
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "uarch": "unknown",
+    "vendor": "GenuineIntel",
     "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "9807384",
-    "timestamp": "2026-08-29T12:57:44Z"
+    "commit": "8a2e213",
+    "timestamp": "2026-08-30T12:33:29Z"
   },
   "features": [
     {
@@ -313,7 +313,7 @@
       "arch": "host",
       "scope": "host",
       "available": false,
-      "skip_reason": "perf branch-stack not permitted (lower perf_event_paranoid or grant CAP_PERFMON)",
+      "skip_reason": "not an AuthenticAMD x86-64 host",
       "fidelity": "native",
       "complete": null,
       "trace_insns": null,
@@ -365,6 +365,11 @@
       "fidelity": "n/a",
       "complete": null,
       "trace_insns": null,
+      "insns_truth": null
+    }
+  ]
+}
+s": null,
       "insns_truth": null
     }
   ]
