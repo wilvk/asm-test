@@ -2,7 +2,7 @@
   "system": {
     "box_id": "gh-macos-15-intel",
     "os": "macos",
-    "os_version": "macOS 15.7.7",
+    "os_version": "macOS 15.7.9",
     "arch": "x86_64",
     "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
     "uarch": "unknown",
@@ -10,8 +10,8 @@
     "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "65b4bea",
-    "timestamp": "2026-08-23T07:30:03Z"
+    "commit": "fff913b",
+    "timestamp": "2026-09-04T11:57:28Z"
   },
   "features": [
     {
