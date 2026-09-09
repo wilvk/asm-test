@@ -10,8 +10,8 @@
     "cc": "cc.exe (Rev3, Built by MSYS2 project) 16.2.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "e323f73",
-    "timestamp": "2026-09-02T11:57:23Z"
+    "commit": "5dac532",
+    "timestamp": "2026-09-09T12:09:31Z"
   },
   "features": [
     {
@@ -22,10 +22,6 @@
       "available": false,
       "skip_reason": "asmfeatures links the POSIX native-trace objects; not built on this OS",
       "fidelity": ""
-    }
-  ]
-}
-elity": ""
     }
   ]
 }
