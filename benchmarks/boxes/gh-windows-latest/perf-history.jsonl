@@ -14,3 +14,4 @@
 {"timestamp": "2026-09-02T11:57:23Z", "commit": "e323f73", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3694, "unit": "cyc"}]}
 {"timestamp": "2026-09-08T11:58:57Z", "commit": "32de980", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3696, "unit": "cyc"}]}
 {"timestamp": "2026-09-09T12:09:31Z", "commit": "5dac532", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3635, "unit": "cyc"}]}
+{"timestamp": "2026-09-12T11:29:05Z", "commit": "1898938", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3635, "unit": "cyc"}]}
